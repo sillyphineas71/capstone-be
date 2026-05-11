@@ -143,10 +143,16 @@ Không đặt logic đặc tả chính thức bên trong `src/`; mọi rule, bou
       api.md
 
   /features
-    /feat-login
-      SPEC.md
-      PLAN.md
-      TASKS.md
+    /auth/
+        /feat-login
+          SPEC.md
+          PLAN.md
+          TASKS.md
+        /feat-register
+          SPEC.md
+          PLAN.md
+          TASKS.md
+   
     /feat-create-meeting
       SPEC.md
       PLAN.md
