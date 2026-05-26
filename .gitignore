@@ -58,3 +58,4 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Sensitive files - API contracts and database schemas
 API_Contract_Agent_Reference.md
 database_v3_1_balanced_intelligent_meeting_system_v3_1_balanced_49_tables.md
+capstone_db_v3_1_balanced_49_tables.sql
