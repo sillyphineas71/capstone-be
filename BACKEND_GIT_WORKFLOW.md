@@ -69,8 +69,8 @@ git commit -m "feat(device-user-mapping): add camera user mapping table"
 Commit này có thể bao gồm nhiều file, miễn là tất cả phục vụ cùng một task/module:
 
 ```text
-prisma/schema.prisma
-prisma/migrations/...
+src/**/*.entity.ts
+src/database/migrations/...
 src/modules/device-user-mappings/device-user-mappings.module.ts
 src/modules/device-user-mappings/device-user-mappings.service.ts
 src/modules/device-user-mappings/device-user-mappings.controller.ts
@@ -138,7 +138,7 @@ feat(attendance): handle face verification callback
 feat(room-tracking): process room occupancy snapshots
 fix(attendance): prevent duplicate check-in records
 refactor(meeting): extract active meeting lookup service
-chore(prisma): add device user mapping migration
+chore(db): add device user mapping migration
 docs(api): update attendance callback payload example
 ```
 
@@ -159,8 +159,8 @@ Nên add theo file hoặc folder liên quan đến task:
 
 ```bash
 git add src/modules/attendance
-git add prisma/schema.prisma
-git add prisma/migrations
+git add src/modules/attendance/entities
+git add src/database/migrations
 ```
 
 Chỉ dùng `git add .` khi đã chắc chắn **tất cả thay đổi hiện tại đều thuộc cùng một commit**.
@@ -216,8 +216,8 @@ git diff --stat
 
 # 5. Add đúng file/module
 git add src/modules/device-user-mappings
-git add prisma/schema.prisma
-git add prisma/migrations
+git add src/modules/device-user-mappings/entities
+git add src/database/migrations
 
 # 6. Kiểm tra staged changes
 git diff --cached --stat
@@ -274,39 +274,39 @@ Không merge PR nếu:
 
 ---
 
-## 8. Quy tắc với database và Prisma
+## 8. Quy tắc với database và TypeORM
 
-Nếu sửa database, commit phải bao gồm đủ:
+Nếu sửa database, commit phải bao gồm đủ Entity và Migration tương ứng:
 
 ```text
-prisma/schema.prisma
-prisma/migrations/...
+src/**/*.entity.ts
+src/database/migrations/...
 ```
 
 Ví dụ:
 
 ```bash
-git add prisma/schema.prisma prisma/migrations
+git add src/modules/device-user-mappings/entities src/database/migrations
 git commit -m "feat(db): add device user mappings table"
 ```
 
-Không nên chỉ commit `schema.prisma` mà quên migration.
+Không nên chỉ commit Entity file (`*.entity.ts`) mà quên tạo và commit file Migration.
 
-Trước khi sửa `schema.prisma`, nên báo người còn lại vì đây là file rất dễ conflict.
+Trước khi sửa các file Entity dùng chung, nên báo người còn lại vì đây là file rất dễ conflict.
 
 Nếu 2 người cùng cần sửa database, nên thống nhất trước:
 
 ```text
 - Ai sửa bảng nào?
-- Migration name là gì?
+- Tên file Migration là gì?
 - Có ảnh hưởng quan hệ khóa ngoại không?
 - Có cần seed data không?
 ```
 
-Ví dụ migration name nên rõ ràng:
+Ví dụ tạo migration bằng TypeORM CLI nên có tên rõ ràng:
 
 ```bash
-npx prisma migrate dev --name add_device_user_mappings
+npm run typeorm migration:generate src/database/migrations/add_device_user_mappings
 ```
 
 ---
@@ -335,7 +335,7 @@ Người 2:
 Các file dễ conflict cần báo nhau trước khi sửa:
 
 ```text
-prisma/schema.prisma
+src/**/*.entity.ts
 src/app.module.ts
 src/main.ts
 package.json
