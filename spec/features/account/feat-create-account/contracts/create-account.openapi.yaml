@@ -1,0 +1,150 @@
+openapi: 3.0.3
+info:
+  title: Create Account Contract
+  version: 1.0.0
+paths:
+  /api/v1/accounts:
+    post:
+      summary: Create new internal account
+      operationId: createAccount
+      tags:
+        - Accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccountSuccessResponse'
+        '400':
+          description: Validation or business error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidDepartment:
+                  value:
+                    error:
+                      code: INVALID_DEPARTMENT_SELECTION
+                      message: Department selection is invalid
+                      details:
+                        - field: departmentId
+                          code: INVALID_DEPARTMENT_SELECTION
+                          message: Department selection is invalid
+                usernameGenerationFailed:
+                  value:
+                    error:
+                      code: USERNAME_GENERATION_FAILED
+                      message: Unable to generate a unique username. Please try again.
+                      details:
+                        - field: username
+                          code: USERNAME_GENERATION_FAILED
+                          message: Unable to generate a unique username. Please try again.
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    CreateAccountRequest:
+      type: object
+      required:
+        - employeeCode
+        - fullName
+        - email
+        - roleId
+      properties:
+        employeeCode:
+          type: string
+          pattern: '^[A-Z0-9]{4,20}$'
+        fullName:
+          type: string
+        email:
+          type: string
+          format: email
+        phoneNumber:
+          type: string
+          pattern: '^\+?[0-9]{10,15}$'
+        departmentId:
+          type: string
+          nullable: true
+        roleId:
+          type: string
+    CreateAccountSuccessResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            account:
+              type: object
+              properties:
+                id:
+                  type: string
+                employeeCode:
+                  type: string
+                username:
+                  type: string
+                fullName:
+                  type: string
+                email:
+                  type: string
+                status:
+                  type: string
+                  enum: [ACTIVE]
+                department:
+                  type: object
+                  nullable: true
+                role:
+                  type: object
+                createdAt:
+                  type: string
+                  format: date-time
+            warnings:
+              type: array
+              items:
+                type: object
+                properties:
+                  code:
+                    type: string
+                  message:
+                    type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  code:
+                    type: string
+                  message:
+                    type: string
