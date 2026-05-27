@@ -137,24 +137,6 @@ Mọi tính năng phải phục vụ meeting lifecycle.
 
 ### 3.1. Stack chính
 
-<<<<<<< HEAD
-| Thành phần | Công nghệ đề xuất | Ghi chú |
-|---|---|---|
-| Runtime | Node.js LTS | Không dùng API experimental nếu không cần |
-| Framework | NestJS | Modular monolith trước, microservice sau nếu cần |
-| Language | TypeScript | Bắt buộc strict typing |
-| Database | PostgreSQL | UUID primary key, timestamptz |
-| ORM | TypeORM | Entity + migration rõ ràng |
-| Auth | JWT | Access token + refresh token nếu scope yêu cầu |
-| Authorization | RBAC | roles, permissions, guards |
-| Realtime | WebSocket Gateway | Room status, meeting status, presence |
-| Device event ingestion | HTTP callbacks + REST API | Face Server uses HTTP Subscription; Python Camera Service sends room camera events to NestJS through REST API |
-| MQTT | Future extension only | Not used in v1; only considered later if the system integrates many sensors or edge devices publishing lightweight telemetry |
-| Validation | class-validator, class-transformer | Validate DTO ở boundary |
-| Config | @nestjs/config | Không hard-code env |
-| Logging | Nest Logger hoặc logger chuẩn hóa | Không log secret/token |
-| Testing | Jest | Unit test + integration test cho logic quan trọng |
-=======
 | Thành phần    | Công nghệ đề xuất                  | Ghi chú                                           |
 | ------------- | ---------------------------------- | ------------------------------------------------- |
 | Runtime       | Node.js LTS                        | Không dùng API experimental nếu không cần         |
@@ -170,7 +152,6 @@ Mọi tính năng phải phục vụ meeting lifecycle.
 | Config        | @nestjs/config                     | Không hard-code env                               |
 | Logging       | Nest Logger hoặc logger chuẩn hóa  | Không log secret/token                            |
 | Testing       | Jest                               | Unit test + integration test cho logic quan trọng |
->>>>>>> e5d5f3a2b55545e25954451e995d85a7f165a802
 
 ### 3.2. Kiến trúc tổng thể
 
@@ -189,34 +170,6 @@ Backend đi theo hướng **modular monolith**:
 
 ### 4.1. Module chính nên có
 
-<<<<<<< HEAD
-| Module | Vai trò | Đường dẫn backend |
-|---|---|---|
-| `auth` | Login, logout, refresh token, password reset, session, guard | `/src/modules/auth` |
-| `accounts` | User profile, departments, roles, permissions, account status | `/src/modules/accounts` |
-| `meetings` | Meeting core: tạo/sửa/hủy/xem cuộc họp, participants, agenda, notes | `/src/modules/meetings` |
-| `approvals` | Meeting request approval, emergency/ad-hoc approval nếu có | `/src/modules/approvals` |
-| `scheduling` | Conflict checking, schedule suggestions, recurrence handling | `/src/modules/scheduling` |
-| `rooms` | Room, seat, booking, room status, capacity, location | `/src/modules/rooms` |
-| `equipment` | Equipment, assignment, room device, camera/mic/device mapping | `/src/modules/equipment` |
-| `iot` | Device event ingestion, raw IoT device events, device heartbeat, device health | `/src/modules/iot` |
-| `device-user-mappings` | Map system user với Face Server person/device identity | `/src/modules/device-user-mappings` |
-| `face-attendance` | Face Server HTTP callbacks, normalize face verify/stranger/heartbeat events | `/src/modules/face-attendance` |
-| `attendance` | Attendance records, check-in/check-out, participant attendance | `/src/modules/attendance` |
-| `presence` | Presence snapshot, presence events, face/camera signal mapping | `/src/modules/presence` |
-| `utilization` | Room usage, no-show, early vacancy, auto-release room | `/src/modules/utilization` |
-| `live-meeting` | Start/pause/resume/extend/end active meeting session | `/src/modules/live-meeting` |
-| `recording` | Recording config/session/segment, media files | `/src/modules/recording` |
-| `transcription` | Transcript management, transcript text/segments nếu có | `/src/modules/transcription` |
-| `minutes` | Meeting minutes, decisions, action items | `/src/modules/minutes` |
-| `documents` | Document metadata/setup-only knowledge area | `/src/modules/documents` |
-| `notifications` | Notification, recipients, email/push/in-app events | `/src/modules/notifications` |
-| `reports` | Report exports, generated reports | `/src/modules/reports` |
-| `analytics` | Dashboard, KPI, room utilization analytics | `/src/modules/analytics` |
-| `administration` | System config, policies, audit logs, admin operations | `/src/modules/administration` |
-| `common` | Shared decorators, guards, pipes, filters, utils | `/src/common` |
-| `database` | Database module, migration config, seed scripts | `/src/database` |
-=======
 | Module           | Vai trò                                                             | Đường dẫn backend             |
 | ---------------- | ------------------------------------------------------------------- | ----------------------------- |
 | `auth`           | Login, logout, refresh token, password reset, session, guard        | `/src/modules/auth`           |
@@ -241,7 +194,6 @@ Backend đi theo hướng **modular monolith**:
 | `administration` | System config, policies, audit logs, admin operations               | `/src/modules/administration` |
 | `common`         | Shared decorators, guards, pipes, filters, utils                    | `/src/common`                 |
 | `database`       | Database module, migration config, seed scripts                     | `/src/database`               |
->>>>>>> e5d5f3a2b55545e25954451e995d85a7f165a802
 
 ### 4.2. Module cần chú ý về scope
 
