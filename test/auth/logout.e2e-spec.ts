@@ -3,7 +3,8 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import * as request from 'supertest';
 import { JwtService } from '@nestjs/jwt';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+// import { Cache } from 'cache-manager';
+import type { Cache } from 'cache-manager';
 import { AuthModule } from '../../src/modules/auth/auth.module';
 import { AuthConfigService } from '../../src/modules/auth/services/auth-config.service';
 
@@ -56,7 +57,7 @@ describe('Logout (e2e)', () => {
     // Actually, since JwtAuthGuard runs first, if it's blacklisted, Guard will throw 401!
     // Wait, the specification says: "Gọi lại /logout với chính token đó vẫn trả về 200 OK (idempotent)."
     // Ah! If JwtAuthGuard blocks it, the second call returns 401!
-    // But the requirement in spec.md says: 
+    // But the requirement in spec.md says:
     // "Nếu request logout được gửi lặp lại cho token đã bị blacklist, hệ thống vẫn trả success theo tính chất idempotent."
     // Oh no, if JwtAuthGuard checks the blacklist, it blocks the second call before it reaches the controller!
   });

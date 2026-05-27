@@ -2,43 +2,51 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 @Injectable()
-export class AuthAuditRepository {
+export class ResetAuditRepository {
   constructor(private readonly dataSource: DataSource) {}
 
-  async logLoginSuccess(params: {
+  /**
+   * Logs a password reset OTP request event.
+   * Absolutely NO plain OTP or sensitive tokens should be saved here.
+   */
+  async logOtpRequest(params: {
     userId: string;
-    requestId?: string;
+    email: string;
     ipAddress?: string;
     userAgent?: string;
-    jti: string;
+    requestId?: string;
   }): Promise<void> {
     await this.dataSource.query(
       `
         INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, ip_address, user_agent, request_id, severity, metadata_json)
-        VALUES ($1, 'login', 'users', $2, $3, $4, $5, 'info', $6::jsonb)
+        VALUES ($1, 'password_reset_request', 'users', $2, $3, $4, $5, 'info', $6::jsonb)
       `,
       [
         params.userId,
-        params.userId,
+        params.userId, // Entity ID is the user
         params.ipAddress ?? null,
         params.userAgent ?? null,
         params.requestId ?? null,
-        JSON.stringify({ jti: params.jti }),
+        JSON.stringify({ email: params.email, action: 'request_otp' }),
       ],
     );
   }
 
-  async logLogoutSuccess(params: {
+  /**
+   * Logs a password reset confirmation/success event.
+   * Absolutely NO plain passwords or OTPs should be saved here.
+   */
+  async logResetSuccess(params: {
     userId: string;
-    requestId?: string;
+    email: string;
     ipAddress?: string;
     userAgent?: string;
-    jti: string;
+    requestId?: string;
   }): Promise<void> {
     await this.dataSource.query(
       `
         INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, ip_address, user_agent, request_id, severity, metadata_json)
-        VALUES ($1, 'logout', 'users', $2, $3, $4, $5, 'info', $6::jsonb)
+        VALUES ($1, 'password_reset_success', 'users', $2, $3, $4, $5, 'info', $6::jsonb)
       `,
       [
         params.userId,
@@ -46,7 +54,7 @@ export class AuthAuditRepository {
         params.ipAddress ?? null,
         params.userAgent ?? null,
         params.requestId ?? null,
-        JSON.stringify({ jti: params.jti, method: 'manual' }),
+        JSON.stringify({ email: params.email, action: 'confirm_reset' }),
       ],
     );
   }

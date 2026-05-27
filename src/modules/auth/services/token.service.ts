@@ -10,14 +10,14 @@ export class TokenService {
     private readonly authConfigService: AuthConfigService,
   ) {}
 
-  async generateAccessToken(payload: { sub: string; sessionId: string; email: string }): Promise<string> {
+  async generateAccessToken(payload: { sub: string; jti: string; email: string }): Promise<string> {
     return this.jwtService.signAsync(payload, {
-      secret: process.env.AUTH_ACCESS_TOKEN_SECRET ?? 'dev-access-secret',
+      secret: this.authConfigService.getAccessTokenSecret(),
       expiresIn: this.authConfigService.getAccessTokenTtlSeconds(),
     });
   }
 
-  async generateRefreshToken(payload: { sub: string; sessionId: string }): Promise<string> {
+  async generateRefreshToken(payload: { sub: string; jti: string }): Promise<string> {
     return this.jwtService.signAsync(payload, {
       secret: process.env.AUTH_REFRESH_TOKEN_SECRET ?? 'dev-refresh-secret',
       expiresIn: this.authConfigService.getRefreshTokenTtlSeconds(),
