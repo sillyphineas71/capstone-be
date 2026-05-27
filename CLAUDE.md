@@ -1,5 +1,10 @@
 # CLAUDE.md - Backend Guide cho Smart Meeting Management & AI Meeting Intelligence Platform v1.1
 
+## 📝 CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
+
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
 > Mục tiêu: giúp agent hiểu đúng domain, kiến trúc, database, module boundary, convention code, API style và các giới hạn quan trọng trước khi sinh code.
 
@@ -41,7 +46,12 @@ Nguyên tắc quan trọng nhất:
 
 ---
 
-## 1. Vai trò của file CLAUDE.md
+## 1. Vai trò của file CLAUDE.md và Quy tắc bắt buộc
+
+**[RULE TỐI THƯỢNG 1] BẮT BUỘC ĐỌC TÀI LIỆU**: Mọi AI Agent ĐỀU PHẢI đọc toàn bộ nội dung của file `CLAUDE.md` (và/hoặc `AGENTS.md`) trước khi bắt đầu bất kỳ công việc nào (lên plan, code, test) trong dự án này. Đây là bước kiểm tra bắt buộc, nếu chưa đọc thì không được phép suy đoán cấu trúc dự án.
+
+**[RULE TỐI THƯỢNG 2] GHI LOG KHI SỬA FILE MARKDOWN**: Bất cứ sự sửa đổi nào ở MỌI file `.md` trong dự án (bao gồm `CLAUDE.md`, `AGENTS.md`, các file `spec.md`, `plan.md`, `tasks.md`, `research.md`...) đều **PHẢI** ghi thêm 1 dòng log vào phần "CHANGELOG & REVISION HISTORY" ở ngay đầu trang của file đó.
+Nội dung log phải có: Ngày thay đổi, Tóm tắt nội dung thay đổi, Vị trí/Các dòng thay đổi. Luật này giúp lưu vết tự động để agent khác và team dễ theo dõi.
 
 File này dùng để hướng dẫn agent khi:
 
@@ -57,7 +67,7 @@ File này dùng để hướng dẫn agent khi:
 Khi có mâu thuẫn giữa các nguồn tài liệu, ưu tiên theo thứ tự:
 
 1. **Yêu cầu trực tiếp mới nhất của người dùng/team.**
-2. **Database v3.1 Balanced hiện tại**, bao gồm table bổ sung `device_user_mappings` nếu đã được team chốt.
+2. **Database v3.2 Compact hiện tại** (39 bảng, loại bỏ user_sessions).
 3. **Feature Table mới nhất** của dự án.
 4. **Use Case Specification mới nhất**.
 5. **API Contract mới nhất**.
@@ -127,21 +137,21 @@ Mọi tính năng phải phục vụ meeting lifecycle.
 
 ### 3.1. Stack chính
 
-| Thành phần | Công nghệ đề xuất | Ghi chú |
-|---|---|---|
-| Runtime | Node.js LTS | Không dùng API experimental nếu không cần |
-| Framework | NestJS | Modular monolith trước, microservice sau nếu cần |
-| Language | TypeScript | Bắt buộc strict typing |
-| Database | PostgreSQL | UUID primary key, timestamptz |
-| ORM | TypeORM | Entity + migration rõ ràng |
-| Auth | JWT | Access token + refresh token nếu scope yêu cầu |
-| Authorization | RBAC | roles, permissions, guards |
-| Realtime | WebSocket Gateway | Room status, meeting status, presence |
-| IoT messaging | MQTT | Capture agent, room device event |
-| Validation | class-validator, class-transformer | Validate DTO ở boundary |
-| Config | @nestjs/config | Không hard-code env |
-| Logging | Nest Logger hoặc logger chuẩn hóa | Không log secret/token |
-| Testing | Jest | Unit test + integration test cho logic quan trọng |
+| Thành phần    | Công nghệ đề xuất                  | Ghi chú                                           |
+| ------------- | ---------------------------------- | ------------------------------------------------- |
+| Runtime       | Node.js LTS                        | Không dùng API experimental nếu không cần         |
+| Framework     | NestJS                             | Modular monolith trước, microservice sau nếu cần  |
+| Language      | TypeScript                         | Bắt buộc strict typing                            |
+| Database      | PostgreSQL                         | UUID primary key, timestamptz                     |
+| ORM           | TypeORM                            | Entity + migration rõ ràng                        |
+| Auth          | JWT                                | Access token + refresh token nếu scope yêu cầu    |
+| Authorization | RBAC                               | roles, permissions, guards                        |
+| Realtime      | WebSocket Gateway                  | Room status, meeting status, presence             |
+| IoT messaging | MQTT                               | Capture agent, room device event                  |
+| Validation    | class-validator, class-transformer | Validate DTO ở boundary                           |
+| Config        | @nestjs/config                     | Không hard-code env                               |
+| Logging       | Nest Logger hoặc logger chuẩn hóa  | Không log secret/token                            |
+| Testing       | Jest                               | Unit test + integration test cho logic quan trọng |
 
 ### 3.2. Kiến trúc tổng thể
 
@@ -159,30 +169,30 @@ Backend đi theo hướng **modular monolith**:
 
 ### 4.1. Module chính nên có
 
-| Module | Vai trò | Đường dẫn backend |
-|---|---|---|
-| `auth` | Login, logout, refresh token, password reset, session, guard | `/src/modules/auth` |
-| `accounts` | User profile, departments, roles, permissions, account status | `/src/modules/accounts` |
-| `meetings` | Meeting core: tạo/sửa/hủy/xem cuộc họp, participants, agenda, notes | `/src/modules/meetings` |
-| `approvals` | Meeting request approval, emergency/ad-hoc approval nếu có | `/src/modules/approvals` |
-| `scheduling` | Conflict checking, schedule suggestions, recurrence handling | `/src/modules/scheduling` |
-| `rooms` | Room, seat, booking, room status, capacity, location | `/src/modules/rooms` |
-| `equipment` | Equipment, assignment, room device, camera/mic/device mapping | `/src/modules/equipment` |
-| `iot` | MQTT events, IoT device event ingestion, device heartbeat | `/src/modules/iot` |
-| `attendance` | Attendance records, check-in/check-out, participant attendance | `/src/modules/attendance` |
-| `presence` | Presence snapshot, presence events, face/camera signal mapping | `/src/modules/presence` |
-| `utilization` | Room usage, no-show, early vacancy, auto-release room | `/src/modules/utilization` |
-| `live-meeting` | Start/pause/resume/extend/end active meeting session | `/src/modules/live-meeting` |
-| `recording` | Recording config/session/segment, media files | `/src/modules/recording` |
-| `transcription` | Transcript management, transcript text/segments nếu có | `/src/modules/transcription` |
-| `minutes` | Meeting minutes, decisions, action items | `/src/modules/minutes` |
-| `documents` | Document metadata/setup-only knowledge area | `/src/modules/documents` |
-| `notifications` | Notification, recipients, email/push/in-app events | `/src/modules/notifications` |
-| `reports` | Report exports, generated reports | `/src/modules/reports` |
-| `analytics` | Dashboard, KPI, room utilization analytics | `/src/modules/analytics` |
-| `administration` | System config, policies, audit logs, admin operations | `/src/modules/administration` |
-| `common` | Shared decorators, guards, pipes, filters, utils | `/src/common` |
-| `database` | Database module, migration config, seed scripts | `/src/database` |
+| Module           | Vai trò                                                             | Đường dẫn backend             |
+| ---------------- | ------------------------------------------------------------------- | ----------------------------- |
+| `auth`           | Login, logout, refresh token, password reset, session, guard        | `/src/modules/auth`           |
+| `accounts`       | User profile, departments, roles, permissions, account status       | `/src/modules/accounts`       |
+| `meetings`       | Meeting core: tạo/sửa/hủy/xem cuộc họp, participants, agenda, notes | `/src/modules/meetings`       |
+| `approvals`      | Meeting request approval, emergency/ad-hoc approval nếu có          | `/src/modules/approvals`      |
+| `scheduling`     | Conflict checking, schedule suggestions, recurrence handling        | `/src/modules/scheduling`     |
+| `rooms`          | Room, seat, booking, room status, capacity, location                | `/src/modules/rooms`          |
+| `equipment`      | Equipment, assignment, room device, camera/mic/device mapping       | `/src/modules/equipment`      |
+| `iot`            | MQTT events, IoT device event ingestion, device heartbeat           | `/src/modules/iot`            |
+| `attendance`     | Attendance records, check-in/check-out, participant attendance      | `/src/modules/attendance`     |
+| `presence`       | Presence snapshot, presence events, face/camera signal mapping      | `/src/modules/presence`       |
+| `utilization`    | Room usage, no-show, early vacancy, auto-release room               | `/src/modules/utilization`    |
+| `live-meeting`   | Start/pause/resume/extend/end active meeting session                | `/src/modules/live-meeting`   |
+| `recording`      | Recording config/session/segment, media files                       | `/src/modules/recording`      |
+| `transcription`  | Transcript management, transcript text/segments nếu có              | `/src/modules/transcription`  |
+| `minutes`        | Meeting minutes, decisions, action items                            | `/src/modules/minutes`        |
+| `documents`      | Document metadata/setup-only knowledge area                         | `/src/modules/documents`      |
+| `notifications`  | Notification, recipients, email/push/in-app events                  | `/src/modules/notifications`  |
+| `reports`        | Report exports, generated reports                                   | `/src/modules/reports`        |
+| `analytics`      | Dashboard, KPI, room utilization analytics                          | `/src/modules/analytics`      |
+| `administration` | System config, policies, audit logs, admin operations               | `/src/modules/administration` |
+| `common`         | Shared decorators, guards, pipes, filters, utils                    | `/src/common`                 |
+| `database`       | Database module, migration config, seed scripts                     | `/src/database`               |
 
 ### 4.2. Module cần chú ý về scope
 
@@ -233,9 +243,9 @@ Các module này có ranh giới gần nhau nhưng không được trộn lẫn:
 
 ### 5.1. Database chính
 
-Database hiện tại là **Database v3.1 Balanced**.
+Database hiện tại là **Database v3.2 Compact**.
 
-Thiết kế gốc có 48 bảng. Nếu team đã chốt thêm bảng `device_user_mappings`, tổng số bảng là **49 bảng**.
+Thiết kế hiện tại có **39 bảng** (đã lược bỏ session DB, tinh gọn audit và một số bảng trung gian so với các bản trước).
 
 Database dùng:
 
@@ -257,10 +267,8 @@ Database dùng:
 - `permissions`
 - `user_roles`
 - `role_permissions`
-- `user_sessions`
 - `password_reset_requests`
 - `face_profiles`
-- `device_user_mappings` nếu đã được team chốt
 
 #### Meeting Core & Scheduling
 
@@ -553,19 +561,19 @@ Dùng exception filter chung để chuẩn hóa:
 
 ### 8.3. HTTP status code
 
-| Trường hợp | Status |
-|---|---:|
-| Tạo thành công | `201` |
-| Lấy/cập nhật/xóa mềm thành công | `200` |
-| Không có body trả về | `204` |
-| Input sai | `400` |
-| Chưa đăng nhập | `401` |
-| Không đủ quyền | `403` |
-| Không tìm thấy | `404` |
-| Conflict nghiệp vụ | `409` |
-| Validation semantic không hợp lệ | `422` |
-| Rate limited | `429` |
-| Lỗi server | `500` |
+| Trường hợp                       | Status |
+| -------------------------------- | -----: |
+| Tạo thành công                   |  `201` |
+| Lấy/cập nhật/xóa mềm thành công  |  `200` |
+| Không có body trả về             |  `204` |
+| Input sai                        |  `400` |
+| Chưa đăng nhập                   |  `401` |
+| Không đủ quyền                   |  `403` |
+| Không tìm thấy                   |  `404` |
+| Conflict nghiệp vụ               |  `409` |
+| Validation semantic không hợp lệ |  `422` |
+| Rate limited                     |  `429` |
+| Lỗi server                       |  `500` |
 
 ### 8.4. Pagination query chuẩn
 
@@ -591,8 +599,8 @@ Backend cần hỗ trợ tối thiểu:
 - Login bằng email/username + password.
 - Hash password bằng bcrypt/argon2.
 - JWT access token.
-- User session nếu database có `user_sessions`.
-- Logout/revoke session.
+- Sử dụng cơ chế Stateless JWT Blacklist qua Redis Cache thay cho bảng `user_sessions`.
+- Logout/revoke session thông qua JWT Blacklist.
 - Password reset qua `password_reset_requests` nếu use case yêu cầu.
 
 Không được:
@@ -892,7 +900,7 @@ updatedBy?: string;
 Trong production:
 
 ```ts
-synchronize: false
+synchronize: false;
 ```
 
 Dùng migration thay vì auto sync.
