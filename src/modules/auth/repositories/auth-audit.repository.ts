@@ -10,20 +10,20 @@ export class AuthAuditRepository {
     requestId?: string;
     ipAddress?: string;
     userAgent?: string;
-    sessionId: string;
+    jti: string;
   }): Promise<void> {
     await this.dataSource.query(
       `
         INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, ip_address, user_agent, request_id, severity, metadata_json)
-        VALUES ($1, 'login', 'user_sessions', $2, $3, $4, $5, 'info', $6::jsonb)
+        VALUES ($1, 'login', 'users', $2, $3, $4, $5, 'info', $6::jsonb)
       `,
       [
         params.userId,
-        params.sessionId,
+        params.userId,
         params.ipAddress ?? null,
         params.userAgent ?? null,
         params.requestId ?? null,
-        JSON.stringify({ sessionId: params.sessionId }),
+        JSON.stringify({ jti: params.jti }),
       ],
     );
   }
