@@ -35,6 +35,7 @@ describe('JwtAuthGuard', () => {
       switchToHttp: () => ({
         getRequest: () => ({ headers }),
       }),
+      getHandler: () => jest.fn(),
     } as any;
   }
 
@@ -65,6 +66,7 @@ describe('JwtAuthGuard', () => {
       switchToHttp: () => ({
         getRequest: () => request,
       }),
+      getHandler: () => jest.fn(),
     } as any;
     
     jwtService.verifyAsync.mockResolvedValue({ sub: 'user-1', jti: 'jti-1', exp: 123456 });
@@ -79,5 +81,48 @@ describe('JwtAuthGuard', () => {
       exp: 123456,
       sub: 'user-1',
     });
+  });
+
+  it('should throw UnauthorizedException if token was issued before password change (iat < invalid_after)', async () => {
+    const request = { headers: { authorization: 'Bearer valid-token' } };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => request,
+      }),
+      getHandler: () => jest.fn(),
+    } as any;
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    jwtService.verifyAsync.mockResolvedValue({ sub: 'user-1', jti: 'jti-1', exp: nowSeconds + 3600, iat: nowSeconds - 10 });
+
+    cacheManager.get.mockImplementation(async (key: string) => {
+      if (key === 'blacklist:jti-1') return null;
+      if (key === 'auth:user:user-1:invalid_after') return Date.now();
+      return null;
+    });
+
+    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it('should succeed if token was issued after password change (iat >= invalid_after)', async () => {
+    const request = { headers: { authorization: 'Bearer valid-token' } };
+    const context = {
+      switchToHttp: () => ({
+        getRequest: () => request,
+      }),
+      getHandler: () => jest.fn(),
+    } as any;
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    jwtService.verifyAsync.mockResolvedValue({ sub: 'user-1', jti: 'jti-1', exp: nowSeconds + 3600, iat: nowSeconds + 10 });
+
+    cacheManager.get.mockImplementation(async (key: string) => {
+      if (key === 'blacklist:jti-1') return null;
+      if (key === 'auth:user:user-1:invalid_after') return Date.now() - 10000;
+      return null;
+    });
+
+    const result = await guard.canActivate(context);
+    expect(result).toBe(true);
   });
 });

@@ -9,7 +9,8 @@ import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+// import { Cache } from 'cache-manager';
+import type { Cache } from 'cache-manager';
 import { AuthConfigService } from '../services/auth-config.service';
 
 @Injectable()
@@ -36,11 +37,35 @@ export class JwtAuthGuard implements CanActivate {
 
       // Check blacklist (T005 logic)
       if (payload.jti) {
-        const ignoreBlacklist = this.reflector.get<boolean>('ignoreBlacklist', context.getHandler());
+        const ignoreBlacklist = this.reflector.get<boolean>(
+          'ignoreBlacklist',
+          context.getHandler(),
+        );
         if (!ignoreBlacklist) {
-          const isBlacklisted = await this.cacheManager.get(`blacklist:${payload.jti}`);
+          const isBlacklisted = await this.cacheManager.get(
+            `blacklist:${payload.jti}`,
+          );
           if (isBlacklisted) {
             throw new UnauthorizedException('Token has been revoked');
+          }
+        }
+      }
+
+      // Check user-level token invalidation (e.g. password reset)
+      if (payload.sub) {
+        const invalidAfterKey = `auth:user:${payload.sub}:invalid_after`;
+        const invalidAfter = await this.cacheManager.get<number | string>(
+          invalidAfterKey,
+        );
+        if (invalidAfter) {
+          const invalidAfterMs =
+            typeof invalidAfter === 'string'
+              ? parseInt(invalidAfter, 10)
+              : invalidAfter;
+          if (payload.iat * 1000 < invalidAfterMs) {
+            throw new UnauthorizedException(
+              'Token has been revoked due to password change',
+            );
           }
         }
       }
