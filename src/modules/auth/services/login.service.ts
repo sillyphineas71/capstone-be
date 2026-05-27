@@ -1,10 +1,10 @@
 import { ForbiddenException, HttpException, HttpStatus, Injectable, InternalServerErrorException, Logger, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 import { AUTH_ERROR_CODES } from '../constants/auth-error-codes';
 import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
-import { UserSessionsRepository } from '../repositories/user-sessions.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
 import { AuthUserSummary, LoginSuccessData, RequestContextInfo } from '../types/login.types';
 import { normalizeLoginEmail } from '../utils/login-normalization.util';
@@ -19,7 +19,6 @@ export class LoginService {
   constructor(
     private readonly usersAuthRepository: UsersAuthRepository,
     private readonly authzReadRepository: AuthzReadRepository,
-    private readonly userSessionsRepository: UserSessionsRepository,
     private readonly authAuditRepository: AuthAuditRepository,
     private readonly rateLimitService: RateLimitService,
     private readonly tokenService: TokenService,
@@ -83,46 +82,24 @@ export class LoginService {
         });
     }
 
-    const refreshTokenExpiry = new Date(Date.now() + this.authConfigService.getRefreshTokenTtlSeconds() * 1000);
-    const placeholderRefreshToken = `bootstrap-${user.id}-${Date.now()}`;
-    let sessionId: string | null = null;
-
-    try {
-      const session = await this.userSessionsRepository.createSession({
-        userId: user.id,
-        refreshTokenHash: this.tokenService.hashRefreshToken(placeholderRefreshToken),
-        ipAddress: requestContext.ipAddress,
-        userAgent: requestContext.userAgent,
-        expiresAt: refreshTokenExpiry,
-      });
-      sessionId = session.id;
-    } catch {
-      throw new InternalServerErrorException({
-        code: AUTH_ERROR_CODES.AUTH_SESSION_CREATE_FAILED,
-        message: 'Failed to create user session.',
-      });
-    }
-
+    const jti = randomUUID();
     let accessToken: string;
     let refreshToken: string;
 
     try {
       accessToken = await this.tokenService.generateAccessToken({
         sub: user.id,
-        sessionId,
+        jti,
         email: user.email,
       });
       refreshToken = await this.tokenService.generateRefreshToken({
         sub: user.id,
-        sessionId,
+        jti,
       });
     } catch (error) {
-      if (sessionId) {
-        await this.userSessionsRepository.revokeSession(sessionId, 'token_generation_failed');
-      }
       this.logger.error('Token generation failed.', error instanceof Error ? error.stack : undefined);
       throw new InternalServerErrorException({
-        code: 'AUTH_TOKEN_GENERATION_FAILED',
+        code: AUTH_ERROR_CODES.AUTH_TOKEN_GENERATION_FAILED,
         message: 'Failed to generate authentication tokens.',
       });
     }
@@ -141,7 +118,7 @@ export class LoginService {
         requestId: requestContext.requestId,
         ipAddress: requestContext.ipAddress,
         userAgent: requestContext.userAgent,
-        sessionId,
+        jti,
       });
     } catch (error) {
       this.logger.error('Failed to write login audit log.', error instanceof Error ? error.stack : undefined);

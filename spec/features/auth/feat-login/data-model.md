@@ -1,3 +1,8 @@
+## 📝 CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-05-27 | Loại bỏ bảng `user_sessions` và di chuyển sang cơ chế stateless JWT. | Phần Entities và Relationships |
+
 # Data Model: AUTH-001 Login
 
 ## Entities
@@ -17,22 +22,6 @@
   - lookup bằng email đã trim + lowercase
   - `account_status` dùng để map `active`, `inactive`, `locked`, `other_status`
   - `last_login_at` update sau login success, non-blocking
-
-### user_sessions
-- Purpose: Persist session trước khi token issuance.
-- Fields used:
-  - `id`
-  - `user_id`
-  - `refresh_token_hash`
-  - `ip_address`
-  - `user_agent`
-  - `login_at`
-  - `expires_at`
-  - `revoked_at`
-  - `is_active`
-- Constraints:
-  - session create fail => `AUTH_SESSION_CREATE_FAILED`
-  - refresh token không lưu raw value
 
 ### roles
 - Purpose: Role metadata trả về response.
@@ -88,7 +77,6 @@
   - `is_active` nếu có ở implementation mapping
 
 ## Relationships
-- `users` 1-n `user_sessions`
 - `users` 1-n `user_roles`
 - `user_roles` n-1 `roles`
 - `roles` n-n `permissions` qua `role_permissions`

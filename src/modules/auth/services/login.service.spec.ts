@@ -1,7 +1,6 @@
 import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
-import { UserSessionsRepository } from '../repositories/user-sessions.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
 import { LoginService } from './login.service';
 import { RateLimitService } from './rate-limit.service';
@@ -21,10 +20,6 @@ describe('LoginService', () => {
   const authzReadRepository = {
     getEffectiveRolesAndPermissions: jest.fn(),
   } as unknown as AuthzReadRepository;
-  const userSessionsRepository = {
-    createSession: jest.fn(),
-    revokeSession: jest.fn(),
-  } as unknown as UserSessionsRepository;
   const authAuditRepository = {
     logLoginSuccess: jest.fn(),
   } as unknown as AuthAuditRepository;
@@ -44,7 +39,6 @@ describe('LoginService', () => {
   const service = new LoginService(
     usersAuthRepository,
     authzReadRepository,
-    userSessionsRepository,
     authAuditRepository,
     rateLimitService,
     tokenService,
@@ -102,7 +96,7 @@ describe('LoginService', () => {
     });
   });
 
-  it('throws AUTH_SESSION_CREATE_FAILED when session creation fails', async () => {
+  it('throws AUTH_TOKEN_GENERATION_FAILED when token generation fails', async () => {
     (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue({
       id: 'u1',
       email: 'user@example.com',
@@ -113,11 +107,11 @@ describe('LoginService', () => {
       accountStatus: 'active',
     });
     (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-    (userSessionsRepository.createSession as jest.Mock).mockRejectedValue(new Error('db fail'));
+    (tokenService.generateAccessToken as jest.Mock).mockRejectedValue(new Error('token generation failed'));
 
     await expect(service.login({ email: 'user@example.com', password: 'secret' } as LoginDto, {})).rejects.toMatchObject({
       response: {
-        code: 'AUTH_SESSION_CREATE_FAILED',
+        code: 'AUTH_TOKEN_GENERATION_FAILED',
       },
       status: 500,
     });
