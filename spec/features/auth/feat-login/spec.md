@@ -9,7 +9,7 @@
   - `CLAUDE.md`
   - `spec/features/account/feat-create-account/spec.md`
   - `API_Contract_Agent_Reference.md`
-  - `database_v3_1_balanced_intelligent_meeting_system_v3_1_balanced_49_tables.md`
+  - `database_v3_2_compact_39_tables.md`
   - `.specify/templates/spec-template.md`
 
 ---
@@ -52,11 +52,11 @@ Mục tiêu của tính năng này là cho phép người dùng nội bộ đăn
 
 ### 2.1 Danh sách actor
 
-| Actor | Vai trò trong tính năng | Quyền / Trách nhiệm chính |
-|---|---|---|
-| Người dùng nội bộ | Actor chính thực hiện đăng nhập | Cung cấp email và password hợp lệ để truy cập hệ thống |
+| Actor             | Vai trò trong tính năng                            | Quyền / Trách nhiệm chính                                                                |
+| ----------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Người dùng nội bộ | Actor chính thực hiện đăng nhập                    | Cung cấp email và password hợp lệ để truy cập hệ thống                                   |
 | Hệ thống xác thực | Xử lý xác thực, rate limit, tạo session, tạo token | Kiểm tra input, tài khoản, password, trạng thái tài khoản, và trả response đúng contract |
-| Quản trị hệ thống | Actor gián tiếp qua cấu hình và trạng thái account | Quản lý account status, role, permission, revoke session và cấu hình auth liên quan |
+| Quản trị hệ thống | Actor gián tiếp qua cấu hình và trạng thái account | Quản lý account status, role, permission, revoke session và cấu hình auth liên quan      |
 
 ### 2.2 Role & Permission Rules
 
@@ -151,21 +151,21 @@ FR-043: Nếu việc tạo session thất bại, hệ thống phải không ti�
 
 ### 3.7 Traceability
 
-| Requirement ID | Nguồn / Use Case liên quan | Ghi chú |
-|---|---|---|
-| FR-002 | User clarification | Strict validate body |
-| FR-005 | User clarification | Trim + lowercase email, validate format |
-| FR-006 | User clarification | Không trim password |
-| FR-007 | User clarification | Rate limit theo IP/email |
-| FR-010 | User clarification | Không thấy user -> `401 AUTH_INVALID_CREDENTIALS` |
-| FR-012 | User clarification | Sai password -> `401 AUTH_INVALID_CREDENTIALS` |
-| FR-014 | User clarification | `inactive` -> `403 AUTH_ACCOUNT_INACTIVE` |
-| FR-015 | User clarification | `locked` -> `423 AUTH_ACCOUNT_LOCKED` |
-| FR-016 | User clarification | Status khác -> `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED` |
-| FR-017 | User clarification, Database `user_sessions` | Session được tạo trước token |
-| FR-018 | User clarification | Session fail -> `500 AUTH_SESSION_CREATE_FAILED` |
-| FR-023 | Database `users`, user clarification | Update `last_login_at` |
-| FR-025 | Database `audit_logs`, user clarification | Ghi audit login success |
+| Requirement ID | Nguồn / Use Case liên quan                   | Ghi chú                                              |
+| -------------- | -------------------------------------------- | ---------------------------------------------------- |
+| FR-002         | User clarification                           | Strict validate body                                 |
+| FR-005         | User clarification                           | Trim + lowercase email, validate format              |
+| FR-006         | User clarification                           | Không trim password                                  |
+| FR-007         | User clarification                           | Rate limit theo IP/email                             |
+| FR-010         | User clarification                           | Không thấy user -> `401 AUTH_INVALID_CREDENTIALS`    |
+| FR-012         | User clarification                           | Sai password -> `401 AUTH_INVALID_CREDENTIALS`       |
+| FR-014         | User clarification                           | `inactive` -> `403 AUTH_ACCOUNT_INACTIVE`            |
+| FR-015         | User clarification                           | `locked` -> `423 AUTH_ACCOUNT_LOCKED`                |
+| FR-016         | User clarification                           | Status khác -> `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED` |
+| FR-017         | User clarification, Database `user_sessions` | Session được tạo trước token                         |
+| FR-018         | User clarification                           | Session fail -> `500 AUTH_SESSION_CREATE_FAILED`     |
+| FR-023         | Database `users`, user clarification         | Update `last_login_at`                               |
+| FR-025         | Database `audit_logs`, user clarification    | Ghi audit login success                              |
 
 ---
 
@@ -223,48 +223,48 @@ NFR-016: Tính năng phải có test case cho ít nhất các nhóm luồng: th�
 
 ### 5.1 Entity liên quan
 
-| Entity / Table | Vai trò trong tính năng | Ghi chú |
-|---|---|---|
-| `users` | Nguồn dữ liệu tài khoản đăng nhập | Chứa email, username, password_hash, account_status, last_login_at, department_id |
-| `user_roles` | Liên kết user với role | Chỉ lấy role còn hiệu lực |
-| `roles` | Danh sách vai trò của user | Dùng để trả `roles[]` |
-| `role_permissions` | Liên kết role với permission | Dùng để tổng hợp permission hiệu lực |
-| `permissions` | Danh sách quyền chi tiết | Dùng để trả `permissions[]` |
-| `user_sessions` | Quản lý session/refresh token | Là bước persist bắt buộc trước khi login success được trả về |
-| `audit_logs` | Nhật ký kiểm toán | Dùng cho login success; lỗi ghi audit không làm fail login |
-| `system_configs` | Cấu hình hệ thống liên quan | Là nguồn cấu hình thời hạn session khi có `rememberDevice` |
-| `system_policies` | Policy hệ thống liên quan | Chỉ dùng cho policy mô tả hoặc quản trị nếu về sau cần |
+| Entity / Table     | Vai trò trong tính năng           | Ghi chú                                                                           |
+| ------------------ | --------------------------------- | --------------------------------------------------------------------------------- |
+| `users`            | Nguồn dữ liệu tài khoản đăng nhập | Chứa email, username, password_hash, account_status, last_login_at, department_id |
+| `user_roles`       | Liên kết user với role            | Chỉ lấy role còn hiệu lực                                                         |
+| `roles`            | Danh sách vai trò của user        | Dùng để trả `roles[]`                                                             |
+| `role_permissions` | Liên kết role với permission      | Dùng để tổng hợp permission hiệu lực                                              |
+| `permissions`      | Danh sách quyền chi tiết          | Dùng để trả `permissions[]`                                                       |
+| `user_sessions`    | Quản lý session/refresh token     | Là bước persist bắt buộc trước khi login success được trả về                      |
+| `audit_logs`       | Nhật ký kiểm toán                 | Dùng cho login success; lỗi ghi audit không làm fail login                        |
+| `system_configs`   | Cấu hình hệ thống liên quan       | Là nguồn cấu hình thời hạn session khi có `rememberDevice`                        |
+| `system_policies`  | Policy hệ thống liên quan         | Chỉ dùng cho policy mô tả hoặc quản trị nếu về sau cần                            |
 
 ### 5.2 Dữ liệu đầu vào
 
-| Field | Type dự kiến | Bắt buộc | Mô tả | Validation |
-|---|---:|---:|---|---|
-| `email` | `string` | Có | Định danh đăng nhập | Required, valid email format, trim, lowercase |
-| `password` | `string` | Có | Mật khẩu đăng nhập | Required, giữ nguyên raw input, không trim |
+| Field      | Type dự kiến | Bắt buộc | Mô tả               | Validation                                    |
+| ---------- | -----------: | -------: | ------------------- | --------------------------------------------- |
+| `email`    |     `string` |       Có | Định danh đăng nhập | Required, valid email format, trim, lowercase |
+| `password` |     `string` |       Có | Mật khẩu đăng nhập  | Required, giữ nguyên raw input, không trim    |
 
 ### 5.3 Dữ liệu đầu ra
 
-| Field | Type dự kiến | Mô tả |
-|---|---:|---|
-| `accessToken` | `string` | Token truy cập cho các request cần xác thực |
-| `refreshToken` | `string` | Token làm mới phiên theo API contract |
-| `expiresIn` | `number` | Thời lượng hiệu lực của access token |
-| `user.id` | `uuid` | Định danh user |
-| `user.email` | `string` | Email của user |
-| `user.fullName` | `string` | Tên hiển thị của user |
-| `user.avatarUrl` | `string/null` | Ảnh đại diện nếu có |
-| `user.departmentId` | `uuid/null` | Phòng ban của user nếu có |
-| `user.roles[]` | `array` | Các role hiệu lực của user |
-| `user.permissions[]` | `array` | Các permission hiệu lực của user |
+| Field                |  Type dự kiến | Mô tả                                       |
+| -------------------- | ------------: | ------------------------------------------- |
+| `accessToken`        |      `string` | Token truy cập cho các request cần xác thực |
+| `refreshToken`       |      `string` | Token làm mới phiên theo API contract       |
+| `expiresIn`          |      `number` | Thời lượng hiệu lực của access token        |
+| `user.id`            |        `uuid` | Định danh user                              |
+| `user.email`         |      `string` | Email của user                              |
+| `user.fullName`      |      `string` | Tên hiển thị của user                       |
+| `user.avatarUrl`     | `string/null` | Ảnh đại diện nếu có                         |
+| `user.departmentId`  |   `uuid/null` | Phòng ban của user nếu có                   |
+| `user.roles[]`       |       `array` | Các role hiệu lực của user                  |
+| `user.permissions[]` |       `array` | Các permission hiệu lực của user            |
 
 ### 5.4 State / Status Model
 
-| Status | Ý nghĩa | Có thể chuyển sang | Điều kiện chuyển |
-|---|---|---|---|
-| `active` | Tài khoản được phép đăng nhập | Phiên đăng nhập hợp lệ | Password đúng, session được tạo, token được tạo |
-| `inactive` | Tài khoản không được phép đăng nhập | Không chuyển trong phạm vi feature này | Trả `403 AUTH_ACCOUNT_INACTIVE` |
-| `locked` | Tài khoản bị khóa tạm thời hoặc theo chính sách | Không chuyển trong phạm vi feature này | Trả `423 AUTH_ACCOUNT_LOCKED` |
-| `other_status` | Trạng thái không nằm trong danh sách chính thức | Không chuyển trong phạm vi feature này | Trả `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED` |
+| Status         | Ý nghĩa                                         | Có thể chuyển sang                     | Điều kiện chuyển                                |
+| -------------- | ----------------------------------------------- | -------------------------------------- | ----------------------------------------------- |
+| `active`       | Tài khoản được phép đăng nhập                   | Phiên đăng nhập hợp lệ                 | Password đúng, session được tạo, token được tạo |
+| `inactive`     | Tài khoản không được phép đăng nhập             | Không chuyển trong phạm vi feature này | Trả `403 AUTH_ACCOUNT_INACTIVE`                 |
+| `locked`       | Tài khoản bị khóa tạm thời hoặc theo chính sách | Không chuyển trong phạm vi feature này | Trả `423 AUTH_ACCOUNT_LOCKED`                   |
+| `other_status` | Trạng thái không nằm trong danh sách chính thức | Không chuyển trong phạm vi feature này | Trả `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED`       |
 
 ### 5.5 Data Constraints
 
