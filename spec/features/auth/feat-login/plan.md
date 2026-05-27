@@ -1,3 +1,8 @@
+## 📝 CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-05-27 | Cập nhật di chuyển sang cơ chế stateless JWT dùng claim `jti` thay vì bảng `user_sessions`. | Toàn bộ file |
+
 # Implementation Plan: AUTH-001 Login
 
 **Branch**: `tai-branch` | **Date**: 2026-05-26 | **Spec**: [spec.md](/home/duktai/Desktop/capstone-be/spec/features/auth/feat-login/spec.md)
@@ -5,19 +10,19 @@
 
 ## 1. Feature Summary
 
-Feature này triển khai `UC-AUTH-01` cho phép người dùng nội bộ đăng nhập hệ thống qua `POST /api/v1/auth/login` bằng `email` và `password`. Luồng cốt lõi đã được chốt rõ: strict validate body, validate email, giữ nguyên raw password, kiểm tra rate limit theo IP/email, tìm user theo email đã normalize, verify password, kiểm tra `account_status`, tạo `user_sessions`, sau đó mới tạo `accessToken` và `refreshToken`, cập nhật `users.last_login_at`, ghi `audit_logs`, rồi trả response thành công theo API contract. Nếu `user_sessions` không tạo được thì fail toàn bộ login; nếu cập nhật `last_login_at` hoặc ghi audit log thất bại thì không fail login, chỉ log lỗi nội bộ.
+Feature này triển khai `UC-AUTH-01` cho phép người dùng nội bộ đăng nhập hệ thống qua `POST /api/v1/auth/login` bằng `email` và `password`. Luồng cốt lõi đã được chốt rõ: strict validate body, validate email, giữ nguyên raw password, kiểm tra rate limit theo IP/email, tìm user theo email đã normalize, verify password, kiểm tra `account_status`, sinh một UUID duy nhất làm `jti`, tạo `accessToken` và `refreshToken` chứa claim `jti`, cập nhật `users.last_login_at`, ghi `audit_logs`, rồi trả response thành công theo API contract. Nếu cập nhật `last_login_at` hoặc ghi audit log thất bại thì không fail login, chỉ log lỗi nội bộ.
 
 ## 2. Technical Context
 
 **Language/Version**: TypeScript 5.x on NestJS 11  
 **Primary Dependencies**: `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express`, `rxjs`; testing bằng `jest`, `supertest`, `@nestjs/testing`  
-**Storage**: PostgreSQL theo database baseline v3.1 Balanced; feature dùng `users`, `user_roles`, `roles`, `role_permissions`, `permissions`, `user_sessions`, `audit_logs`, `system_configs`  
+**Storage**: PostgreSQL theo database baseline v3.2 Compact; feature dùng `users`, `user_roles`, `roles`, `role_permissions`, `permissions`, `audit_logs`, `system_configs`  
 **Testing**: Jest unit tests, Nest integration tests, Supertest e2e cho endpoint login  
 **Target Platform**: Linux server backend API  
 **Project Type**: Backend web-service (NestJS modular monolith)  
 **Performance Goals**: Login success/fail phản hồi trong vòng 3 giây ở điều kiện tải thông thường  
-**Constraints**: Không trả dữ liệu nhạy cảm; body chỉ cho phép `email`, `password`; nếu có `rememberDevice` hoặc field lạ phải trả `400 VALIDATION_ERROR`; rate limit phải diễn ra trước password verification; session phải được persist trước khi tạo token; không mở rộng sang logout/refresh/reset password/SSO  
-**Scale/Scope**: 1 endpoint login, 1 auth flow đồng bộ, tác động trực tiếp tới identity/session/audit tables
+**Constraints**: Không trả dữ liệu nhạy cảm; body chỉ cho phép `email`, `password`; nếu có `rememberDevice` hoặc field lạ phải trả `400 VALIDATION_ERROR`; rate limit phải diễn ra trước password verification; không mở rộng sang logout/refresh/reset password/SSO  
+**Scale/Scope**: 1 endpoint login, 1 auth flow đồng bộ, tác động trực tiếp tới identity/audit tables
 
 ## 3. Scope Confirmation
 
@@ -27,10 +32,10 @@ Trong scope:
 - Strict validation cho body, email format, required fields.
 - Email được trim + lowercase trước khi tra cứu.
 - Password được verify bằng raw input, không trim.
-- Rate limit theo IP/email trước bước tra cứu account và verify password.
+- Check rate limit theo IP/email trước bước tra cứu account và verify password.
 - Kiểm tra `users.account_status` với các trạng thái: `active`, `inactive`, `locked`, và fallback cho status khác.
-- Tạo `user_sessions` trước khi tạo token.
-- Tạo `accessToken`, `refreshToken` gắn với session vừa tạo.
+- Sinh UUID duy nhất làm `jti` để gán vào token.
+- Tạo `accessToken`, `refreshToken` gắn với `jti` vừa sinh.
 - Cập nhật `users.last_login_at` theo cơ chế non-blocking.
 - Ghi `audit_logs` cho login success theo cơ chế non-blocking.
 - Trả response success chuẩn của dự án với token + user summary + roles/permissions.
@@ -38,7 +43,7 @@ Trong scope:
 Ngoài scope:
 - `rememberDevice` như request field hợp lệ cho login hiện tại; field này phải bị reject do strict validation.
 - `mustChangePassword`.
-- Logout, refresh token endpoint, revoke session endpoint.
+- Logout, refresh token endpoint.
 - Forgot password, reset password, change password.
 - Lockout policy chi tiết ngoài kết quả rate limit đã chốt.
 - SSO, OAuth, face login, social login.
@@ -61,9 +66,6 @@ Tác động chính:
   - Read mapping role-permission.
 - `permissions`
   - Read permission metadata để trả `permissions[]`.
-- `user_sessions`
-  - Insert session mới trước khi tạo token.
-  - Required logical fields: `user_id`, `refresh_token_hash`, `login_at`, `expires_at`, `ip_address`, `user_agent`, `is_active`.
 - `audit_logs`
   - Insert login success audit record sau khi login success đã sẵn sàng; nếu fail chỉ log nội bộ.
 - `system_configs`
@@ -72,8 +74,6 @@ Tác động chính:
 **Schema/constraint impact cần xác nhận trong implementation**
 - `users.email` là unique để tra cứu trực tiếp và ổn định.
 - `users.account_status` phải support ít nhất `active`, `inactive`, `locked`.
-- `user_sessions.refresh_token_hash` được lưu dưới dạng hash, không lưu raw refresh token.
-- Nếu token được gắn với session id thì cần một cơ chế claim hoặc metadata phù hợp ở lớp ứng dụng, không yêu cầu thêm cột DB mới nếu chưa cần.
 
 **Transaction boundary**
 
@@ -85,16 +85,14 @@ Boundary tối thiểu cần giữ nhất quán:
   - user lookup
   - password verification
   - account status check
-- DB write path nên bao gồm ít nhất:
-  - insert `user_sessions`
 - Ngoài transaction critical path hoặc non-blocking path:
-  - generate access token / refresh token sau khi session insert thành công
+  - sinh `jti` và generate access token / refresh token
   - update `users.last_login_at`
   - insert `audit_logs`
 
 Ghi chú thiết kế:
-- Vì spec chốt `AUTH_SESSION_CREATE_FAILED` là blocker nhưng `last_login_at` và `audit_logs` là non-blocking, plan không gom ba bước này vào một transaction rollback chung.
-- Nếu token generation fail sau khi session đã insert, implementation cần xử lý cleanup hoặc revoke/inactivate session vừa tạo để tránh session mồ côi. Đây là consistency requirement trong code path, không phải mở rộng scope chức năng.
+- `last_login_at` và `audit_logs` là best-effort side effects, không phải blockers.
+- Nếu token generation fail, implementation cần xử lý trả về lỗi.
 
 ## 5. API / Contract Plan
 
@@ -151,10 +149,9 @@ Ghi chú thiết kế:
   - `users.account_status = locked`
 - `429 AUTH_TOO_MANY_ATTEMPTS`
   - vượt rate limit theo IP/email
-- `500 AUTH_SESSION_CREATE_FAILED`
-  - không tạo được `user_sessions`
+- `500 AUTH_TOKEN_GENERATION_FAILED`
+  - không tạo được token
 - `500` system error chuẩn của dự án
-  - token generation error
   - unexpected DB/internal error
 
 **Contract consistency notes**
@@ -195,12 +192,10 @@ Luồng xử lý đề xuất:
    - `locked` -> `423 AUTH_ACCOUNT_LOCKED`
    - status khác -> `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED`
 9. Load role/permission data hiệu lực cho response.
-10. Tạo `user_sessions`:
-   - nếu thất bại -> `500 AUTH_SESSION_CREATE_FAILED`
-11. Generate `accessToken` và `refreshToken` gắn với session vừa tạo.
+10. Sinh UUID duy nhất làm `jti`.
+11. Generate `accessToken` và `refreshToken` gắn với `jti` vừa tạo.
 12. Nếu token generation fail:
-   - fail login với system error
-   - cleanup/revoke session vừa tạo để không để session mồ côi
+   - fail login với `500 AUTH_TOKEN_GENERATION_FAILED`
 13. Update `users.last_login_at`:
    - nếu fail -> không fail login, chỉ log lỗi nội bộ
 14. Ghi `audit_logs` cho login success:
@@ -210,7 +205,7 @@ Luồng xử lý đề xuất:
 Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 - `rememberDevice` không phải request field hợp lệ trong scope này.
 - `AUTH_INVALID_CREDENTIALS` dùng chung cho user not found và wrong password.
-- Session persistence là bước bắt buộc trước token issuance.
+- Sinh `jti` là bước bắt buộc trước token issuance.
 - `last_login_at` và `audit_logs` là best-effort side effects, không phải blockers.
 
 ## 8. Validation Plan
@@ -271,10 +266,9 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 - `429 AUTH_TOO_MANY_ATTEMPTS`
 
 **Token/session errors**
-- `500 AUTH_SESSION_CREATE_FAILED`
-  - session insert fail
-- generic system error
+- `500 AUTH_TOKEN_GENERATION_FAILED`
   - token generation fail
+- generic system error
   - unexpected internal failures
 
 **Non-blocking side-effect failures**
@@ -286,7 +280,8 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
   - log nội bộ với trace context
 
 **Consistency safeguard**
-- Nếu session đã tạo nhưng token generation fail, implementation phải mark session as revoked/inactive hoặc cleanup theo cơ chế an toàn để không còn active session không usable.
+- Bảo đảm token được sinh an toàn với jti.
+
 
 ## 10. Testing Strategy
 
@@ -306,8 +301,7 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
   - inactive -> `AUTH_ACCOUNT_INACTIVE`
   - locked -> `AUTH_ACCOUNT_LOCKED`
   - unsupported status -> `AUTH_ACCOUNT_STATUS_NOT_ALLOWED`
-  - session create fail -> `AUTH_SESSION_CREATE_FAILED`
-  - token generation fail -> system error + session cleanup path
+  - token generation fail -> `AUTH_TOKEN_GENERATION_FAILED`
   - last_login_at fail không làm fail login
   - audit log fail không làm fail login
 - Role/permission aggregation:
@@ -316,12 +310,9 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 **Integration tests**
 - Repository/service integration cho:
   - lookup `users` bằng normalized email
-  - insert `user_sessions`
   - read `user_roles` + `roles` + `role_permissions` + `permissions`
   - update `last_login_at`
   - insert `audit_logs`
-- Consistency path:
-  - session insert thành công nhưng token generation fail -> cleanup/revoke path
 
 **E2E/API tests**
 - `POST /api/v1/auth/login` success case
@@ -333,30 +324,28 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 - `423 AUTH_ACCOUNT_LOCKED`
 - `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED`
 - `429 AUTH_TOO_MANY_ATTEMPTS`
-- `500 AUTH_SESSION_CREATE_FAILED`
+- `500 AUTH_TOKEN_GENERATION_FAILED`
 - success response shape không chứa dữ liệu nhạy cảm
 
 **Coverage intent**
-- Tập trung vào contract behavior, security behavior, transaction/consistency path, và acceptance criteria trong spec.
+- Tập trung vào contract behavior, security behavior, và acceptance criteria trong spec.
 
 ## 11. Implementation Phases
 
 ### Phase 0 - Research & Design Consolidation
 - Xác nhận cấu trúc module NestJS phù hợp cho `auth` trong repo hiện tại.
 - Chốt cơ chế rate limit implementation phù hợp với codebase hiện có hoặc tối thiểu adapter tạm thời cho scope feature.
-- Chốt token/session cleanup behavior khi token generation fail.
 
 ### Phase 1 - Foundations
 - Tạo module/domain skeleton cho `auth` theo structure NestJS.
 - Tạo shared error codes, DTO validation, response mapping cho login.
-- Tạo data access abstractions tối thiểu cho `users`, `user_sessions`, role/permission graph, `audit_logs`, `system_configs`.
+- Tạo data access abstractions tối thiểu cho `users`, role/permission graph, `audit_logs`, `system_configs`.
 
 ### Phase 2 - Core Login Flow
 - Implement strict body validation và email normalization.
 - Implement rate limit check.
 - Implement user lookup + password verification + account status evaluation.
-- Implement `user_sessions` creation.
-- Implement token generation gắn với session.
+- Implement token generation gắn với `jti`.
 
 ### Phase 3 - Side Effects & Response Assembly
 - Implement role/permission aggregation.
@@ -365,7 +354,7 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 - Implement final response mapper theo API contract.
 
 ### Phase 4 - Verification
-- Unit tests cho validation, auth logic, status mapping, session/token failure paths.
+- Unit tests cho validation, auth logic, status mapping.
 - Integration tests cho repositories/services.
 - E2E tests cho endpoint contract và acceptance scenarios.
 - Lint/test run để bảo đảm plan sẵn sàng cho tasks/implementation.
@@ -374,8 +363,6 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 
 - **Risk**: API quick reference từng nêu `rememberDevice`, nhưng clarified spec cấm field này.
   - **Mitigation**: Treat clarified spec as source of truth; map any presence of field to `400 VALIDATION_ERROR` và ghi rõ trong tests.
-- **Risk**: Token generation fail sau session insert có thể để lại session mồ côi.
-  - **Mitigation**: Thiết kế cleanup/revoke path rõ ràng và test explicit case này.
 - **Risk**: Repo hiện gần như chưa có auth module foundation.
   - **Mitigation**: Phase 1 tạo minimal auth skeleton và shared abstractions trước khi đi vào endpoint.
 - **Risk**: Rate limit implementation choice có thể kéo thêm dependency ngoài scope.
@@ -397,5 +384,6 @@ Quyết định nghiệp vụ cần phản ánh rõ trong code/design:
 | `locked` -> `423 AUTH_ACCOUNT_LOCKED` | Mục 5, 7, 9, 10 |
 | Unsupported status -> `403 AUTH_ACCOUNT_STATUS_NOT_ALLOWED` | Mục 5, 7, 9, 10 |
 | Không trả dữ liệu nhạy cảm | Mục 5, 9, 10 |
-| Login success chỉ khi `user_sessions` tạo thành công | Mục 4, 7, 9, 10 |
+| Login success chỉ khi token tạo thành công | Mục 4, 7, 9, 10 |
 | `last_login_at`/audit fail không fail login | Mục 4, 7, 9, 10 |
+
