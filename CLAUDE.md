@@ -3,6 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
 | 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
 
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
@@ -954,6 +955,204 @@ IVSS có thể được xem xét sau cho: centralized camera management, central
 - Hard-code camera IP/password trong source code.
 - Commit credential thật.
 - Log camera password, token hoặc raw secret.
+
+### 11.13. Danh sách UC Camera/IoT v1
+
+Danh sách UC Camera/IoT v1 là bản đã chuẩn hóa từ Feature Table hiện tại. Một số UC đã có trong file cũ được giữ lại nhưng đổi wording để đúng với kiến trúc implementation. Một số UC mới được bổ sung để che phủ phần technical integration còn thiếu như callback, heartbeat, raw event, normalization, device-user mapping và RTSP config.
+
+```text
+1. Đăng ký thiết bị camera/IoT vào hệ thống
+2. Gán camera vào phòng họp
+3. Cấu hình thông tin kết nối Face Server
+4. Cấu hình RTSP cho IP Camera góc phòng
+5. Kiểm tra trạng thái khả dụng của camera
+6. Nhận heartbeat từ Face Server
+7. Nhận verify event từ Face Server
+8. Nhận stranger event từ Face Server
+9. Lưu raw event từ thiết bị camera
+10. Chuẩn hóa payload sự kiện camera
+11. Liên kết user hệ thống với person trên Face Server
+12. Lưu sự kiện check-in từ camera điểm danh
+13. Tạo bản ghi điểm danh bằng camera điểm danh ở cửa
+14. Nhận occupancy event từ Python Camera Service
+15. Nhận room empty event từ Python Camera Service
+16. Cập nhật trạng thái hiện diện realtime
+17. Bắt đầu ghi hình từ IP Camera góc phòng
+18. Dừng ghi hình từ IP Camera góc phòng
+19. Tạo metadata file phương tiện
+20. Lưu lỗi ghi hình / lỗi kết nối camera
+```
+
+### 11.14. Existing camera-related UC wording normalization
+
+| UC cũ trong Feature Table | Wording mới nên dùng trong CLAUDE.md | Lý do sửa |
+|---|---|---|
+| Gán thủ công camera nhận diện vào phòng họp | Gán camera vào phòng họp | Dùng wording trung lập hơn, áp dụng cho cả Door Face Attendance Terminal và IP Room Camera |
+| Xem / Kiểm tra trạng thái khả dụng của thiết bị | Kiểm tra trạng thái khả dụng của camera | Scope hiện tại tập trung camera/IoT trước |
+| Đăng ký và liên kết dữ liệu khuôn mặt | Liên kết user hệ thống với person trên Face Server | Backend không tự lưu/match face template; Face Server lưu person và face template nội bộ |
+| Lưu sự kiện check-in từ camera điểm danh | Lưu sự kiện check-in từ camera điểm danh | Giữ nguyên, nhưng phải ghi rõ event đến từ Face Server verify callback |
+| Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | Giữ nguyên, nhưng chỉ xử lý sau khi raw event đã được normalize và mapping user thành công |
+| Tạo sự kiện vào phòng bằng IP Camera góc phòng | Nhận occupancy event từ Python Camera Service | NestJS không đọc RTSP trực tiếp; Python service xử lý camera rồi gửi event |
+| Tạo sự kiện rời phòng bằng IP Camera góc phòng | Nhận room empty event từ Python Camera Service | Nên hiểu là room-level empty/occupancy event, không phải định danh từng người |
+| Cập nhật trạng thái hiện diện realtime | Cập nhật trạng thái hiện diện realtime | Giữ nguyên, nhưng input là normalized presence event/snapshot |
+| Bắt đầu ghi hình từ IP Camera góc phòng | Bắt đầu ghi hình từ IP Camera góc phòng | Giữ nguyên |
+| Dừng ghi hình từ IP Camera góc phòng | Dừng ghi hình từ IP Camera góc phòng | Giữ nguyên |
+| Tạo metadata file phương tiện | Tạo metadata file phương tiện | Giữ nguyên, dùng cho recording/media_files |
+| Thông báo lỗi ghi âm/ghi hình | Lưu lỗi ghi hình / lỗi kết nối camera | Tạm thời chỉ lưu error event/log; notification business có thể làm sau |
+
+### 11.15. New Camera/IoT UC added for v1 integration
+
+| UC mới | Module đề xuất | Mục tiêu |
+|---|---|---|
+| Đăng ký thiết bị camera/IoT vào hệ thống | `iot` | Tạo record `iot_devices` cho Face Server, IP Room Camera hoặc thiết bị IoT có khả năng gửi event/stream |
+| Cấu hình thông tin kết nối Face Server | `face-attendance` hoặc `iot` | Lưu IP, device code, callback config, token/secret nếu có, room assignment |
+| Cấu hình RTSP cho IP Camera góc phòng | `iot` hoặc `recording` | Lưu RTSP URL/config để Python Camera Service hoặc recording worker sử dụng |
+| Nhận heartbeat từ Face Server | `face-attendance` | Nhận heartbeat callback, lưu raw event, cập nhật last_seen/device health |
+| Nhận verify event từ Face Server | `face-attendance` | Nhận event nhận diện thành công, lưu raw event, normalize payload |
+| Nhận stranger event từ Face Server | `face-attendance` | Nhận event người lạ/chưa đăng ký, lưu raw event, tạo unknown/pending event nếu phù hợp |
+| Lưu raw event từ thiết bị camera | `iot` | Lưu mọi payload gốc vào `iot_device_events` trước khi xử lý business |
+| Chuẩn hóa payload sự kiện camera | `iot` hoặc module adapter tương ứng | Chuyển vendor-specific payload thành internal DTO chuẩn |
+| Liên kết user hệ thống với person trên Face Server | `device-user-mappings` | Map `users.id` với `device_person_id/code/name` trên Face Server |
+| Nhận occupancy event từ Python Camera Service | `presence` | Nhận room occupied/occupancy_count event từ Python service |
+| Nhận room empty event từ Python Camera Service | `presence` | Nhận room empty/no occupancy event từ Python service |
+
+### 11.16. Camera/IoT UC backlog for v1
+
+#### Group A - Camera/IoT Device Setup
+
+| # | Function | Module |
+|---:|---|---|
+| 1 | Đăng ký thiết bị camera/IoT vào hệ thống | `iot` |
+| 2 | Gán camera vào phòng họp | `iot` hoặc `equipment` nếu xét theo assignment tài sản |
+| 3 | Cấu hình thông tin kết nối Face Server | `face-attendance` + `iot` |
+| 4 | Cấu hình RTSP cho IP Camera góc phòng | `iot` + `recording` |
+| 5 | Kiểm tra trạng thái khả dụng của camera | `iot` |
+
+#### Group B - Face Server Attendance Callback
+
+| # | Function | Module |
+|---:|---|---|
+| 6 | Nhận heartbeat từ Face Server | `face-attendance` |
+| 7 | Nhận verify event từ Face Server | `face-attendance` |
+| 8 | Nhận stranger event từ Face Server | `face-attendance` |
+| 9 | Lưu raw event từ thiết bị camera | `iot` |
+| 10 | Chuẩn hóa payload sự kiện camera | `face-attendance` adapter hoặc `iot` adapter |
+| 11 | Liên kết user hệ thống với person trên Face Server | `device-user-mappings` |
+| 12 | Lưu sự kiện check-in từ camera điểm danh | `attendance` |
+| 13 | Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | `attendance` |
+
+#### Group C - IP Room Camera Presence
+
+| # | Function | Module |
+|---:|---|---|
+| 14 | Nhận occupancy event từ Python Camera Service | `presence` |
+| 15 | Nhận room empty event từ Python Camera Service | `presence` |
+| 16 | Cập nhật trạng thái hiện diện realtime | `presence` + `WebSocket Gateway` |
+
+#### Group D - Camera Recording
+
+| # | Function | Module |
+|---:|---|---|
+| 17 | Bắt đầu ghi hình từ IP Camera góc phòng | `recording` |
+| 18 | Dừng ghi hình từ IP Camera góc phòng | `recording` |
+| 19 | Tạo metadata file phương tiện | `recording` hoặc `media` nếu sau này tách module |
+| 20 | Lưu lỗi ghi hình / lỗi kết nối camera | `recording` + `iot` |
+
+### 11.17. Module creation rules for Camera/IoT
+
+If a camera/IoT UC does not fit an existing module, create a new module only when needed and document the reason in the spec/plan.
+
+Approved modules for Camera/IoT v1:
+
+- `iot`
+- `device-user-mappings`
+- `face-attendance`
+- `presence`
+- `attendance`
+- `recording`
+- `equipment`
+- `utilization` only when implementing business no-show/early-empty rules later
+
+Do not put everything into `iot`.
+Do not put camera callback parsing directly into `attendance`.
+Do not put RTSP processing directly into NestJS request handlers.
+
+Nếu module `media` chưa tồn tại, không tự tạo ngay nếu `recording` đã đủ chứa `media_files` metadata. Chỉ tạo `media` module nếu team chốt tách file/media management riêng.
+
+### 11.18. Out of scope for Camera/IoT integration phase
+
+Các UC sau sử dụng dữ liệu camera nhưng là business phase, chưa làm trước trong Camera/IoT integration layer:
+
+- Phát hiện trường hợp có nguy cơ no-show
+- Tạo trường hợp no-show
+- Cập nhật trường hợp no-show
+- Gửi cảnh báo no-show
+- Tự động giải phóng phòng
+- Gửi cảnh báo người tham dự chưa check-in
+- Gửi cảnh báo khuôn mặt lạ
+- Dashboard điểm danh & hiện diện
+- Report/statistics về tỷ lệ no-show, tỷ lệ tham dự đúng giờ
+- Tính tổng thời gian hiện diện thực tế nếu chưa có đủ event nền
+
+Những UC này sẽ được implement sau khi lớp Camera/IoT ingestion đã ổn định và dữ liệu đã được chuẩn hóa vào DB.
+
+### 11.19. Recommended implementation order for Camera/IoT phase
+
+1. `iot` - Đăng ký thiết bị camera/IoT vào hệ thống
+2. `iot` - Gán camera vào phòng họp
+3. `iot` / `face-attendance` - Cấu hình thông tin kết nối Face Server
+4. `iot` / `recording` - Cấu hình RTSP cho IP Camera góc phòng
+5. `iot` - Kiểm tra trạng thái khả dụng của camera
+6. `device-user-mappings` - Liên kết user hệ thống với person trên Face Server
+7. `face-attendance` - Nhận heartbeat từ Face Server
+8. `face-attendance` - Nhận verify event từ Face Server
+9. `face-attendance` - Nhận stranger event từ Face Server
+10. `iot` - Lưu raw event từ thiết bị camera
+11. `face-attendance` / `presence` - Chuẩn hóa payload sự kiện camera
+12. `attendance` - Lưu sự kiện check-in từ camera điểm danh
+13. `attendance` - Tạo bản ghi điểm danh bằng camera điểm danh ở cửa
+14. `presence` - Nhận occupancy event từ Python Camera Service
+15. `presence` - Nhận room empty event từ Python Camera Service
+16. `presence` - Cập nhật trạng thái hiện diện realtime
+17. `recording` - Bắt đầu ghi hình từ IP Camera góc phòng
+18. `recording` - Dừng ghi hình từ IP Camera góc phòng
+19. `recording` - Tạo metadata file phương tiện
+20. `iot` / `recording` - Lưu lỗi ghi hình / lỗi kết nối camera
+
+### 11.20. Spec Kit convention cho UC Camera/IoT
+
+For each Camera/IoT UC, create a feature folder under:
+
+`spec/features/<module>/<feature-name>/`
+
+Examples:
+
+- `spec/features/iot/feat-register-camera-device/`
+- `spec/features/iot/feat-assign-camera-to-room/`
+- `spec/features/face-attendance/feat-face-server-heartbeat/`
+- `spec/features/face-attendance/feat-face-server-verify-event/`
+- `spec/features/face-attendance/feat-face-server-stranger-event/`
+- `spec/features/device-user-mappings/feat-map-user-to-face-server-person/`
+- `spec/features/presence/feat-room-camera-occupancy-event/`
+- `spec/features/presence/feat-room-camera-empty-event/`
+- `spec/features/recording/feat-start-ip-camera-recording/`
+- `spec/features/recording/feat-stop-ip-camera-recording/`
+
+Spec content may be written in Vietnamese, but technical names such as module name, endpoint, entity, DTO, table and field names must remain in English.
+
+### 11.21. Quy tắc wording khi viết spec cho Camera/IoT UC
+
+When writing specs for Camera/IoT UC:
+
+- Use Vietnamese for business explanation.
+- Keep technical names in English.
+- Clearly distinguish `equipment` from `iot_devices`.
+- `equipment` means physical asset/resource.
+- `iot_devices` means connected device that sends event/heartbeat/stream metadata.
+- Camera can be an equipment asset, but camera integration belongs to `iot`, `face-attendance`, `presence`, and `recording`.
+- Do not describe IP Room Camera as the main source of person identity in v1.
+- Do not describe NestJS as directly reading RTSP stream in request handler.
+- Do not describe backend as training or running face recognition model.
 
 ---
 

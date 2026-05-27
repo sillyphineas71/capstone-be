@@ -3,6 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
 | 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
 
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
@@ -38,7 +39,7 @@ Backend sử dụng:
 - **TypeORM** làm ORM/migration layer, trừ khi team thay đổi chính thức.
 - **JWT + RBAC** cho authentication/authorization.
 - **WebSocket** cho realtime status/presence/live meeting sync.
-- **MQTT** cho tương tác IoT/device/capture agent nếu triển khai phần thiết bị.
+- **HTTP Subscription** (từ Door Face Attendance Terminal) và **RTSP qua Python Camera Service** (từ IP Room Camera) cho camera integration trong v1. MQTT không được dùng trong v1 core flow.
 
 Nguyên tắc quan trọng nhất:
 
@@ -161,7 +162,8 @@ Backend đi theo hướng **modular monolith**:
 - Không chia microservice sớm khi chưa cần.
 - Các module giao tiếp qua service/export rõ ràng, không import chéo bừa bãi.
 - Database dùng chung PostgreSQL nhưng boundary logic vẫn theo module.
-- IoT/MQTT/WebSocket được đóng gói trong module riêng hoặc adapter rõ ràng.
+- Device event ingestion, camera callbacks and WebSocket are packaged in clear modules/adapters.
+- MQTT is reserved for future extension only and is not part of the v1 core flow.
 
 ---
 
@@ -360,7 +362,7 @@ Khi cần thay đổi schema:
 /src
   /common
     /constants
-    /decorcho tors
+    /decorators
     /exceptions
     /filters
     /guards
@@ -373,7 +375,9 @@ Khi cần thay đổi schema:
     app.config.ts
     database.config.ts
     jwt.config.ts
-    mqtt.config.ts
+    device-callback.config.ts
+    camera.config.ts
+    mqtt.config.ts // future only, not used in v1
     storage.config.ts
 
   /database
@@ -759,33 +763,396 @@ Không gộp ba loại dữ liệu này vào một bảng/service nếu schema �
 - `capture_session_channels`: từng kênh capture, ví dụ microphone/camera/screen.
 - `device_user_mappings`: mapping giữa người dùng trong hệ thống và định danh người đó trên thiết bị/camera/face server.
 
-### 11.2. Nguyên tắc tích hợp thiết bị
+### 11.2. Hai loại camera trong dự án
 
-Backend không nên phụ thuộc trực tiếp vào SDK cụ thể của camera/mic nếu chưa chốt vendor.
+#### Door Face Attendance Terminal
 
-Nên dùng adapter/port:
+Thiết bị đặt tại cửa phòng họp, dùng để check-in/check-out bằng khuôn mặt. Đây **không phải IP camera thường** mà là Face Server có sẵn camera, màn hình, face database nội bộ, face enrollment, face verification, HTTP Subscription và web admin.
+
+Thiết bị tự thực hiện face enrollment, face template storage, face verification, similarity calculation và control log. Backend **không** tự detect face, không tự extract embedding, không tự so khớp khuôn mặt. Backend chỉ nhận kết quả nhận diện từ thiết bị.
+
+Luồng tích hợp v1:
+
+```text
+Door Face Attendance Terminal
+→ HTTP Subscription
+→ NestJS backend callback endpoint
+→ iot_device_events (raw)
+→ device_user_mappings
+→ attendance_events / attendance_records
+→ WebSocket dashboard
+```
+
+#### IP Room Camera
+
+Camera đặt tại góc phòng họp, dùng để theo dõi phòng có người hay không, cập nhật occupancy/presence, phát hiện phòng trống sớm, phát hiện no-show, và ghi hình nếu được bật.
+
+IP Room Camera **không phải nguồn định danh người chính**. Định danh người nên đến từ Door Face Attendance Terminal.
+
+IP Room Camera cung cấp RTSP stream, xử lý bởi Python Camera Service, không xử lý trực tiếp trong NestJS request handler.
+
+Luồng tích hợp v1:
+
+```text
+IP Room Camera
+→ RTSP
+→ Python Camera Service / OpenCV / FFmpeg
+→ REST API to NestJS
+→ presence_snapshots / room_events / room_booking_usages / no_show_cases
+→ WebSocket dashboard
+```
+
+### 11.3. Nguyên tắc tích hợp thiết bị
+
+Backend không phụ thuộc trực tiếp vào SDK cụ thể của camera/vendor. Thiết kế qua adapter/port:
 
 ```text
 DeviceProviderPort
 FaceDeviceProviderPort
 CaptureAgentPort
-MqttEventPublisherPort
 ```
 
 Mục tiêu là thay vendor mà không phá domain logic.
 
-### 11.3. MQTT event
+### 11.4. Device callback endpoints
 
-MQTT event nên được validate trước khi lưu/xử lý.
+Các endpoint callback từ device phải tách khỏi API người dùng thông thường:
 
-Payload từ thiết bị không được tin tưởng tuyệt đối:
+```text
+POST /api/v1/device-callbacks/face/heartbeat
+POST /api/v1/device-callbacks/face/verify
+POST /api/v1/device-callbacks/face/stranger
+```
 
-- Validate device id.
-- Check device active.
-- Check room assignment.
-- Check timestamp hợp lệ.
-- Ghi raw payload có kiểm soát nếu cần debug.
-- Không để payload thiết bị tự quyết định business action quan trọng nếu chưa qua service rule.
+Các endpoint này là system-to-system, **không** dùng JWT user login. Thay vào đó validate:
+
+- Source IP nếu có thể.
+- Device code hoặc device id.
+- Callback token/shared secret nếu thiết bị hỗ trợ.
+- Device còn active và đã được assign vào room.
+
+Device có thể gửi payload dạng vendor-specific (JSON, form data, text, XML, multipart). Callback controller được phép nhận raw body nhưng phải theo quy trình:
+
+```text
+raw body nhận tại boundary
+→ store raw payload vào iot_device_events
+→ normalize payload
+→ validate device và mapping
+→ xử lý business logic (attendance / presence)
+```
+
+Không truyền raw payload trực tiếp vào business service để quyết định attendance.
+
+### 11.5. Room camera endpoints (từ Python Camera Service)
+
+```text
+POST /api/v1/room-camera/presence
+POST /api/v1/room-camera/occupancy-snapshots
+POST /api/v1/room-camera/events
+```
+
+### 11.6. Door face event processing flow
+
+```text
+1. Face Server gửi verify event về backend.
+2. Backend xác định source device.
+3. Backend lưu raw event vào iot_device_events.
+4. Backend normalize payload thành internal DTO.
+5. Backend resolve device person qua device_user_mappings.
+6. Backend resolve room từ iot_devices.room_id.
+7. Backend tìm active meeting trong room tại thời điểm event.
+8. Nếu user thuộc meeting participants:
+   - Tạo attendance_events.
+   - Tạo/cập nhật attendance_records.
+   - Cập nhật meeting_participants.attendance_status nếu cần.
+9. Nếu user unknown hoặc không phải participant:
+   - Lưu event.
+   - Đánh dấu pending_review hoặc unknown_face.
+   - Tạo notification nếu cần.
+10. Backend emit WebSocket event về frontend.
+```
+
+### 11.7. Room camera event processing flow
+
+```text
+1. Python Camera Service phát hiện occupancy event.
+2. Python gửi event về NestJS REST API.
+3. Backend validate device.
+4. Backend lưu raw event vào iot_device_events.
+5. Backend tạo presence_snapshots.
+6. Backend tạo room_events nếu room status thay đổi.
+7. Backend cập nhật room_booking_usages nếu có booking/meeting liên quan.
+8. Utilization service đánh giá no-show hoặc early-empty rules.
+9. Backend emit WebSocket event về frontend.
+```
+
+### 11.8. Module boundary cho camera
+
+| Module | Trách nhiệm camera | Không trách nhiệm |
+|---|---|---|
+| `equipment` | Equipment asset CRUD, assign thiết bị vào phòng | Processing camera event, tạo attendance |
+| `iot` | `iot_devices` CRUD, lưu raw `iot_device_events`, heartbeat | Business attendance decision, no-show, release phòng |
+| `device-user-mappings` | Map system user với Face Server person, track sync_status | Face recognition, attendance logic |
+| `face-attendance` | Face Server HTTP callbacks, normalize face event payload, gọi AttendanceService | Quản lý booking, no-show, train model |
+| `presence` | Room camera event ingestion, `presence_snapshots`, read API | Device CRUD, attendance final decision, room release |
+| `attendance` | `attendance_events`, `attendance_records`, check-in/check-out sau khi event đã normalize | Raw device event parsing, RTSP processing |
+| `utilization` | `room_booking_usages`, no-show evaluation, `no_show_cases`, auto-release | Đọc camera stream, parse device payload |
+| `recording` | Recording configs/sessions/segments, media file metadata | FFmpeg process trực tiếp trong request, face attendance |
+
+### 11.9. Quy tắc bảo mật cho device callbacks
+
+Minimum validation:
+
+```text
+1. Resolve device qua: source IP, device code, hoặc callback token/shared secret.
+2. Check device tồn tại trong iot_devices.
+3. Check device.status là online/active/enabled.
+4. Check device.room_id tồn tại nếu event cần room.
+5. Lưu raw payload trước khi xử lý.
+6. Không tin timestamp thiết bị nếu lệch quá xa server time.
+7. Không để device payload tự trigger critical action như auto-release mà không qua utilization service.
+```
+
+Khuyến nghị thêm:
+
+```text
+- IP allowlist cho lab/demo nếu device trong LAN.
+- Callback token nếu device hỗ trợ.
+- Log tất cả callback request vào iot_device_events.
+- Không log password/secret từ device config.
+```
+
+### 11.10. MQTT policy cho v1
+
+MQTT/Mosquitto **không được dùng trong v1**.
+
+Không implement: Mosquitto broker, MQTT subscriber/publisher service, MQTT topic contract, MQTT env requirement.
+
+Cho phép: giữ `iot_devices.mqtt_topic` nếu database baseline đã có, giữ enum value `mqtt` trong source_protocol nếu đã có trong DB, đề cập MQTT là future extension.
+
+MQTT có thể được xem xét ở future version nếu hệ thống mở rộng thêm nhiều sensor hoặc edge device publish telemetry event nhẹ.
+
+### 11.11. IVSS policy cho v1
+
+IVSS **không phải thành phần core MVP backend**.
+
+Không implement: IVSS SDK integration, IVSS-dependent recording flow, IVSS-dependent camera discovery, IVSS là mandatory camera hub.
+
+Cho phép: đề cập IVSS là optional production camera management/recording server, store IVSS như một `iot_device` hoặc `equipment` nếu team muốn track.
+
+IVSS có thể được xem xét sau cho: centralized camera management, centralized recording, playback, camera operation monitoring.
+
+### 11.12. Điều agent không được làm với camera
+
+- Thêm MQTT/Mosquitto trong v1.
+- Implement backend-side face recognition model.
+- Implement face embedding extraction hoặc model training.
+- Phụ thuộc IVSS cho core flow.
+- Đọc RTSP stream trực tiếp trong NestJS HTTP request lifecycle.
+- Lưu binary video/audio/image lớn trực tiếp vào PostgreSQL.
+- Để raw device payload tự quyết định critical business state.
+- Bỏ qua bước lưu raw event hoặc bỏ qua device validation.
+- Hard-code camera IP/password trong source code.
+- Commit credential thật.
+- Log camera password, token hoặc raw secret.
+
+### 11.13. Danh sách UC Camera/IoT v1
+
+Danh sách UC Camera/IoT v1 là bản đã chuẩn hóa từ Feature Table hiện tại. Một số UC đã có trong file cũ được giữ lại nhưng đổi wording để đúng với kiến trúc implementation. Một số UC mới được bổ sung để che phủ phần technical integration còn thiếu như callback, heartbeat, raw event, normalization, device-user mapping và RTSP config.
+
+```text
+1. Đăng ký thiết bị camera/IoT vào hệ thống
+2. Gán camera vào phòng họp
+3. Cấu hình thông tin kết nối Face Server
+4. Cấu hình RTSP cho IP Camera góc phòng
+5. Kiểm tra trạng thái khả dụng của camera
+6. Nhận heartbeat từ Face Server
+7. Nhận verify event từ Face Server
+8. Nhận stranger event từ Face Server
+9. Lưu raw event từ thiết bị camera
+10. Chuẩn hóa payload sự kiện camera
+11. Liên kết user hệ thống với person trên Face Server
+12. Lưu sự kiện check-in từ camera điểm danh
+13. Tạo bản ghi điểm danh bằng camera điểm danh ở cửa
+14. Nhận occupancy event từ Python Camera Service
+15. Nhận room empty event từ Python Camera Service
+16. Cập nhật trạng thái hiện diện realtime
+17. Bắt đầu ghi hình từ IP Camera góc phòng
+18. Dừng ghi hình từ IP Camera góc phòng
+19. Tạo metadata file phương tiện
+20. Lưu lỗi ghi hình / lỗi kết nối camera
+```
+
+### 11.14. Existing camera-related UC wording normalization
+
+| UC cũ trong Feature Table | Wording mới nên dùng trong CLAUDE.md | Lý do sửa |
+|---|---|---|
+| Gán thủ công camera nhận diện vào phòng họp | Gán camera vào phòng họp | Dùng wording trung lập hơn, áp dụng cho cả Door Face Attendance Terminal và IP Room Camera |
+| Xem / Kiểm tra trạng thái khả dụng của thiết bị | Kiểm tra trạng thái khả dụng của camera | Scope hiện tại tập trung camera/IoT trước |
+| Đăng ký và liên kết dữ liệu khuôn mặt | Liên kết user hệ thống với person trên Face Server | Backend không tự lưu/match face template; Face Server lưu person và face template nội bộ |
+| Lưu sự kiện check-in từ camera điểm danh | Lưu sự kiện check-in từ camera điểm danh | Giữ nguyên, nhưng phải ghi rõ event đến từ Face Server verify callback |
+| Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | Giữ nguyên, nhưng chỉ xử lý sau khi raw event đã được normalize và mapping user thành công |
+| Tạo sự kiện vào phòng bằng IP Camera góc phòng | Nhận occupancy event từ Python Camera Service | NestJS không đọc RTSP trực tiếp; Python service xử lý camera rồi gửi event |
+| Tạo sự kiện rời phòng bằng IP Camera góc phòng | Nhận room empty event từ Python Camera Service | Nên hiểu là room-level empty/occupancy event, không phải định danh từng người |
+| Cập nhật trạng thái hiện diện realtime | Cập nhật trạng thái hiện diện realtime | Giữ nguyên, nhưng input là normalized presence event/snapshot |
+| Bắt đầu ghi hình từ IP Camera góc phòng | Bắt đầu ghi hình từ IP Camera góc phòng | Giữ nguyên |
+| Dừng ghi hình từ IP Camera góc phòng | Dừng ghi hình từ IP Camera góc phòng | Giữ nguyên |
+| Tạo metadata file phương tiện | Tạo metadata file phương tiện | Giữ nguyên, dùng cho recording/media_files |
+| Thông báo lỗi ghi âm/ghi hình | Lưu lỗi ghi hình / lỗi kết nối camera | Tạm thời chỉ lưu error event/log; notification business có thể làm sau |
+
+### 11.15. New Camera/IoT UC added for v1 integration
+
+| UC mới | Module đề xuất | Mục tiêu |
+|---|---|---|
+| Đăng ký thiết bị camera/IoT vào hệ thống | `iot` | Tạo record `iot_devices` cho Face Server, IP Room Camera hoặc thiết bị IoT có khả năng gửi event/stream |
+| Cấu hình thông tin kết nối Face Server | `face-attendance` hoặc `iot` | Lưu IP, device code, callback config, token/secret nếu có, room assignment |
+| Cấu hình RTSP cho IP Camera góc phòng | `iot` hoặc `recording` | Lưu RTSP URL/config để Python Camera Service hoặc recording worker sử dụng |
+| Nhận heartbeat từ Face Server | `face-attendance` | Nhận heartbeat callback, lưu raw event, cập nhật last_seen/device health |
+| Nhận verify event từ Face Server | `face-attendance` | Nhận event nhận diện thành công, lưu raw event, normalize payload |
+| Nhận stranger event từ Face Server | `face-attendance` | Nhận event người lạ/chưa đăng ký, lưu raw event, tạo unknown/pending event nếu phù hợp |
+| Lưu raw event từ thiết bị camera | `iot` | Lưu mọi payload gốc vào `iot_device_events` trước khi xử lý business |
+| Chuẩn hóa payload sự kiện camera | `iot` hoặc module adapter tương ứng | Chuyển vendor-specific payload thành internal DTO chuẩn |
+| Liên kết user hệ thống với person trên Face Server | `device-user-mappings` | Map `users.id` với `device_person_id/code/name` trên Face Server |
+| Nhận occupancy event từ Python Camera Service | `presence` | Nhận room occupied/occupancy_count event từ Python service |
+| Nhận room empty event từ Python Camera Service | `presence` | Nhận room empty/no occupancy event từ Python service |
+
+### 11.16. Camera/IoT UC backlog for v1
+
+#### Group A - Camera/IoT Device Setup
+
+| # | Function | Module |
+|---:|---|---|
+| 1 | Đăng ký thiết bị camera/IoT vào hệ thống | `iot` |
+| 2 | Gán camera vào phòng họp | `iot` hoặc `equipment` nếu xét theo assignment tài sản |
+| 3 | Cấu hình thông tin kết nối Face Server | `face-attendance` + `iot` |
+| 4 | Cấu hình RTSP cho IP Camera góc phòng | `iot` + `recording` |
+| 5 | Kiểm tra trạng thái khả dụng của camera | `iot` |
+
+#### Group B - Face Server Attendance Callback
+
+| # | Function | Module |
+|---:|---|---|
+| 6 | Nhận heartbeat từ Face Server | `face-attendance` |
+| 7 | Nhận verify event từ Face Server | `face-attendance` |
+| 8 | Nhận stranger event từ Face Server | `face-attendance` |
+| 9 | Lưu raw event từ thiết bị camera | `iot` |
+| 10 | Chuẩn hóa payload sự kiện camera | `face-attendance` adapter hoặc `iot` adapter |
+| 11 | Liên kết user hệ thống với person trên Face Server | `device-user-mappings` |
+| 12 | Lưu sự kiện check-in từ camera điểm danh | `attendance` |
+| 13 | Tạo bản ghi điểm danh bằng camera điểm danh ở cửa | `attendance` |
+
+#### Group C - IP Room Camera Presence
+
+| # | Function | Module |
+|---:|---|---|
+| 14 | Nhận occupancy event từ Python Camera Service | `presence` |
+| 15 | Nhận room empty event từ Python Camera Service | `presence` |
+| 16 | Cập nhật trạng thái hiện diện realtime | `presence` + `WebSocket Gateway` |
+
+#### Group D - Camera Recording
+
+| # | Function | Module |
+|---:|---|---|
+| 17 | Bắt đầu ghi hình từ IP Camera góc phòng | `recording` |
+| 18 | Dừng ghi hình từ IP Camera góc phòng | `recording` |
+| 19 | Tạo metadata file phương tiện | `recording` hoặc `media` nếu sau này tách module |
+| 20 | Lưu lỗi ghi hình / lỗi kết nối camera | `recording` + `iot` |
+
+### 11.17. Module creation rules for Camera/IoT
+
+If a camera/IoT UC does not fit an existing module, create a new module only when needed and document the reason in the spec/plan.
+
+Approved modules for Camera/IoT v1:
+
+- `iot`
+- `device-user-mappings`
+- `face-attendance`
+- `presence`
+- `attendance`
+- `recording`
+- `equipment`
+- `utilization` only when implementing business no-show/early-empty rules later
+
+Do not put everything into `iot`.
+Do not put camera callback parsing directly into `attendance`.
+Do not put RTSP processing directly into NestJS request handlers.
+
+Nếu module `media` chưa tồn tại, không tự tạo ngay nếu `recording` đã đủ chứa `media_files` metadata. Chỉ tạo `media` module nếu team chốt tách file/media management riêng.
+
+### 11.18. Out of scope for Camera/IoT integration phase
+
+Các UC sau sử dụng dữ liệu camera nhưng là business phase, chưa làm trước trong Camera/IoT integration layer:
+
+- Phát hiện trường hợp có nguy cơ no-show
+- Tạo trường hợp no-show
+- Cập nhật trường hợp no-show
+- Gửi cảnh báo no-show
+- Tự động giải phóng phòng
+- Gửi cảnh báo người tham dự chưa check-in
+- Gửi cảnh báo khuôn mặt lạ
+- Dashboard điểm danh & hiện diện
+- Report/statistics về tỷ lệ no-show, tỷ lệ tham dự đúng giờ
+- Tính tổng thời gian hiện diện thực tế nếu chưa có đủ event nền
+
+Những UC này sẽ được implement sau khi lớp Camera/IoT ingestion đã ổn định và dữ liệu đã được chuẩn hóa vào DB.
+
+### 11.19. Recommended implementation order for Camera/IoT phase
+
+1. `iot` - Đăng ký thiết bị camera/IoT vào hệ thống
+2. `iot` - Gán camera vào phòng họp
+3. `iot` / `face-attendance` - Cấu hình thông tin kết nối Face Server
+4. `iot` / `recording` - Cấu hình RTSP cho IP Camera góc phòng
+5. `iot` - Kiểm tra trạng thái khả dụng của camera
+6. `device-user-mappings` - Liên kết user hệ thống với person trên Face Server
+7. `face-attendance` - Nhận heartbeat từ Face Server
+8. `face-attendance` - Nhận verify event từ Face Server
+9. `face-attendance` - Nhận stranger event từ Face Server
+10. `iot` - Lưu raw event từ thiết bị camera
+11. `face-attendance` / `presence` - Chuẩn hóa payload sự kiện camera
+12. `attendance` - Lưu sự kiện check-in từ camera điểm danh
+13. `attendance` - Tạo bản ghi điểm danh bằng camera điểm danh ở cửa
+14. `presence` - Nhận occupancy event từ Python Camera Service
+15. `presence` - Nhận room empty event từ Python Camera Service
+16. `presence` - Cập nhật trạng thái hiện diện realtime
+17. `recording` - Bắt đầu ghi hình từ IP Camera góc phòng
+18. `recording` - Dừng ghi hình từ IP Camera góc phòng
+19. `recording` - Tạo metadata file phương tiện
+20. `iot` / `recording` - Lưu lỗi ghi hình / lỗi kết nối camera
+
+### 11.20. Spec Kit convention cho UC Camera/IoT
+
+For each Camera/IoT UC, create a feature folder under:
+
+`spec/features/<module>/<feature-name>/`
+
+Examples:
+
+- `spec/features/iot/feat-register-camera-device/`
+- `spec/features/iot/feat-assign-camera-to-room/`
+- `spec/features/face-attendance/feat-face-server-heartbeat/`
+- `spec/features/face-attendance/feat-face-server-verify-event/`
+- `spec/features/face-attendance/feat-face-server-stranger-event/`
+- `spec/features/device-user-mappings/feat-map-user-to-face-server-person/`
+- `spec/features/presence/feat-room-camera-occupancy-event/`
+- `spec/features/presence/feat-room-camera-empty-event/`
+- `spec/features/recording/feat-start-ip-camera-recording/`
+- `spec/features/recording/feat-stop-ip-camera-recording/`
+
+Spec content may be written in Vietnamese, but technical names such as module name, endpoint, entity, DTO, table and field names must remain in English.
+
+### 11.21. Quy tắc wording khi viết spec cho Camera/IoT UC
+
+When writing specs for Camera/IoT UC:
+
+- Use Vietnamese for business explanation.
+- Keep technical names in English.
+- Clearly distinguish `equipment` from `iot_devices`.
+- `equipment` means physical asset/resource.
+- `iot_devices` means connected device that sends event/heartbeat/stream metadata.
+- Camera can be an equipment asset, but camera integration belongs to `iot`, `face-attendance`, `presence`, and `recording`.
+- Do not describe IP Room Camera as the main source of person identity in v1.
+- Do not describe NestJS as directly reading RTSP stream in request handler.
+- Do not describe backend as training or running face recognition model.
 
 ---
 
@@ -838,6 +1205,8 @@ create(@Body() body: any) {
   return this.meetingsService.create(body);
 }
 ```
+
+**Exception: device callback endpoints may receive raw body** because Face Server or third-party devices can send vendor-specific payloads (JSON, form-data, XML, multipart, etc.). Raw body is allowed only at the device callback boundary (`/api/v1/device-callbacks/face/*`) and must be stored into `iot_device_events` before any normalization or business logic is executed.
 
 ### 13.2. ValidationPipe global
 
@@ -1118,7 +1487,13 @@ JWT_REFRESH_EXPIRES_IN=7d
 
 BCRYPT_SALT_ROUNDS=10
 
-MQTT_URL=mqtt://localhost:1883
+DEVICE_CALLBACK_BASE_URL=http://localhost:3000
+FACE_DEVICE_CALLBACK_TOKEN=
+DEVICE_CALLBACK_IP_ALLOWLIST=
+
+# Future only - not used in v1
+MQTT_ENABLED=false
+MQTT_URL=
 MQTT_USERNAME=
 MQTT_PASSWORD=
 
@@ -1242,6 +1617,32 @@ GET    /api/v1/device-user-mappings
 POST   /api/v1/device-user-mappings
 PATCH  /api/v1/device-user-mappings/:id
 DELETE /api/v1/device-user-mappings/:id
+```
+
+### 22.7a. Face Attendance Terminal Callbacks (system-to-system, không dùng JWT user)
+
+```text
+POST   /api/v1/device-callbacks/face/heartbeat
+POST   /api/v1/device-callbacks/face/verify
+POST   /api/v1/device-callbacks/face/stranger
+```
+
+### 22.7b. Room Camera (từ Python Camera Service)
+
+```text
+POST   /api/v1/room-camera/presence
+POST   /api/v1/room-camera/occupancy-snapshots
+POST   /api/v1/room-camera/events
+```
+
+### 22.7c. Recording từ camera
+
+```text
+POST   /api/v1/recordings/video/start
+POST   /api/v1/recordings/video/stop
+GET    /api/v1/recordings
+GET    /api/v1/recordings/:id
+POST   /api/v1/recordings/:id/error
 ```
 
 ### 22.8. Attendance / Presence
@@ -1391,7 +1792,8 @@ Không bật mặc định tính năng có rủi ro cao khi chưa có policy.
 ### 24.3. Test convention
 
 - Test business rule trong service.
-- Mock external provider/MQTT/storage.
+- Mock external provider/device callbacks/camera service/storage.
+- Mock MQTT only if a future MQTT feature is explicitly enabled.
 - Không phụ thuộc vào real camera/mic/device trong test backend.
 - Dùng test database hoặc transaction rollback cho integration test.
 
