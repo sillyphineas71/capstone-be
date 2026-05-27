@@ -1,0 +1,47 @@
+{
+  "endpoint": "/api/v1/auth/logout",
+  "method": "POST",
+  "description": "Thu hồi phiên làm việc hiện tại của người dùng",
+  "permission": "auth:user",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer <access-token>"
+    },
+    "body": {}
+  },
+  "responses": {
+    "200": {
+      "description": "Đăng xuất thành công (bao gồm cả trường hợp idempotent khi session đã bị revoke trước đó)",
+      "body": {
+        "success": true,
+        "data": {
+          "revoked": true,
+          "revokedAt": "2026-05-27T10:00:00.000Z"
+        },
+        "meta": {}
+      }
+    },
+    "401": {
+      "description": "Unauthorized - Thiếu token, token không hợp lệ hoặc user không đủ quyền",
+      "body": {
+        "success": false,
+        "message": "Unauthorized",
+        "error": {
+          "code": "UNAUTHORIZED_ACCESS",
+          "details": {}
+        }
+      }
+    },
+    "500": {
+      "description": "System Error - Lỗi truy xuất cơ sở dữ liệu khi thu hồi session",
+      "body": {
+        "success": false,
+        "message": "Internal server error occurred while processing logout",
+        "error": {
+          "code": "SYSTEM_ERROR",
+          "details": {}
+        }
+      }
+    }
+  }
+}
