@@ -1,5 +1,25 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Ip, Post, Req, SetMetadata, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiUnauthorizedResponse, ApiInternalServerErrorResponse } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Ip,
+  Post,
+  Req,
+  SetMetadata,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+  ApiUnauthorizedResponse,
+  ApiInternalServerErrorResponse,
+} from '@nestjs/swagger';
 import type { Request } from 'express';
 import { LoginDto } from '../dto/login.dto';
 import { LogoutResponseDto } from '../dto/logout-response.dto';
@@ -65,18 +85,35 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @SetMetadata('ignoreBlacklist', true)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Logout', description: 'Invalidates the current session token' })
-  @ApiResponse({ status: 200, description: 'Logout successful', type: LogoutResponseDto })
+  @ApiOperation({
+    summary: 'Logout',
+    description: 'Invalidates the current session token',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Logout successful',
+    type: LogoutResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Unauthorized / Token invalid' })
-  @ApiInternalServerErrorResponse({ description: 'Internal server error (e.g., Redis issue)' })
-  async logout(@Req() request: Request): Promise<{ success: boolean; message: string; data: LogoutResponseDto }> {
-    const user = request['user'] as { userId: string; jti: string; exp: number };
-    
+  @ApiInternalServerErrorResponse({
+    description: 'Internal server error (e.g., Redis issue)',
+  })
+  async logout(
+    @Req() request: Request,
+  ): Promise<{ success: boolean; message: string; data: LogoutResponseDto }> {
+    const user = request['user'] as {
+      userId: string;
+      jti: string;
+      exp: number;
+    };
+
     // Blacklist the token
     await this.logoutService.logout(user.jti, user.exp);
-    
+
     // Fire-and-forget audit logging
-    this.logoutService.logLogoutAudit(user.userId, user.jti, request).catch(() => {});
+    this.logoutService
+      .logLogoutAudit(user.userId, user.jti, request)
+      .catch(() => {});
 
     return {
       success: true,
@@ -96,9 +133,15 @@ export class AuthController {
       transform: true,
     }),
   )
-  @ApiOperation({ summary: 'Request password reset OTP', description: 'Generates and sends a 6-digit OTP to the user email' })
+  @ApiOperation({
+    summary: 'Request password reset OTP',
+    description: 'Generates and sends a 6-digit OTP to the user email',
+  })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
-  @ApiResponse({ status: 400, description: 'E1 Unified Account Restricted error' })
+  @ApiResponse({
+    status: 400,
+    description: 'E1 Unified Account Restricted error',
+  })
   @ApiResponse({ status: 429, description: 'Spam rate limited block' })
   async requestOtp(
     @Body() dto: RequestOtpDto,
@@ -106,7 +149,12 @@ export class AuthController {
     @Headers('user-agent') userAgent?: string,
     @Headers('x-request-id') requestId?: string,
   ) {
-    return this.passwordResetService.requestOtp(dto, ipAddress, userAgent, requestId);
+    return this.passwordResetService.requestOtp(
+      dto,
+      ipAddress,
+      userAgent,
+      requestId,
+    );
   }
 
   @Post('password-reset/confirm')
@@ -117,15 +165,26 @@ export class AuthController {
       transform: true,
     }),
   )
-  @ApiOperation({ summary: 'Confirm password reset with OTP', description: 'Verifies the OTP and resets user password' })
+  @ApiOperation({
+    summary: 'Confirm password reset with OTP',
+    description: 'Verifies the OTP and resets user password',
+  })
   @ApiResponse({ status: 200, description: 'Password reset successful' })
-  @ApiResponse({ status: 400, description: 'E1 Unified error or E2 OTP invalid/expired' })
+  @ApiResponse({
+    status: 400,
+    description: 'E1 Unified error or E2 OTP invalid/expired',
+  })
   async confirmReset(
     @Body() dto: ConfirmResetDto,
     @Ip() ipAddress: string,
     @Headers('user-agent') userAgent?: string,
     @Headers('x-request-id') requestId?: string,
   ) {
-    return this.passwordResetService.confirmReset(dto, ipAddress, userAgent, requestId);
+    return this.passwordResetService.confirmReset(
+      dto,
+      ipAddress,
+      userAgent,
+      requestId,
+    );
   }
 }

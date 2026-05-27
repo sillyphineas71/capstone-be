@@ -6,7 +6,10 @@ export class AuthConfigService {
   constructor(private readonly configService: ConfigService) {}
 
   getAccessTokenTtlSeconds(): number {
-    return this.configService.get<number>('AUTH_ACCESS_TOKEN_TTL_SECONDS', 3600);
+    return this.configService.get<number>(
+      'AUTH_ACCESS_TOKEN_TTL_SECONDS',
+      3600,
+    );
   }
 
   getAccessTokenSecret(): string {
@@ -14,7 +17,10 @@ export class AuthConfigService {
   }
 
   getRefreshTokenTtlSeconds(): number {
-    return this.configService.get<number>('AUTH_REFRESH_TOKEN_TTL_SECONDS', 60 * 60 * 24 * 7);
+    return this.configService.get<number>(
+      'AUTH_REFRESH_TOKEN_TTL_SECONDS',
+      60 * 60 * 24 * 7,
+    );
   }
 
   getRateLimitMaxAttempts(): number {
@@ -22,6 +28,9 @@ export class AuthConfigService {
   }
 
   getRateLimitWindowSeconds(): number {
-    return this.configService.get<number>('AUTH_RATE_LIMIT_WINDOW_SECONDS', 300);
+    return this.configService.get<number>(
+      'AUTH_RATE_LIMIT_WINDOW_SECONDS',
+      300,
+    );
   }
 }

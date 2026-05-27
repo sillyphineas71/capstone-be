@@ -18,10 +18,7 @@ import { AuthEmailService } from './services/auth-email.service';
 import { PasswordResetService } from './services/password-reset.service';
 
 @Module({
-  imports: [
-    JwtModule.register({}),
-    CacheModule.register(),
-  ],
+  imports: [JwtModule.register({}), CacheModule.register()],
   controllers: [AuthController],
   providers: [
     AuthConfigService,

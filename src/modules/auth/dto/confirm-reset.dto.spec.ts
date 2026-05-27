@@ -26,8 +26,14 @@ describe('ConfirmResetDto', () => {
   });
 
   it('should reject invalid OTP length', async () => {
-    const dto1 = plainToInstance(ConfirmResetDto, { ...validData, otp: '12345' });
-    const dto2 = plainToInstance(ConfirmResetDto, { ...validData, otp: '1234567' });
+    const dto1 = plainToInstance(ConfirmResetDto, {
+      ...validData,
+      otp: '12345',
+    });
+    const dto2 = plainToInstance(ConfirmResetDto, {
+      ...validData,
+      otp: '1234567',
+    });
 
     const errors1 = await validate(dto1);
     const errors2 = await validate(dto2);
@@ -37,7 +43,10 @@ describe('ConfirmResetDto', () => {
   });
 
   it('should reject non-numeric OTP', async () => {
-    const dto = plainToInstance(ConfirmResetDto, { ...validData, otp: '12345a' });
+    const dto = plainToInstance(ConfirmResetDto, {
+      ...validData,
+      otp: '12345a',
+    });
     const errors = await validate(dto);
     expect(errors.length).toBeGreaterThan(0);
   });
@@ -52,7 +61,10 @@ describe('ConfirmResetDto', () => {
     ];
 
     for (const password of invalidPasswords) {
-      const dto = plainToInstance(ConfirmResetDto, { ...validData, newPassword: password });
+      const dto = plainToInstance(ConfirmResetDto, {
+        ...validData,
+        newPassword: password,
+      });
       const errors = await validate(dto);
       expect(errors.length).toBeGreaterThan(0);
     }

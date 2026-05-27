@@ -1,4 +1,12 @@
-import { ForbiddenException, HttpException, HttpStatus, Injectable, InternalServerErrorException, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { AUTH_ERROR_CODES } from '../constants/auth-error-codes';
@@ -6,7 +14,11 @@ import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
-import { AuthUserSummary, LoginSuccessData, RequestContextInfo } from '../types/login.types';
+import {
+  AuthUserSummary,
+  LoginSuccessData,
+  RequestContextInfo,
+} from '../types/login.types';
 import { normalizeLoginEmail } from '../utils/login-normalization.util';
 import { AuthConfigService } from './auth-config.service';
 import { RateLimitService } from './rate-limit.service';
@@ -25,13 +37,22 @@ export class LoginService {
     private readonly authConfigService: AuthConfigService,
   ) {}
 
-  async login(loginDto: LoginDto, requestContext: RequestContextInfo): Promise<LoginSuccessData> {
+  async login(
+    loginDto: LoginDto,
+    requestContext: RequestContextInfo,
+  ): Promise<LoginSuccessData> {
     const normalizedEmail = normalizeLoginEmail(loginDto.email);
 
     try {
-      this.rateLimitService.checkOrThrow(requestContext.ipAddress, normalizedEmail);
+      this.rateLimitService.checkOrThrow(
+        requestContext.ipAddress,
+        normalizedEmail,
+      );
     } catch (error) {
-      if (error instanceof Error && error.name === AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS) {
+      if (
+        error instanceof Error &&
+        error.name === AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS
+      ) {
         throw new HttpException(
           {
             code: AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS,
@@ -43,7 +64,8 @@ export class LoginService {
       throw error;
     }
 
-    const user = await this.usersAuthRepository.findByNormalizedEmail(normalizedEmail);
+    const user =
+      await this.usersAuthRepository.findByNormalizedEmail(normalizedEmail);
     if (!user) {
       throw new UnauthorizedException({
         code: AUTH_ERROR_CODES.AUTH_INVALID_CREDENTIALS,
@@ -51,7 +73,10 @@ export class LoginService {
       });
     }
 
-    const passwordMatched = await bcrypt.compare(loginDto.password, user.passwordHash);
+    const passwordMatched = await bcrypt.compare(
+      loginDto.password,
+      user.passwordHash,
+    );
     if (!passwordMatched) {
       throw new UnauthorizedException({
         code: AUTH_ERROR_CODES.AUTH_INVALID_CREDENTIALS,
@@ -97,19 +122,26 @@ export class LoginService {
         jti,
       });
     } catch (error) {
-      this.logger.error('Token generation failed.', error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        'Token generation failed.',
+        error instanceof Error ? error.stack : undefined,
+      );
       throw new InternalServerErrorException({
         code: AUTH_ERROR_CODES.AUTH_TOKEN_GENERATION_FAILED,
         message: 'Failed to generate authentication tokens.',
       });
     }
 
-    const authz = await this.authzReadRepository.getEffectiveRolesAndPermissions(user.id);
+    const authz =
+      await this.authzReadRepository.getEffectiveRolesAndPermissions(user.id);
 
     try {
       await this.usersAuthRepository.updateLastLoginAt(user.id, new Date());
     } catch (error) {
-      this.logger.error('Failed to update last_login_at.', error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        'Failed to update last_login_at.',
+        error instanceof Error ? error.stack : undefined,
+      );
     }
 
     try {
@@ -121,7 +153,10 @@ export class LoginService {
         jti,
       });
     } catch (error) {
-      this.logger.error('Failed to write login audit log.', error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        'Failed to write login audit log.',
+        error instanceof Error ? error.stack : undefined,
+      );
     }
 
     const summary: AuthUserSummary = {

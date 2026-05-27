@@ -48,7 +48,10 @@ export class UsersResetRepository {
   /**
    * Updates user's password, resets must_change_password flag, and marks password_updated_at in a transaction.
    */
-  async updatePasswordInTransaction(userId: string, newPasswordHash: string): Promise<void> {
+  async updatePasswordInTransaction(
+    userId: string,
+    newPasswordHash: string,
+  ): Promise<void> {
     await this.dataSource.transaction(async (transactionalEntityManager) => {
       await transactionalEntityManager.query(
         `

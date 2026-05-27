@@ -11,8 +11,8 @@ describe('LogoutService', () => {
   let authAuditRepository: { logLogoutSuccess: jest.Mock };
 
   beforeEach(async () => {
-    cacheManager = { set: jest.Mock = jest.fn() };
-    authAuditRepository = { logLogoutSuccess: jest.Mock = jest.fn() };
+    cacheManager = { set: (jest.Mock = jest.fn()) };
+    authAuditRepository = { logLogoutSuccess: (jest.Mock = jest.fn()) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -30,30 +30,36 @@ describe('LogoutService', () => {
       const jti = 'some-jti';
       const now = Date.now();
       const exp = Math.floor(now / 1000) + 3600; // 1 hour later
-      
+
       jest.spyOn(Date, 'now').mockReturnValue(now);
-      
+
       await service.logout(jti, exp);
-      
+
       const expectedTtlMillis = exp * 1000 - now;
-      expect(cacheManager.set).toHaveBeenCalledWith(`blacklist:${jti}`, true, expectedTtlMillis);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `blacklist:${jti}`,
+        true,
+        expectedTtlMillis,
+      );
     });
 
     it('should throw InternalServerErrorException if cache set fails', async () => {
       const jti = 'some-jti';
       const exp = Math.floor(Date.now() / 1000) + 3600;
-      
+
       cacheManager.set.mockRejectedValue(new Error('Redis error'));
-      
-      await expect(service.logout(jti, exp)).rejects.toThrow(InternalServerErrorException);
+
+      await expect(service.logout(jti, exp)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should not cache if TTL is negative (already expired)', async () => {
       const jti = 'some-jti';
       const exp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
-      
+
       await service.logout(jti, exp);
-      
+
       expect(cacheManager.set).not.toHaveBeenCalled();
     });
   });
@@ -62,7 +68,10 @@ describe('LogoutService', () => {
     it('should call authAuditRepository.logLogoutSuccess', async () => {
       const userId = 'user-1';
       const jti = 'jti-1';
-      const req = { ip: '127.0.0.1', headers: { 'user-agent': 'test-agent' } } as unknown as Request;
+      const req = {
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'test-agent' },
+      } as unknown as Request;
 
       await service.logLogoutAudit(userId, jti, req);
 
@@ -75,11 +84,15 @@ describe('LogoutService', () => {
     });
 
     it('should not throw if authAuditRepository fails', async () => {
-      authAuditRepository.logLogoutSuccess.mockRejectedValue(new Error('DB error'));
+      authAuditRepository.logLogoutSuccess.mockRejectedValue(
+        new Error('DB error'),
+      );
       const req = { ip: '127.0.0.1', headers: {} } as unknown as Request;
-      
+
       // Should resolve normally despite inner error
-      await expect(service.logLogoutAudit('user-1', 'jti-1', req)).resolves.toBeUndefined();
+      await expect(
+        service.logLogoutAudit('user-1', 'jti-1', req),
+      ).resolves.toBeUndefined();
     });
   });
 });

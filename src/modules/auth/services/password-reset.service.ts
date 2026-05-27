@@ -54,7 +54,10 @@ export class PasswordResetService {
       }
 
       // 2. Increment 5-minute spam counter
-      const currentAttempts = await this.cacheService.incrementLimitCounter(email, 300000); // 5 mins
+      const currentAttempts = await this.cacheService.incrementLimitCounter(
+        email,
+        300000,
+      ); // 5 mins
       if (currentAttempts > 3) {
         // Block the email for 60 minutes
         await this.cacheService.blockEmail(email, 3600000); // 60 mins
@@ -81,7 +84,8 @@ export class PasswordResetService {
         // Safe Unified Response to prevent Account Enumeration attacks
         throw new BadRequestException({
           success: false,
-          message: 'Email không tồn tại hoặc tài khoản đã bị khóa. Vui lòng kiểm tra lại.',
+          message:
+            'Email không tồn tại hoặc tài khoản đã bị khóa. Vui lòng kiểm tra lại.',
           error: {
             code: AUTH_ERROR_CODES.AUTH_ACCOUNT_RESTRICTED,
           },
@@ -102,7 +106,10 @@ export class PasswordResetService {
 
       // 6. Non-blocking Async Dispatch: Send email OTP and Log audit request
       this.emailService.sendOtp(email, otp).catch((err) => {
-        this.logger.error(`[Non-Blocking] Failed to send OTP email to ${email}: ${err.message}`, err.stack);
+        this.logger.error(
+          `[Non-Blocking] Failed to send OTP email to ${email}: ${err.message}`,
+          err.stack,
+        );
       });
 
       this.auditRepository
@@ -114,19 +121,26 @@ export class PasswordResetService {
           requestId,
         })
         .catch((err) => {
-          this.logger.error(`[Non-Blocking] Failed to log OTP request audit: ${err.message}`, err.stack);
+          this.logger.error(
+            `[Non-Blocking] Failed to log OTP request audit: ${err.message}`,
+            err.stack,
+          );
         });
 
       return {
         success: true,
-        message: 'Mã xác thực đã được gửi tới email của bạn. Vui lòng kiểm tra hộp thư.',
+        message:
+          'Mã xác thực đã được gửi tới email của bạn. Vui lòng kiểm tra hộp thư.',
         data: null,
       };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
       }
-      this.logger.error(`Unhandled error during OTP request for ${email}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Unhandled error during OTP request for ${email}: ${error.message}`,
+        error.stack,
+      );
       throw error;
     }
   }
@@ -153,7 +167,8 @@ export class PasswordResetService {
       ) {
         throw new BadRequestException({
           success: false,
-          message: 'Email không tồn tại hoặc tài khoản đã bị khóa. Vui lòng kiểm tra lại.',
+          message:
+            'Email không tồn tại hoặc tài khoản đã bị khóa. Vui lòng kiểm tra lại.',
           error: {
             code: AUTH_ERROR_CODES.AUTH_ACCOUNT_RESTRICTED,
           },
@@ -165,7 +180,8 @@ export class PasswordResetService {
       if (!session) {
         throw new BadRequestException({
           success: false,
-          message: 'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
+          message:
+            'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
           error: {
             code: AUTH_ERROR_CODES.AUTH_OTP_INVALID_OR_EXPIRED,
           },
@@ -183,7 +199,8 @@ export class PasswordResetService {
           await this.cacheService.deleteOtpSession(email);
           throw new BadRequestException({
             success: false,
-            message: 'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
+            message:
+              'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
             error: {
               code: AUTH_ERROR_CODES.AUTH_OTP_INVALID_OR_EXPIRED,
             },
@@ -198,7 +215,8 @@ export class PasswordResetService {
 
           throw new BadRequestException({
             success: false,
-            message: 'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
+            message:
+              'Mã xác thực không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
             error: {
               code: AUTH_ERROR_CODES.AUTH_OTP_INVALID_OR_EXPIRED,
             },
@@ -210,7 +228,10 @@ export class PasswordResetService {
       const salt = await bcrypt.genSalt(10);
       const newPasswordHash = await bcrypt.hash(newPassword, salt);
 
-      await this.usersRepository.updatePasswordInTransaction(user.id, newPasswordHash);
+      await this.usersRepository.updatePasswordInTransaction(
+        user.id,
+        newPasswordHash,
+      );
 
       // 5. Invalidate OTP, limits, and blocks immediately
       await this.cacheService.deleteOtpSession(email);
@@ -228,19 +249,26 @@ export class PasswordResetService {
           requestId,
         })
         .catch((err) => {
-          this.logger.error(`[Non-Blocking] Failed to log password reset success audit: ${err.message}`, err.stack);
+          this.logger.error(
+            `[Non-Blocking] Failed to log password reset success audit: ${err.message}`,
+            err.stack,
+          );
         });
 
       return {
         success: true,
-        message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
+        message:
+          'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
         data: null,
       };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
       }
-      this.logger.error(`Unhandled error during password reset confirmation for ${email}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Unhandled error during password reset confirmation for ${email}: ${error.message}`,
+        error.stack,
+      );
       throw error;
     }
   }

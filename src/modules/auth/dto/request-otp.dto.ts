@@ -5,6 +5,8 @@ export class RequestOtpDto {
   @IsString()
   @IsNotEmpty()
   @IsEmail()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   email!: string;
 }

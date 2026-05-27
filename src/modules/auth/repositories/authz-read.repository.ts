@@ -10,8 +10,10 @@ interface AuthzRow {
 export class AuthzReadRepository {
   constructor(private readonly dataSource: DataSource) {}
 
-  async getEffectiveRolesAndPermissions(userId: string): Promise<{ roles: string[]; permissions: string[] }> {
-    const rows = (await this.dataSource.query(
+  async getEffectiveRolesAndPermissions(
+    userId: string,
+  ): Promise<{ roles: string[]; permissions: string[] }> {
+    const rows = await this.dataSource.query(
       `
         SELECT DISTINCT r.role_code, p.permission_code
         FROM user_roles ur
@@ -25,13 +27,23 @@ export class AuthzReadRepository {
           AND (p.id IS NULL OR p.is_active = true)
       `,
       [userId],
-    )) as AuthzRow[];
-
-    const roles = Array.from(new Set(rows.map((row) => row.role_code).filter((value): value is string => Boolean(value))));
-    const permissions = Array.from(
-      new Set(rows.map((row) => row.permission_code).filter((value): value is string => Boolean(value))),
     );
 
-    return { roles, permissions };
+    const roles = Array.from(
+      new Set(
+        rows
+          .map((row) => row.role_code)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const permissions = Array.from(
+      new Set(
+        rows
+          .map((row) => row.permission_code)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    return { roles: roles as string[], permissions: permissions as string[] };
   }
 }

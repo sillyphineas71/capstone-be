@@ -28,6 +28,9 @@ export class IotDevice {
   @Column({ name: 'device_code', type: 'varchar' })
   deviceCode: string;
 
+  @Column({ name: 'room_id', type: 'uuid', nullable: true })
+  roomId: string | null;
+
   @Column({ name: 'device_type', type: 'varchar', length: 50 })
   deviceType: IotDeviceType;
 

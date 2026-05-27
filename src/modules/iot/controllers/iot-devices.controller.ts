@@ -7,8 +7,11 @@ import {
   UsePipes,
   ValidationPipe,
   ForbiddenException,
+  Param,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
+import { AssignRoomDto } from '../dto/assign-room.dto';
 import { IotDevicesService } from '../services/iot-devices.service';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -21,11 +24,11 @@ const MockPermissionsGuard = class {
 };
 const Permissions =
   (...args: string[]) =>
-    (target: any, key?: any, descriptor?: any) => { };
+  (target: any, key?: any, descriptor?: any) => {};
 
 @Controller('iot-devices')
 export class IotDevicesController {
-  constructor(private readonly iotDevicesService: IotDevicesService) { }
+  constructor(private readonly iotDevicesService: IotDevicesService) {}
 
   @Post()
   @UseGuards(JwtAuthGuard, MockPermissionsGuard)
@@ -49,6 +52,32 @@ export class IotDevicesController {
 
     return {
       success: true,
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  @Post(':id/assign-room')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:assign_room')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async assignRoom(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignRoomDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.assignRoom(userId, id, dto);
+
+    return {
+      success: true,
+      message: 'Room assigned successfully',
       data: toIotDeviceResponse(device),
     };
   }
