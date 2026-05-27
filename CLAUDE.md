@@ -33,7 +33,7 @@ Backend sử dụng:
 - **TypeORM** làm ORM/migration layer, trừ khi team thay đổi chính thức.
 - **JWT + RBAC** cho authentication/authorization.
 - **WebSocket** cho realtime status/presence/live meeting sync.
-- **MQTT** cho tương tác IoT/device/capture agent nếu triển khai phần thiết bị.
+- **HTTP Subscription** (từ Door Face Attendance Terminal) và **RTSP qua Python Camera Service** (từ IP Room Camera) cho camera integration trong v1. MQTT không được dùng trong v1 core flow.
 
 Nguyên tắc quan trọng nhất:
 
@@ -137,7 +137,8 @@ Mọi tính năng phải phục vụ meeting lifecycle.
 | Auth | JWT | Access token + refresh token nếu scope yêu cầu |
 | Authorization | RBAC | roles, permissions, guards |
 | Realtime | WebSocket Gateway | Room status, meeting status, presence |
-| IoT messaging | MQTT | Capture agent, room device event |
+| Device event ingestion | HTTP callbacks + REST API | Face Server uses HTTP Subscription; Python Camera Service sends room camera events to NestJS through REST API |
+| MQTT | Future extension only | Not used in v1; only considered later if the system integrates many sensors or edge devices publishing lightweight telemetry |
 | Validation | class-validator, class-transformer | Validate DTO ở boundary |
 | Config | @nestjs/config | Không hard-code env |
 | Logging | Nest Logger hoặc logger chuẩn hóa | Không log secret/token |
@@ -151,7 +152,8 @@ Backend đi theo hướng **modular monolith**:
 - Không chia microservice sớm khi chưa cần.
 - Các module giao tiếp qua service/export rõ ràng, không import chéo bừa bãi.
 - Database dùng chung PostgreSQL nhưng boundary logic vẫn theo module.
-- IoT/MQTT/WebSocket được đóng gói trong module riêng hoặc adapter rõ ràng.
+- Device event ingestion, camera callbacks and WebSocket are packaged in clear modules/adapters.
+- MQTT is reserved for future extension only and is not part of the v1 core flow.
 
 ---
 
@@ -168,7 +170,9 @@ Backend đi theo hướng **modular monolith**:
 | `scheduling` | Conflict checking, schedule suggestions, recurrence handling | `/src/modules/scheduling` |
 | `rooms` | Room, seat, booking, room status, capacity, location | `/src/modules/rooms` |
 | `equipment` | Equipment, assignment, room device, camera/mic/device mapping | `/src/modules/equipment` |
-| `iot` | MQTT events, IoT device event ingestion, device heartbeat | `/src/modules/iot` |
+| `iot` | Device event ingestion, raw IoT device events, device heartbeat, device health | `/src/modules/iot` |
+| `device-user-mappings` | Map system user với Face Server person/device identity | `/src/modules/device-user-mappings` |
+| `face-attendance` | Face Server HTTP callbacks, normalize face verify/stranger/heartbeat events | `/src/modules/face-attendance` |
 | `attendance` | Attendance records, check-in/check-out, participant attendance | `/src/modules/attendance` |
 | `presence` | Presence snapshot, presence events, face/camera signal mapping | `/src/modules/presence` |
 | `utilization` | Room usage, no-show, early vacancy, auto-release room | `/src/modules/utilization` |
@@ -352,7 +356,7 @@ Khi cần thay đổi schema:
 /src
   /common
     /constants
-    /decorcho tors
+    /decorators
     /exceptions
     /filters
     /guards
@@ -365,7 +369,9 @@ Khi cần thay đổi schema:
     app.config.ts
     database.config.ts
     jwt.config.ts
-    mqtt.config.ts
+    device-callback.config.ts
+    camera.config.ts
+    mqtt.config.ts // future only, not used in v1
     storage.config.ts
 
   /database
@@ -751,33 +757,198 @@ Không gộp ba loại dữ liệu này vào một bảng/service nếu schema �
 - `capture_session_channels`: từng kênh capture, ví dụ microphone/camera/screen.
 - `device_user_mappings`: mapping giữa người dùng trong hệ thống và định danh người đó trên thiết bị/camera/face server.
 
-### 11.2. Nguyên tắc tích hợp thiết bị
+### 11.2. Hai loại camera trong dự án
 
-Backend không nên phụ thuộc trực tiếp vào SDK cụ thể của camera/mic nếu chưa chốt vendor.
+#### Door Face Attendance Terminal
 
-Nên dùng adapter/port:
+Thiết bị đặt tại cửa phòng họp, dùng để check-in/check-out bằng khuôn mặt. Đây **không phải IP camera thường** mà là Face Server có sẵn camera, màn hình, face database nội bộ, face enrollment, face verification, HTTP Subscription và web admin.
+
+Thiết bị tự thực hiện face enrollment, face template storage, face verification, similarity calculation và control log. Backend **không** tự detect face, không tự extract embedding, không tự so khớp khuôn mặt. Backend chỉ nhận kết quả nhận diện từ thiết bị.
+
+Luồng tích hợp v1:
+
+```text
+Door Face Attendance Terminal
+→ HTTP Subscription
+→ NestJS backend callback endpoint
+→ iot_device_events (raw)
+→ device_user_mappings
+→ attendance_events / attendance_records
+→ WebSocket dashboard
+```
+
+#### IP Room Camera
+
+Camera đặt tại góc phòng họp, dùng để theo dõi phòng có người hay không, cập nhật occupancy/presence, phát hiện phòng trống sớm, phát hiện no-show, và ghi hình nếu được bật.
+
+IP Room Camera **không phải nguồn định danh người chính**. Định danh người nên đến từ Door Face Attendance Terminal.
+
+IP Room Camera cung cấp RTSP stream, xử lý bởi Python Camera Service, không xử lý trực tiếp trong NestJS request handler.
+
+Luồng tích hợp v1:
+
+```text
+IP Room Camera
+→ RTSP
+→ Python Camera Service / OpenCV / FFmpeg
+→ REST API to NestJS
+→ presence_snapshots / room_events / room_booking_usages / no_show_cases
+→ WebSocket dashboard
+```
+
+### 11.3. Nguyên tắc tích hợp thiết bị
+
+Backend không phụ thuộc trực tiếp vào SDK cụ thể của camera/vendor. Thiết kế qua adapter/port:
 
 ```text
 DeviceProviderPort
 FaceDeviceProviderPort
 CaptureAgentPort
-MqttEventPublisherPort
 ```
 
 Mục tiêu là thay vendor mà không phá domain logic.
 
-### 11.3. MQTT event
+### 11.4. Device callback endpoints
 
-MQTT event nên được validate trước khi lưu/xử lý.
+Các endpoint callback từ device phải tách khỏi API người dùng thông thường:
 
-Payload từ thiết bị không được tin tưởng tuyệt đối:
+```text
+POST /api/v1/device-callbacks/face/heartbeat
+POST /api/v1/device-callbacks/face/verify
+POST /api/v1/device-callbacks/face/stranger
+```
 
-- Validate device id.
-- Check device active.
-- Check room assignment.
-- Check timestamp hợp lệ.
-- Ghi raw payload có kiểm soát nếu cần debug.
-- Không để payload thiết bị tự quyết định business action quan trọng nếu chưa qua service rule.
+Các endpoint này là system-to-system, **không** dùng JWT user login. Thay vào đó validate:
+
+- Source IP nếu có thể.
+- Device code hoặc device id.
+- Callback token/shared secret nếu thiết bị hỗ trợ.
+- Device còn active và đã được assign vào room.
+
+Device có thể gửi payload dạng vendor-specific (JSON, form data, text, XML, multipart). Callback controller được phép nhận raw body nhưng phải theo quy trình:
+
+```text
+raw body nhận tại boundary
+→ store raw payload vào iot_device_events
+→ normalize payload
+→ validate device và mapping
+→ xử lý business logic (attendance / presence)
+```
+
+Không truyền raw payload trực tiếp vào business service để quyết định attendance.
+
+### 11.5. Room camera endpoints (từ Python Camera Service)
+
+```text
+POST /api/v1/room-camera/presence
+POST /api/v1/room-camera/occupancy-snapshots
+POST /api/v1/room-camera/events
+```
+
+### 11.6. Door face event processing flow
+
+```text
+1. Face Server gửi verify event về backend.
+2. Backend xác định source device.
+3. Backend lưu raw event vào iot_device_events.
+4. Backend normalize payload thành internal DTO.
+5. Backend resolve device person qua device_user_mappings.
+6. Backend resolve room từ iot_devices.room_id.
+7. Backend tìm active meeting trong room tại thời điểm event.
+8. Nếu user thuộc meeting participants:
+   - Tạo attendance_events.
+   - Tạo/cập nhật attendance_records.
+   - Cập nhật meeting_participants.attendance_status nếu cần.
+9. Nếu user unknown hoặc không phải participant:
+   - Lưu event.
+   - Đánh dấu pending_review hoặc unknown_face.
+   - Tạo notification nếu cần.
+10. Backend emit WebSocket event về frontend.
+```
+
+### 11.7. Room camera event processing flow
+
+```text
+1. Python Camera Service phát hiện occupancy event.
+2. Python gửi event về NestJS REST API.
+3. Backend validate device.
+4. Backend lưu raw event vào iot_device_events.
+5. Backend tạo presence_snapshots.
+6. Backend tạo room_events nếu room status thay đổi.
+7. Backend cập nhật room_booking_usages nếu có booking/meeting liên quan.
+8. Utilization service đánh giá no-show hoặc early-empty rules.
+9. Backend emit WebSocket event về frontend.
+```
+
+### 11.8. Module boundary cho camera
+
+| Module | Trách nhiệm camera | Không trách nhiệm |
+|---|---|---|
+| `equipment` | Equipment asset CRUD, assign thiết bị vào phòng | Processing camera event, tạo attendance |
+| `iot` | `iot_devices` CRUD, lưu raw `iot_device_events`, heartbeat | Business attendance decision, no-show, release phòng |
+| `device-user-mappings` | Map system user với Face Server person, track sync_status | Face recognition, attendance logic |
+| `face-attendance` | Face Server HTTP callbacks, normalize face event payload, gọi AttendanceService | Quản lý booking, no-show, train model |
+| `presence` | Room camera event ingestion, `presence_snapshots`, read API | Device CRUD, attendance final decision, room release |
+| `attendance` | `attendance_events`, `attendance_records`, check-in/check-out sau khi event đã normalize | Raw device event parsing, RTSP processing |
+| `utilization` | `room_booking_usages`, no-show evaluation, `no_show_cases`, auto-release | Đọc camera stream, parse device payload |
+| `recording` | Recording configs/sessions/segments, media file metadata | FFmpeg process trực tiếp trong request, face attendance |
+
+### 11.9. Quy tắc bảo mật cho device callbacks
+
+Minimum validation:
+
+```text
+1. Resolve device qua: source IP, device code, hoặc callback token/shared secret.
+2. Check device tồn tại trong iot_devices.
+3. Check device.status là online/active/enabled.
+4. Check device.room_id tồn tại nếu event cần room.
+5. Lưu raw payload trước khi xử lý.
+6. Không tin timestamp thiết bị nếu lệch quá xa server time.
+7. Không để device payload tự trigger critical action như auto-release mà không qua utilization service.
+```
+
+Khuyến nghị thêm:
+
+```text
+- IP allowlist cho lab/demo nếu device trong LAN.
+- Callback token nếu device hỗ trợ.
+- Log tất cả callback request vào iot_device_events.
+- Không log password/secret từ device config.
+```
+
+### 11.10. MQTT policy cho v1
+
+MQTT/Mosquitto **không được dùng trong v1**.
+
+Không implement: Mosquitto broker, MQTT subscriber/publisher service, MQTT topic contract, MQTT env requirement.
+
+Cho phép: giữ `iot_devices.mqtt_topic` nếu database baseline đã có, giữ enum value `mqtt` trong source_protocol nếu đã có trong DB, đề cập MQTT là future extension.
+
+MQTT có thể được xem xét ở future version nếu hệ thống mở rộng thêm nhiều sensor hoặc edge device publish telemetry event nhẹ.
+
+### 11.11. IVSS policy cho v1
+
+IVSS **không phải thành phần core MVP backend**.
+
+Không implement: IVSS SDK integration, IVSS-dependent recording flow, IVSS-dependent camera discovery, IVSS là mandatory camera hub.
+
+Cho phép: đề cập IVSS là optional production camera management/recording server, store IVSS như một `iot_device` hoặc `equipment` nếu team muốn track.
+
+IVSS có thể được xem xét sau cho: centralized camera management, centralized recording, playback, camera operation monitoring.
+
+### 11.12. Điều agent không được làm với camera
+
+- Thêm MQTT/Mosquitto trong v1.
+- Implement backend-side face recognition model.
+- Implement face embedding extraction hoặc model training.
+- Phụ thuộc IVSS cho core flow.
+- Đọc RTSP stream trực tiếp trong NestJS HTTP request lifecycle.
+- Lưu binary video/audio/image lớn trực tiếp vào PostgreSQL.
+- Để raw device payload tự quyết định critical business state.
+- Bỏ qua bước lưu raw event hoặc bỏ qua device validation.
+- Hard-code camera IP/password trong source code.
+- Commit credential thật.
+- Log camera password, token hoặc raw secret.
 
 ---
 
@@ -830,6 +1001,8 @@ create(@Body() body: any) {
   return this.meetingsService.create(body);
 }
 ```
+
+**Exception: device callback endpoints may receive raw body** because Face Server or third-party devices can send vendor-specific payloads (JSON, form-data, XML, multipart, etc.). Raw body is allowed only at the device callback boundary (`/api/v1/device-callbacks/face/*`) and must be stored into `iot_device_events` before any normalization or business logic is executed.
 
 ### 13.2. ValidationPipe global
 
@@ -1110,7 +1283,13 @@ JWT_REFRESH_EXPIRES_IN=7d
 
 BCRYPT_SALT_ROUNDS=10
 
-MQTT_URL=mqtt://localhost:1883
+DEVICE_CALLBACK_BASE_URL=http://localhost:3000
+FACE_DEVICE_CALLBACK_TOKEN=
+DEVICE_CALLBACK_IP_ALLOWLIST=
+
+# Future only - not used in v1
+MQTT_ENABLED=false
+MQTT_URL=
 MQTT_USERNAME=
 MQTT_PASSWORD=
 
@@ -1234,6 +1413,32 @@ GET    /api/v1/device-user-mappings
 POST   /api/v1/device-user-mappings
 PATCH  /api/v1/device-user-mappings/:id
 DELETE /api/v1/device-user-mappings/:id
+```
+
+### 22.7a. Face Attendance Terminal Callbacks (system-to-system, không dùng JWT user)
+
+```text
+POST   /api/v1/device-callbacks/face/heartbeat
+POST   /api/v1/device-callbacks/face/verify
+POST   /api/v1/device-callbacks/face/stranger
+```
+
+### 22.7b. Room Camera (từ Python Camera Service)
+
+```text
+POST   /api/v1/room-camera/presence
+POST   /api/v1/room-camera/occupancy-snapshots
+POST   /api/v1/room-camera/events
+```
+
+### 22.7c. Recording từ camera
+
+```text
+POST   /api/v1/recordings/video/start
+POST   /api/v1/recordings/video/stop
+GET    /api/v1/recordings
+GET    /api/v1/recordings/:id
+POST   /api/v1/recordings/:id/error
 ```
 
 ### 22.8. Attendance / Presence
@@ -1383,7 +1588,8 @@ Không bật mặc định tính năng có rủi ro cao khi chưa có policy.
 ### 24.3. Test convention
 
 - Test business rule trong service.
-- Mock external provider/MQTT/storage.
+- Mock external provider/device callbacks/camera service/storage.
+- Mock MQTT only if a future MQTT feature is explicitly enabled.
 - Không phụ thuộc vào real camera/mic/device trong test backend.
 - Dùng test database hoặc transaction rollback cho integration test.
 
