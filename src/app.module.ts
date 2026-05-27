@@ -1,3 +1,4 @@
+import { APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
@@ -10,6 +11,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { MustChangePasswordGuard } from './modules/auth/guards/must-change-password.guard';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { IotModule } from './modules/iot/iot.module';
@@ -55,6 +57,21 @@ import { UtilizationModule } from './modules/utilization/utilization.module';
     AdministrationModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    /**
+     * Global guard order matters: NestJS applies APP_GUARD in the order they are listed.
+     * MustChangePasswordGuard runs AFTER JwtAuthGuard (which is applied per-endpoint via
+     * @UseGuards(JwtAuthGuard)) so request.user will already be populated when
+     * MustChangePasswordGuard.canActivate() is invoked.
+     *
+     * Routes in ALLOWED_ROUTE_PREFIXES (/auth/me, /auth/change-password, /auth/logout)
+     * are whitelisted and bypass the must_change_password check.
+     */
+    {
+      provide: APP_GUARD,
+      useClass: MustChangePasswordGuard,
+    },
+  ],
 })
 export class AppModule {}

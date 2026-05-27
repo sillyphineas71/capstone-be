@@ -8,6 +8,8 @@ import { AuthzReadRepository } from './repositories/authz-read.repository';
 import { UsersAuthRepository } from './repositories/users-auth.repository';
 import { UsersResetRepository } from './repositories/users-reset.repository';
 import { ResetAuditRepository } from './repositories/reset-audit.repository';
+import { UsersChangePasswordRepository } from './repositories/users-change-password.repository';
+import { ChangePasswordAuditRepository } from './repositories/change-password-audit.repository';
 import { AuthConfigService } from './services/auth-config.service';
 import { LoginService } from './services/login.service';
 import { LogoutService } from './services/logout.service';
@@ -16,6 +18,9 @@ import { TokenService } from './services/token.service';
 import { PasswordResetCacheService } from './services/password-reset-cache.service';
 import { AuthEmailService } from './services/auth-email.service';
 import { PasswordResetService } from './services/password-reset.service';
+import { ChangePasswordCacheService } from './services/change-password-cache.service';
+import { ChangePasswordService } from './services/change-password.service';
+import { MustChangePasswordGuard } from './guards/must-change-password.guard';
 
 @Module({
   imports: [
@@ -38,6 +43,12 @@ import { PasswordResetService } from './services/password-reset.service';
     PasswordResetCacheService,
     AuthEmailService,
     PasswordResetService,
+    // UC-AUTH-04: Change Password
+    UsersChangePasswordRepository,
+    ChangePasswordAuditRepository,
+    ChangePasswordCacheService,
+    ChangePasswordService,
+    MustChangePasswordGuard,
   ],
   exports: [
     AuthConfigService,
@@ -53,6 +64,12 @@ import { PasswordResetService } from './services/password-reset.service';
     PasswordResetCacheService,
     AuthEmailService,
     PasswordResetService,
+    // UC-AUTH-04: Change Password — exported for potential use in other modules
+    UsersChangePasswordRepository,
+    ChangePasswordAuditRepository,
+    ChangePasswordCacheService,
+    ChangePasswordService,
+    MustChangePasswordGuard,
   ],
 })
 export class AuthModule {}

@@ -1,15 +1,17 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Ip, Post, Req, SetMetadata, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiUnauthorizedResponse, ApiInternalServerErrorResponse } from '@nestjs/swagger';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Ip, Patch, Post, Req, SetMetadata, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags, ApiUnauthorizedResponse, ApiInternalServerErrorResponse } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { LoginDto } from '../dto/login.dto';
 import { LogoutResponseDto } from '../dto/logout-response.dto';
 import { RequestOtpDto } from '../dto/request-otp.dto';
 import { ConfirmResetDto } from '../dto/confirm-reset.dto';
+import { ChangePasswordDto } from '../dto/change-password.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { LoginResponsePresenter } from '../presenters/login-response.presenter';
 import { LoginService } from '../services/login.service';
 import { LogoutService } from '../services/logout.service';
 import { PasswordResetService } from '../services/password-reset.service';
+import { ChangePasswordService } from '../services/change-password.service';
 import { hasOnlyAllowedLoginFields } from '../utils/login-normalization.util';
 
 @ApiTags('Authentication')
@@ -20,6 +22,7 @@ export class AuthController {
     private readonly logoutService: LogoutService,
     private readonly loginResponsePresenter: LoginResponsePresenter,
     private readonly passwordResetService: PasswordResetService,
+    private readonly changePasswordService: ChangePasswordService,
   ) {}
 
   @Post('login')
@@ -127,5 +130,50 @@ export class AuthController {
     @Headers('x-request-id') requestId?: string,
   ) {
     return this.passwordResetService.confirmReset(dto, ipAddress, userAgent, requestId);
+  }
+
+  @Patch('change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({
+    summary: 'Change password',
+    description:
+      'Allows an authenticated user to change their own password. Requires current password verification. '
+      + 'Passive JWT invalidation is applied after success — old tokens are rejected on subsequent requests.',
+  })
+  @ApiBody({ type: ChangePasswordDto })
+  @ApiResponse({ status: 200, description: 'Password changed successfully' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation error | Wrong current password | Confirm password mismatch | Password policy violation',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Unauthorized — JWT missing, expired, or invalidated after password change',
+  })
+  @ApiResponse({ status: 403, description: 'Account restricted (locked / inactive)' })
+  @ApiResponse({ status: 422, description: 'New password is the same as the current password' })
+  @ApiResponse({
+    status: 429,
+    description: 'Too many failed attempts — rate limited for 15 minutes',
+  })
+  @ApiInternalServerErrorResponse({ description: 'Internal server error (DB / Redis failure)' })
+  async changePassword(
+    @Body() dto: ChangePasswordDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const user = (request as unknown as { user: { userId: string } }).user;
+    const userId = user.userId;
+
+    return this.changePasswordService.changePassword(userId, dto, {
+      ipAddress,
+      userAgent,
+      requestId,
+    });
   }
 }
