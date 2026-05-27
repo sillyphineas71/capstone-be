@@ -1,10 +1,15 @@
 # Spec Template - Feature Specification
 
+## 📝 CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-05-27 | Cập nhật quy tắc viết câu EARS: Giữ nguyên từ khóa cấu trúc bằng tiếng Anh, viết nội dung bằng tiếng Việt | Phần EARS Pattern & Quy tắc viết câu |
+
 > File này dùng làm template cho Spec Kit / Codex CLI khi chạy `$speckit-specify`.
 > Mục tiêu: tạo đặc tả tính năng rõ ràng, dễ kiểm tra, dễ chuyển tiếp sang plan/tasks/implementation.
 >
 > Ngôn ngữ chính: Tiếng Việt.
-> Tuy nhiên, các câu **Functional Requirements**, **Error Requirements**, và các requirement quan trọng nên giữ nguyên keyword EARS bằng tiếng Anh để agent nhìn rõ cấu trúc:
+> Tuy nhiên, các câu **Functional Requirements**, **Error Requirements**, và các requirement quan trọng nên giữ nguyên keyword EARS bằng tiếng Anh để agent nhìn rõ cấu trúc, còn toàn bộ nội dung nghiệp vụ thì viết bằng tiếng Việt:
 > `THE system SHALL`, `WHEN`, `WHILE`, `WHERE`, `IF`, `THEN`.
 >
 > Quy tắc quan trọng:
@@ -50,22 +55,29 @@ EARS giúp requirement rõ trigger, rõ điều kiện, rõ system response, d�
 ### Quy tắc viết câu EARS trong template này
 
 ```text
-[Requirement ID]: [EARS keyword / condition], THE system SHALL [system response].
+[Requirement ID]: [EARS keyword bằng tiếng Anh] [Nội dung điều kiện viết bằng tiếng Việt], THE system SHALL [Nội dung phản hồi viết bằng tiếng Việt].
 ```
 
 Hoặc với lỗi/ngoại lệ:
 
 ```text
-[Requirement ID]: IF [unwanted condition], THEN THE system SHALL [safe system response].
+[Requirement ID]: IF [Nội dung lỗi/ngoại lệ viết bằng tiếng Việt], THEN THE system SHALL [Nội dung phản hồi viết bằng tiếng Việt].
 ```
+
+Ví dụ mẫu:
+- **Ubiquitous**: `THE system SHALL [Nội dung viết bằng tiếng việt]`
+- **Event-driven**: `WHEN [Nội dung viết bằng tiếng việt], THE system SHALL [Nội dung viết bằng tiếng việt]`
+- **State-driven**: `WHILE [Nội dung viết bằng tiếng việt], THE system SHALL [Nội dung viết bằng tiếng việt]`
+- **Optional**: `WHERE [Nội dung viết bằng tiếng việt], THE system SHALL [Nội dung viết bằng tiếng việt]`
+- **Unwanted Behavior**: `IF [Nội dung viết bằng tiếng việt], THEN THE system SHALL [Nội dung viết bằng tiếng việt]`
 
 Quy tắc bắt buộc:
 
+- BẮT BUỘC viết toàn bộ nội dung nghiệp vụ bên trong và sau các từ khóa bằng tiếng Việt để người dùng dễ đọc hiểu và kiểm soát nội dung, chỉ giữ các từ khóa cấu trúc EARS bằng tiếng Anh.
 - Luôn có **một system response rõ ràng** sau `SHALL`.
 - Không dùng từ mơ hồ như: nhanh, tốt, tiện lợi, tối ưu, thông minh nếu không có tiêu chí đo lường.
 - Không gộp quá nhiều hành vi không liên quan vào cùng một requirement.
 - Không mô tả chi tiết implementation như class, function, query SQL, ORM, thuật toán nội bộ nếu chưa cần.
-- Có thể viết nội dung nghiệp vụ bằng tiếng Việt, nhưng giữ keyword EARS bằng tiếng Anh.
 
 ---
 

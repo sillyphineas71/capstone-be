@@ -3,10 +3,13 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags, ApiUnauthorizedRespo
 import type { Request } from 'express';
 import { LoginDto } from '../dto/login.dto';
 import { LogoutResponseDto } from '../dto/logout-response.dto';
+import { RequestOtpDto } from '../dto/request-otp.dto';
+import { ConfirmResetDto } from '../dto/confirm-reset.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { LoginResponsePresenter } from '../presenters/login-response.presenter';
 import { LoginService } from '../services/login.service';
 import { LogoutService } from '../services/logout.service';
+import { PasswordResetService } from '../services/password-reset.service';
 import { hasOnlyAllowedLoginFields } from '../utils/login-normalization.util';
 
 @ApiTags('Authentication')
@@ -16,6 +19,7 @@ export class AuthController {
     private readonly loginService: LoginService,
     private readonly logoutService: LogoutService,
     private readonly loginResponsePresenter: LoginResponsePresenter,
+    private readonly passwordResetService: PasswordResetService,
   ) {}
 
   @Post('login')
@@ -82,5 +86,46 @@ export class AuthController {
         revokedAt: new Date(),
       },
     };
+  }
+
+  @Post('password-reset/request')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Request password reset OTP', description: 'Generates and sends a 6-digit OTP to the user email' })
+  @ApiResponse({ status: 200, description: 'OTP sent successfully' })
+  @ApiResponse({ status: 400, description: 'E1 Unified Account Restricted error' })
+  @ApiResponse({ status: 429, description: 'Spam rate limited block' })
+  async requestOtp(
+    @Body() dto: RequestOtpDto,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ) {
+    return this.passwordResetService.requestOtp(dto, ipAddress, userAgent, requestId);
+  }
+
+  @Post('password-reset/confirm')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Confirm password reset with OTP', description: 'Verifies the OTP and resets user password' })
+  @ApiResponse({ status: 200, description: 'Password reset successful' })
+  @ApiResponse({ status: 400, description: 'E1 Unified error or E2 OTP invalid/expired' })
+  async confirmReset(
+    @Body() dto: ConfirmResetDto,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ) {
+    return this.passwordResetService.confirmReset(dto, ipAddress, userAgent, requestId);
   }
 }
