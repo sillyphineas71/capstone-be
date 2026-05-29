@@ -17,8 +17,10 @@ export function maskSensitiveMetadata(
       const isSensitive = sensitiveKeywords.some((keyword) =>
         lowerKey.includes(keyword),
       );
+      
+      const isAllowedExclusion = lowerKey.endsWith('_last4');
 
-      if (isSensitive) {
+      if (isSensitive && !isAllowedExclusion) {
         maskedJson[key] = '***';
       } else if (
         typeof maskedJson[key] === 'object' &&

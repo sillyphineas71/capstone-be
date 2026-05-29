@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Post,
+  Patch,
   Req,
   UseGuards,
   UsePipes,
@@ -12,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
 import { AssignRoomDto } from '../dto/assign-room.dto';
+import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto';
 import { IotDevicesService } from '../services/iot-devices.service';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -79,6 +81,39 @@ export class IotDevicesController {
       success: true,
       message: 'Room assigned successfully',
       data: toIotDeviceResponse(device),
+    };
+  }
+
+  @Patch(':id/face-server-config')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:configure_face_server')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async configureFaceServer(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfigureFaceServerDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const result = await this.iotDevicesService.configureFaceServer(
+      userId,
+      id,
+      dto,
+    );
+
+    return {
+      success: true,
+      message: 'Face server configuration updated successfully',
+      data: {
+        ...toIotDeviceResponse(result.device),
+        one_time_callback_token: result.oneTimeCallbackToken,
+      },
     };
   }
 }

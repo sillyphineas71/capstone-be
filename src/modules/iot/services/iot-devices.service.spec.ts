@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service';
 import { DataSource } from 'typeorm';
@@ -38,6 +38,7 @@ describe('IotDevicesService', () => {
     auditRepoMock = {
       logDeviceCreation: jest.fn(),
       logAssignRoom: jest.fn(),
+      logConfigureFaceServer: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -249,6 +250,140 @@ describe('IotDevicesService', () => {
 
       await expect(
         service.assignRoom('user-id', 'dev-1', { roomId: 'room-1' }),
+      ).rejects.toThrow('DB Error');
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('configureFaceServer', () => {
+    const validDto = {
+      callback_enabled: true,
+      callback_protocol: 'http' as const,
+      callback_base_url: 'http://localhost',
+      allowed_source_ip: '127.0.0.1',
+      heartbeat_path: '/heartbeat',
+      verify_path: '/verify',
+      stranger_path: '/stranger',
+    };
+
+    it('should configure successfully, generate token, and commit transaction', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: 'room-1',
+        metadataJson: { old_key: 'old_val' },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.configureFaceServer(
+        'user-id',
+        'dev-1',
+        validDto,
+      );
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureFaceServer).toHaveBeenCalled();
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(result.oneTimeCallbackToken).toBeDefined();
+      expect(
+        device.metadataJson.face_server_config.callback_token_hash,
+      ).toBeDefined();
+      expect(
+        device.metadataJson.face_server_config.callback_token_last4,
+      ).toBeDefined();
+      expect(device.metadataJson.old_key).toBe('old_val');
+    });
+
+    it('should throw NotFoundException if device not found', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(
+        service.configureFaceServer('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ConflictException if invalid device type', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceType: IotDeviceType.ROOM_CAMERA,
+        roomId: 'room-1',
+      });
+      await expect(
+        service.configureFaceServer('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException if device not assigned to a room', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: null,
+      });
+      await expect(
+        service.configureFaceServer('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should default callback_enabled to true if not provided', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: 'room-1',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const dtoWithoutEnabled = { ...validDto };
+      delete (dtoWithoutEnabled as any).callback_enabled;
+
+      await service.configureFaceServer('user-id', 'dev-1', dtoWithoutEnabled);
+
+      expect(device.metadataJson.face_server_config.callback_enabled).toBe(
+        true,
+      );
+    });
+
+    it('should replace old token hash with new one on re-config', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: 'room-1',
+        metadataJson: {
+          face_server_config: { callback_token_hash: 'old_hash' },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.configureFaceServer(
+        'user-id',
+        'dev-1',
+        validDto,
+      );
+
+      expect(
+        device.metadataJson.face_server_config.callback_token_hash,
+      ).not.toBe('old_hash');
+      expect(result.oneTimeCallbackToken).toBeDefined();
+    });
+
+    it('should rollback transaction if audit log fails', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: 'room-1',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+      (auditRepoMock.logConfigureFaceServer as jest.Mock).mockRejectedValue(
+        new Error('DB Error'),
+      );
+
+      await expect(
+        service.configureFaceServer('user-id', 'dev-1', validDto),
       ).rejects.toThrow('DB Error');
 
       expect(queryRunnerMock.startTransaction).toHaveBeenCalled();

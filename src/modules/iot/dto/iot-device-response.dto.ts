@@ -20,7 +20,7 @@ export class IotDeviceResponseDto {
 }
 
 export function toIotDeviceResponse(entity: IotDevice): IotDeviceResponseDto {
-  return {
+  const response: IotDeviceResponseDto = {
     id: entity.id,
     device_name: entity.deviceName,
     device_code: entity.deviceCode,
@@ -37,4 +37,10 @@ export function toIotDeviceResponse(entity: IotDevice): IotDeviceResponseDto {
     created_at: entity.createdAt,
     updated_at: entity.updatedAt,
   };
+
+  if (response.metadata_json?.face_server_config?.callback_token_hash) {
+    delete response.metadata_json.face_server_config.callback_token_hash;
+  }
+
+  return response;
 }

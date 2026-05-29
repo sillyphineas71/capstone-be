@@ -7,7 +7,9 @@ import { DataSource } from 'typeorm';
 import { IotDevice } from '../entities/iot-device.entity';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
 import { AssignRoomDto } from '../dto/assign-room.dto';
+import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto';
 import { IotAuditRepository } from '../repositories/iot-audit.repository';
+import * as crypto from 'crypto';
 import { IotDeviceType } from '../entities/iot-device.entity';
 
 @Injectable()
@@ -15,7 +17,7 @@ export class IotDevicesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
-  ) {}
+  ) { }
 
   async create(
     userId: string | null,
@@ -202,6 +204,113 @@ export class IotDevicesService {
       }
 
       return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async configureFaceServer(
+    userId: string | null,
+    deviceId: string,
+    dto: ConfigureFaceServerDto,
+  ): Promise<{ device: IotDevice; oneTimeCallbackToken: string }> {
+    const device = await this.dataSource.manager.findOne(IotDevice, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (device.deviceType !== IotDeviceType.DOOR_FACE_TERMINAL) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message:
+          'Only door face terminal devices can be configured as a face server.',
+      });
+    }
+
+    if (!device.roomId) {
+      throw new ConflictException({
+        code: 'DEVICE_ROOM_ASSIGNMENT_REQUIRED',
+        message:
+          'Device must be assigned to a room before configuring face server.',
+      });
+    }
+
+    // Process DTO and defaults
+    const callback_enabled =
+      dto.callback_enabled !== undefined ? dto.callback_enabled : true;
+
+    // Generate tokens
+    const plainToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(plainToken)
+      .digest('hex');
+    const tokenLast4 = plainToken.slice(-4);
+    const configuredAt = new Date().toISOString();
+
+    const newFaceConfig = {
+      callback_enabled,
+      callback_protocol: dto.callback_protocol,
+      callback_base_url: dto.callback_base_url,
+      heartbeat_path: dto.heartbeat_path,
+      verify_path: dto.verify_path,
+      stranger_path: dto.stranger_path,
+      allowed_source_ip: dto.allowed_source_ip,
+      callback_token_hash: tokenHash,
+      callback_token_last4: tokenLast4,
+      configured_at: configuredAt,
+    };
+
+    const currentMetadata = device.metadataJson || {};
+    const updatedMetadata = {
+      ...currentMetadata,
+      face_server_config: newFaceConfig,
+    };
+
+    device.metadataJson = updatedMetadata;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IotDevice, device);
+
+      await this.iotAuditRepository.logConfigureFaceServer(
+        queryRunner.manager,
+        {
+          userId,
+          deviceId: savedDevice.id,
+          configMetadata: newFaceConfig,
+        },
+      );
+
+      await queryRunner.commitTransaction();
+
+      // Fetch createdByName based on the creator of the device
+      if (savedDevice.createdBy) {
+        const userRow = (await queryRunner.query(
+          'SELECT full_name FROM users WHERE id = $1',
+          [savedDevice.createdBy],
+        )) as Array<{ full_name: string }>;
+        if (userRow && userRow.length > 0) {
+          Object.assign(savedDevice, { createdByName: userRow[0].full_name });
+        }
+      }
+
+      return {
+        device: savedDevice,
+        oneTimeCallbackToken: plainToken,
+      };
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
