@@ -494,4 +494,186 @@ describe('IotDevicesService', () => {
       expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
     });
   });
+  describe('checkAvailability', () => {
+    it('should throw NotFoundException if device not found', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(
+        service.checkAvailability('user-id', 'dev-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ConflictException if invalid device type', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceType: IotDeviceType.MICROPHONE,
+      });
+      await expect(
+        service.checkAvailability('user-id', 'dev-1'),
+      ).rejects.toThrow(ConflictException);
+      await expect(
+        service.checkAvailability('user-id', 'dev-1'),
+      ).rejects.toThrow('This device type is not supported for availability check.');
+    });
+
+    it('should mark door_face_terminal as available, online, healthy if heartbeat within 5 minutes', async () => {
+      const lastSeenAt = new Date();
+      lastSeenAt.setMinutes(lastSeenAt.getMinutes() - 2); // 2 minutes ago
+      
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        lastSeenAt,
+        status: 'offline',
+        healthStatus: 'unknown',
+        metadataJson: { old_meta: 'val' },
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('online');
+      expect(result.healthStatus).toBe('healthy');
+      expect(result.metadataJson.last_availability_check.is_available).toBe(true);
+      expect(result.metadataJson.last_availability_check.check_type).toBe('heartbeat_status');
+      expect(result.metadataJson.last_availability_check.runtime_verified).toBe(true);
+      expect(result.metadataJson.last_availability_check.reason_code).toBeNull();
+      expect(result.metadataJson.old_meta).toBe('val'); // Old meta preserved
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('should mark door_face_terminal as unavailable, offline, unhealthy if heartbeat > 5 minutes', async () => {
+      const lastSeenAt = new Date();
+      lastSeenAt.setMinutes(lastSeenAt.getMinutes() - 10); // 10 minutes ago
+      
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        lastSeenAt,
+        status: 'online',
+        healthStatus: 'healthy',
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('offline');
+      expect(result.healthStatus).toBe('unhealthy');
+      expect(result.metadataJson.last_availability_check.is_available).toBe(false);
+      expect(result.metadataJson.last_availability_check.reason_code).toBe('HEARTBEAT_STALE');
+      expect(result.metadataJson.last_availability_check.runtime_verified).toBe(true);
+    });
+
+    it('should mark door_face_terminal as unavailable, offline, unknown if heartbeat not seen', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        lastSeenAt: null,
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('offline');
+      expect(result.healthStatus).toBe('unknown');
+      expect(result.metadataJson.last_availability_check.is_available).toBe(false);
+      expect(result.metadataJson.last_availability_check.reason_code).toBe('HEARTBEAT_NOT_SEEN');
+      expect(result.metadataJson.last_availability_check.runtime_verified).toBe(false);
+    });
+
+    it('should mark ip_room_camera as unavailable if missing room', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: null,
+        status: 'offline',
+        metadataJson: { rtsp_config: { rtsp_enabled: true } },
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('offline'); // Keep status
+      expect(result.healthStatus).toBe('not_configured');
+      expect(result.metadataJson.last_availability_check.is_available).toBe(false);
+      expect(result.metadataJson.last_availability_check.reason_code).toBe('DEVICE_ROOM_ASSIGNMENT_REQUIRED');
+    });
+
+    it('should mark ip_room_camera as unavailable if missing rtsp_config', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+        status: 'offline',
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('offline'); // Keep status
+      expect(result.healthStatus).toBe('not_configured');
+      expect(result.metadataJson.last_availability_check.is_available).toBe(false);
+      expect(result.metadataJson.last_availability_check.reason_code).toBe('RTSP_CONFIG_MISSING');
+    });
+
+    it('should mark ip_room_camera as unavailable if rtsp_enabled is false', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+        status: 'offline',
+        metadataJson: { rtsp_config: { rtsp_enabled: false } },
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.metadataJson.last_availability_check.is_available).toBe(false);
+      expect(result.metadataJson.last_availability_check.reason_code).toBe('RTSP_DISABLED');
+    });
+
+    it('should mark ip_room_camera as config-ready available if fully configured', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+        status: 'offline',
+        metadataJson: {
+          rtsp_config: {
+            rtsp_enabled: true,
+            rtsp_host: '1.1.1.1',
+            rtsp_port: 554,
+            rtsp_path: '/path',
+          }
+        },
+      };
+      
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.checkAvailability('user-id', 'dev-1');
+
+      expect(result.status).toBe('offline'); // Status NOT updated to online
+      expect(result.healthStatus).toBe('unknown'); // Fallback for config_ready
+      expect(result.metadataJson.last_availability_check.is_available).toBe(true);
+      expect(result.metadataJson.last_availability_check.runtime_verified).toBe(false);
+      expect(result.metadataJson.last_availability_check.check_type).toBe('rtsp_config_readiness');
+      expect(result.metadataJson.last_availability_check.reason_code).toBeNull();
+      // Ensure it doesn't log audit
+      expect(auditRepoMock.logConfigureFaceServer).not.toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureRtsp).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -417,4 +417,141 @@ export class IotDevicesService {
       await queryRunner.release();
     }
   }
+  async checkAvailability(
+    userId: string | null,
+    deviceId: string,
+  ): Promise<IotDevice> {
+    const device = await this.dataSource.manager.findOne(IotDevice, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (
+      device.deviceType !== IotDeviceType.DOOR_FACE_TERMINAL &&
+      device.deviceType !== IotDeviceType.IP_ROOM_CAMERA
+    ) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_CAMERA',
+        message: 'This device type is not supported for availability check.',
+      });
+    }
+
+    let is_available = false;
+    let check_type = '';
+    let runtime_verified = false;
+    let reason_code: string | null = null;
+    let message = 'Camera availability checked successfully';
+
+    if (device.deviceType === IotDeviceType.DOOR_FACE_TERMINAL) {
+      check_type = 'heartbeat_status';
+      if (device.lastSeenAt) {
+        const now = new Date();
+        const diffInMinutes =
+          (now.getTime() - device.lastSeenAt.getTime()) / 60000;
+
+        if (diffInMinutes <= 5) {
+          is_available = true;
+          runtime_verified = true;
+          reason_code = null;
+          device.status = 'online';
+          device.healthStatus = 'healthy';
+        } else {
+          is_available = false;
+          runtime_verified = true;
+          reason_code = 'HEARTBEAT_STALE';
+          device.status = 'offline';
+          device.healthStatus = 'unhealthy';
+        }
+      } else {
+        is_available = false;
+        runtime_verified = false;
+        reason_code = 'HEARTBEAT_NOT_SEEN';
+        device.status = 'offline';
+        device.healthStatus = 'unknown';
+      }
+    } else if (device.deviceType === IotDeviceType.IP_ROOM_CAMERA) {
+      check_type = 'rtsp_config_readiness';
+      runtime_verified = false;
+
+      const rtspConfig = device.metadataJson?.rtsp_config;
+
+      if (!device.roomId) {
+        is_available = false;
+        reason_code = 'DEVICE_ROOM_ASSIGNMENT_REQUIRED';
+        device.healthStatus = 'not_configured';
+      } else if (!rtspConfig) {
+        is_available = false;
+        reason_code = 'RTSP_CONFIG_MISSING';
+        device.healthStatus = 'not_configured';
+      } else if (rtspConfig.rtsp_enabled === false) {
+        is_available = false;
+        reason_code = 'RTSP_DISABLED';
+        device.healthStatus = 'not_configured';
+      } else if (
+        rtspConfig.rtsp_host &&
+        rtspConfig.rtsp_port &&
+        rtspConfig.rtsp_path
+      ) {
+        is_available = true;
+        reason_code = null;
+        message =
+          'RTSP configuration is ready. Runtime stream probing is not performed in this version.';
+        device.healthStatus = 'unknown'; // Use unknown as fallback since config_ready is not standard
+      } else {
+        is_available = false;
+        reason_code = 'RTSP_CONFIG_MISSING';
+        device.healthStatus = 'not_configured';
+      }
+    }
+
+    const currentMetadata = device.metadataJson || {};
+
+    device.metadataJson = {
+      ...currentMetadata,
+      last_availability_check: {
+        is_available,
+        check_type,
+        runtime_verified,
+        reason_code,
+        message,
+        checked_at: new Date().toISOString(),
+        checked_by: userId,
+      },
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IotDevice, device);
+
+      // No audit log for this UC
+
+      await queryRunner.commitTransaction();
+
+      if (savedDevice.createdBy) {
+        const userRow = (await queryRunner.query(
+          'SELECT full_name FROM users WHERE id = $1',
+          [savedDevice.createdBy],
+        )) as Array<{ full_name: string }>;
+        if (userRow && userRow.length > 0) {
+          Object.assign(savedDevice, { createdByName: userRow[0].full_name });
+        }
+      }
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
 }

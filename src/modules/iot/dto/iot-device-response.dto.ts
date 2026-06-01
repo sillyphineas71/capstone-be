@@ -17,6 +17,7 @@ export class IotDeviceResponseDto {
   created_by_name?: string | null;
   created_at: Date;
   updated_at: Date;
+  availability?: any;
 }
 
 export function toIotDeviceResponse(entity: IotDevice): IotDeviceResponseDto {
@@ -53,6 +54,14 @@ export function toIotDeviceResponse(entity: IotDevice): IotDeviceResponseDto {
     delete rtspConfig.rtsp_password;
     delete rtspConfig.rtsp_password_encrypted;
     delete rtspConfig['***']; // in case maskSensitiveMetadata masked it
+  }
+
+  if (response.metadata_json?.last_availability_check?.checked_by) {
+    delete response.metadata_json.last_availability_check.checked_by;
+  }
+
+  if (response.metadata_json?.last_availability_check) {
+    response.availability = response.metadata_json.last_availability_check;
   }
 
   return response;

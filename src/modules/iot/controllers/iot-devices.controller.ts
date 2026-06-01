@@ -143,4 +143,22 @@ export class IotDevicesController {
       data: toIotDeviceResponse(device),
     };
   }
+
+  @Post(':id/check-availability')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:check_availability')
+  async checkAvailability(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.checkAvailability(userId, id);
+
+    return {
+      success: true,
+      message: 'Camera availability checked successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
 }
