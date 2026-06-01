@@ -5,6 +5,8 @@ import { JwtModule } from '@nestjs/jwt';
 import { CacheModule } from '@nestjs/cache-manager';
 import { IotDevice } from './entities/iot-device.entity';
 import { IotDevicesController } from './controllers/iot-devices.controller';
+import { DeviceCallbacksController } from './controllers/device-callbacks.controller';
+import { ShortDeviceCallbacksController } from './controllers/short-device-callbacks.controller';
 import { IotDevicesService } from './services/iot-devices.service';
 import { IotAuditRepository } from './repositories/iot-audit.repository';
 
@@ -15,7 +17,11 @@ import { IotAuditRepository } from './repositories/iot-audit.repository';
     JwtModule.register({}),
     CacheModule.register(),
   ],
-  controllers: [IotDevicesController],
+  controllers: [
+    IotDevicesController,
+    DeviceCallbacksController,
+    ShortDeviceCallbacksController,
+  ],
   providers: [IotDevicesService, IotAuditRepository],
 })
 export class IotModule {}

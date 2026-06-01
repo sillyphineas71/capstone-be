@@ -21,7 +21,9 @@ jest.mock('typeorm', () => {
       initialize = jest.fn().mockResolvedValue(this);
       destroy = jest.fn().mockResolvedValue(undefined);
       query = jest.fn().mockResolvedValue([]);
-      transaction = jest.fn().mockImplementation((cb) => cb({ query: jest.fn() }));
+      transaction = jest
+        .fn()
+        .mockImplementation((cb) => cb({ query: jest.fn() }));
     },
   };
 });
@@ -115,7 +117,9 @@ describe('Password Reset Request (e2e)', () => {
       .send({ email: 'restricted@example.com' })
       .expect(400);
 
-    expect(response.body.message).toContain('Email không tồn tại hoặc tài khoản đã bị khóa');
+    expect(response.body.message).toContain(
+      'Email không tồn tại hoặc tài khoản đã bị khóa',
+    );
     expect(response.body.error.code).toBe('AUTH_ACCOUNT_RESTRICTED');
   });
 

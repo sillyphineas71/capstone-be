@@ -1,7 +1,11 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
+  UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { IotDevice } from '../entities/iot-device.entity';
@@ -12,6 +16,15 @@ import { ConfigureRtspDto } from '../dto/configure-rtsp.dto';
 import { IotAuditRepository } from '../repositories/iot-audit.repository';
 import * as crypto from 'crypto';
 import { IotDeviceType } from '../entities/iot-device.entity';
+import { maskSensitiveMetadata } from '../../../common/utils/masking.util';
+
+export interface HeartbeatInput {
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, any> | null;
+  query: Record<string, string | undefined>;
+  params?: Record<string, string | undefined>;
+  clientIp: string | undefined;
+}
 
 @Injectable()
 export class IotDevicesService {
@@ -249,8 +262,8 @@ export class IotDevicesService {
     const callback_enabled =
       dto.callback_enabled !== undefined ? dto.callback_enabled : true;
 
-    // Generate tokens
-    const plainToken = crypto.randomBytes(32).toString('hex');
+    // Generate short token (base64url) to fit hardware URL length limit
+    const plainToken = crypto.randomBytes(16).toString('base64url');
     const tokenHash = crypto
       .createHash('sha256')
       .update(plainToken)
@@ -553,5 +566,210 @@ export class IotDevicesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private readonly logger = new Logger(IotDevicesService.name);
+
+  async receiveHeartbeat(input: HeartbeatInput) {
+    const { headers, body, query, params, clientIp } = input;
+
+    // 1. Extract device_code: header → body → query device_code → query d → path param deviceCode
+    const deviceCode = this.extractValue(
+      headers['x-device-code'],
+      body?.device_code,
+      query?.device_code,
+      query?.d,
+      params?.deviceCode,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException({
+        code: 'DEVICE_CODE_REQUIRED',
+        message:
+          'device_code is required (header X-Device-Code, body, or query param).',
+      });
+    }
+
+    // 2. Find device by device_code
+    const device = await this.dataSource.manager.findOne(IotDevice, {
+      where: { deviceCode },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 3. Check device type
+    if (device.deviceType !== IotDeviceType.DOOR_FACE_TERMINAL) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message: 'Only door face terminal devices support heartbeat callback.',
+      });
+    }
+
+    // 4. Check callback_enabled
+    const faceConfig = device.metadataJson?.face_server_config;
+    if (!faceConfig || faceConfig.callback_enabled !== true) {
+      throw new ConflictException({
+        code: 'FACE_CALLBACK_NOT_ENABLED',
+        message: 'Face server callback is not enabled for this device.',
+      });
+    }
+
+    // 5. Extract callback_token: header → body → query callback_token → query t → path param callbackToken
+    const callbackToken = this.extractValue(
+      headers['x-callback-token'],
+      body?.callback_token,
+      query?.callback_token,
+      query?.t,
+      params?.callbackToken,
+    );
+    if (!callbackToken) {
+      throw new UnauthorizedException({
+        code: 'CALLBACK_TOKEN_REQUIRED',
+        message:
+          'callback_token is required (header X-Callback-Token, body, or query param).',
+      });
+    }
+
+    // 6. Verify callback token via SHA-256 hash
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(callbackToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+
+    // 7. Check allowed_source_ip (best-effort)
+    if (faceConfig.allowed_source_ip) {
+      const normalizedClientIp = this.normalizeIp(clientIp);
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+
+    // 8. Process heartbeat
+    const now = new Date();
+    device.lastSeenAt = now;
+    device.status = 'online';
+    device.healthStatus = 'healthy';
+
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    const rawSample = maskSensitiveMetadata(body || {}) || {};
+
+    const currentMetadata = device.metadataJson || {};
+    device.metadataJson = {
+      ...currentMetadata,
+      last_heartbeat: {
+        received_at: now.toISOString(),
+        source_ip: normalizedClientIp || null,
+        payload_timestamp: body?.timestamp || null,
+        device_status: body?.status || null,
+        raw_payload_sample: rawSample,
+      },
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager.save(IotDevice, device);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      device_code: device.deviceCode,
+      status: device.status,
+      health_status: device.healthStatus,
+      last_seen_at: device.lastSeenAt,
+      received_at: now,
+    };
+  }
+
+  private extractValue(
+    headerVal: string | string[] | undefined,
+    bodyVal: any,
+    queryVal: string | string[] | undefined,
+    shortAliasVal?: string | string[] | undefined,
+    pathParamVal?: string | string[] | undefined,
+  ): string | null {
+    // Header first
+    if (headerVal) {
+      const val = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Body second
+    if (bodyVal !== undefined && bodyVal !== null) {
+      const trimmed = String(bodyVal).trim();
+      if (trimmed) return trimmed;
+    }
+    // Query third
+    if (queryVal) {
+      const val = Array.isArray(queryVal) ? queryVal[0] : queryVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Short Alias fourth
+    if (shortAliasVal) {
+      const val = Array.isArray(shortAliasVal) ? shortAliasVal[0] : shortAliasVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Path Param fifth
+    if (pathParamVal) {
+      const val = Array.isArray(pathParamVal) ? pathParamVal[0] : pathParamVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    return null;
+  }
+
+  private normalizeIp(ip: string | undefined): string | null {
+    if (!ip) return null;
+    // Strip ::ffff: prefix for IPv4-mapped IPv6
+    if (ip.startsWith('::ffff:')) {
+      return ip.substring(7);
+    }
+    return ip;
   }
 }
