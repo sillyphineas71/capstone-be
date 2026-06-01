@@ -71,4 +71,29 @@ export class IotAuditRepository {
       [params.userId, params.deviceId, JSON.stringify(safeMetadata)],
     );
   }
+
+  async logConfigureRtsp(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      configMetadata: Record<string, any>;
+    },
+  ): Promise<void> {
+    const safeMetadata = { ...params.configMetadata };
+    const hasPassword = !!(
+      safeMetadata.rtsp_password || safeMetadata.rtsp_password_encrypted
+    );
+    safeMetadata.rtsp_password_configured = hasPassword;
+    delete safeMetadata.rtsp_password;
+    delete safeMetadata.rtsp_password_encrypted;
+
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'configure_rtsp', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [params.userId, params.deviceId, JSON.stringify(safeMetadata)],
+    );
+  }
 }

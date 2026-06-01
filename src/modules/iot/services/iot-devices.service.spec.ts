@@ -39,6 +39,7 @@ describe('IotDevicesService', () => {
       logDeviceCreation: jest.fn(),
       logAssignRoom: jest.fn(),
       logConfigureFaceServer: jest.fn(),
+      logConfigureRtsp: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -384,6 +385,109 @@ describe('IotDevicesService', () => {
 
       await expect(
         service.configureFaceServer('user-id', 'dev-1', validDto),
+      ).rejects.toThrow('DB Error');
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('configureRtsp', () => {
+    const validDto = {
+      rtsp_enabled: true,
+      rtsp_protocol: 'rtsp' as const,
+      rtsp_host: '192.168.1.50',
+      rtsp_port: 554,
+      rtsp_path: '/stream/1',
+      rtsp_username: 'admin',
+      rtsp_password: 'new_password',
+      stream_profile: 'main',
+    };
+
+    it('should configure successfully, overwrite password, and commit transaction', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+        metadataJson: { rtsp_config: { rtsp_password: 'old_password' } },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const result = await service.configureRtsp('user-id', 'dev-1', validDto);
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureRtsp).toHaveBeenCalled();
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(device.metadataJson.rtsp_config.rtsp_password).toBe(
+        'new_password',
+      );
+    });
+
+    it('should keep old password if not provided', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+        metadataJson: { rtsp_config: { rtsp_password: 'old_password' } },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+
+      const dtoWithoutPassword = { ...validDto };
+      delete (dtoWithoutPassword as any).rtsp_password;
+
+      await service.configureRtsp('user-id', 'dev-1', dtoWithoutPassword);
+
+      expect(device.metadataJson.rtsp_config.rtsp_password).toBe(
+        'old_password',
+      );
+    });
+
+    it('should throw NotFoundException if device not found', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(
+        service.configureRtsp('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ConflictException if invalid device type', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceType: IotDeviceType.DOOR_FACE_TERMINAL,
+        roomId: 'room-1',
+      });
+      await expect(
+        service.configureRtsp('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw ConflictException if device not assigned to a room', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: null,
+      });
+      await expect(
+        service.configureRtsp('user-id', 'dev-1', validDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should rollback transaction if audit log fails', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceType: IotDeviceType.IP_ROOM_CAMERA,
+        roomId: 'room-1',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockResolvedValue(device);
+      (auditRepoMock.logConfigureRtsp as jest.Mock).mockRejectedValue(
+        new Error('DB Error'),
+      );
+
+      await expect(
+        service.configureRtsp('user-id', 'dev-1', validDto),
       ).rejects.toThrow('DB Error');
 
       expect(queryRunnerMock.startTransaction).toHaveBeenCalled();

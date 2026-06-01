@@ -14,6 +14,7 @@ import {
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
 import { AssignRoomDto } from '../dto/assign-room.dto';
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto';
+import { ConfigureRtspDto } from '../dto/configure-rtsp.dto';
 import { IotDevicesService } from '../services/iot-devices.service';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -114,6 +115,32 @@ export class IotDevicesController {
         ...toIotDeviceResponse(result.device),
         one_time_callback_token: result.oneTimeCallbackToken,
       },
+    };
+  }
+
+  @Patch(':id/rtsp-config')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:configure_rtsp')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async configureRtsp(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfigureRtspDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.configureRtsp(userId, id, dto);
+
+    return {
+      success: true,
+      message: 'RTSP configuration updated successfully',
+      data: toIotDeviceResponse(device),
     };
   }
 }

@@ -8,6 +8,7 @@ import { IotDevice } from '../entities/iot-device.entity';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
 import { AssignRoomDto } from '../dto/assign-room.dto';
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto';
+import { ConfigureRtspDto } from '../dto/configure-rtsp.dto';
 import { IotAuditRepository } from '../repositories/iot-audit.repository';
 import * as crypto from 'crypto';
 import { IotDeviceType } from '../entities/iot-device.entity';
@@ -17,7 +18,7 @@ export class IotDevicesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
-  ) { }
+  ) {}
 
   async create(
     userId: string | null,
@@ -311,6 +312,104 @@ export class IotDevicesService {
         device: savedDevice,
         oneTimeCallbackToken: plainToken,
       };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+  async configureRtsp(
+    userId: string | null,
+    deviceId: string,
+    dto: ConfigureRtspDto,
+  ): Promise<IotDevice> {
+    const device = await this.dataSource.manager.findOne(IotDevice, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (
+      device.deviceType !== IotDeviceType.IP_ROOM_CAMERA &&
+      device.deviceType !== IotDeviceType.ROOM_CAMERA
+    ) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_RTSP_CAMERA',
+        message: 'Only IP room cameras can be configured with RTSP.',
+      });
+    }
+
+    if (!device.roomId) {
+      throw new ConflictException({
+        code: 'DEVICE_ROOM_ASSIGNMENT_REQUIRED',
+        message: 'Device must be assigned to a room before configuring RTSP.',
+      });
+    }
+
+    const currentMetadata = device.metadataJson || {};
+    const currentRtspConfig = currentMetadata.rtsp_config || {};
+
+    const rtsp_enabled =
+      dto.rtsp_enabled !== undefined ? dto.rtsp_enabled : true;
+    const rtsp_port = dto.rtsp_port !== undefined ? dto.rtsp_port : 554;
+    const stream_profile = dto.stream_profile || 'main';
+
+    let rtsp_password = currentRtspConfig.rtsp_password;
+    if (dto.rtsp_password !== undefined) {
+      rtsp_password = dto.rtsp_password;
+    }
+
+    const newRtspConfig = {
+      rtsp_enabled,
+      rtsp_protocol: dto.rtsp_protocol,
+      rtsp_host: dto.rtsp_host,
+      rtsp_port,
+      rtsp_path: dto.rtsp_path,
+      rtsp_username: dto.rtsp_username,
+      rtsp_password,
+      stream_profile,
+      configured_at: new Date().toISOString(),
+    };
+
+    const updatedMetadata = {
+      ...currentMetadata,
+      rtsp_config: newRtspConfig,
+    };
+
+    device.metadataJson = updatedMetadata;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IotDevice, device);
+
+      await this.iotAuditRepository.logConfigureRtsp(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        configMetadata: newRtspConfig,
+      });
+
+      await queryRunner.commitTransaction();
+
+      if (savedDevice.createdBy) {
+        const userRow = (await queryRunner.query(
+          'SELECT full_name FROM users WHERE id = $1',
+          [savedDevice.createdBy],
+        )) as Array<{ full_name: string }>;
+        if (userRow && userRow.length > 0) {
+          Object.assign(savedDevice, { createdByName: userRow[0].full_name });
+        }
+      }
+
+      return savedDevice;
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

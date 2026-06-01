@@ -42,5 +42,18 @@ export function toIotDeviceResponse(entity: IotDevice): IotDeviceResponseDto {
     delete response.metadata_json.face_server_config.callback_token_hash;
   }
 
+  if (response.metadata_json?.rtsp_config) {
+    const rtspConfig = response.metadata_json.rtsp_config;
+    const hasPassword = !!(
+      rtspConfig.rtsp_password ||
+      rtspConfig.rtsp_password_encrypted ||
+      rtspConfig['***']
+    );
+    rtspConfig.rtsp_password_configured = hasPassword;
+    delete rtspConfig.rtsp_password;
+    delete rtspConfig.rtsp_password_encrypted;
+    delete rtspConfig['***']; // in case maskSensitiveMetadata masked it
+  }
+
   return response;
 }
