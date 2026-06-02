@@ -17,6 +17,7 @@ import { IotAuditRepository } from '../repositories/iot-audit.repository';
 import * as crypto from 'crypto';
 import { IotDeviceType } from '../entities/iot-device.entity';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util';
+import { IotDeviceEventsService } from './iot-device-events.service';
 
 export interface HeartbeatInput {
   headers: Record<string, string | string[] | undefined>;
@@ -49,6 +50,7 @@ export class IotDevicesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
+    private readonly iotDeviceEventsService: IotDeviceEventsService,
   ) {}
 
   async create(
@@ -932,6 +934,29 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
+      await this.iotDeviceEventsService.storeRawEvent(
+        {
+          device,
+          eventType: 'face_verify',
+          sourceProtocol: 'http',
+          severity: 'info',
+          receivedAt: now,
+          occurredAt: extractedFields.verify_time
+            ? new Date(extractedFields.verify_time)
+            : null,
+          sourceIp: normalizedClientIp || 'unknown',
+          httpMethod: (headers['method'] ||
+            headers['x-http-method-override'] ||
+            'POST') as string,
+          contentType: (headers['content-type'] || 'unknown') as string,
+          contentLength: (headers['content-length'] || '0') as string,
+          rawPayloadSample: maskedSample,
+          fileMetadata: payloadToMask._files || [],
+          extractedFields,
+          storedByUc: 'IOT-009',
+        },
+        queryRunner.manager,
+      );
       await queryRunner.manager.save(IotDevice, device);
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -1138,6 +1163,32 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
+      await this.iotDeviceEventsService.storeRawEvent(
+        {
+          device,
+          eventType: 'face_stranger',
+          sourceProtocol: 'http',
+          severity: 'warning',
+          receivedAt: now,
+          occurredAt:
+            extractedFields.event_time || extractedFields.capture_time
+              ? new Date(
+                  extractedFields.event_time || extractedFields.capture_time,
+                )
+              : null,
+          sourceIp: normalizedClientIp || 'unknown',
+          httpMethod: (headers['method'] ||
+            headers['x-http-method-override'] ||
+            'POST') as string,
+          contentType: (headers['content-type'] || 'unknown') as string,
+          contentLength: (headers['content-length'] || '0') as string,
+          rawPayloadSample: maskedSample,
+          fileMetadata: payloadToMask._files || [],
+          extractedFields,
+          storedByUc: 'IOT-009',
+        },
+        queryRunner.manager,
+      );
       await queryRunner.manager.save(IotDevice, device);
       await queryRunner.commitTransaction();
     } catch (error) {

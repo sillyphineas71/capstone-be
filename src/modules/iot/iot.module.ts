@@ -10,11 +10,13 @@ import { ShortDeviceCallbacksController } from './controllers/short-device-callb
 import { VerifyShortDeviceCallbacksController } from './controllers/verify-short-device-callbacks.controller';
 import { StrangerShortDeviceCallbacksController } from './controllers/stranger-short-device-callbacks.controller';
 import { IotDevicesService } from './services/iot-devices.service';
+import { IotDeviceEventsService } from './services/iot-device-events.service';
 import { IotAuditRepository } from './repositories/iot-audit.repository';
+import { IotDeviceEvent } from './entities/iot-device-event.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([IotDevice]),
+    TypeOrmModule.forFeature([IotDevice, IotDeviceEvent]),
     AuthModule,
     JwtModule.register({}),
     CacheModule.register(),
@@ -26,6 +28,7 @@ import { IotAuditRepository } from './repositories/iot-audit.repository';
     VerifyShortDeviceCallbacksController,
     StrangerShortDeviceCallbacksController,
   ],
-  providers: [IotDevicesService, IotAuditRepository],
+  providers: [IotDevicesService, IotDeviceEventsService, IotAuditRepository],
+  exports: [IotDevicesService, IotDeviceEventsService],
 })
 export class IotModule {}
