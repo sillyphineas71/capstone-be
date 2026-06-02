@@ -17,7 +17,7 @@ export function maskSensitiveMetadata(
       const isSensitive = sensitiveKeywords.some((keyword) =>
         lowerKey.includes(keyword),
       );
-      
+
       const isAllowedExclusion = lowerKey.endsWith('_last4');
 
       if (isSensitive && !isAllowedExclusion) {

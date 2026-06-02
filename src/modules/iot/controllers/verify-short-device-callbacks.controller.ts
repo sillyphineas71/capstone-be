@@ -2,45 +2,19 @@ import { Controller, Get, Post, Req, UseInterceptors } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { IotDevicesService } from '../services/iot-devices.service';
 
-@Controller('device-callbacks')
-export class DeviceCallbacksController {
+@Controller('vf')
+export class VerifyShortDeviceCallbacksController {
   constructor(private readonly iotDevicesService: IotDevicesService) {}
 
-  @Get('face/heartbeat')
-  async handleHeartbeatGet(@Req() req: any) {
-    return this.handleHeartbeat(req);
-  }
-
-  @Post('face/heartbeat')
-  async handleHeartbeatPost(@Req() req: any) {
-    return this.handleHeartbeat(req);
-  }
-
-  @Get('face/verify')
-  async handleVerifyGet(@Req() req: any) {
+  @Get(':deviceCode/:callbackToken')
+  async handleVerifyGetWithParams(@Req() req: any) {
     return this.handleVerify(req);
   }
 
-  @Post('face/verify')
+  @Post(':deviceCode/:callbackToken')
   @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 5 * 1024 * 1024, files: 5 } }))
-  async handleVerifyPost(@Req() req: any) {
+  async handleVerifyPostWithParams(@Req() req: any) {
     return this.handleVerify(req);
-  }
-
-  private async handleHeartbeat(req: any) {
-    const result = await this.iotDevicesService.receiveHeartbeat({
-      headers: req.headers || {},
-      body: req.body || null,
-      query: req.query || {},
-      params: req.params || {},
-      clientIp: req.ip || req.socket?.remoteAddress || undefined,
-    });
-
-    return {
-      success: true,
-      message: 'Heartbeat received successfully',
-      data: result,
-    };
   }
 
   private async handleVerify(req: any) {
