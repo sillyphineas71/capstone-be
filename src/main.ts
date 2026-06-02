@@ -10,9 +10,9 @@ async function bootstrap() {
   app.use(json({ limit: '50mb' }));
   app.use(urlencoded({ extended: true, limit: '50mb' }));
 
-  // Middleware debug: Chỉ in log cho tín hiệu Heartbeat và Verify từ Camera
+  // Middleware debug: Chỉ in log cho tín hiệu Heartbeat, Verify và Stranger từ Camera
   app.use((req: any, res: any, next: any) => {
-    if (req.originalUrl.includes('/hb/') || req.originalUrl.includes('/vf/')) {
+    if (req.originalUrl.includes('/hb/') || req.originalUrl.includes('/vf/') || req.originalUrl.includes('/sf/')) {
       console.log(`[IoT Event] ${req.method} ${req.originalUrl}`);
     }
     next();

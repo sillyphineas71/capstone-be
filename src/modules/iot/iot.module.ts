@@ -8,6 +8,7 @@ import { IotDevicesController } from './controllers/iot-devices.controller';
 import { DeviceCallbacksController } from './controllers/device-callbacks.controller';
 import { ShortDeviceCallbacksController } from './controllers/short-device-callbacks.controller';
 import { VerifyShortDeviceCallbacksController } from './controllers/verify-short-device-callbacks.controller';
+import { StrangerShortDeviceCallbacksController } from './controllers/stranger-short-device-callbacks.controller';
 import { IotDevicesService } from './services/iot-devices.service';
 import { IotAuditRepository } from './repositories/iot-audit.repository';
 
@@ -23,6 +24,7 @@ import { IotAuditRepository } from './repositories/iot-audit.repository';
     DeviceCallbacksController,
     ShortDeviceCallbacksController,
     VerifyShortDeviceCallbacksController,
+    StrangerShortDeviceCallbacksController,
   ],
   providers: [IotDevicesService, IotAuditRepository],
 })

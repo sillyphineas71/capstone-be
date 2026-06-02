@@ -22,9 +22,24 @@ export class DeviceCallbacksController {
   }
 
   @Post('face/verify')
-  @UseInterceptors(AnyFilesInterceptor({ limits: { fileSize: 5 * 1024 * 1024, files: 5 } }))
+  @UseInterceptors(
+    AnyFilesInterceptor({ limits: { fileSize: 5 * 1024 * 1024, files: 5 } }),
+  )
   async handleVerifyPost(@Req() req: any) {
     return this.handleVerify(req);
+  }
+
+  @Get('face/stranger')
+  async handleStrangerGet(@Req() req: any) {
+    return this.handleStranger(req);
+  }
+
+  @Post('face/stranger')
+  @UseInterceptors(
+    AnyFilesInterceptor({ limits: { fileSize: 5 * 1024 * 1024, files: 5 } }),
+  )
+  async handleStrangerPost(@Req() req: any) {
+    return this.handleStranger(req);
   }
 
   private async handleHeartbeat(req: any) {
@@ -56,6 +71,23 @@ export class DeviceCallbacksController {
     return {
       success: true,
       message: 'Verify event received successfully',
+      data: result,
+    };
+  }
+
+  private async handleStranger(req: any) {
+    const result = await this.iotDevicesService.receiveStrangerEvent({
+      headers: req.headers || {},
+      body: req.body || null,
+      query: req.query || {},
+      params: req.params || {},
+      clientIp: req.ip || req.socket?.remoteAddress || undefined,
+      files: req.files || [],
+    });
+
+    return {
+      success: true,
+      message: 'Stranger event received successfully',
       data: result,
     };
   }

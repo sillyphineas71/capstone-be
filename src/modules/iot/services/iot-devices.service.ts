@@ -35,6 +35,15 @@ export interface VerifyEventInput {
   files?: any[];
 }
 
+export interface StrangerEventInput {
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, any> | null;
+  query: Record<string, string | undefined>;
+  params?: Record<string, string | undefined>;
+  clientIp: string | undefined;
+  files?: any[];
+}
+
 @Injectable()
 export class IotDevicesService {
   constructor(
@@ -845,7 +854,7 @@ export class IotDevicesService {
 
     // 8. Process payload tolerant ingestion
     const now = new Date();
-    let extractedFields: any = {
+    const extractedFields: any = {
       person_id: body?.person_id || null,
       person_name: body?.person_name || null,
       verify_time: body?.verify_time || null,
@@ -878,8 +887,12 @@ export class IotDevicesService {
     // Truncate long string fields
     let truncated = false;
     for (const key in payloadToMask) {
-      if (typeof payloadToMask[key] === 'string' && payloadToMask[key].length > 2000) {
-        payloadToMask[key] = payloadToMask[key].substring(0, 2000) + '... [TRUNCATED]';
+      if (
+        typeof payloadToMask[key] === 'string' &&
+        payloadToMask[key].length > 2000
+      ) {
+        payloadToMask[key] =
+          payloadToMask[key].substring(0, 2000) + '... [TRUNCATED]';
         truncated = true;
       }
     }
@@ -902,7 +915,9 @@ export class IotDevicesService {
     device.healthStatus = 'healthy';
 
     const currentMetadata = device.metadataJson || {};
-    const oldSamples = Array.isArray(currentMetadata.recent_verify_event_samples)
+    const oldSamples = Array.isArray(
+      currentMetadata.recent_verify_event_samples,
+    )
       ? currentMetadata.recent_verify_event_samples
       : [];
 
@@ -933,12 +948,218 @@ export class IotDevicesService {
     };
   }
 
+  async receiveStrangerEvent(input: StrangerEventInput) {
+    const { headers, body, query, params, clientIp, files } = input;
+
+    // 1. Extract device_code
+    const deviceCode = this.extractValue(
+      headers['x-device-code'],
+      body?.device_code,
+      query?.device_code,
+      query?.d,
+      params?.deviceCode,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException({
+        code: 'DEVICE_CODE_REQUIRED',
+        message: 'device_code is required.',
+      });
+    }
+
+    // 2. Find device by device_code
+    const device = await this.dataSource.manager.findOne(IotDevice, {
+      where: { deviceCode },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 3. Check device type
+    if (device.deviceType !== IotDeviceType.DOOR_FACE_TERMINAL) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message: 'Only door face terminal devices support stranger callback.',
+      });
+    }
+
+    // 4. Check callback_enabled
+    const faceConfig = device.metadataJson?.face_server_config;
+    if (!faceConfig || faceConfig.callback_enabled !== true) {
+      throw new ConflictException({
+        code: 'FACE_CALLBACK_NOT_ENABLED',
+        message: 'Face server callback is not enabled for this device.',
+      });
+    }
+
+    // 5. Extract callback_token
+    const callbackToken = this.extractValue(
+      headers['x-callback-token'],
+      body?.callback_token,
+      query?.callback_token,
+      query?.t,
+      params?.callbackToken,
+    );
+    if (!callbackToken) {
+      throw new UnauthorizedException({
+        code: 'CALLBACK_TOKEN_REQUIRED',
+        message: 'callback_token is required.',
+      });
+    }
+
+    // 6. Verify callback token via SHA-256 hash
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(callbackToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+
+    // 7. Check allowed_source_ip (best-effort)
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    if (faceConfig.allowed_source_ip) {
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+
+    // 8. Process payload tolerant ingestion
+    const now = new Date();
+    const extractedFields: any = {
+      stranger_id: body?.stranger_id || null,
+      event_time: body?.event_time || null,
+      capture_time: body?.capture_time || null,
+      similarity: body?.similarity || null,
+      event_result: 'stranger',
+    };
+
+    let payloadToMask: any = {};
+    if (body && Object.keys(body).length > 0) {
+      // Create a shallow copy to mask
+      payloadToMask = { ...body };
+    } else {
+      payloadToMask = {
+        _unparseable: true,
+        content_type: headers['content-type'] || 'unknown',
+        content_length: headers['content-length'] || '0',
+        method: headers['method'] || 'unknown',
+      };
+    }
+
+    // Add file metadata if files exist (don't log/save buffers)
+    if (files && files.length > 0) {
+      payloadToMask._files = files.map((f: any) => ({
+        fieldname: f.fieldname,
+        originalname: f.originalname,
+        mimetype: f.mimetype,
+        size: f.size,
+      }));
+    }
+
+    // Truncate long string fields
+    let truncated = false;
+    for (const key in payloadToMask) {
+      if (
+        typeof payloadToMask[key] === 'string' &&
+        payloadToMask[key].length > 2000
+      ) {
+        payloadToMask[key] =
+          payloadToMask[key].substring(0, 2000) + '... [TRUNCATED]';
+        truncated = true;
+      }
+    }
+    if (truncated) {
+      payloadToMask.truncated = true;
+    }
+
+    const maskedSample = maskSensitiveMetadata(payloadToMask) || {};
+
+    const newSample = {
+      received_at: now.toISOString(),
+      source_ip: normalizedClientIp || null,
+      extracted_fields: extractedFields,
+      raw_payload_sample: maskedSample,
+    };
+
+    // 9. Update DB
+    device.lastSeenAt = now;
+    device.status = 'online';
+    device.healthStatus = 'healthy';
+
+    const currentMetadata = device.metadataJson || {};
+    const oldSamples = Array.isArray(
+      currentMetadata.recent_stranger_event_samples,
+    )
+      ? currentMetadata.recent_stranger_event_samples
+      : [];
+
+    device.metadataJson = {
+      ...currentMetadata,
+      last_stranger_event_sample: newSample,
+      recent_stranger_event_samples: [newSample, ...oldSamples].slice(0, 5),
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager.save(IotDevice, device);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      device_code: device.deviceCode,
+      event_type: 'face_stranger',
+      received_at: now.toISOString(),
+    };
+  }
+
   private extractValue(
     headerVal: string | string[] | undefined,
     bodyVal: any,
     queryVal: string | string[] | undefined,
-    shortAliasVal?: string | string[] | undefined,
-    pathParamVal?: string | string[] | undefined,
+    shortAliasVal?: string | string[],
+    pathParamVal?: string | string[],
   ): string | null {
     // Header first
     if (headerVal) {
@@ -959,7 +1180,9 @@ export class IotDevicesService {
     }
     // Short Alias fourth
     if (shortAliasVal) {
-      const val = Array.isArray(shortAliasVal) ? shortAliasVal[0] : shortAliasVal;
+      const val = Array.isArray(shortAliasVal)
+        ? shortAliasVal[0]
+        : shortAliasVal;
       const trimmed = String(val).trim();
       if (trimmed) return trimmed;
     }
