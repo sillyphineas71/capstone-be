@@ -5,7 +5,7 @@
 | :--- | :--- | :--- |
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
 | 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
-
+| 2026-06-03 | Thêm rule mới để kiểm tra, kiểm soát agent khi làm việc | Trong phần RULE tối thượng |
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
 > Mục tiêu: giúp agent hiểu đúng domain, kiến trúc, database, module boundary, convention code, API style và các giới hạn quan trọng trước khi sinh code.
 
@@ -53,6 +53,9 @@ Nguyên tắc quan trọng nhất:
 
 **[RULE TỐI THƯỢNG 2] GHI LOG KHI SỬA FILE MARKDOWN**: Bất cứ sự sửa đổi nào ở MỌI file `.md` trong dự án (bao gồm `CLAUDE.md`, `AGENTS.md`, các file `spec.md`, `plan.md`, `tasks.md`, `research.md`...) đều **PHẢI** ghi thêm 1 dòng log vào phần "CHANGELOG & REVISION HISTORY" ở ngay đầu trang của file đó.
 Nội dung log phải có: Ngày thay đổi, Tóm tắt nội dung thay đổi, Vị trí/Các dòng thay đổi. Luật này giúp lưu vết tự động để agent khác và team dễ theo dõi.
+
+**[RULE TỐI THƯỢNG 3] CÂU TRẢ LỜI CỦA AGENT KHI GIAO TIẾP VỚI TÔI LUÔN LUÔN PHẢI BẮT ĐẦU BẰNG "[Xin Chào Thiếu Chủ]"**: Mọi phản hồi của Agent gửi tới người dùng PHẢI luôn bắt đầu chính xác bằng cụm từ "[Xin Chào Thiếu Chủ]". Không được thêm bất kỳ ký tự, emoji hoặc nội dung nào phía trước. Quy tắc này áp dụng cho mọi loại phản hồi và có độ ưu tiên cao nhất về định dạng giao tiếp.
+
 
 File này dùng để hướng dẫn agent khi:
 
@@ -2129,6 +2132,7 @@ Trước khi trả code, tự kiểm tra:
 ```
 
 ---
+  "Auth module intentionally uses raw SQL via TypeORM DataSource for security-sensitive queries."
 
 ## 33. Ghi chú cuối cùng
 

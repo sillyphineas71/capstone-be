@@ -2132,6 +2132,7 @@ Trước khi trả code, tự kiểm tra:
 ```
 
 ---
+  "Auth module intentionally uses raw SQL via TypeORM DataSource for security-sensitive queries."
 
 ## 33. Ghi chú cuối cùng
 
@@ -2147,3 +2148,4 @@ Dự án này cần tính **logic, nhất quán và chuyên nghiệp** hơn là 
 6. Có thể demo và phát triển được trong phạm vi capstone.
 
 Khi nghi ngờ, không tự ý mở rộng. Hãy giữ thiết kế đơn giản, rõ boundary, phù hợp NestJS + PostgreSQL và meeting lifecycle của dự án.
+
