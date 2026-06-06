@@ -1,12 +1,14 @@
-# CLAUDE.md - Backend Guide cho Smart Meeting Management & AI Meeting Intelligence Platform v1.1
+# Backend Agent Guide - Smart Meeting Management & AI Meeting Intelligence Platform v1.1
 
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-06-06 | Sửa lỗi review: thêm device_user_mappings, cập nhật tech stack MQTT, update notification convention, xóa endpoint bảng đã remove | Các mục 3.1, 5.2, 18, 22 |
+| 2026-06-06 | Cập nhật toàn diện đồng bộ DB v3.2 Compact: loại bỏ 10 bảng đã removed khỏi tài liệu hướng dẫn, thêm mapping compact, cập nhật chuẩn Auth/MQTT/TypeORM | Toàn bộ file |
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
 | 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
 | 2026-06-03 | Thêm rule mới để kiểm tra, kiểm soát agent khi làm việc | Trong phần RULE tối thượng |
-
+| 2026-06-06 | - Thêm ưu tiên tài liệu `SPEC_ALIGNMENT_WITH_DB_V3_2_COMPACT.md` và `spec_typeorm_aligned.md`.<br>- Khẳng định luôn dùng TypeORM, không dùng Prisma. | Phần TL;DR và thứ tự ưu tiên tài liệu |
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
 > Mục tiêu: giúp agent hiểu đúng domain, kiến trúc, database, module boundary, convention code, API style và các giới hạn quan trọng trước khi sinh code.
 
@@ -37,7 +39,7 @@ Backend sử dụng:
 
 - **NestJS** làm backend framework.
 - **PostgreSQL** làm database chính.
-- **TypeORM** làm ORM/migration layer, trừ khi team thay đổi chính thức.
+- **TypeORM** làm ORM/migration layer. Tuyệt đối không dùng Prisma.
 - **JWT + RBAC** cho authentication/authorization.
 - **WebSocket** cho realtime status/presence/live meeting sync.
 - **HTTP Subscription** (từ Door Face Attendance Terminal) và **RTSP qua Python Camera Service** (từ IP Room Camera) cho camera integration trong v1. MQTT không được dùng trong v1 core flow.
@@ -48,7 +50,7 @@ Nguyên tắc quan trọng nhất:
 
 ---
 
-## 1. Vai trò của file CLAUDE.md và Quy tắc bắt buộc
+## 1. Vai trò của file CLAUDE.md/AGENTS.md và Quy tắc bắt buộc
 
 **[RULE TỐI THƯỢNG 1] BẮT BUỘC ĐỌC TÀI LIỆU**: Mọi AI Agent ĐỀU PHẢI đọc toàn bộ nội dung của file `CLAUDE.md` (và/hoặc `AGENTS.md`) trước khi bắt đầu bất kỳ công việc nào (lên plan, code, test) trong dự án này. Đây là bước kiểm tra bắt buộc, nếu chưa đọc thì không được phép suy đoán cấu trúc dự án.
 
@@ -56,6 +58,9 @@ Nguyên tắc quan trọng nhất:
 Nội dung log phải có: Ngày thay đổi, Tóm tắt nội dung thay đổi, Vị trí/Các dòng thay đổi. Luật này giúp lưu vết tự động để agent khác và team dễ theo dõi.
 
 **[RULE TỐI THƯỢNG 3] CÂU TRẢ LỜI CỦA AGENT KHI GIAO TIẾP VỚI TÔI LUÔN LUÔN PHẢI BẮT ĐẦU BẰNG "[Xin Chào Thiếu Chủ]"**: Mọi phản hồi của Agent gửi tới người dùng PHẢI luôn bắt đầu chính xác bằng cụm từ "[Xin Chào Thiếu Chủ]". Không được thêm bất kỳ ký tự, emoji hoặc nội dung nào phía trước. Quy tắc này áp dụng cho mọi loại phản hồi và có độ ưu tiên cao nhất về định dạng giao tiếp.
+
+**[RULE TỐI THƯỢNG 4] KHÔNG SỬ DỤNG PRISMA**: Tuyệt đối dùng TypeORM. Không tự ý chuyển ORM. Không tạo TypeORM Entity cho các bảng không tồn tại trong DB Compact. Không tạo lại các bảng đã bị remove. Khi Spec gốc nhắc đến các bảng cũ, Agent bắt buộc đọc `SPEC_ALIGNMENT_WITH_DB_V3_2_COMPACT.md` để tự map. Bất kì thay đổi Schema nào phải được review và có TypeORM migration rõ ràng. Không sử dụng `synchronize: true` trên môi trường thật. Chữ "Prisma" chỉ được xuất hiện trong tài liệu này như một cảnh báo, không được dùng làm baseline.
+
 
 File này dùng để hướng dẫn agent khi:
 
@@ -71,13 +76,15 @@ File này dùng để hướng dẫn agent khi:
 Khi có mâu thuẫn giữa các nguồn tài liệu, ưu tiên theo thứ tự:
 
 1. **Yêu cầu trực tiếp mới nhất của người dùng/team.**
-2. **Database v3.2 Compact hiện tại** (39 bảng, loại bỏ user_sessions).
-3. **Feature Table mới nhất** của dự án.
-4. **Use Case Specification mới nhất**.
-5. **API Contract mới nhất**.
-6. **Tài liệu trong `/spec`**.
-7. **File CLAUDE.md này**.
-8. Code hiện tại trong `/src`.
+2. **Tài liệu đối chiếu `docs/SPEC_ALIGNMENT_WITH_DB_V3_2_COMPACT.md`** (nếu có).
+3. **Tài liệu spec đã align `docs/spec_typeorm_aligned.md`** (nếu có).
+4. **Database v3.2 Compact hiện tại** (39 bảng, loại bỏ user_sessions).
+5. **Feature Table mới nhất** của dự án.
+6. **Use Case Specification mới nhất**.
+7. **API Contract mới nhất**.
+8. **Tài liệu trong `/spec`**.
+9. **File CLAUDE.md này** (và AGENTS.md).
+10. Code hiện tại trong `/src`.
 
 Nếu code hiện tại khác spec/database chính thức, không mặc định code là đúng. Hãy báo rõ sự lệch và đề xuất cách sửa an toàn.
 
@@ -151,7 +158,7 @@ Mọi tính năng phải phục vụ meeting lifecycle.
 | Auth          | JWT                                | Access token + refresh token nếu scope yêu cầu    |
 | Authorization | RBAC                               | roles, permissions, guards                        |
 | Realtime      | WebSocket Gateway                  | Room status, meeting status, presence             |
-| IoT messaging | MQTT                               | Capture agent, room device event                  |
+| IoT/device integration | HTTP Subscription + REST callback | Door Face Attendance Terminal và Python Camera Service trong v1; MQTT chỉ future/optional |
 | Validation    | class-validator, class-transformer | Validate DTO ở boundary                           |
 | Config        | @nestjs/config                     | Không hard-code env                               |
 | Logging       | Nest Logger hoặc logger chuẩn hóa  | Không log secret/token                            |
@@ -176,36 +183,36 @@ Backend đi theo hướng **modular monolith**:
 
 | Module           | Vai trò                                                             | Đường dẫn backend             |
 | ---------------- | ------------------------------------------------------------------- | ----------------------------- |
-| `auth`           | Login, logout, refresh token, password reset, session, guard        | `/src/modules/auth`           |
+| `auth`           | Login, logout, refresh token, guard (không dùng table session)      | `/src/modules/auth`           |
 | `accounts`       | User profile, departments, roles, permissions, account status       | `/src/modules/accounts`       |
 | `meetings`       | Meeting core: tạo/sửa/hủy/xem cuộc họp, participants, agenda, notes | `/src/modules/meetings`       |
 | `approvals`      | Meeting request approval, emergency/ad-hoc approval nếu có          | `/src/modules/approvals`      |
 | `scheduling`     | Conflict checking, schedule suggestions, recurrence handling        | `/src/modules/scheduling`     |
-| `rooms`          | Room, seat, booking, room status, capacity, location                | `/src/modules/rooms`          |
-| `equipment`      | Equipment, assignment, room device, camera/mic/device mapping       | `/src/modules/equipment`      |
-| `iot`            | MQTT events, IoT device event ingestion, device heartbeat           | `/src/modules/iot`            |
+| `rooms`          | Room, booking, room status, capacity, layout_json                   | `/src/modules/rooms`          |
+| `equipment`      | Equipment, room device, camera/mic/device mapping                   | `/src/modules/equipment`      |
+| `iot`            | IoT device event ingestion, device heartbeat                        | `/src/modules/iot`            |
 | `attendance`     | Attendance records, check-in/check-out, participant attendance      | `/src/modules/attendance`     |
 | `presence`       | Presence snapshot, presence events, face/camera signal mapping      | `/src/modules/presence`       |
 | `utilization`    | Room usage, no-show, early vacancy, auto-release room               | `/src/modules/utilization`    |
 | `live-meeting`   | Start/pause/resume/extend/end active meeting session                | `/src/modules/live-meeting`   |
 | `recording`      | Recording config/session/segment, media files                       | `/src/modules/recording`      |
 | `transcription`  | Transcript management, transcript text/segments nếu có              | `/src/modules/transcription`  |
-| `minutes`        | Meeting minutes, decisions, action items                            | `/src/modules/minutes`        |
-| `documents`      | Document metadata/setup-only knowledge area                         | `/src/modules/documents`      |
-| `notifications`  | Notification, recipients, email/push/in-app events                  | `/src/modules/notifications`  |
-| `reports`        | Report exports, generated reports                                   | `/src/modules/reports`        |
+| `minutes`        | Meeting minutes, decisions, action_items_json                       | `/src/modules/minutes`        |
+| `documents`      | Setup-only knowledge area (không table riêng, dùng system_configs)  | `/src/modules/documents`      |
+| `notifications`  | Notification, recipient summary/JSON, email/push/in-app events      | `/src/modules/notifications`  |
+| `reports`        | Report output via background_jobs + media_files                     | `/src/modules/reports`        |
 | `analytics`      | Dashboard, KPI, room utilization analytics                          | `/src/modules/analytics`      |
-| `administration` | System config, policies, audit logs, admin operations               | `/src/modules/administration` |
+| `administration` | System config, audit logs, admin operations                         | `/src/modules/administration` |
 | `common`         | Shared decorators, guards, pipes, filters, utils                    | `/src/common`                 |
 | `database`       | Database module, migration config, seed scripts                     | `/src/database`               |
 
 ### 4.2. Module cần chú ý về scope
 
-#### `documents`
+#### `documents`, `transcription` và `auto-release` (Feature flags)
 
-`documents` hiện tại là khu vực **setup-only / provisional** cho AI Document hoặc knowledge management tương lai.
+Các tính năng nâng cao như **AI Document**, **AI transcription**, và **auto-release phòng (utilization)** hiện tại là **provisional/future**. Không được tự động bật mặc định hoặc triển khai sâu trừ khi có yêu cầu rõ ràng. Tất cả cấu hình kích hoạt tính năng này phải thông qua feature flags trong `system_configs`.
 
-Không được tự ý triển khai:
+Đặc biệt với `documents`, không được tự ý triển khai:
 
 - Vector database.
 - Embedding pipeline.
@@ -215,14 +222,7 @@ Không được tự ý triển khai:
 - Open-source AI model integration.
 - Third-party AI provider integration.
 
-Chỉ được làm khi có yêu cầu rõ ràng từ team.
-
-Hiện tại `documents` nên chỉ quản lý:
-
-- Metadata tài liệu.
-- Liên kết document với meeting/minutes/recording nếu schema có.
-- Trạng thái xử lý document nếu cần.
-- Cấu hình/provisional flags trong `system_configs` hoặc `system_policies`.
+Chỉ được làm khi có yêu cầu rõ ràng từ team. Mọi dữ liệu tài liệu được khuyến nghị quản lý file đính kèm qua `media_files`.
 
 #### `transcription`
 
@@ -262,21 +262,18 @@ Database dùng:
 - Foreign key rõ ràng.
 - Index cho FK, lookup field, status field, time range field quan trọng.
 
-### 5.2. Nhóm bảng chính
+### 5.2. Nhóm bảng chính (39 bảng)
 
 #### Identity & Access
-
 - `departments`
 - `users`
 - `roles`
 - `permissions`
 - `user_roles`
 - `role_permissions`
-- `password_reset_requests`
 - `face_profiles`
 
 #### Meeting Core & Scheduling
-
 - `meetings`
 - `meeting_requests`
 - `meeting_participants`
@@ -285,57 +282,57 @@ Database dùng:
 - `meeting_recurrence_rules`
 - `meeting_notes`
 - `meeting_events`
-- `schedule_conflicts`
 
 #### Room & Utilization
-
 - `rooms`
-- `room_seats`
 - `room_bookings`
 - `room_booking_usages`
 - `no_show_cases`
 - `room_events`
 
 #### Equipment / IoT / Capture Agent
-
 - `equipments`
-- `equipment_assignments`
 - `iot_devices`
+- `device_user_mappings`
 - `iot_device_events`
 - `capture_sessions`
 - `capture_session_channels`
 
 #### Attendance & Presence
-
 - `attendance_records`
 - `attendance_events`
 - `presence_snapshots`
 
 #### Recording / Media / Transcription
-
 - `recording_configs`
 - `recording_sessions`
 - `recording_segments`
 - `media_files`
 - `transcripts`
 
-#### Minutes / Knowledge / AI Document setup
-
+#### Minutes
 - `meeting_minutes`
-- `meeting_action_items`
-- `documents`
 
 #### Notification / Reporting / Administration
-
 - `notifications`
-- `notification_recipients`
-- `report_exports`
 - `background_jobs`
 - `system_configs`
-- `system_policies`
 - `audit_logs`
 
-### 5.3. Nguyên tắc database tuyệt đối
+### 5.3. Mapping xử lý DB Compact cho 10 bảng đã bị loại bỏ
+
+- **`password_reset_requests`**: Dùng Redis/cache TTL kết hợp `users.must_change_password`, `users.password_updated_at` và `audit_logs`.
+- **`user_sessions`**: Dùng Redis/JWT blacklist/cache và `audit_logs`.
+- **`schedule_conflicts`**: Tính toán động từ `meetings`, `room_bookings`, `meeting_participants` và lưu snapshot vào `meeting_requests.conflict_summary_json`.
+- **`room_seats`**: Thông tin ghế map vào `rooms.layout_json`, `capture_session_channels.seat_code_snapshot`, `recording_segments.seat_code_snapshot`.
+- **`equipment_assignments`**: Gộp vào các trường trong `equipments`: `current_room_id`, `assigned_by`, `assigned_at`, `installed_at`, `assignment_note`.
+- **`meeting_action_items`**: Map vào trường `meeting_minutes.action_items_json`.
+- **`documents`**: Lưu file đính kèm dùng `media_files`. Cấu hình AI Document dùng `system_configs`.
+- **`notification_recipients`**: Lưu recipient summary/JSON trực tiếp trong `notifications`.
+- **`report_exports`**: Thông qua module `background_jobs` và lưu output file trong `media_files`.
+- **`system_policies`**: Map vào `system_configs` và lưu policy snapshot JSON nếu cần.
+
+### 5.4. Nguyên tắc database tuyệt đối
 
 Không tự ý:
 
@@ -514,7 +511,11 @@ POST   /api/v1/meeting-requests/:id/reject
 POST   /api/v1/rooms/:id/release
 POST   /api/v1/live-meetings/:id/start
 POST   /api/v1/live-meetings/:id/end
+POST   /api/v1/scheduling/check-conflicts
 ```
+
+Tuyệt đối không gợi ý hay gọi API endpoint cho các bảng không tồn tại, ví dụ như:
+- KHÔNG gọi `GET /api/v1/schedule-conflicts`, `POST /api/v1/equipment-assignments`, `POST /api/v1/documents`, `GET /api/v1/report-exports`, `GET /api/v1/system-policies`, `POST /api/v1/meetings/:id/action-items`.
 
 ---
 
@@ -603,12 +604,12 @@ Giới hạn:
 
 Backend cần hỗ trợ tối thiểu:
 
-- Login bằng email/username + password.
+- Login bằng **email + password** (trừ khi team chốt có username).
 - Hash password bằng bcrypt/argon2.
 - JWT access token.
-- Sử dụng cơ chế Stateless JWT Blacklist qua Redis Cache thay cho bảng `user_sessions`.
+- Sử dụng cơ chế Stateless JWT Blacklist qua Redis Cache. **Tuyệt đối không dùng bảng `user_sessions`**.
 - Logout/revoke session thông qua JWT Blacklist.
-- Password reset qua `password_reset_requests` nếu use case yêu cầu.
+- Password reset/OTP lưu ở Redis/cache TTL, lấy trạng thái từ `users.must_change_password`. Không dùng bảng `password_reset_requests`.
 
 Không được:
 
@@ -1411,8 +1412,11 @@ ActionItemAssignedEvent
 
 Service domain phát event hoặc gọi notification service qua boundary rõ ràng.
 
-`notifications` lưu nội dung/thông tin notification.  
-`notification_recipients` lưu người nhận và trạng thái đọc/gửi.
+`notifications` lưu nội dung notification, recipient summary/JSON, delivery status và trạng thái đọc/gửi tổng hợp nếu cần.
+
+Không dùng bảng `notification_recipients` trong DB Compact.
+
+Nếu cần gửi email/outbox/retry, dùng `notifications` kết hợp `background_jobs`.
 
 ---
 
@@ -1577,7 +1581,6 @@ POST   /api/v1/meeting-requests/:id/cancel
 POST   /api/v1/scheduling/check-conflicts
 POST   /api/v1/scheduling/suggest-times
 POST   /api/v1/scheduling/suggest-rooms
-GET    /api/v1/schedule-conflicts
 ```
 
 ### 22.6. Rooms
@@ -1606,9 +1609,6 @@ POST   /api/v1/equipments
 GET    /api/v1/equipments/:id
 PATCH  /api/v1/equipments/:id
 DELETE /api/v1/equipments/:id
-
-POST   /api/v1/equipment-assignments
-DELETE /api/v1/equipment-assignments/:id
 
 GET    /api/v1/iot-devices
 POST   /api/v1/iot-devices
@@ -1707,15 +1707,7 @@ GET    /api/v1/meetings/:id/minutes
 POST   /api/v1/meetings/:id/minutes
 PATCH  /api/v1/meeting-minutes/:id
 
-GET    /api/v1/meetings/:id/action-items
-POST   /api/v1/meetings/:id/action-items
-PATCH  /api/v1/action-items/:id
-
-GET    /api/v1/documents
-POST   /api/v1/documents
-GET    /api/v1/documents/:id
-PATCH  /api/v1/documents/:id
-DELETE /api/v1/documents/:id
+# AI Document/Documents are future/setup-only. File attachments use media_files.
 ```
 
 ### 22.13. Notifications / Reports / Administration
@@ -1724,9 +1716,10 @@ DELETE /api/v1/documents/:id
 GET    /api/v1/notifications
 PATCH  /api/v1/notifications/:id/read
 
-POST   /api/v1/report-exports
-GET    /api/v1/report-exports
-GET    /api/v1/report-exports/:id
+POST   /api/v1/reports/meeting-activity/exports
+GET    /api/v1/background-jobs/:id
+GET    /api/v1/media-files/:id
+# Export chạy async qua background_jobs + media_files
 
 GET    /api/v1/analytics/room-utilization
 GET    /api/v1/analytics/meeting-summary
@@ -1734,8 +1727,6 @@ GET    /api/v1/analytics/no-show-rate
 
 GET    /api/v1/system-configs
 PATCH  /api/v1/system-configs/:key
-GET    /api/v1/system-policies
-PATCH  /api/v1/system-policies/:id
 GET    /api/v1/audit-logs
 ```
 
@@ -2129,10 +2120,10 @@ Trước khi trả code, tự kiểm tra:
 [ ] Có tránh log dữ liệu nhạy cảm không?
 [ ] Có test hoặc đề xuất test cho logic quan trọng không?
 [ ] Có giữ AI Document ở trạng thái setup-only nếu chưa được yêu cầu không?
+[ ] Đảm bảo không còn Prisma như một phần của technology baseline hiện tại?
 ```
 
 ---
-  "Auth module intentionally uses raw SQL via TypeORM DataSource for security-sensitive queries."
 
 ## 33. Ghi chú cuối cùng
 
@@ -2148,4 +2139,3 @@ Dự án này cần tính **logic, nhất quán và chuyên nghiệp** hơn là 
 6. Có thể demo và phát triển được trong phạm vi capstone.
 
 Khi nghi ngờ, không tự ý mở rộng. Hãy giữ thiết kế đơn giản, rõ boundary, phù hợp NestJS + PostgreSQL và meeting lifecycle của dự án.
-
