@@ -1,6 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
+﻿import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, Index } from 'typeorm';
 
 @Entity('departments')
+@Index('ux_departments_code', ['departmentCode'], { unique: true, where: 'deleted_at IS NULL' })
+@Index('ux_departments_name', ['departmentName'], { unique: true, where: 'deleted_at IS NULL' })
 export class DepartmentEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -46,3 +48,4 @@ export class DepartmentEntity {
   @OneToMany(() => DepartmentEntity, (dept) => dept.parentDepartment)
   children: DepartmentEntity[];
 }
+
