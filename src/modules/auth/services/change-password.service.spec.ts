@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, HttpException, InternalServerErrorException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  InternalServerErrorException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { ChangePasswordService } from './change-password.service';
@@ -60,7 +66,9 @@ function buildMocks() {
   };
 }
 
-async function buildService(mocks: ReturnType<typeof buildMocks>): Promise<ChangePasswordService> {
+async function buildService(
+  mocks: ReturnType<typeof buildMocks>,
+): Promise<ChangePasswordService> {
   const module: TestingModule = await Test.createTestingModule({
     providers: [
       ChangePasswordService,
@@ -68,7 +76,10 @@ async function buildService(mocks: ReturnType<typeof buildMocks>): Promise<Chang
       { provide: UsersChangePasswordRepository, useValue: mocks.mockUsersRepo },
       { provide: ChangePasswordCacheService, useValue: mocks.mockCacheService },
       { provide: ChangePasswordAuditRepository, useValue: mocks.mockAuditRepo },
-      { provide: PasswordResetCacheService, useValue: mocks.mockPasswordResetCacheService },
+      {
+        provide: PasswordResetCacheService,
+        useValue: mocks.mockPasswordResetCacheService,
+      },
     ],
   }).compile();
 
@@ -76,12 +87,21 @@ async function buildService(mocks: ReturnType<typeof buildMocks>): Promise<Chang
 }
 
 // Helper: configure DataSource.transaction to run the callback with a mock EntityManager
-function mockTransactionWith(mocks: ReturnType<typeof buildMocks>, user: Awaited<ReturnType<typeof buildMocks>['mockUsersRepo']['findByIdForUpdate']>) {
+function mockTransactionWith(
+  mocks: ReturnType<typeof buildMocks>,
+  user: Awaited<
+    ReturnType<typeof buildMocks>['mockUsersRepo']['findByIdForUpdate']
+  >,
+) {
   (mocks.mockDataSource.transaction as jest.Mock).mockImplementation(
     async (cb: (em: object) => Promise<void>) => {
       const em = {};
-      (mocks.mockUsersRepo.findByIdForUpdate as jest.Mock).mockResolvedValue(user);
-      (mocks.mockUsersRepo.updatePassword as jest.Mock).mockResolvedValue(undefined);
+      (mocks.mockUsersRepo.findByIdForUpdate as jest.Mock).mockResolvedValue(
+        user,
+      );
+      (mocks.mockUsersRepo.updatePassword as jest.Mock).mockResolvedValue(
+        undefined,
+      );
       await cb(em);
     },
   );
@@ -112,17 +132,18 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
     mockTransactionWith(mocks, activeUser);
-    (mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock).mockResolvedValue(undefined);
+    (
+      mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock
+    ).mockResolvedValue(undefined);
     (mocks.mockAuditRepo.logSuccess as jest.Mock).mockResolvedValue(undefined);
 
     const result = await service.changePassword(USER_ID, { ...validDto }, CTX);
 
     expect(result.success).toBe(true);
     expect(result.message).toContain('Thay đổi mật khẩu thành công');
-    expect(mocks.mockPasswordResetCacheService.invalidateUserTokens).toHaveBeenCalledWith(
-      USER_ID,
-      expect.any(Number),
-    );
+    expect(
+      mocks.mockPasswordResetCacheService.invalidateUserTokens,
+    ).toHaveBeenCalledWith(USER_ID, expect.any(Number));
     expect(mocks.mockAuditRepo.logSuccess).toHaveBeenCalled();
   });
 
@@ -139,7 +160,9 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
     mockTransactionWith(mocks, userWithFlag);
-    (mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock).mockResolvedValue(undefined);
+    (
+      mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock
+    ).mockResolvedValue(undefined);
     (mocks.mockAuditRepo.logSuccess as jest.Mock).mockResolvedValue(undefined);
 
     await service.changePassword(USER_ID, { ...validDto }, CTX);
@@ -172,7 +195,11 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
     await expect(
       service.changePassword(
         USER_ID,
-        { currentPassword: CURRENT_PASSWORD, newPassword: NEW_PASSWORD, confirmPassword: 'Different@789' },
+        {
+          currentPassword: CURRENT_PASSWORD,
+          newPassword: NEW_PASSWORD,
+          confirmPassword: 'Different@789',
+        },
         CTX,
       ),
     ).rejects.toThrow(BadRequestException);
@@ -183,29 +210,51 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
   // ── TC-05: currentPassword wrong (attempt #1) → counter incremented ─────────
   it('TC-05: Wrong currentPassword (attempt #1) → counter=1, HTTP 400 CURRENT_PASSWORD_INCORRECT', async () => {
     const passwordHash = await hashPassword('AnotherPass@999');
-    const activeUser = { id: USER_ID, passwordHash, accountStatus: 'active', mustChangePassword: false, deletedAt: null };
+    const activeUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'active',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
-    (mocks.mockCacheService.incrementFailedCounter as jest.Mock).mockResolvedValue(1);
+    (
+      mocks.mockCacheService.incrementFailedCounter as jest.Mock
+    ).mockResolvedValue(1);
     mockTransactionWith(mocks, activeUser);
 
     await expect(
       service.changePassword(USER_ID, { ...validDto }, CTX),
     ).rejects.toThrow(BadRequestException);
 
-    expect(mocks.mockCacheService.incrementFailedCounter).toHaveBeenCalledWith(USER_ID);
+    expect(mocks.mockCacheService.incrementFailedCounter).toHaveBeenCalledWith(
+      USER_ID,
+    );
     expect(mocks.mockCacheService.setBlockFlag).not.toHaveBeenCalled();
   });
 
   // ── TC-06: currentPassword wrong (attempt #5) → block flag set, still HTTP 400
   it('TC-06: Wrong currentPassword (attempt #5) → setBlockFlag called, logRateLimited called, still HTTP 400', async () => {
     const passwordHash = await hashPassword('AnotherPass@999');
-    const activeUser = { id: USER_ID, passwordHash, accountStatus: 'active', mustChangePassword: false, deletedAt: null };
+    const activeUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'active',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
-    (mocks.mockCacheService.incrementFailedCounter as jest.Mock).mockResolvedValue(5);
-    (mocks.mockCacheService.setBlockFlag as jest.Mock).mockResolvedValue(undefined);
-    (mocks.mockAuditRepo.logRateLimited as jest.Mock).mockResolvedValue(undefined);
+    (
+      mocks.mockCacheService.incrementFailedCounter as jest.Mock
+    ).mockResolvedValue(5);
+    (mocks.mockCacheService.setBlockFlag as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    (mocks.mockAuditRepo.logRateLimited as jest.Mock).mockResolvedValue(
+      undefined,
+    );
     mockTransactionWith(mocks, activeUser);
 
     await expect(
@@ -222,18 +271,28 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
   it('TC-07: Block flag set by previous attempt — next request gets HTTP 429 CHANGE_PASSWORD_RATE_LIMITED (AC-012)', async () => {
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(true);
 
-    const err = await service.changePassword(USER_ID, { ...validDto }, CTX).catch((e: unknown) => e);
+    const err = await service
+      .changePassword(USER_ID, { ...validDto }, CTX)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpException);
     expect((err as HttpException).getStatus()).toBe(429);
 
-    const responseBody = (err as HttpException).getResponse() as { error: { code: string } };
+    const responseBody = (err as HttpException).getResponse() as {
+      error: { code: string };
+    };
     expect(responseBody.error.code).toBe('CHANGE_PASSWORD_RATE_LIMITED');
   });
 
   // ── TC-08: newPassword same as current → 422 SAME_AS_CURRENT_PASSWORD ────────
   it('TC-08: newPassword equals current password (bcrypt E5) → HTTP 422 SAME_AS_CURRENT_PASSWORD (AC-008)', async () => {
     const passwordHash = await hashPassword(CURRENT_PASSWORD);
-    const activeUser = { id: USER_ID, passwordHash, accountStatus: 'active', mustChangePassword: false, deletedAt: null };
+    const activeUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'active',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
     mockTransactionWith(mocks, activeUser);
@@ -241,7 +300,11 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
     await expect(
       service.changePassword(
         USER_ID,
-        { currentPassword: CURRENT_PASSWORD, newPassword: CURRENT_PASSWORD, confirmPassword: CURRENT_PASSWORD },
+        {
+          currentPassword: CURRENT_PASSWORD,
+          newPassword: CURRENT_PASSWORD,
+          confirmPassword: CURRENT_PASSWORD,
+        },
         CTX,
       ),
     ).rejects.toThrow(UnprocessableEntityException);
@@ -250,7 +313,13 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
   // ── TC-09: account_status locked → HTTP 403 ACCOUNT_RESTRICTED ───────────────
   it('TC-09: account_status = locked → HTTP 403 ACCOUNT_RESTRICTED (rollback)', async () => {
     const passwordHash = await hashPassword(CURRENT_PASSWORD);
-    const lockedUser = { id: USER_ID, passwordHash, accountStatus: 'locked', mustChangePassword: false, deletedAt: null };
+    const lockedUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'locked',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
     mockTransactionWith(mocks, lockedUser);
@@ -275,12 +344,22 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
   // ── TC-11: Audit log failure does not affect response ─────────────────────────
   it('TC-11: logSuccess throws — error is swallowed, response is still success', async () => {
     const passwordHash = await hashPassword(CURRENT_PASSWORD);
-    const activeUser = { id: USER_ID, passwordHash, accountStatus: 'active', mustChangePassword: false, deletedAt: null };
+    const activeUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'active',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
     mockTransactionWith(mocks, activeUser);
-    (mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock).mockResolvedValue(undefined);
-    (mocks.mockAuditRepo.logSuccess as jest.Mock).mockRejectedValue(new Error('DB down'));
+    (
+      mocks.mockPasswordResetCacheService.invalidateUserTokens as jest.Mock
+    ).mockResolvedValue(undefined);
+    (mocks.mockAuditRepo.logSuccess as jest.Mock).mockRejectedValue(
+      new Error('DB down'),
+    );
 
     const result = await service.changePassword(USER_ID, { ...validDto }, CTX);
     expect(result.success).toBe(true);
@@ -289,16 +368,29 @@ describe('ChangePasswordService — 12 test cases (UC-AUTH-04)', () => {
   // ── TC-12: logger.warn called when currentPassword is wrong (NFR-CHPWD-013) ───
   it('TC-12: Wrong currentPassword → logger.warn is called (NFR-CHPWD-013)', async () => {
     const passwordHash = await hashPassword('AnotherPass@999');
-    const activeUser = { id: USER_ID, passwordHash, accountStatus: 'active', mustChangePassword: false, deletedAt: null };
+    const activeUser = {
+      id: USER_ID,
+      passwordHash,
+      accountStatus: 'active',
+      mustChangePassword: false,
+      deletedAt: null,
+    };
 
     (mocks.mockCacheService.isBlocked as jest.Mock).mockResolvedValue(false);
-    (mocks.mockCacheService.incrementFailedCounter as jest.Mock).mockResolvedValue(1);
+    (
+      mocks.mockCacheService.incrementFailedCounter as jest.Mock
+    ).mockResolvedValue(1);
     mockTransactionWith(mocks, activeUser);
 
-    const warnSpy = jest.spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn');
+    const warnSpy = jest.spyOn(
+      (service as unknown as { logger: { warn: jest.Mock } }).logger,
+      'warn',
+    );
 
     await service.changePassword(USER_ID, { ...validDto }, CTX).catch(() => {});
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Wrong currentPassword'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Wrong currentPassword'),
+    );
   });
 });

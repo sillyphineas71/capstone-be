@@ -35,7 +35,9 @@ describe('MustChangePasswordGuard — 4 test cases (FR-CHPWD-026, AC-006b)', () 
 
   // ── TC-01: must_change_password = false → allow ───────────────────────────
   it('TC-01: must_change_password=false → canActivate returns true', async () => {
-    mockUsersRepo.findMustChangePassword.mockResolvedValue({ mustChangePassword: false });
+    mockUsersRepo.findMustChangePassword.mockResolvedValue({
+      mustChangePassword: false,
+    });
 
     const ctx = buildContext('/api/v1/meetings', 'user-001');
     const result = await guard.canActivate(ctx);
@@ -53,7 +55,9 @@ describe('MustChangePasswordGuard — 4 test cases (FR-CHPWD-026, AC-006b)', () 
 
   // ── TC-03: must_change_password = true, business API → 403 ───────────────
   it('TC-03: must_change_password=true + route /api/v1/meetings → throw ForbiddenException MUST_CHANGE_PASSWORD (AC-006b)', async () => {
-    mockUsersRepo.findMustChangePassword.mockResolvedValue({ mustChangePassword: true });
+    mockUsersRepo.findMustChangePassword.mockResolvedValue({
+      mustChangePassword: true,
+    });
 
     const ctx = buildContext('/api/v1/meetings', 'user-001');
 

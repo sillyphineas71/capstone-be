@@ -32,9 +32,7 @@ const ALLOWED_ROUTE_PREFIXES = [
 export class MustChangePasswordGuard implements CanActivate {
   private readonly logger = new Logger(MustChangePasswordGuard.name);
 
-  constructor(
-    private readonly usersRepo: UsersChangePasswordRepository,
-  ) {}
+  constructor(private readonly usersRepo: UsersChangePasswordRepository) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
@@ -54,16 +52,16 @@ export class MustChangePasswordGuard implements CanActivate {
     }
 
     // Query DB for current flag value.
-    const result = await this.usersRepo.findMustChangePassword(userId).catch(
-      (err: unknown) => {
+    const result = await this.usersRepo
+      .findMustChangePassword(userId)
+      .catch((err: unknown) => {
         this.logger.error(
           `[MustChangePasswordGuard] DB lookup failed for user ${userId}: ${(err as Error).message}`,
           (err as Error).stack,
         );
         // Fail-open: if we can't check, allow the request to avoid locking out users.
         return null;
-      },
-    );
+      });
 
     if (result?.mustChangePassword) {
       throw new ForbiddenException({

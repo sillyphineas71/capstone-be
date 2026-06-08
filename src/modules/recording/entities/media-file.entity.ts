@@ -45,7 +45,12 @@ export class MediaFileEntity {
   @Column({ name: 'meeting_id', type: 'uuid', nullable: true })
   meetingId: string | null;
 
-  @Column({ name: 'related_entity_type', type: 'varchar', length: 60, nullable: true })
+  @Column({
+    name: 'related_entity_type',
+    type: 'varchar',
+    length: 60,
+    nullable: true,
+  })
   relatedEntityType: string | null;
 
   @Column({ name: 'related_entity_id', type: 'uuid', nullable: true })
@@ -69,7 +74,12 @@ export class MediaFileEntity {
   @Column({ name: 'storage_provider', type: 'varchar', length: 50 })
   storageProvider: StorageProvider;
 
-  @Column({ name: 'storage_bucket', type: 'varchar', length: 150, nullable: true })
+  @Column({
+    name: 'storage_bucket',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   storageBucket: string | null;
 
   @Column({ name: 'storage_key', type: 'text' })
@@ -90,7 +100,12 @@ export class MediaFileEntity {
   @Column({ name: 'version_no', type: 'integer', default: 1 })
   versionNo: number;
 
-  @Column({ name: 'visibility_level', type: 'varchar', length: 30, default: MediaVisibilityLevel.INTERNAL })
+  @Column({
+    name: 'visibility_level',
+    type: 'varchar',
+    length: 30,
+    default: MediaVisibilityLevel.INTERNAL,
+  })
   visibilityLevel: MediaVisibilityLevel;
 
   @Column({ name: 'is_active', type: 'boolean', default: true })

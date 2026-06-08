@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { IoTDeviceEntity } from '../../../modules/iot/entities/iot-device.entity.js';
@@ -43,7 +49,12 @@ export class RecordingConfigEntity {
   @Column({ name: 'video_source_device_id', type: 'uuid', nullable: true })
   videoSourceDeviceId: string | null;
 
-  @Column({ name: 'audio_source_mode', type: 'varchar', length: 40, nullable: true })
+  @Column({
+    name: 'audio_source_mode',
+    type: 'varchar',
+    length: 40,
+    nullable: true,
+  })
   audioSourceMode: AudioSourceMode | null;
 
   @Column({ name: 'auto_start', type: 'boolean', default: false })
@@ -58,7 +69,11 @@ export class RecordingConfigEntity {
   @Column({ name: 'configured_by', type: 'uuid', nullable: true })
   configuredBy: string | null;
 
-  @Column({ name: 'configured_at', type: 'timestamptz', default: () => 'now()' })
+  @Column({
+    name: 'configured_at',
+    type: 'timestamptz',
+    default: () => 'now()',
+  })
   configuredAt: Date;
 
   @Column({ name: 'config_json', type: 'jsonb', nullable: true })

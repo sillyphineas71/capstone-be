@@ -44,7 +44,12 @@ export class MeetingMinutesEntity {
   @Column({ type: 'varchar', length: 30, default: MeetingMinutesStatus.DRAFT })
   status: MeetingMinutesStatus;
 
-  @Column({ name: 'visibility_level', type: 'varchar', length: 30, default: MeetingMinutesVisibilityLevel.PARTICIPANTS })
+  @Column({
+    name: 'visibility_level',
+    type: 'varchar',
+    length: 30,
+    default: MeetingMinutesVisibilityLevel.PARTICIPANTS,
+  })
   visibilityLevel: MeetingMinutesVisibilityLevel;
 
   @Column({ name: 'minutes_content', type: 'text' })

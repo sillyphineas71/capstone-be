@@ -51,7 +51,11 @@ import { AdministrationModule } from '../administration/administration.module.js
     IsDepartmentNameUniqueConstraint,
     NoEmojiOrControlConstraint,
   ],
-  exports: [TypeOrmModule, UsersService, PasswordGeneratorService, DepartmentsService],
+  exports: [
+    TypeOrmModule,
+    UsersService,
+    PasswordGeneratorService,
+    DepartmentsService,
+  ],
 })
 export class AccountsModule {}
-

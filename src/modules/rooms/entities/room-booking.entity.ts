@@ -41,7 +41,12 @@ export class RoomBookingEntity {
   @Column({ name: 'room_id', type: 'uuid' })
   roomId: string;
 
-  @Column({ name: 'booking_type', type: 'varchar', length: 30, default: BookingType.SCHEDULED })
+  @Column({
+    name: 'booking_type',
+    type: 'varchar',
+    length: 30,
+    default: BookingType.SCHEDULED,
+  })
   bookingType: BookingType;
 
   @Column({ name: 'reserved_start_time', type: 'timestamptz' })

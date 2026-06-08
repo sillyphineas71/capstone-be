@@ -70,10 +70,20 @@ export class MeetingEntity {
   @Column({ name: 'room_id', type: 'uuid', nullable: true })
   roomId: string | null;
 
-  @Column({ name: 'meeting_type', type: 'varchar', length: 30, default: MeetingType.NORMAL })
+  @Column({
+    name: 'meeting_type',
+    type: 'varchar',
+    length: 30,
+    default: MeetingType.NORMAL,
+  })
   meetingType: MeetingType;
 
-  @Column({ name: 'meeting_mode', type: 'varchar', length: 30, default: MeetingMode.OFFLINE })
+  @Column({
+    name: 'meeting_mode',
+    type: 'varchar',
+    length: 30,
+    default: MeetingMode.OFFLINE,
+  })
   meetingMode: MeetingMode;
 
   @Column({ type: 'varchar', length: 20, default: MeetingPriority.NORMAL })
@@ -82,7 +92,12 @@ export class MeetingEntity {
   @Column({ type: 'varchar', length: 30, default: MeetingStatus.DRAFT })
   status: MeetingStatus;
 
-  @Column({ name: 'visibility_level', type: 'varchar', length: 30, default: MeetingVisibilityLevel.INTERNAL })
+  @Column({
+    name: 'visibility_level',
+    type: 'varchar',
+    length: 30,
+    default: MeetingVisibilityLevel.INTERNAL,
+  })
   visibilityLevel: MeetingVisibilityLevel;
 
   @Column({ name: 'start_time', type: 'timestamptz' })
@@ -136,7 +151,10 @@ export class MeetingEntity {
   @JoinColumn({ name: 'host_id' })
   host: UserEntity | null;
 
-  @ManyToOne(() => MeetingRecurrenceRuleEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => MeetingRecurrenceRuleEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'recurrence_rule_id' })
   recurrenceRule: MeetingRecurrenceRuleEntity | null;
 

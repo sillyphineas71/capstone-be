@@ -5,7 +5,9 @@ import { ChangePasswordDto } from './change-password.dto';
 /**
  * Helper: create a valid DTO instance then mutate one field.
  */
-function buildDto(overrides: Partial<Record<keyof ChangePasswordDto, string>> = {}): ChangePasswordDto {
+function buildDto(
+  overrides: Partial<Record<keyof ChangePasswordDto, string>> = {},
+): ChangePasswordDto {
   return plainToInstance(ChangePasswordDto, {
     currentPassword: 'OldPass@123',
     newPassword: 'NewPass@456',
@@ -28,7 +30,9 @@ describe('ChangePasswordDto — 9 validation test cases (FR-CHPWD-002, AC-003, A
     const errors = await validate(dto);
     const field = errors.find((e) => e.property === 'currentPassword');
     expect(field).toBeDefined();
-    expect(field?.constraints).toMatchObject(expect.objectContaining({ maxLength: expect.any(String) }));
+    expect(field?.constraints).toMatchObject(
+      expect.objectContaining({ maxLength: expect.any(String) }),
+    );
   });
 
   // ─── Test 3: newPassword < 8 chars ────────────────────────────────────────
@@ -45,7 +49,9 @@ describe('ChangePasswordDto — 9 validation test cases (FR-CHPWD-002, AC-003, A
     const errors = await validate(dto);
     const field = errors.find((e) => e.property === 'newPassword');
     expect(field).toBeDefined();
-    expect(field?.constraints).toMatchObject(expect.objectContaining({ maxLength: expect.any(String) }));
+    expect(field?.constraints).toMatchObject(
+      expect.objectContaining({ maxLength: expect.any(String) }),
+    );
   });
 
   // ─── Test 5: newPassword missing uppercase ─────────────────────────────────

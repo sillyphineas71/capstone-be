@@ -30,7 +30,12 @@ export class MeetingNoteEntity {
   @Column({ name: 'author_id', type: 'uuid' })
   authorId: string;
 
-  @Column({ name: 'note_type', type: 'varchar', length: 30, default: MeetingNoteType.IN_MEETING })
+  @Column({
+    name: 'note_type',
+    type: 'varchar',
+    length: 30,
+    default: MeetingNoteType.IN_MEETING,
+  })
   noteType: MeetingNoteType;
 
   @Column({ type: 'text' })
@@ -39,7 +44,12 @@ export class MeetingNoteEntity {
   @Column({ type: 'boolean', default: false })
   pinned: boolean;
 
-  @Column({ name: 'visibility_level', type: 'varchar', length: 30, default: 'participants' })
+  @Column({
+    name: 'visibility_level',
+    type: 'varchar',
+    length: 30,
+    default: 'participants',
+  })
   visibilityLevel: string;
 
   @Column({ name: 'source_event_id', type: 'uuid', nullable: true })

@@ -1,4 +1,10 @@
-import { Catch, ExceptionFilter, ArgumentsHost, HttpStatus, Logger } from '@nestjs/common';
+import {
+  Catch,
+  ExceptionFilter,
+  ArgumentsHost,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 
@@ -24,9 +30,11 @@ export class QueryFailedFilter implements ExceptionFilter {
     // PostgreSQL unique violation
     if (code === '23505') {
       const constraint: string | undefined = driverError?.constraint;
-      const field = constraint?.includes('department_code') ? 'departmentCode'
-        : constraint?.includes('department_name') ? 'departmentName'
-        : 'unknown';
+      const field = constraint?.includes('department_code')
+        ? 'departmentCode'
+        : constraint?.includes('department_name')
+          ? 'departmentName'
+          : 'unknown';
 
       this.logger.warn(
         `Unique constraint violation: ${constraint} (requestId: ${requestId})`,
@@ -34,9 +42,10 @@ export class QueryFailedFilter implements ExceptionFilter {
 
       response.status(HttpStatus.CONFLICT).json({
         success: false,
-        message: field === 'departmentCode'
-          ? 'Mã phòng ban này đã được sử dụng'
-          : 'Tên phòng ban này đã được sử dụng',
+        message:
+          field === 'departmentCode'
+            ? 'Mã phòng ban này đã được sử dụng'
+            : 'Tên phòng ban này đã được sử dụng',
         error: {
           code: 'DEPARTMENT_ALREADY_EXISTS',
           details: { field },
@@ -64,4 +73,3 @@ export class QueryFailedFilter implements ExceptionFilter {
     });
   }
 }
-

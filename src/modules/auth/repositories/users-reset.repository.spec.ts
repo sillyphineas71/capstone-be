@@ -51,7 +51,9 @@ describe('UsersResetRepository', () => {
         employmentStatus: 'active',
         deletedAt: null,
       });
-      expect(dataSource.query).toHaveBeenCalledWith(expect.any(String), [email]);
+      expect(dataSource.query).toHaveBeenCalledWith(expect.any(String), [
+        email,
+      ]);
     });
 
     it('should return null when user does not exist', async () => {
@@ -78,7 +80,10 @@ describe('UsersResetRepository', () => {
       await repository.updatePasswordInTransaction(userId, newHash);
 
       expect(dataSource.transaction).toHaveBeenCalled();
-      expect(transactionalEntityManager.query).toHaveBeenCalledWith(expect.any(String), [userId, newHash]);
+      expect(transactionalEntityManager.query).toHaveBeenCalledWith(
+        expect.any(String),
+        [userId, newHash],
+      );
     });
   });
 });

@@ -33,7 +33,11 @@ describe('AuthEmailService', () => {
     const email = 'user@error.com';
     const otp = '123456';
 
-    await expect(service.sendOtp(email, otp)).rejects.toThrow(InternalServerErrorException);
-    await expect(service.sendOtp(email, otp)).rejects.toThrow('AUTH_EMAIL_DISPATCH_FAILED');
+    await expect(service.sendOtp(email, otp)).rejects.toThrow(
+      InternalServerErrorException,
+    );
+    await expect(service.sendOtp(email, otp)).rejects.toThrow(
+      'AUTH_EMAIL_DISPATCH_FAILED',
+    );
   });
 });

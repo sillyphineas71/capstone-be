@@ -6,7 +6,7 @@ describe('IsDepartmentNameUniqueConstraint', () => {
 
   beforeEach(() => {
     mockRepo = { count: jest.fn() };
-    constraint = new IsDepartmentNameUniqueConstraint(mockRepo as any);
+    constraint = new IsDepartmentNameUniqueConstraint(mockRepo);
   });
 
   it('should return true if name does not exist', async () => {

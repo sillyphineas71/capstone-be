@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
@@ -13,7 +17,9 @@ export class AuthEmailService {
    */
   async sendOtp(email: string, otp: string): Promise<void> {
     try {
-      this.logger.log(`[Email Service] Gửi mã OTP khôi phục mật khẩu đến: ${email}`);
+      this.logger.log(
+        `[Email Service] Gửi mã OTP khôi phục mật khẩu đến: ${email}`,
+      );
 
       const mailContent = `
 ========================================================================
@@ -37,7 +43,10 @@ Hệ thống Smart Meeting Management
         throw new Error('Simulated SMTP connection failed');
       }
     } catch (error) {
-      this.logger.error(`Lỗi khi gửi email đến ${email}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Lỗi khi gửi email đến ${email}: ${error.message}`,
+        error.stack,
+      );
       throw new InternalServerErrorException('AUTH_EMAIL_DISPATCH_FAILED');
     }
   }

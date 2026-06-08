@@ -30,7 +30,12 @@ export class UserEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'employee_code',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   employeeCode: string | null;
 
   @Column({ type: 'varchar', length: 100 })
@@ -39,7 +44,12 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 255 })
   email: string;
 
-  @Column({ name: 'password_hash', type: 'varchar', length: 255, select: false })
+  @Column({
+    name: 'password_hash',
+    type: 'varchar',
+    length: 255,
+    select: false,
+  })
   passwordHash: string;
 
   @Column({ name: 'full_name', type: 'varchar', length: 255 })
@@ -57,13 +67,28 @@ export class UserEntity {
   @Column({ name: 'direct_manager_id', type: 'uuid', nullable: true })
   directManagerId: string | null;
 
-  @Column({ name: 'position_title', type: 'varchar', length: 150, nullable: true })
+  @Column({
+    name: 'position_title',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   positionTitle: string | null;
 
-  @Column({ name: 'employment_status', type: 'varchar', length: 30, default: EmploymentStatus.ACTIVE })
+  @Column({
+    name: 'employment_status',
+    type: 'varchar',
+    length: 30,
+    default: EmploymentStatus.ACTIVE,
+  })
   employmentStatus: EmploymentStatus;
 
-  @Column({ name: 'account_status', type: 'varchar', length: 30, default: AccountStatus.ACTIVE })
+  @Column({
+    name: 'account_status',
+    type: 'varchar',
+    length: 30,
+    default: AccountStatus.ACTIVE,
+  })
   accountStatus: AccountStatus;
 
   @Column({ name: 'must_change_password', type: 'boolean', default: false })

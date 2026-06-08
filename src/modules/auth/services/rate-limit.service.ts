@@ -14,7 +14,9 @@ export class RateLimitService {
     const now = Date.now();
     const windowStart = now - windowSeconds * 1000;
     const key = `${ipAddress ?? 'unknown'}:${email}`;
-    const currentAttempts = (this.attempts.get(key) ?? []).filter((timestamp) => timestamp >= windowStart);
+    const currentAttempts = (this.attempts.get(key) ?? []).filter(
+      (timestamp) => timestamp >= windowStart,
+    );
 
     if (currentAttempts.length >= maxAttempts) {
       const error = new Error(AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS);

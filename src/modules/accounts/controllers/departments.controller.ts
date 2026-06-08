@@ -75,7 +75,11 @@ export class DepartmentsController {
     @Headers('user-agent') userAgent?: string,
     @Headers('x-request-id') requestId?: string,
     @Headers('Idempotency-Key') idempotencyKey?: string,
-  ): Promise<{ success: boolean; message: string; data: DepartmentResponseDto }> {
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto;
+  }> {
     const user = request['user'] as { userId: string } | undefined;
     const creatorId = user?.userId || 'system';
 
@@ -93,4 +97,3 @@ export class DepartmentsController {
     };
   }
 }
-

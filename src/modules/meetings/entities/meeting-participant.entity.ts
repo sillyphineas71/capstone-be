@@ -43,7 +43,12 @@ export class MeetingParticipantEntity {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  @Column({ name: 'participant_role', type: 'varchar', length: 40, default: ParticipantRole.ATTENDEE })
+  @Column({
+    name: 'participant_role',
+    type: 'varchar',
+    length: 40,
+    default: ParticipantRole.ATTENDEE,
+  })
   participantRole: ParticipantRole;
 
   @Column({ name: 'is_required', type: 'boolean', default: true })
@@ -52,13 +57,23 @@ export class MeetingParticipantEntity {
   @Column({ name: 'attendance_required', type: 'boolean', default: true })
   attendanceRequired: boolean;
 
-  @Column({ name: 'invitation_status', type: 'varchar', length: 30, default: InvitationStatus.PENDING })
+  @Column({
+    name: 'invitation_status',
+    type: 'varchar',
+    length: 30,
+    default: InvitationStatus.PENDING,
+  })
   invitationStatus: InvitationStatus;
 
   @Column({ name: 'response_at', type: 'timestamptz', nullable: true })
   responseAt: Date | null;
 
-  @Column({ name: 'attendance_status', type: 'varchar', length: 30, default: ParticipantAttendanceStatus.NOT_CHECKED_IN })
+  @Column({
+    name: 'attendance_status',
+    type: 'varchar',
+    length: 30,
+    default: ParticipantAttendanceStatus.NOT_CHECKED_IN,
+  })
   attendanceStatus: ParticipantAttendanceStatus;
 
   @Column({ name: 'joined_at', type: 'timestamptz', nullable: true })

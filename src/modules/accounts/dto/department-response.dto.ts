@@ -10,10 +10,18 @@ export class DepartmentResponseDto {
   @ApiProperty({ description: 'Tên phòng ban (đã trim)' })
   departmentName: string;
 
-  @ApiProperty({ description: 'ID phòng ban cha', format: 'uuid', nullable: true })
+  @ApiProperty({
+    description: 'ID phòng ban cha',
+    format: 'uuid',
+    nullable: true,
+  })
   parentDepartmentId: string | null;
 
-  @ApiProperty({ description: 'ID người quản lý', format: 'uuid', nullable: true })
+  @ApiProperty({
+    description: 'ID người quản lý',
+    format: 'uuid',
+    nullable: true,
+  })
   managerUserId: string | null;
 
   @ApiProperty({ description: 'Mô tả phòng ban', nullable: true })

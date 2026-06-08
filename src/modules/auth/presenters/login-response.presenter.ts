@@ -3,7 +3,11 @@ import { AuthUserSummary, LoginSuccessData } from '../types/login.types';
 
 @Injectable()
 export class LoginResponsePresenter {
-  success(data: LoginSuccessData): { success: true; data: LoginSuccessData; meta: Record<string, never> } {
+  success(data: LoginSuccessData): {
+    success: true;
+    data: LoginSuccessData;
+    meta: Record<string, never>;
+  } {
     return {
       success: true,
       data,

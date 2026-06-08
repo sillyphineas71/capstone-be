@@ -120,21 +120,29 @@ export class UsersController {
     description: 'Không đủ quyền hạn hoặc ngoài phạm vi department.',
   })
   async getUserDetail(
-    @Param('userId', new ParseUUIDPipe({
-      errorHttpStatusCode: HttpStatus.BAD_REQUEST,
-      exceptionFactory: () => ({
-        success: false,
-        message: 'Validation failed (uuid is expected)',
-        error: { code: 'INVALID_USER_ID', details: {} },
-        timestamp: new Date().toISOString(),
-        path: '/api/v1/users/:userId',
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId',
+        }),
       }),
-    })) userId: string,
+    )
+    userId: string,
     @Req() request: Request,
     @Ip() ipAddress: string,
     @Headers('user-agent') userAgent?: string,
     @Headers('x-request-id') requestId?: string,
-  ): Promise<{ success: boolean; message: string; data: UserDetailResponseDto }> {
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UserDetailResponseDto;
+  }> {
     const user = request['user'] as { userId: string } | undefined;
     const authenticatedUserId = user?.userId || 'system';
 

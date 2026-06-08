@@ -55,7 +55,8 @@ export class ChangePasswordCacheService {
 
       // Read current value (returns null / undefined if key absent)
       const raw = await this.cacheManager.get<number | string>(key);
-      const current = raw == null ? 0 : (typeof raw === 'string' ? parseInt(raw, 10) : raw);
+      const current =
+        raw == null ? 0 : typeof raw === 'string' ? parseInt(raw, 10) : raw;
 
       const next = current + 1;
       // Always reset TTL on each increment (sliding window)

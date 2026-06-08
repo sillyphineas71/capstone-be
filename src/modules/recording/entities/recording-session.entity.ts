@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from '../../../modules/rooms/entities/room.entity.js';
@@ -63,7 +69,11 @@ export class RecordingSessionEntity {
   @Column({ name: 'paused_duration_seconds', type: 'integer', default: 0 })
   pausedDurationSeconds: number;
 
-  @Column({ type: 'varchar', length: 30, default: RecordingSessionStatus.STARTING })
+  @Column({
+    type: 'varchar',
+    length: 30,
+    default: RecordingSessionStatus.STARTING,
+  })
   status: RecordingSessionStatus;
 
   @Column({ name: 'started_by', type: 'uuid', nullable: true })
@@ -75,7 +85,12 @@ export class RecordingSessionEntity {
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
 
-  @Column({ name: 'storage_provider', type: 'varchar', length: 50, nullable: true })
+  @Column({
+    name: 'storage_provider',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
   storageProvider: string | null;
 
   @Column({ name: 'storage_path', type: 'text', nullable: true })
@@ -102,11 +117,17 @@ export class RecordingSessionEntity {
   @JoinColumn({ name: 'room_id' })
   room: RoomEntity | null;
 
-  @ManyToOne(() => RecordingConfigEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => RecordingConfigEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'recording_config_id' })
   recordingConfig: RecordingConfigEntity | null;
 
-  @ManyToOne(() => CaptureSessionEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => CaptureSessionEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'capture_session_id' })
   captureSession: CaptureSessionEntity | null;
 

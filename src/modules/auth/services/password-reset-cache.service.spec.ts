@@ -42,7 +42,9 @@ describe('PasswordResetCacheService', () => {
 
       const result = await service.getOtpSession(email);
       expect(result).toEqual(mockSession);
-      expect(cacheManager.get).toHaveBeenCalledWith(`otp:password_reset:${email}`);
+      expect(cacheManager.get).toHaveBeenCalledWith(
+        `otp:password_reset:${email}`,
+      );
     });
 
     it('should get OTP session successfully when it returns a JSON string', async () => {
@@ -62,32 +64,44 @@ describe('PasswordResetCacheService', () => {
     it('should throw InternalServerErrorException when get fails', async () => {
       cacheManager.get.mockRejectedValue(new Error('Cache error'));
 
-      await expect(service.getOtpSession(email)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.getOtpSession(email)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should set OTP session with correct key and TTL', async () => {
       const ttlMs = 600000; // 10 mins
       await service.setOtpSession(email, mockSession, ttlMs);
 
-      expect(cacheManager.set).toHaveBeenCalledWith(`otp:password_reset:${email}`, mockSession, ttlMs);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `otp:password_reset:${email}`,
+        mockSession,
+        ttlMs,
+      );
     });
 
     it('should throw InternalServerErrorException when set fails', async () => {
       cacheManager.set.mockRejectedValue(new Error('Cache error'));
 
-      await expect(service.setOtpSession(email, mockSession, 600000)).rejects.toThrow(InternalServerErrorException);
+      await expect(
+        service.setOtpSession(email, mockSession, 600000),
+      ).rejects.toThrow(InternalServerErrorException);
     });
 
     it('should delete OTP session successfully', async () => {
       await service.deleteOtpSession(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(`otp:password_reset:${email}`);
+      expect(cacheManager.del).toHaveBeenCalledWith(
+        `otp:password_reset:${email}`,
+      );
     });
 
     it('should throw InternalServerErrorException when delete fails', async () => {
       cacheManager.del.mockRejectedValue(new Error('Cache error'));
 
-      await expect(service.deleteOtpSession(email)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.deleteOtpSession(email)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
   });
 
@@ -118,7 +132,9 @@ describe('PasswordResetCacheService', () => {
     it('should throw InternalServerErrorException when get limit counter fails', async () => {
       cacheManager.get.mockRejectedValue(new Error('Cache error'));
 
-      await expect(service.getLimitCounter(email)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.getLimitCounter(email)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should increment limit counter from 0 to 1', async () => {
@@ -127,7 +143,11 @@ describe('PasswordResetCacheService', () => {
 
       const result = await service.incrementLimitCounter(email, ttlMs);
       expect(result).toBe(1);
-      expect(cacheManager.set).toHaveBeenCalledWith(`otp_limit:password_reset:${email}`, 1, ttlMs);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `otp_limit:password_reset:${email}`,
+        1,
+        ttlMs,
+      );
     });
 
     it('should increment limit counter from 2 to 3', async () => {
@@ -136,13 +156,19 @@ describe('PasswordResetCacheService', () => {
 
       const result = await service.incrementLimitCounter(email, ttlMs);
       expect(result).toBe(3);
-      expect(cacheManager.set).toHaveBeenCalledWith(`otp_limit:password_reset:${email}`, 3, ttlMs);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `otp_limit:password_reset:${email}`,
+        3,
+        ttlMs,
+      );
     });
 
     it('should delete limit counter successfully', async () => {
       await service.deleteLimitCounter(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(`otp_limit:password_reset:${email}`);
+      expect(cacheManager.del).toHaveBeenCalledWith(
+        `otp_limit:password_reset:${email}`,
+      );
     });
   });
 
@@ -167,13 +193,19 @@ describe('PasswordResetCacheService', () => {
       const ttlMs = 3600000; // 60 mins
       await service.blockEmail(email, ttlMs);
 
-      expect(cacheManager.set).toHaveBeenCalledWith(`otp_blocked:password_reset:${email}`, true, ttlMs);
+      expect(cacheManager.set).toHaveBeenCalledWith(
+        `otp_blocked:password_reset:${email}`,
+        true,
+        ttlMs,
+      );
     });
 
     it('should delete block key successfully', async () => {
       await service.deleteBlockKey(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(`otp_blocked:password_reset:${email}`);
+      expect(cacheManager.del).toHaveBeenCalledWith(
+        `otp_blocked:password_reset:${email}`,
+      );
     });
   });
 });

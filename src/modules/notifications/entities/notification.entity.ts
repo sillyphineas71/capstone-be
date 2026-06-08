@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 
 export enum NotificationType {
@@ -8,6 +15,9 @@ export enum NotificationType {
   NO_SHOW_ALERT = 'no_show_alert',
   UNKNOWN_FACE_ALERT = 'unknown_face_alert',
   MINUTES_DISTRIBUTION = 'minutes_distribution',
+  MEETING_REQUEST_CREATED = 'meeting_request_created',
+  MEETING_REQUEST_APPROVED = 'meeting_request_approved',
+  MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
 }
 
 export enum NotificationChannel {
@@ -38,7 +48,12 @@ export class NotificationEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'notification_code', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'notification_code',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   notificationCode: string | null;
 
   @Column({ name: 'notification_type', type: 'varchar', length: 60 })
@@ -53,13 +68,23 @@ export class NotificationEntity {
   @Column({ type: 'text' })
   content: string;
 
-  @Column({ name: 'related_entity_type', type: 'varchar', length: 60, nullable: true })
+  @Column({
+    name: 'related_entity_type',
+    type: 'varchar',
+    length: 60,
+    nullable: true,
+  })
   relatedEntityType: string | null;
 
   @Column({ name: 'related_entity_id', type: 'uuid', nullable: true })
   relatedEntityId: string | null;
 
-  @Column({ name: 'recipient_scope', type: 'varchar', length: 40, default: 'user_list' })
+  @Column({
+    name: 'recipient_scope',
+    type: 'varchar',
+    length: 40,
+    default: 'user_list',
+  })
   recipientScope: string;
 
   @Column({ name: 'recipient_user_ids_json', type: 'jsonb', nullable: true })
@@ -80,7 +105,12 @@ export class NotificationEntity {
   @Column({ name: 'sent_at', type: 'timestamptz', nullable: true })
   sentAt: Date | null;
 
-  @Column({ name: 'delivery_status', type: 'varchar', length: 30, default: NotificationDeliveryStatus.DRAFT })
+  @Column({
+    name: 'delivery_status',
+    type: 'varchar',
+    length: 30,
+    default: NotificationDeliveryStatus.DRAFT,
+  })
   deliveryStatus: NotificationDeliveryStatus;
 
   @Column({ name: 'read_count', type: 'integer', default: 0 })

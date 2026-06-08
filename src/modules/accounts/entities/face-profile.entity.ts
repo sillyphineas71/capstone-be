@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, DeleteDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  DeleteDateColumn,
+} from 'typeorm';
 import { UserEntity } from './user.entity.js';
 
 export enum FaceProfileStatus {
@@ -19,13 +26,22 @@ export class FaceProfileEntity {
   @Column({ name: 'profile_code', type: 'varchar', length: 80 })
   profileCode: string;
 
-  @Column({ type: 'varchar', length: 30, default: FaceProfileStatus.PENDING_REVIEW })
+  @Column({
+    type: 'varchar',
+    length: 30,
+    default: FaceProfileStatus.PENDING_REVIEW,
+  })
   status: FaceProfileStatus;
 
   @Column({ name: 'consent_at', type: 'timestamptz', nullable: true })
   consentAt: Date | null;
 
-  @Column({ name: 'model_version', type: 'varchar', length: 80, nullable: true })
+  @Column({
+    name: 'model_version',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
   modelVersion: string | null;
 
   @Column({ name: 'primary_image_file_id', type: 'uuid', nullable: true })
@@ -34,7 +50,13 @@ export class FaceProfileEntity {
   @Column({ name: 'embedding_storage_key', type: 'text', nullable: true })
   embeddingStorageKey: string | null;
 
-  @Column({ name: 'quality_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'quality_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   qualityScore: number | null;
 
   @Column({ name: 'sample_count', type: 'integer', default: 0 })

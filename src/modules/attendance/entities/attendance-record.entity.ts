@@ -49,10 +49,20 @@ export class AttendanceRecordEntity {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  @Column({ name: 'check_in_method', type: 'varchar', length: 40, default: CheckInMethod.SYSTEM })
+  @Column({
+    name: 'check_in_method',
+    type: 'varchar',
+    length: 40,
+    default: CheckInMethod.SYSTEM,
+  })
   checkInMethod: CheckInMethod;
 
-  @Column({ name: 'attendance_source', type: 'varchar', length: 40, default: AttendanceSource.MIXED })
+  @Column({
+    name: 'attendance_source',
+    type: 'varchar',
+    length: 40,
+    default: AttendanceSource.MIXED,
+  })
   attendanceSource: AttendanceSource;
 
   @Column({ name: 'check_in_time', type: 'timestamptz', nullable: true })
@@ -79,13 +89,28 @@ export class AttendanceRecordEntity {
   @Column({ name: 'late_minutes', type: 'integer', nullable: true })
   lateMinutes: number | null;
 
-  @Column({ name: 'presence_duration_minutes', type: 'integer', nullable: true })
+  @Column({
+    name: 'presence_duration_minutes',
+    type: 'integer',
+    nullable: true,
+  })
   presenceDurationMinutes: number | null;
 
-  @Column({ name: 'confidence_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'confidence_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   confidenceScore: number | null;
 
-  @Column({ name: 'attendance_status', type: 'varchar', length: 30, default: AttendanceRecordStatus.PENDING_REVIEW })
+  @Column({
+    name: 'attendance_status',
+    type: 'varchar',
+    length: 30,
+    default: AttendanceRecordStatus.PENDING_REVIEW,
+  })
   attendanceStatus: AttendanceRecordStatus;
 
   @Column({ name: 'verified_by', type: 'uuid', nullable: true })
@@ -108,7 +133,10 @@ export class AttendanceRecordEntity {
   @JoinColumn({ name: 'meeting_id' })
   meeting: MeetingEntity;
 
-  @ManyToOne(() => MeetingParticipantEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => MeetingParticipantEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'participant_id' })
   participant: MeetingParticipantEntity | null;
 

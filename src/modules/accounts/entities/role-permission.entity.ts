@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { RoleEntity } from './role.entity.js';
 import { PermissionEntity } from './permission.entity.js';
 import { UserEntity } from './user.entity.js';

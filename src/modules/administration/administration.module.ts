@@ -17,7 +17,11 @@ import { RecordingModule } from '../recording/recording.module.js';
   imports: [
     AccountsModule,
     RecordingModule,
-    TypeOrmModule.forFeature([AuditLogEntity, SystemConfigEntity, BackgroundJobEntity]),
+    TypeOrmModule.forFeature([
+      AuditLogEntity,
+      SystemConfigEntity,
+      BackgroundJobEntity,
+    ]),
   ],
   exports: [TypeOrmModule],
 })

@@ -8,11 +8,15 @@ describe('NoEmojiOrControlConstraint', () => {
   });
 
   it('should accept normal Vietnamese text', () => {
-    expect(constraint.validate('Phòng Công nghệ thông tin', {} as any)).toBe(true);
+    expect(constraint.validate('Phòng Công nghệ thông tin', {} as any)).toBe(
+      true,
+    );
   });
 
   it('should accept text with common separators', () => {
-    expect(constraint.validate('Research & Development (R&D)', {} as any)).toBe(true);
+    expect(constraint.validate('Research & Development (R&D)', {} as any)).toBe(
+      true,
+    );
   });
 
   it('should reject emoji', () => {
@@ -24,7 +28,9 @@ describe('NoEmojiOrControlConstraint', () => {
   });
 
   it('should reject HTML tags', () => {
-    expect(constraint.validate('<script>alert("xss")</script>', {} as any)).toBe(false);
+    expect(
+      constraint.validate('<script>alert("xss")</script>', {} as any),
+    ).toBe(false);
   });
 
   it('should accept empty string', () => {

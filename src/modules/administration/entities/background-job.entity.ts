@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MediaFileEntity } from '../../../modules/recording/entities/media-file.entity.js';
 
@@ -29,7 +35,12 @@ export class BackgroundJobEntity {
   @Column({ name: 'job_type', type: 'varchar', length: 80 })
   jobType: BackgroundJobType;
 
-  @Column({ name: 'related_entity_type', type: 'varchar', length: 60, nullable: true })
+  @Column({
+    name: 'related_entity_type',
+    type: 'varchar',
+    length: 60,
+    nullable: true,
+  })
   relatedEntityType: string | null;
 
   @Column({ name: 'related_entity_id', type: 'uuid', nullable: true })

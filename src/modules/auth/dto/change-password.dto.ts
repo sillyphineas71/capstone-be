@@ -22,7 +22,8 @@ export class ChangePasswordDto {
    * No complexity check; just required + max 72 chars (bcrypt limit).
    */
   @ApiProperty({
-    description: 'Current password of the authenticated user (used for identity verification)',
+    description:
+      'Current password of the authenticated user (used for identity verification)',
     example: 'OldPass@123',
     maxLength: 72,
   })
@@ -65,7 +66,8 @@ export class ChangePasswordDto {
    * Cross-field match is validated in the service layer (BL-2).
    */
   @ApiProperty({
-    description: 'Confirmation of the new password — must match newPassword exactly',
+    description:
+      'Confirmation of the new password — must match newPassword exactly',
     example: 'NewPass@456',
     maxLength: 72,
   })

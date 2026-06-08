@@ -5,14 +5,23 @@ import { CreateDepartmentDto } from './create-department.dto.js';
 describe('CreateDepartmentDto Validation', () => {
   describe('departmentCode', () => {
     it('should accept valid codes', async () => {
-      const validCodes = ['IT', 'HR_DEPT', 'DEV-TEAM', 'A1', 'FINANCE', 'OPS2024'];
+      const validCodes = [
+        'IT',
+        'HR_DEPT',
+        'DEV-TEAM',
+        'A1',
+        'FINANCE',
+        'OPS2024',
+      ];
       for (const code of validCodes) {
         const dto = plainToInstance(CreateDepartmentDto, {
           departmentCode: code,
           departmentName: 'Test Department',
         });
         const errors = await validate(dto);
-        const codeErrors = errors.filter(e => e.property === 'departmentCode');
+        const codeErrors = errors.filter(
+          (e) => e.property === 'departmentCode',
+        );
         expect(codeErrors.length).toBe(0);
       }
     });
@@ -33,7 +42,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -43,7 +52,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -53,7 +62,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -63,7 +72,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -73,7 +82,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -83,7 +92,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
 
@@ -93,7 +102,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test',
       });
       const errors = await validate(dto);
-      const codeErrors = errors.filter(e => e.property === 'departmentCode');
+      const codeErrors = errors.filter((e) => e.property === 'departmentCode');
       expect(codeErrors.length).toBeGreaterThan(0);
     });
   });
@@ -105,7 +114,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Phòng Công nghệ thông tin',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBe(0);
     });
 
@@ -115,7 +124,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Research & Development (R&D)',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBe(0);
     });
 
@@ -135,7 +144,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: '',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
 
@@ -145,7 +154,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: '   ',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
 
@@ -155,7 +164,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'Test 😊 Department',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
 
@@ -165,7 +174,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: '<script>alert("xss")</script>',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
 
@@ -175,7 +184,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'A',
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
 
@@ -185,7 +194,7 @@ describe('CreateDepartmentDto Validation', () => {
         departmentName: 'A'.repeat(151),
       });
       const errors = await validate(dto);
-      const nameErrors = errors.filter(e => e.property === 'departmentName');
+      const nameErrors = errors.filter((e) => e.property === 'departmentName');
       expect(nameErrors.length).toBeGreaterThan(0);
     });
   });
@@ -198,7 +207,9 @@ describe('CreateDepartmentDto Validation', () => {
         parentDepartmentId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
       });
       const errors = await validate(dto);
-      const parentErrors = errors.filter(e => e.property === 'parentDepartmentId');
+      const parentErrors = errors.filter(
+        (e) => e.property === 'parentDepartmentId',
+      );
       expect(parentErrors.length).toBe(0);
     });
 
@@ -218,7 +229,9 @@ describe('CreateDepartmentDto Validation', () => {
         parentDepartmentId: 'not-a-uuid',
       });
       const errors = await validate(dto);
-      const parentErrors = errors.filter(e => e.property === 'parentDepartmentId');
+      const parentErrors = errors.filter(
+        (e) => e.property === 'parentDepartmentId',
+      );
       expect(parentErrors.length).toBeGreaterThan(0);
     });
   });
@@ -231,7 +244,9 @@ describe('CreateDepartmentDto Validation', () => {
         managerUserId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
       });
       const errors = await validate(dto);
-      const managerErrors = errors.filter(e => e.property === 'managerUserId');
+      const managerErrors = errors.filter(
+        (e) => e.property === 'managerUserId',
+      );
       expect(managerErrors.length).toBe(0);
     });
 
@@ -253,7 +268,7 @@ describe('CreateDepartmentDto Validation', () => {
         description: 'Phòng Công nghệ thông tin',
       });
       const errors = await validate(dto);
-      const descErrors = errors.filter(e => e.property === 'description');
+      const descErrors = errors.filter((e) => e.property === 'description');
       expect(descErrors.length).toBe(0);
     });
 
@@ -271,7 +286,7 @@ describe('CreateDepartmentDto Validation', () => {
     it('should fail if both required fields missing', async () => {
       const dto = plainToInstance(CreateDepartmentDto, {});
       const errors = await validate(dto);
-      const fields = errors.map(e => e.property);
+      const fields = errors.map((e) => e.property);
       expect(fields).toContain('departmentCode');
       expect(fields).toContain('departmentName');
     });

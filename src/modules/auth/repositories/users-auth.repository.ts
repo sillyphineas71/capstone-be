@@ -6,7 +6,9 @@ import { AuthenticatedUserRecord } from '../types/login.types';
 export class UsersAuthRepository {
   constructor(private readonly dataSource: DataSource) {}
 
-  async findByNormalizedEmail(email: string): Promise<AuthenticatedUserRecord | null> {
+  async findByNormalizedEmail(
+    email: string,
+  ): Promise<AuthenticatedUserRecord | null> {
     const row = await this.dataSource.query(
       `
         SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status

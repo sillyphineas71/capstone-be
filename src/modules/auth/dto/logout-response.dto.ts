@@ -2,7 +2,8 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class LogoutResponseDto {
   @ApiProperty({
-    description: 'Trạng thái thu hồi token (đưa vào blacklist thành công hoặc đã bị thu hồi trước đó)',
+    description:
+      'Trạng thái thu hồi token (đưa vào blacklist thành công hoặc đã bị thu hồi trước đó)',
     example: true,
   })
   revoked: boolean;

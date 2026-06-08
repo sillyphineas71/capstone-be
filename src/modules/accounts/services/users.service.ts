@@ -338,10 +338,7 @@ export class UsersService {
     );
 
     // 3. Department scope check (only for Business Admin, skip self-view)
-    if (
-      !isSystemAdmin &&
-      targetUserId !== authenticatedUserId
-    ) {
+    if (!isSystemAdmin && targetUserId !== authenticatedUserId) {
       const scope = await this.resolveDepartmentScope(authenticatedUserId);
 
       if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
@@ -459,12 +456,7 @@ export class UsersService {
     }
 
     const scope = new Set<string>();
-    await this.collectDepartmentScope(
-      em,
-      admin.departmentId,
-      scope,
-      0,
-    );
+    await this.collectDepartmentScope(em, admin.departmentId, scope, 0);
 
     return scope;
   }

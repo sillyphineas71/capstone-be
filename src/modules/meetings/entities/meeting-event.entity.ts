@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from './meeting.entity.js';
 
@@ -8,6 +14,9 @@ export enum MeetingEventType {
   EXTENSION_REQUESTED = 'extension_requested',
   WARNING_SENT = 'warning_sent',
   STATUS_CHANGED = 'status_changed',
+  MEETING_REQUEST_CREATED = 'meeting_request_created',
+  MEETING_REQUEST_APPROVED = 'meeting_request_approved',
+  MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
 }
 
 export enum MeetingEventSourceType {
@@ -35,7 +44,12 @@ export class MeetingEventEntity {
   @Column({ name: 'actor_user_id', type: 'uuid', nullable: true })
   actorUserId: string | null;
 
-  @Column({ name: 'source_type', type: 'varchar', length: 30, default: MeetingEventSourceType.SYSTEM })
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 30,
+    default: MeetingEventSourceType.SYSTEM,
+  })
   sourceType: MeetingEventSourceType;
 
   @Column({ type: 'text', nullable: true })

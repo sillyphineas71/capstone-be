@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from '../../../modules/rooms/entities/room.entity.js';
 import { IoTDeviceEntity } from './iot-device.entity.js';
@@ -54,7 +61,12 @@ export class IoTDeviceEventEntity {
   @Column({ name: 'event_time', type: 'timestamptz', default: () => 'now()' })
   eventTime: Date;
 
-  @Column({ name: 'source_protocol', type: 'varchar', length: 30, default: IoTEventSourceProtocol.MQTT })
+  @Column({
+    name: 'source_protocol',
+    type: 'varchar',
+    length: 30,
+    default: IoTEventSourceProtocol.MQTT,
+  })
   sourceProtocol: IoTEventSourceProtocol;
 
   @Column({ type: 'varchar', length: 20, default: IoTEventSeverity.INFO })
@@ -63,7 +75,12 @@ export class IoTDeviceEventEntity {
   @Column({ name: 'payload_json', type: 'jsonb', nullable: true })
   payloadJson: Record<string, unknown> | null;
 
-  @Column({ name: 'processed_status', type: 'varchar', length: 30, default: IoTEventProcessedStatus.RECEIVED })
+  @Column({
+    name: 'processed_status',
+    type: 'varchar',
+    length: 30,
+    default: IoTEventProcessedStatus.RECEIVED,
+  })
   processedStatus: IoTEventProcessedStatus;
 
   @Column({ name: 'error_message', type: 'text', nullable: true })

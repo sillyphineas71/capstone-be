@@ -99,7 +99,8 @@ export class ChangePasswordService {
       if (user.accountStatus !== 'active') {
         throw new ForbiddenException({
           success: false,
-          message: 'Tài khoản của bạn đang bị khóa hoặc không hoạt động. Vui lòng liên hệ quản trị viên.',
+          message:
+            'Tài khoản của bạn đang bị khóa hoặc không hoạt động. Vui lòng liên hệ quản trị viên.',
           error: { code: 'ACCOUNT_RESTRICTED', details: {} },
         });
       }
@@ -164,13 +165,11 @@ export class ChangePasswordService {
     );
 
     // ── BL-9: Fire-and-forget audit log ───────────────────────────────────────
-    this.auditRepo
-      .logSuccess({ userId, ...ctx })
-      .catch((err: unknown) => {
-        this.logger.error(
-          `[ChangePassword] Failed to write success audit log: ${(err as Error).message}`,
-        );
-      });
+    this.auditRepo.logSuccess({ userId, ...ctx }).catch((err: unknown) => {
+      this.logger.error(
+        `[ChangePassword] Failed to write success audit log: ${(err as Error).message}`,
+      );
+    });
 
     // ── BL-10: Return success ─────────────────────────────────────────────────
     return {

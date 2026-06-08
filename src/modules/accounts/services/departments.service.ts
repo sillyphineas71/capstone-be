@@ -9,7 +9,10 @@ import { DataSource, IsNull } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { UserEntity } from '../entities/user.entity.js';
-import { AuditLogEntity, AuditLogSeverity } from '../../administration/entities/audit-log.entity.js';
+import {
+  AuditLogEntity,
+  AuditLogSeverity,
+} from '../../administration/entities/audit-log.entity.js';
 
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
@@ -22,7 +25,10 @@ export interface ClientContext {
 
 const MAX_DEPTH = 5;
 
-const idempotencyCache = new Map<string, { response: DepartmentResponseDto; payloadHash: string }>();
+const idempotencyCache = new Map<
+  string,
+  { response: DepartmentResponseDto; payloadHash: string }
+>();
 
 @Injectable()
 export class DepartmentsService {
@@ -38,12 +44,15 @@ export class DepartmentsService {
   ): Promise<DepartmentResponseDto> {
     const departmentCode = dto.departmentCode.trim().toUpperCase();
     const departmentName = dto.departmentName.trim();
-    const description = typeof dto.description === 'string' && dto.description.trim() !== ''
-      ? dto.description.trim()
-      : null;
+    const description =
+      typeof dto.description === 'string' && dto.description.trim() !== ''
+        ? dto.description.trim()
+        : null;
 
     const sanitizedName = this.stripHtml(departmentName);
-    const sanitizedDescription = description ? this.stripHtml(description) : null;
+    const sanitizedDescription = description
+      ? this.stripHtml(description)
+      : null;
 
     // Idempotency check
     if (idempotencyKey) {
@@ -74,7 +83,10 @@ export class DepartmentsService {
         throw new ConflictException({
           success: false,
           message: 'Ma phong ban nay da duoc su dung.',
-          error: { code: 'DEPARTMENT_ALREADY_EXISTS', details: { field: 'departmentCode' } },
+          error: {
+            code: 'DEPARTMENT_ALREADY_EXISTS',
+            details: { field: 'departmentCode' },
+          },
         });
       }
 
@@ -86,7 +98,10 @@ export class DepartmentsService {
         throw new ConflictException({
           success: false,
           message: 'Ten phong ban nay da duoc su dung.',
-          error: { code: 'DEPARTMENT_ALREADY_EXISTS', details: { field: 'departmentName' } },
+          error: {
+            code: 'DEPARTMENT_ALREADY_EXISTS',
+            details: { field: 'departmentName' },
+          },
         });
       }
 
@@ -99,7 +114,10 @@ export class DepartmentsService {
           throw new NotFoundException({
             success: false,
             message: 'Phong ban cha khong ton tai hoac khong hoat dong.',
-            error: { code: 'RESOURCE_NOT_FOUND', details: { field: 'parentDepartmentId' } },
+            error: {
+              code: 'RESOURCE_NOT_FOUND',
+              details: { field: 'parentDepartmentId' },
+            },
           });
         }
 
@@ -108,7 +126,10 @@ export class DepartmentsService {
           throw new UnprocessableEntityException({
             success: false,
             message: 'Cay phan cap phong ban khong duoc vuot qua 5 cap.',
-            error: { code: 'VALIDATION_ERROR', details: { field: 'parentDepartmentId' } },
+            error: {
+              code: 'VALIDATION_ERROR',
+              details: { field: 'parentDepartmentId' },
+            },
           });
         }
       }
@@ -122,7 +143,10 @@ export class DepartmentsService {
           throw new NotFoundException({
             success: false,
             message: 'Nguoi quan ly khong ton tai hoac khong hoat dong.',
-            error: { code: 'RESOURCE_NOT_FOUND', details: { field: 'managerUserId' } },
+            error: {
+              code: 'RESOURCE_NOT_FOUND',
+              details: { field: 'managerUserId' },
+            },
           });
         }
       }
@@ -162,7 +186,12 @@ export class DepartmentsService {
         });
         await em.save(AuditLogEntity, auditLog);
       } catch (auditError) {
-        this.logger.error('Failed to save audit log for department ' + createdDept.id + ': ' + (auditError as Error).message);
+        this.logger.error(
+          'Failed to save audit log for department ' +
+            createdDept.id +
+            ': ' +
+            (auditError as Error).message,
+        );
       }
     });
 
@@ -181,9 +210,14 @@ export class DepartmentsService {
           createdAt: createdDept!.createdAt,
           updatedAt: createdDept!.updatedAt,
         },
-        payloadHash: this.hashPayload({ departmentCode: dto.departmentCode, departmentName: dto.departmentName }),
+        payloadHash: this.hashPayload({
+          departmentCode: dto.departmentCode,
+          departmentName: dto.departmentName,
+        }),
       });
-      setTimeout(function() { idempotencyCache.delete(cacheKey); }, 86400000);
+      setTimeout(function () {
+        idempotencyCache.delete(cacheKey);
+      }, 86400000);
     }
 
     return {
@@ -207,7 +241,9 @@ export class DepartmentsService {
         where: { id: currentId },
         select: ['id', 'parentDepartmentId'],
       });
-      if (!dept || !dept.parentDepartmentId) { break; }
+      if (!dept || !dept.parentDepartmentId) {
+        break;
+      }
       currentId = dept.parentDepartmentId;
       depth++;
     }
@@ -218,7 +254,12 @@ export class DepartmentsService {
     return input.replace(/<[^>]*>/g, '');
   }
 
-  private hashPayload(dto: { departmentCode: string; departmentName: string }): string {
-    return dto.departmentCode.trim().toUpperCase() + '::' + dto.departmentName.trim();
+  private hashPayload(dto: {
+    departmentCode: string;
+    departmentName: string;
+  }): string {
+    return (
+      dto.departmentCode.trim().toUpperCase() + '::' + dto.departmentName.trim()
+    );
   }
 }

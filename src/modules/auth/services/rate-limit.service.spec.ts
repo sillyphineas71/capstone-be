@@ -9,6 +9,8 @@ describe('RateLimitService', () => {
     } as unknown as ConfigService);
     const service = new RateLimitService(authConfigService);
 
-    expect(() => service.checkOrThrow('127.0.0.1', 'user@example.com')).not.toThrow();
+    expect(() =>
+      service.checkOrThrow('127.0.0.1', 'user@example.com'),
+    ).not.toThrow();
   });
 });

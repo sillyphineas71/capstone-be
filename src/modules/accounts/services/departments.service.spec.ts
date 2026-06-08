@@ -67,7 +67,7 @@ describe('DepartmentsService', () => {
         updatedAt: new Date(),
       };
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
-      em.save.mockResolvedValue(mockSavedDept as any);
+      em.save.mockResolvedValue(mockSavedDept);
 
       const result = await service.createDepartment(validDto, 'creator-id', {
         ipAddress: '127.0.0.1',
@@ -84,7 +84,11 @@ describe('DepartmentsService', () => {
       em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
         if (entityClass === DepartmentEntity) {
           if (options?.where?.id === 'parent-uuid') {
-            return { id: 'parent-uuid', isActive: true, parentDepartmentId: null };
+            return {
+              id: 'parent-uuid',
+              isActive: true,
+              parentDepartmentId: null,
+            };
           }
           return null; // no duplicate code/name
         }
@@ -102,14 +106,18 @@ describe('DepartmentsService', () => {
         updatedAt: new Date(),
       };
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
-      em.save.mockResolvedValue(mockSavedDept as any);
+      em.save.mockResolvedValue(mockSavedDept);
 
-      const result = await service.createDepartment({
-        ...validDto,
-        departmentCode: 'DEV',
-        departmentName: 'Phòng Phát triển',
-        parentDepartmentId: 'parent-uuid',
-      }, 'creator-id', {});
+      const result = await service.createDepartment(
+        {
+          ...validDto,
+          departmentCode: 'DEV',
+          departmentName: 'Phòng Phát triển',
+          parentDepartmentId: 'parent-uuid',
+        },
+        'creator-id',
+        {},
+      );
 
       expect(result.parentDepartmentId).toBe('parent-uuid');
     });
@@ -136,14 +144,18 @@ describe('DepartmentsService', () => {
         updatedAt: new Date(),
       };
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
-      em.save.mockResolvedValue(mockSavedDept as any);
+      em.save.mockResolvedValue(mockSavedDept);
 
-      const result = await service.createDepartment({
-        ...validDto,
-        departmentCode: 'HR',
-        departmentName: 'Phòng Nhân sự',
-        managerUserId: 'manager-uuid',
-      }, 'creator-id', {});
+      const result = await service.createDepartment(
+        {
+          ...validDto,
+          departmentCode: 'HR',
+          departmentName: 'Phòng Nhân sự',
+          managerUserId: 'manager-uuid',
+        },
+        'creator-id',
+        {},
+      );
 
       expect(result.managerUserId).toBe('manager-uuid');
     });
@@ -170,7 +182,10 @@ describe('DepartmentsService', () => {
         if (entityClass === DepartmentEntity) {
           callCount++;
           if (callCount === 1) return null; // code unique
-          return { id: 'existing', departmentName: 'Phòng Công nghệ thông tin' }; // name duplicate
+          return {
+            id: 'existing',
+            departmentName: 'Phòng Công nghệ thông tin',
+          }; // name duplicate
         }
         return null;
       });
@@ -190,10 +205,14 @@ describe('DepartmentsService', () => {
       });
 
       await expect(
-        service.createDepartment({
-          ...validDto,
-          parentDepartmentId: 'nonexistent',
-        }, 'creator-id', {}),
+        service.createDepartment(
+          {
+            ...validDto,
+            parentDepartmentId: 'nonexistent',
+          },
+          'creator-id',
+          {},
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -209,10 +228,14 @@ describe('DepartmentsService', () => {
       });
 
       await expect(
-        service.createDepartment({
-          ...validDto,
-          parentDepartmentId: 'inactive-parent',
-        }, 'creator-id', {}),
+        service.createDepartment(
+          {
+            ...validDto,
+            parentDepartmentId: 'inactive-parent',
+          },
+          'creator-id',
+          {},
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -228,10 +251,14 @@ describe('DepartmentsService', () => {
       });
 
       await expect(
-        service.createDepartment({
-          ...validDto,
-          managerUserId: 'inactive-manager',
-        }, 'creator-id', {}),
+        service.createDepartment(
+          {
+            ...validDto,
+            managerUserId: 'inactive-manager',
+          },
+          'creator-id',
+          {},
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -240,10 +267,15 @@ describe('DepartmentsService', () => {
       em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
         if (entityClass === DepartmentEntity) {
           if (options?.where?.departmentCode === 'IT') return null; // no code duplicate
-          if (options?.where?.departmentName === 'Phòng Công nghệ thông tin') return null; // no name duplicate
+          if (options?.where?.departmentName === 'Phòng Công nghệ thông tin')
+            return null; // no name duplicate
           if (options?.where?.id === 'deep-parent') {
             // Return parent with chain of depth 5
-            return { id: 'deep-parent', isActive: true, parentDepartmentId: 'level4' };
+            return {
+              id: 'deep-parent',
+              isActive: true,
+              parentDepartmentId: 'level4',
+            };
           }
           if (options?.where?.id === 'level4') {
             return { id: 'level4', parentDepartmentId: 'level3' };
@@ -263,10 +295,14 @@ describe('DepartmentsService', () => {
       });
 
       await expect(
-        service.createDepartment({
-          ...validDto,
-          parentDepartmentId: 'deep-parent',
-        }, 'creator-id', {}),
+        service.createDepartment(
+          {
+            ...validDto,
+            parentDepartmentId: 'deep-parent',
+          },
+          'creator-id',
+          {},
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
@@ -284,12 +320,16 @@ describe('DepartmentsService', () => {
       };
       em.findOne.mockResolvedValue(null);
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
-      em.save.mockResolvedValue(mockSavedDept as any);
+      em.save.mockResolvedValue(mockSavedDept);
 
-      await service.createDepartment({
-        departmentCode: 'AUDIT',
-        departmentName: 'Audit Dept',
-      }, 'creator-id', {});
+      await service.createDepartment(
+        {
+          departmentCode: 'AUDIT',
+          departmentName: 'Audit Dept',
+        },
+        'creator-id',
+        {},
+      );
 
       // Verify audit log was created (em.save called for both department + audit log)
       expect(em.save).toHaveBeenCalled();

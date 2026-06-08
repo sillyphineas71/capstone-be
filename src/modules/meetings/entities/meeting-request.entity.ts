@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from './meeting.entity.js';
 
@@ -61,13 +67,28 @@ export class MeetingRequestEntity {
   @Column({ name: 'requested_end_time', type: 'timestamptz', nullable: true })
   requestedEndTime: Date | null;
 
-  @Column({ name: 'approval_mode', type: 'varchar', length: 30, default: ApprovalMode.AUTO })
+  @Column({
+    name: 'approval_mode',
+    type: 'varchar',
+    length: 30,
+    default: ApprovalMode.AUTO,
+  })
   approvalMode: ApprovalMode;
 
-  @Column({ name: 'approval_status', type: 'varchar', length: 30, default: ApprovalStatus.PENDING })
+  @Column({
+    name: 'approval_status',
+    type: 'varchar',
+    length: 30,
+    default: ApprovalStatus.PENDING,
+  })
   approvalStatus: ApprovalStatus;
 
-  @Column({ name: 'conflict_check_status', type: 'varchar', length: 30, default: ConflictCheckStatus.NOT_CHECKED })
+  @Column({
+    name: 'conflict_check_status',
+    type: 'varchar',
+    length: 30,
+    default: ConflictCheckStatus.NOT_CHECKED,
+  })
   conflictCheckStatus: ConflictCheckStatus;
 
   @Column({ name: 'conflict_checked_at', type: 'timestamptz', nullable: true })

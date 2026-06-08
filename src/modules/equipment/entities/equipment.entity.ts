@@ -51,7 +51,12 @@ export class EquipmentEntity {
   @Column({ name: 'equipment_type', type: 'varchar', length: 50 })
   equipmentType: EquipmentType;
 
-  @Column({ name: 'serial_number', type: 'varchar', length: 120, nullable: true })
+  @Column({
+    name: 'serial_number',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
   serialNumber: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
@@ -63,10 +68,20 @@ export class EquipmentEntity {
   @Column({ name: 'purchase_date', type: 'date', nullable: true })
   purchaseDate: string | null;
 
-  @Column({ name: 'asset_status', type: 'varchar', length: 30, default: AssetStatus.AVAILABLE })
+  @Column({
+    name: 'asset_status',
+    type: 'varchar',
+    length: 30,
+    default: AssetStatus.AVAILABLE,
+  })
   assetStatus: AssetStatus;
 
-  @Column({ name: 'health_status', type: 'varchar', length: 30, default: HealthStatus.UNKNOWN })
+  @Column({
+    name: 'health_status',
+    type: 'varchar',
+    length: 30,
+    default: HealthStatus.UNKNOWN,
+  })
   healthStatus: HealthStatus;
 
   @Column({ name: 'current_room_id', type: 'uuid', nullable: true })
@@ -90,7 +105,11 @@ export class EquipmentEntity {
   @Column({ name: 'last_maintenance_at', type: 'timestamptz', nullable: true })
   lastMaintenanceAt: Date | null;
 
-  @Column({ name: 'last_issue_reported_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'last_issue_reported_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   lastIssueReportedAt: Date | null;
 
   @Column({ name: 'last_issue_note', type: 'text', nullable: true })

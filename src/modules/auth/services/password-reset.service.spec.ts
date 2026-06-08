@@ -101,7 +101,9 @@ describe('PasswordResetService', () => {
       cacheService.isBlocked.mockResolvedValue(true);
 
       await expect(service.requestOtp(dto)).rejects.toThrow(HttpException);
-      await expect(service.requestOtp(dto)).rejects.toThrow('Yêu cầu quá nhiều lần. Vui lòng thử lại sau.');
+      await expect(service.requestOtp(dto)).rejects.toThrow(
+        'Yêu cầu quá nhiều lần. Vui lòng thử lại sau.',
+      );
     });
 
     it('should block email and throw HTTP 429 if rate limit is exceeded', async () => {
@@ -117,7 +119,9 @@ describe('PasswordResetService', () => {
       cacheService.incrementLimitCounter.mockResolvedValue(1);
       usersRepository.findByEmailForReset.mockResolvedValue(null);
 
-      await expect(service.requestOtp(dto)).rejects.toThrow(BadRequestException);
+      await expect(service.requestOtp(dto)).rejects.toThrow(
+        BadRequestException,
+      );
       await expect(service.requestOtp(dto)).rejects.toThrow(
         'Email không tồn tại hoặc tài khoản đã bị khóa. Vui lòng kiểm tra lại.',
       );
@@ -128,9 +132,21 @@ describe('PasswordResetService', () => {
       cacheService.incrementLimitCounter.mockResolvedValue(1);
 
       const restrictedUsers = [
-        { accountStatus: 'locked', employmentStatus: 'active', deletedAt: null },
-        { accountStatus: 'active', employmentStatus: 'resigned', deletedAt: null },
-        { accountStatus: 'active', employmentStatus: 'active', deletedAt: new Date() },
+        {
+          accountStatus: 'locked',
+          employmentStatus: 'active',
+          deletedAt: null,
+        },
+        {
+          accountStatus: 'active',
+          employmentStatus: 'resigned',
+          deletedAt: null,
+        },
+        {
+          accountStatus: 'active',
+          employmentStatus: 'active',
+          deletedAt: new Date(),
+        },
       ];
 
       for (const restrictedUser of restrictedUsers) {
@@ -141,7 +157,9 @@ describe('PasswordResetService', () => {
           ...restrictedUser,
         });
 
-        await expect(service.requestOtp(dto)).rejects.toThrow(BadRequestException);
+        await expect(service.requestOtp(dto)).rejects.toThrow(
+          BadRequestException,
+        );
       }
     });
   });
@@ -173,7 +191,10 @@ describe('PasswordResetService', () => {
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('Đặt lại mật khẩu thành công');
-      expect(usersRepository.updatePasswordInTransaction).toHaveBeenCalledWith('user-id', expect.any(String));
+      expect(usersRepository.updatePasswordInTransaction).toHaveBeenCalledWith(
+        'user-id',
+        expect.any(String),
+      );
       expect(cacheService.deleteOtpSession).toHaveBeenCalledWith(email);
       expect(cacheService.deleteLimitCounter).toHaveBeenCalledWith(email);
       expect(cacheService.deleteBlockKey).toHaveBeenCalledWith(email);
@@ -182,7 +203,9 @@ describe('PasswordResetService', () => {
     it('should throw unified E1 if account is restricted during confirm reset', async () => {
       usersRepository.findByEmailForReset.mockResolvedValue(null);
 
-      await expect(service.confirmReset(dto)).rejects.toThrow(BadRequestException);
+      await expect(service.confirmReset(dto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('should throw E2 if OTP session is expired or not found', async () => {
@@ -197,8 +220,12 @@ describe('PasswordResetService', () => {
 
       cacheService.getOtpSession.mockResolvedValue(null);
 
-      await expect(service.confirmReset(dto)).rejects.toThrow(BadRequestException);
-      await expect(service.confirmReset(dto)).rejects.toThrow('Mã xác thực không hợp lệ hoặc đã hết hạn.');
+      await expect(service.confirmReset(dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.confirmReset(dto)).rejects.toThrow(
+        'Mã xác thực không hợp lệ hoặc đã hết hạn.',
+      );
     });
 
     it('should increment failed attempts and throw E2 if OTP is incorrect', async () => {
@@ -219,7 +246,9 @@ describe('PasswordResetService', () => {
 
       const badDto = { ...dto, otp: '000000' };
 
-      await expect(service.confirmReset(badDto)).rejects.toThrow(BadRequestException);
+      await expect(service.confirmReset(badDto)).rejects.toThrow(
+        BadRequestException,
+      );
       expect(cacheService.setOtpSession).toHaveBeenCalledWith(
         email,
         expect.objectContaining({ attempts: 1 }),
@@ -245,7 +274,9 @@ describe('PasswordResetService', () => {
 
       const badDto = { ...dto, otp: '000000' };
 
-      await expect(service.confirmReset(badDto)).rejects.toThrow(BadRequestException);
+      await expect(service.confirmReset(badDto)).rejects.toThrow(
+        BadRequestException,
+      );
       expect(cacheService.deleteOtpSession).toHaveBeenCalledWith(email);
     });
   });

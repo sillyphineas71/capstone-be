@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 
 export enum SystemConfigValueType {
@@ -23,7 +30,12 @@ export class SystemConfigEntity {
   @Column({ name: 'config_json', type: 'jsonb', nullable: true })
   configJson: Record<string, unknown> | null;
 
-  @Column({ name: 'value_type', type: 'varchar', length: 30, default: SystemConfigValueType.STRING })
+  @Column({
+    name: 'value_type',
+    type: 'varchar',
+    length: 30,
+    default: SystemConfigValueType.STRING,
+  })
   valueType: SystemConfigValueType;
 
   @Column({ name: 'config_group', type: 'varchar', length: 80 })

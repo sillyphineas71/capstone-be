@@ -47,13 +47,19 @@ describe('LoginService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (rateLimitService.checkOrThrow as jest.Mock).mockImplementation(() => undefined);
+    (rateLimitService.checkOrThrow as jest.Mock).mockImplementation(
+      () => undefined,
+    );
   });
 
   it('throws AUTH_INVALID_CREDENTIALS when user not found', async () => {
-    (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue(null);
+    (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue(
+      null,
+    );
 
-    await expect(service.login({ email: 'user@example.com', password: 'secret' } as LoginDto, {})).rejects.toMatchObject({
+    await expect(
+      service.login({ email: 'user@example.com', password: 'secret' }, {}),
+    ).rejects.toMatchObject({
       response: {
         code: 'AUTH_INVALID_CREDENTIALS',
       },
@@ -68,7 +74,9 @@ describe('LoginService', () => {
       throw error;
     });
 
-    await expect(service.login({ email: 'user@example.com', password: 'secret' } as LoginDto, {})).rejects.toMatchObject({
+    await expect(
+      service.login({ email: 'user@example.com', password: 'secret' }, {}),
+    ).rejects.toMatchObject({
       response: {
         code: 'AUTH_TOO_MANY_ATTEMPTS',
       },
@@ -88,7 +96,9 @@ describe('LoginService', () => {
     });
     (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-    await expect(service.login({ email: 'user@example.com', password: 'secret' } as LoginDto, {})).rejects.toMatchObject({
+    await expect(
+      service.login({ email: 'user@example.com', password: 'secret' }, {}),
+    ).rejects.toMatchObject({
       response: {
         code: 'AUTH_ACCOUNT_INACTIVE',
       },
@@ -107,9 +117,13 @@ describe('LoginService', () => {
       accountStatus: 'active',
     });
     (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-    (tokenService.generateAccessToken as jest.Mock).mockRejectedValue(new Error('token generation failed'));
+    (tokenService.generateAccessToken as jest.Mock).mockRejectedValue(
+      new Error('token generation failed'),
+    );
 
-    await expect(service.login({ email: 'user@example.com', password: 'secret' } as LoginDto, {})).rejects.toMatchObject({
+    await expect(
+      service.login({ email: 'user@example.com', password: 'secret' }, {}),
+    ).rejects.toMatchObject({
       response: {
         code: 'AUTH_TOKEN_GENERATION_FAILED',
       },

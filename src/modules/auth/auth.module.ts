@@ -23,10 +23,7 @@ import { ChangePasswordService } from './services/change-password.service';
 import { MustChangePasswordGuard } from './guards/must-change-password.guard';
 
 @Module({
-  imports: [
-    JwtModule.register({}),
-    CacheModule.register(),
-  ],
+  imports: [JwtModule.register({}), CacheModule.register()],
   controllers: [AuthController],
   providers: [
     AuthConfigService,

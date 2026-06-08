@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { RoomEntity } from '../../../modules/rooms/entities/room.entity.js';
 import { EquipmentEntity } from '../../../modules/equipment/entities/equipment.entity.js';
 
@@ -47,7 +55,12 @@ export class IoTDeviceEntity {
   @Column({ name: 'equipment_id', type: 'uuid', nullable: true })
   equipmentId: string | null;
 
-  @Column({ name: 'network_identifier', type: 'varchar', length: 150, nullable: true })
+  @Column({
+    name: 'network_identifier',
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   networkIdentifier: string | null;
 
   @Column({ name: 'ip_address', type: 'varchar', length: 100, nullable: true })
@@ -62,16 +75,31 @@ export class IoTDeviceEntity {
   @Column({ name: 'mqtt_topic', type: 'varchar', length: 255, nullable: true })
   mqttTopic: string | null;
 
-  @Column({ name: 'agent_version', type: 'varchar', length: 80, nullable: true })
+  @Column({
+    name: 'agent_version',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
   agentVersion: string | null;
 
-  @Column({ name: 'firmware_version', type: 'varchar', length: 80, nullable: true })
+  @Column({
+    name: 'firmware_version',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
   firmwareVersion: string | null;
 
   @Column({ type: 'varchar', length: 30, default: IoTDeviceStatus.OFFLINE })
   status: IoTDeviceStatus;
 
-  @Column({ name: 'health_status', type: 'varchar', length: 30, default: IoTDeviceHealthStatus.UNKNOWN })
+  @Column({
+    name: 'health_status',
+    type: 'varchar',
+    length: 30,
+    default: IoTDeviceHealthStatus.UNKNOWN,
+  })
   healthStatus: IoTDeviceHealthStatus;
 
   @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })

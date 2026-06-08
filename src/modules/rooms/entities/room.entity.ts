@@ -48,10 +48,20 @@ export class RoomEntity {
   @Column({ type: 'integer' })
   capacity: number;
 
-  @Column({ name: 'room_type', type: 'varchar', length: 50, default: RoomType.MEETING_ROOM })
+  @Column({
+    name: 'room_type',
+    type: 'varchar',
+    length: 50,
+    default: RoomType.MEETING_ROOM,
+  })
   roomType: RoomType;
 
-  @Column({ name: 'current_status', type: 'varchar', length: 30, default: RoomStatus.AVAILABLE })
+  @Column({
+    name: 'current_status',
+    type: 'varchar',
+    length: 30,
+    default: RoomStatus.AVAILABLE,
+  })
   currentStatus: RoomStatus;
 
   @Column({ name: 'has_camera', type: 'boolean', default: false })

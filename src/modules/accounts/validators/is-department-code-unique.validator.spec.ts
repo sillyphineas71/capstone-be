@@ -10,7 +10,7 @@ describe('IsDepartmentCodeUniqueConstraint', () => {
 
   beforeEach(() => {
     mockRepo = { count: jest.fn() };
-    constraint = new IsDepartmentCodeUniqueConstraint(mockRepo as any);
+    constraint = new IsDepartmentCodeUniqueConstraint(mockRepo);
   });
 
   it('should return true if code does not exist', async () => {

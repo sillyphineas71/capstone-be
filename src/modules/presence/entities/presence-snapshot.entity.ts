@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { MeetingParticipantEntity } from '../../../modules/meetings/entities/meeting-participant.entity.js';
@@ -36,7 +42,12 @@ export class PresenceSnapshotEntity {
   @Column({ name: 'participant_id', type: 'uuid', nullable: true })
   participantId: string | null;
 
-  @Column({ name: 'presence_status', type: 'varchar', length: 30, default: PresenceStatus.UNKNOWN })
+  @Column({
+    name: 'presence_status',
+    type: 'varchar',
+    length: 30,
+    default: PresenceStatus.UNKNOWN,
+  })
   presenceStatus: PresenceStatus;
 
   @Column({ name: 'occupancy_count', type: 'integer', nullable: true })
@@ -45,10 +56,21 @@ export class PresenceSnapshotEntity {
   @Column({ name: 'snapshot_time', type: 'timestamptz' })
   snapshotTime: Date;
 
-  @Column({ name: 'source_type', type: 'varchar', length: 40, default: PresenceSourceType.MIXED })
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 40,
+    default: PresenceSourceType.MIXED,
+  })
   sourceType: PresenceSourceType;
 
-  @Column({ name: 'confidence_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'confidence_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   confidenceScore: number | null;
 
   @Column({ name: 'metadata_json', type: 'jsonb', nullable: true })
@@ -67,7 +89,10 @@ export class PresenceSnapshotEntity {
   @JoinColumn({ name: 'user_id' })
   user: UserEntity | null;
 
-  @ManyToOne(() => MeetingParticipantEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => MeetingParticipantEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'participant_id' })
   participant: MeetingParticipantEntity | null;
 }

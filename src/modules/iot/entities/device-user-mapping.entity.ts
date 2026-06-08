@@ -26,13 +26,28 @@ export class DeviceUserMappingEntity {
   @Column({ name: 'face_profile_id', type: 'uuid', nullable: true })
   faceProfileId: string | null;
 
-  @Column({ name: 'device_person_id', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'device_person_id',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   devicePersonId: string | null;
 
-  @Column({ name: 'device_person_code', type: 'varchar', length: 100, nullable: true })
+  @Column({
+    name: 'device_person_code',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
   devicePersonCode: string | null;
 
-  @Column({ name: 'device_person_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'device_person_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   devicePersonName: string | null;
 
   @Column({ name: 'face_registered', type: 'boolean', default: false })
@@ -44,7 +59,12 @@ export class DeviceUserMappingEntity {
   @Column({ name: 'registered_by', type: 'uuid', nullable: true })
   registeredBy: string | null;
 
-  @Column({ name: 'sync_status', type: 'varchar', length: 30, default: 'pending' })
+  @Column({
+    name: 'sync_status',
+    type: 'varchar',
+    length: 30,
+    default: 'pending',
+  })
   syncStatus: string;
 
   @Column({ name: 'last_synced_at', type: 'timestamptz', nullable: true })

@@ -12,7 +12,11 @@ import {
 import { UsersService } from './users.service.js';
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
-import { UserEntity, EmploymentStatus, AccountStatus } from '../entities/user.entity.js';
+import {
+  UserEntity,
+  EmploymentStatus,
+  AccountStatus,
+} from '../entities/user.entity.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
@@ -166,8 +170,12 @@ describe('UsersService', () => {
         return [];
       });
 
-      em.create.mockImplementation((_entityClass: unknown, plain: unknown) => plain);
-      em.save.mockImplementation(async (_entityClass: unknown, entity: unknown) => entity);
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (_entityClass: unknown, entity: unknown) => entity,
+      );
     }
 
     function setupBusinessAdmin(
@@ -218,8 +226,12 @@ describe('UsersService', () => {
         return [];
       });
 
-      em.create.mockImplementation((_entityClass: unknown, plain: unknown) => plain);
-      em.save.mockImplementation(async (_entityClass: unknown, entity: unknown) => entity);
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (_entityClass: unknown, entity: unknown) => entity,
+      );
     }
 
     // ===== HAPPY PATH TESTS (T007) =====
@@ -235,7 +247,9 @@ describe('UsersService', () => {
       expect(result.email).toBe('user@company.com');
       expect(result.fullName).toBe('Nguyen Van A');
       expect(result.phoneNumber).toBe('0909123456');
-      expect(result.avatarUrl).toBe('https://storage.example.com/avatars/uuid.jpg');
+      expect(result.avatarUrl).toBe(
+        'https://storage.example.com/avatars/uuid.jpg',
+      );
       expect(result.positionTitle).toBe('Software Engineer');
       expect(result.department).toBeDefined();
       expect(result.department!.id).toBe('dept-id');
@@ -304,8 +318,12 @@ describe('UsersService', () => {
         return [];
       });
 
-      em.create.mockImplementation((_entityClass: unknown, plain: unknown) => plain);
-      em.save.mockImplementation(async (_entityClass: unknown, entity: unknown) => entity);
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (_entityClass: unknown, entity: unknown) => entity,
+      );
 
       // Should NOT throw ForbiddenException despite being out of scope
       const result = await service.getUserDetail(authUserId, authUserId);
@@ -331,15 +349,19 @@ describe('UsersService', () => {
 
     it('[E6] User soft-deleted — 404 USER_NOT_FOUND (AC-008)', async () => {
       // Mock: findOne returns null for the target (as if soft-deleted)
-      em.findOne.mockImplementation(async (entityClass: unknown, options: any) => {
-        if (entityClass === UserEntity) {
-          if (options?.where?.id === targetUserId &&
-              options?.where?.deletedAt !== undefined) {
-            return null; // Soft-deleted user is excluded by deletedAt: IsNull()
+      em.findOne.mockImplementation(
+        async (entityClass: unknown, options: any) => {
+          if (entityClass === UserEntity) {
+            if (
+              options?.where?.id === targetUserId &&
+              options?.where?.deletedAt !== undefined
+            ) {
+              return null; // Soft-deleted user is excluded by deletedAt: IsNull()
+            }
           }
-        }
-        return null;
-      });
+          return null;
+        },
+      );
 
       await expect(
         service.getUserDetail(targetUserId, authUserId),
@@ -383,18 +405,20 @@ describe('UsersService', () => {
     it('[HP4] hasFaceProfile = false khi không có face_profile (AC-002)', async () => {
       setupSystemAdmin();
       // Override face profile to return null
-      em.findOne.mockImplementation(async (entityClass: unknown, options: any) => {
-        if (entityClass === UserEntity) {
-          if (options?.where?.id === targetUserId) return baseTargetUser;
-          if (options?.where?.id === authUserId) return baseAuthAdmin;
-          if (options?.where?.id === managerUserId) return managerUser;
+      em.findOne.mockImplementation(
+        async (entityClass: unknown, options: any) => {
+          if (entityClass === UserEntity) {
+            if (options?.where?.id === targetUserId) return baseTargetUser;
+            if (options?.where?.id === authUserId) return baseAuthAdmin;
+            if (options?.where?.id === managerUserId) return managerUser;
+            return null;
+          }
+          if (entityClass === FaceProfileEntity) {
+            return null; // No face profile
+          }
           return null;
-        }
-        if (entityClass === FaceProfileEntity) {
-          return null; // No face profile
-        }
-        return null;
-      });
+        },
+      );
 
       const result = await service.getUserDetail(targetUserId, authUserId);
       expect(result.hasFaceProfile).toBe(false);
@@ -406,17 +430,19 @@ describe('UsersService', () => {
         directManagerId: null,
       };
 
-      em.findOne.mockImplementation(async (entityClass: unknown, options: any) => {
-        if (entityClass === UserEntity) {
-          if (options?.where?.id === targetUserId) return userWithoutManager;
-          if (options?.where?.id === authUserId) return baseAuthAdmin;
+      em.findOne.mockImplementation(
+        async (entityClass: unknown, options: any) => {
+          if (entityClass === UserEntity) {
+            if (options?.where?.id === targetUserId) return userWithoutManager;
+            if (options?.where?.id === authUserId) return baseAuthAdmin;
+            return null;
+          }
+          if (entityClass === FaceProfileEntity) {
+            return { id: 'face-id' };
+          }
           return null;
-        }
-        if (entityClass === FaceProfileEntity) {
-          return { id: 'face-id' };
-        }
-        return null;
-      });
+        },
+      );
 
       em.find.mockImplementation(async (entityClass: unknown, options: any) => {
         if (entityClass === UserRoleEntity) {
@@ -442,17 +468,19 @@ describe('UsersService', () => {
         avatarUrl: null,
       };
 
-      em.findOne.mockImplementation(async (entityClass: unknown, options: any) => {
-        if (entityClass === UserEntity) {
-          if (options?.where?.id === targetUserId) return userWithoutAvatar;
-          if (options?.where?.id === authUserId) return baseAuthAdmin;
+      em.findOne.mockImplementation(
+        async (entityClass: unknown, options: any) => {
+          if (entityClass === UserEntity) {
+            if (options?.where?.id === targetUserId) return userWithoutAvatar;
+            if (options?.where?.id === authUserId) return baseAuthAdmin;
+            return null;
+          }
+          if (entityClass === FaceProfileEntity) {
+            return { id: 'face-id' };
+          }
           return null;
-        }
-        if (entityClass === FaceProfileEntity) {
-          return { id: 'face-id' };
-        }
-        return null;
-      });
+        },
+      );
 
       em.find.mockImplementation(async (entityClass: unknown, options: any) => {
         if (entityClass === UserRoleEntity) {
@@ -473,7 +501,9 @@ describe('UsersService', () => {
     it('[HP7] avatarUrl có giá trị từ DB (AC-017)', async () => {
       setupSystemAdmin();
       const result = await service.getUserDetail(targetUserId, authUserId);
-      expect(result.avatarUrl).toBe('https://storage.example.com/avatars/uuid.jpg');
+      expect(result.avatarUrl).toBe(
+        'https://storage.example.com/avatars/uuid.jpg',
+      );
     });
 
     it('[AC-018] employmentStatus chỉ nhận 4 enum values', async () => {

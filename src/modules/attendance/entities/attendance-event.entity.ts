@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from '../../../modules/rooms/entities/room.entity.js';
@@ -30,16 +36,32 @@ export class AttendanceEventEntity {
   @Column({ name: 'event_time', type: 'timestamptz' })
   eventTime: Date;
 
-  @Column({ name: 'source_type', type: 'varchar', length: 40, default: 'system' })
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 40,
+    default: 'system',
+  })
   sourceType: string;
 
-  @Column({ name: 'confidence_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'confidence_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   confidenceScore: number | null;
 
   @Column({ name: 'evidence_media_file_id', type: 'uuid', nullable: true })
   evidenceMediaFileId: string | null;
 
-  @Column({ name: 'review_status', type: 'varchar', length: 30, nullable: true })
+  @Column({
+    name: 'review_status',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
   reviewStatus: string | null;
 
   @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
@@ -56,7 +78,10 @@ export class AttendanceEventEntity {
   @JoinColumn({ name: 'meeting_id' })
   meeting: MeetingEntity;
 
-  @ManyToOne(() => AttendanceRecordEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => AttendanceRecordEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'attendance_record_id' })
   attendanceRecord: AttendanceRecordEntity | null;
 

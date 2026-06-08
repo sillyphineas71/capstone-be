@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { MediaFileEntity } from '../../../modules/recording/entities/media-file.entity.js';
@@ -40,7 +47,12 @@ export class TranscriptEntity {
   @Column({ name: 'version_no', type: 'integer', default: 1 })
   versionNo: number;
 
-  @Column({ name: 'language_code', type: 'varchar', length: 20, nullable: true })
+  @Column({
+    name: 'language_code',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
   languageCode: string | null;
 
   @Column({ name: 'raw_text', type: 'text', nullable: true })
@@ -55,10 +67,21 @@ export class TranscriptEntity {
   @Column({ name: 'detected_speakers_json', type: 'jsonb', nullable: true })
   detectedSpeakersJson: Record<string, unknown> | null;
 
-  @Column({ name: 'security_status', type: 'varchar', length: 30, default: TranscriptSecurityStatus.PENDING_SCAN })
+  @Column({
+    name: 'security_status',
+    type: 'varchar',
+    length: 30,
+    default: TranscriptSecurityStatus.PENDING_SCAN,
+  })
   securityStatus: TranscriptSecurityStatus;
 
-  @Column({ name: 'confidence_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'confidence_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   confidenceScore: number | null;
 
   @Column({ type: 'varchar', length: 30, default: TranscriptStatus.PROCESSING })
@@ -91,7 +114,10 @@ export class TranscriptEntity {
   @JoinColumn({ name: 'source_media_file_id' })
   sourceMediaFile: MediaFileEntity | null;
 
-  @ManyToOne(() => RecordingSessionEntity, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => RecordingSessionEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'recording_session_id' })
   recordingSession: RecordingSessionEntity | null;
 

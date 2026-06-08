@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from './room.entity.js';
@@ -53,13 +59,29 @@ export class RoomBookingUsageEntity {
   @Column({ name: 'last_presence_at', type: 'timestamptz', nullable: true })
   lastPresenceAt: Date | null;
 
-  @Column({ name: 'usage_status', type: 'varchar', length: 30, default: RoomUsageStatus.NOT_STARTED })
+  @Column({
+    name: 'usage_status',
+    type: 'varchar',
+    length: 30,
+    default: RoomUsageStatus.NOT_STARTED,
+  })
   usageStatus: RoomUsageStatus;
 
-  @Column({ name: 'occupancy_source', type: 'varchar', length: 40, nullable: true })
+  @Column({
+    name: 'occupancy_source',
+    type: 'varchar',
+    length: 40,
+    nullable: true,
+  })
   occupancySource: OccupancySource | null;
 
-  @Column({ name: 'occupancy_confidence', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'occupancy_confidence',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   occupancyConfidence: number | null;
 
   @Column({ name: 'auto_released', type: 'boolean', default: false })

@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from './room.entity.js';
@@ -34,7 +40,12 @@ export class NoShowCaseEntity {
   @Column({ name: 'room_id', type: 'uuid' })
   roomId: string;
 
-  @Column({ name: 'detection_status', type: 'varchar', length: 30, default: NoShowDetectionStatus.RISK })
+  @Column({
+    name: 'detection_status',
+    type: 'varchar',
+    length: 30,
+    default: NoShowDetectionStatus.RISK,
+  })
   detectionStatus: NoShowDetectionStatus;
 
   @Column({ name: 'detected_at', type: 'timestamptz', default: () => 'now()' })
@@ -46,7 +57,11 @@ export class NoShowCaseEntity {
   @Column({ name: 'warning_deadline_at', type: 'timestamptz', nullable: true })
   warningDeadlineAt: Date | null;
 
-  @Column({ name: 'auto_release_eligible_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'auto_release_eligible_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   autoReleaseEligibleAt: Date | null;
 
   @Column({ name: 'released_at', type: 'timestamptz', nullable: true })
@@ -55,7 +70,12 @@ export class NoShowCaseEntity {
   @Column({ name: 'resolved_by', type: 'uuid', nullable: true })
   resolvedBy: string | null;
 
-  @Column({ name: 'resolution_status', type: 'varchar', length: 30, nullable: true })
+  @Column({
+    name: 'resolution_status',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
   resolutionStatus: NoShowResolutionStatus | null;
 
   @Column({ type: 'text', nullable: true })

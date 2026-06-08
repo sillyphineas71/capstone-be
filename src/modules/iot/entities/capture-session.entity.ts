@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from '../../../modules/rooms/entities/room.entity.js';
@@ -29,7 +35,12 @@ export class CaptureSessionEntity {
   @Column({ name: 'recording_session_id', type: 'uuid', nullable: true })
   recordingSessionId: string | null;
 
-  @Column({ name: 'session_status', type: 'varchar', length: 30, default: CaptureSessionStatus.STARTING })
+  @Column({
+    name: 'session_status',
+    type: 'varchar',
+    length: 30,
+    default: CaptureSessionStatus.STARTING,
+  })
   sessionStatus: CaptureSessionStatus;
 
   @Column({ name: 'started_at', type: 'timestamptz', default: () => 'now()' })

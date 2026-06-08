@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from '../../../modules/meetings/entities/meeting.entity.js';
 import { RoomEntity } from './room.entity.js';
@@ -24,7 +30,12 @@ export class RoomEventEntity {
   @Column({ name: 'event_time', type: 'timestamptz', default: () => 'now()' })
   eventTime: Date;
 
-  @Column({ name: 'source_type', type: 'varchar', length: 30, default: 'system' })
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 30,
+    default: 'system',
+  })
   sourceType: string;
 
   @Column({ name: 'actor_user_id', type: 'uuid', nullable: true })
@@ -39,7 +50,13 @@ export class RoomEventEntity {
   @Column({ name: 'occupancy_count', type: 'integer', nullable: true })
   occupancyCount: number | null;
 
-  @Column({ name: 'confidence_score', type: 'numeric', precision: 5, scale: 2, nullable: true })
+  @Column({
+    name: 'confidence_score',
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
   confidenceScore: number | null;
 
   @Column({ type: 'text', nullable: true })
