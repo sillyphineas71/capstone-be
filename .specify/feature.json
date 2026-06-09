@@ -1,3 +1,3 @@
 {
-  "feature_directory": "specs/001-update-meeting-time"
+  "feature_directory": "spec/features/meeting/feat-my-schedule"
 }

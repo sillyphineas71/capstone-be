@@ -4,10 +4,6 @@ import { MediaFileEntity } from './entities/media-file.entity.js';
 import { RecordingConfigEntity } from './entities/recording-config.entity.js';
 import { RecordingSessionEntity } from './entities/recording-session.entity.js';
 import { RecordingSegmentEntity } from './entities/recording-segment.entity.js';
-import { AccountsModule } from '../accounts/accounts.module.js';
-import { MeetingsModule } from '../meetings/meetings.module.js';
-import { RoomsModule } from '../rooms/rooms.module.js';
-import { IotModule } from '../iot/iot.module.js';
 
 /**
  * RecordingModule quản lý:
@@ -15,13 +11,14 @@ import { IotModule } from '../iot/iot.module.js';
  * - RecordingConfigEntity (recording_configs)
  * - RecordingSessionEntity (recording_sessions)
  * - RecordingSegmentEntity (recording_segments)
+ *
+ * Module này KHÔNG import các business module khác (AccountsModule, MeetingsModule,
+ * RoomsModule, IotModule) để tránh circular dependency.
+ * Nó chỉ đăng ký entities và export TypeOrmModule.
+ * Entity relations được TypeORM resolve tự động qua decorators.
  */
 @Module({
   imports: [
-    AccountsModule,
-    MeetingsModule,
-    RoomsModule,
-    IotModule,
     TypeOrmModule.forFeature([
       MediaFileEntity,
       RecordingConfigEntity,

@@ -17,6 +17,8 @@ export enum MeetingEventType {
   MEETING_REQUEST_CREATED = 'meeting_request_created',
   MEETING_REQUEST_APPROVED = 'meeting_request_approved',
   MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
+  MEETING_TIME_UPDATED = 'meeting_time_updated',
+  ROOM_CHANGED = 'room_changed',
 }
 
 export enum MeetingEventSourceType {

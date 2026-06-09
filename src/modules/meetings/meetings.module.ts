@@ -13,6 +13,7 @@ import { RoomBookingEntity } from '../rooms/entities/room-booking.entity.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { MeetingsController } from './controllers/meetings.controller.js';
 import { MeetingsService } from './services/meetings.service.js';
 import { MeetingRequestReviewService } from './services/meeting-request-review.service.js';
@@ -39,6 +40,7 @@ import { IsAfterStartTimeConstraint } from './validators/is-after-start-time.val
     AccountsModule,
     NotificationsModule,
     AdministrationModule,
+    AuthModule,
     TypeOrmModule.forFeature([
       MeetingRecurrenceRuleEntity,
       MeetingEntity,

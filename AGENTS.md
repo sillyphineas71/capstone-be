@@ -8,6 +8,9 @@
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
 | 2026-05-27 | - Cập nhật Database lên v3.2 Compact (39 bảng), xóa `user_sessions`.<br>- Thêm luật ghi log thay đổi ở đầu mọi file `.md`.<br>- Thêm luật BẮT BUỘC phải đọc CLAUDE.md/AGENTS.md trước khi code. | Các dòng liên quan DB, phần TL;DR và Authentication |
 | 2026-06-03 | Thêm rule mới để kiểm tra, kiểm soát agent khi làm việc | Trong phần RULE tối thượng |
+| 2026-06-09 | Implement UC-MM-03 "Cập nhật phòng họp": MeetingEventType + NotificationType enums, seed permission, DTOs, service methods (getAttendeeCount, getAvailableRoomsForMeeting, updateMeetingRoom with transaction/events/audit/notification), controller endpoints, unit tests (service/DTO/controller) | Mới: meeting-event.entity, notification.entity, seed 20260609000001, 3 DTO files, meetings.service (methods T007-T009), meetings.controller (T010-T011), 3 spec files |
+
+
 | 2026-06-06 | - Thêm ưu tiên tài liệu `SPEC_ALIGNMENT_WITH_DB_V3_2_COMPACT.md` và `spec_typeorm_aligned.md`.<br>- Khẳng định luôn dùng TypeORM, không dùng Prisma. | Phần TL;DR và thứ tự ưu tiên tài liệu |
 > File này là tài liệu định hướng cho Claude Code / coding agent khi làm việc với **backend** của dự án.  
 > Mục tiêu: giúp agent hiểu đúng domain, kiến trúc, database, module boundary, convention code, API style và các giới hạn quan trọng trước khi sinh code.

@@ -3,8 +3,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogEntity } from './entities/audit-log.entity.js';
 import { SystemConfigEntity } from './entities/system-config.entity.js';
 import { BackgroundJobEntity } from './entities/background-job.entity.js';
-import { AccountsModule } from '../accounts/accounts.module.js';
-import { RecordingModule } from '../recording/recording.module.js';
 
 /**
  * AdministrationModule quản lý:
@@ -12,11 +10,13 @@ import { RecordingModule } from '../recording/recording.module.js';
  *   nhưng auth module TIẾP TỤC dùng raw SQL cho security-sensitive audit entries.
  * - SystemConfigEntity (system_configs)
  * - BackgroundJobEntity (background_jobs)
+ *
+ * Module này KHÔNG import các business module khác (AccountsModule, RecordingModule...)
+ * để tránh circular dependency. Nó chỉ đăng ký entities và export TypeOrmModule.
+ * Các module cần dùng entities từ đây chỉ cần import AdministrationModule.
  */
 @Module({
   imports: [
-    AccountsModule,
-    RecordingModule,
     TypeOrmModule.forFeature([
       AuditLogEntity,
       SystemConfigEntity,

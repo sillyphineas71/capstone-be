@@ -31,14 +31,14 @@ export class AuthzReadRepository {
 
     const roles = Array.from(
       new Set(
-        rows
+        (rows as AuthzRow[])
           .map((row) => row.role_code)
           .filter((value): value is string => Boolean(value)),
       ),
     );
     const permissions = Array.from(
       new Set(
-        rows
+        (rows as AuthzRow[])
           .map((row) => row.permission_code)
           .filter((value): value is string => Boolean(value)),
       ),

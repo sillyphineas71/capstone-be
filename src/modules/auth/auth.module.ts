@@ -21,6 +21,8 @@ import { PasswordResetService } from './services/password-reset.service';
 import { ChangePasswordCacheService } from './services/change-password-cache.service';
 import { ChangePasswordService } from './services/change-password.service';
 import { MustChangePasswordGuard } from './guards/must-change-password.guard';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { PermissionsGuard } from './guards/permissions.guard';
 
 @Module({
   imports: [JwtModule.register({}), CacheModule.register()],
@@ -46,8 +48,15 @@ import { MustChangePasswordGuard } from './guards/must-change-password.guard';
     ChangePasswordCacheService,
     ChangePasswordService,
     MustChangePasswordGuard,
+    // Guards exported for use in other modules (MeetingsModule, AccountsModule, etc.)
+    JwtAuthGuard,
+    PermissionsGuard,
   ],
   exports: [
+    // Re-export JwtModule and CacheModule so importing modules can resolve
+    // JwtService and CACHE_MANAGER (required by JwtAuthGuard)
+    JwtModule,
+    CacheModule,
     AuthConfigService,
     RateLimitService,
     TokenService,
@@ -67,6 +76,9 @@ import { MustChangePasswordGuard } from './guards/must-change-password.guard';
     ChangePasswordCacheService,
     ChangePasswordService,
     MustChangePasswordGuard,
+    // Guards exported for use in other modules
+    JwtAuthGuard,
+    PermissionsGuard,
   ],
 })
 export class AuthModule {}

@@ -3,13 +3,15 @@ import { MeetingsController } from './meetings.controller.js';
 import { MeetingsService } from '../services/meetings.service.js';
 import { MeetingRequestReviewService } from '../services/meeting-request-review.service.js';
 import { CreateMeetingDto } from '../dto/create-meeting.dto.js';
+import { UpdateMeetingRoomDto } from '../dto/update-meeting-room.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { CreateMeetingResponseDto } from '../dto/create-meeting-response.dto.js';
+import { CancelMeetingResponseDto } from '../dto/cancel-meeting-response.dto.js';
 
 describe('MeetingsController', () => {
   let controller: MeetingsController;
-  let service: { create: jest.Mock; getAvailableRooms: jest.Mock };
+  let service: { create: jest.Mock; getAvailableRooms: jest.Mock; getAvailableRoomsForMeeting: jest.Mock; updateMeetingRoom: jest.Mock; cancelMeeting: jest.Mock };
   let reviewService: { approve: jest.Mock; reject: jest.Mock };
 
   const mockMeetingResponse = new CreateMeetingResponseDto({
@@ -34,6 +36,9 @@ describe('MeetingsController', () => {
     service = {
       create: jest.fn(),
       getAvailableRooms: jest.fn(),
+      getAvailableRoomsForMeeting: jest.fn(),
+      updateMeetingRoom: jest.fn(),
+      cancelMeeting: jest.fn(),
     };
 
     reviewService = {
@@ -131,6 +136,202 @@ describe('MeetingsController', () => {
       expect(result.success).toBe(true);
       expect(result.data).toHaveLength(1);
       expect(service.getAvailableRooms).toHaveBeenCalled();
+    });
+  });
+
+  describe('getAvailableRoomsForMeeting', () => {
+    it('[T015-1] should return 200 with available rooms list', async () => {
+      const mockRooms = [
+        {
+          roomId: 'room-2',
+          roomName: 'Phòng B',
+          roomCode: 'R02',
+          capacity: 20,
+          location: null,
+          equipmentFlags: [],
+          availabilityStatus: 'available',
+          isCurrentRoom: false,
+          capacityWarning: null,
+        },
+      ];
+
+      service.getAvailableRoomsForMeeting.mockResolvedValue(mockRooms);
+
+      const result = await controller.getAvailableRoomsForMeeting(
+        'meeting-uuid',
+        undefined,
+        undefined,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].roomId).toBe('room-2');
+      expect(service.getAvailableRoomsForMeeting).toHaveBeenCalledWith(
+        'meeting-uuid',
+        { capacityWarningMode: false, includeCurrentRoom: false },
+      );
+    });
+  });
+
+  describe('updateMeetingRoom', () => {
+    it('[T015-3] should return 200 with update response', async () => {
+      const dto: UpdateMeetingRoomDto = {
+        newRoomId: 'new-room-uuid',
+        confirmCapacityOverride: false,
+      };
+
+      const mockResponse = {
+        meetingId: 'meeting-uuid',
+        oldRoom: { id: 'old-room-uuid', name: 'Old Room' },
+        newRoom: { id: 'new-room-uuid', name: 'New Room' },
+        oldBookingId: 'booking-1',
+        newBookingId: 'booking-2',
+        startTime: '2026-07-01T10:00:00.000Z',
+        endTime: '2026-07-01T11:00:00.000Z',
+        notificationStatus: 'sent',
+        updatedAt: '2026-06-11T10:00:00.000Z',
+      };
+
+      service.updateMeetingRoom.mockResolvedValue(mockResponse);
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.updateMeetingRoom(
+        'meeting-uuid',
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data.meetingId).toBe('meeting-uuid');
+      expect(service.updateMeetingRoom).toHaveBeenCalledWith(
+        'meeting-uuid',
+        dto,
+        { userId: 'auth-user-uuid' },
+        { ipAddress: '127.0.0.1', userAgent: 'Mozilla/5.0' },
+      );
+    });
+  });
+
+  describe('cancelMeeting', () => {
+    const mockCancelResponse = new CancelMeetingResponseDto({
+      meetingId: 'meeting-uuid',
+      status: 'cancelled',
+      cancelledAt: new Date('2026-06-01T12:00:00Z'),
+      cancelledBy: 'auth-user-uuid',
+      roomReleased: true,
+      releasedBookingId: 'booking-uuid',
+      notificationStatus: 'queued',
+    });
+
+    it('[T008-1] should cancel meeting successfully and return 200', async () => {
+      const dto = { cancellationReason: 'Phòng không phù hợp' };
+
+      service.cancelMeeting.mockResolvedValue(mockCancelResponse);
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.cancelMeeting(
+        'meeting-uuid',
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+      );
+
+      expect(service.cancelMeeting).toHaveBeenCalledWith(
+        'meeting-uuid',
+        { userId: 'auth-user-uuid' },
+        { ipAddress: '127.0.0.1', userAgent: 'Mozilla/5.0' },
+        'Phòng không phù hợp',
+      );
+      expect(result.success).toBe(true);
+      expect(result.data.meetingId).toBe('meeting-uuid');
+      expect(result.data.status).toBe('cancelled');
+    });
+
+    it('[T008-2] should pass undefined reason when dto is empty', async () => {
+      service.cancelMeeting.mockResolvedValue(mockCancelResponse);
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.cancelMeeting(
+        'meeting-uuid',
+        {},
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+      );
+
+      expect(service.cancelMeeting).toHaveBeenCalledWith(
+        'meeting-uuid',
+        { userId: 'auth-user-uuid' },
+        { ipAddress: '127.0.0.1', userAgent: 'Mozilla/5.0' },
+        undefined,
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('[T008-3] should return 404 when service throws NotFoundException', async () => {
+      service.cancelMeeting.mockRejectedValue(
+        new (require('@nestjs/common').NotFoundException)({
+          success: false,
+          message: 'Cuộc họp không tồn tại',
+          error: { code: 'MEETING_NOT_FOUND' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.cancelMeeting('nonexistent-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+      ).rejects.toThrow();
+    });
+
+    it('[T008-4] should return 403 when service throws ForbiddenException', async () => {
+      service.cancelMeeting.mockRejectedValue(
+        new (require('@nestjs/common').ForbiddenException)({
+          success: false,
+          message: 'Bạn không có quyền hủy cuộc họp này',
+          error: { code: 'FORBIDDEN' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'participant-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.cancelMeeting('meeting-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+      ).rejects.toThrow();
+    });
+
+    it('[T008-5] should return 409 when service throws ConflictException', async () => {
+      service.cancelMeeting.mockRejectedValue(
+        new (require('@nestjs/common').ConflictException)({
+          success: false,
+          message: 'Trạng thái cuộc họp không hợp lệ',
+          error: { code: 'INVALID_MEETING_STATUS' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.cancelMeeting('meeting-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+      ).rejects.toThrow();
     });
   });
 });

@@ -18,6 +18,8 @@ export enum NotificationType {
   MEETING_REQUEST_CREATED = 'meeting_request_created',
   MEETING_REQUEST_APPROVED = 'meeting_request_approved',
   MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
+  MEETING_TIME_UPDATED = 'meeting_time_updated',
+  MEETING_ROOM_UPDATED = 'meeting_room_updated',
 }
 
 export enum NotificationChannel {

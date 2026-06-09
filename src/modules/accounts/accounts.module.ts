@@ -1,4 +1,4 @@
-﻿import { Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DepartmentEntity } from './entities/department.entity.js';
 import { UserEntity } from './entities/user.entity.js';
@@ -16,6 +16,7 @@ import { IsDepartmentCodeUniqueConstraint } from './validators/is-department-cod
 import { IsDepartmentNameUniqueConstraint } from './validators/is-department-name-unique.validator.js';
 import { NoEmojiOrControlConstraint } from './validators/no-emoji-or-control.validator.js';
 import { AdministrationModule } from '../administration/administration.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 /**
  * AccountsModule quáº£n lÃ½ táº¥t cáº£ entities thuá»™c domain Identity & Access:
@@ -41,6 +42,7 @@ import { AdministrationModule } from '../administration/administration.module.js
       FaceProfileEntity,
     ]),
     AdministrationModule,
+    AuthModule,
   ],
   controllers: [UsersController, DepartmentsController],
   providers: [
