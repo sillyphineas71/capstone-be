@@ -76,6 +76,25 @@ File này dùng để hướng dẫn agent khi:
 - Sinh test.
 - Làm việc theo use case/spec/API contract.
 
+Markdown Editing Safety Rules
+
+When editing Vietnamese Markdown files such as spec.md, plan.md, tasks.md, AGENTS.md, or CLAUDE.md, the agent MUST follow these rules:
+
+Before editing a Markdown file, check whether the file has UTF-8 BOM.
+If the file has UTF-8 BOM, read and write it using utf-8-sig.
+Do not use PowerShell heredoc/stdin to pass Vietnamese text into Python because it may corrupt Unicode characters.
+Do not perform broad regex replacements across the whole file for requirement IDs such as FR-*, NFR-*, AC-*, EC-*, or T* unless a dry-run has been reviewed.
+Never allow a regex for FR-* to accidentally match NFR-*.
+Preserve ID padding and numbering format exactly unless the task explicitly asks to renumber.
+Prefer editing small, clearly bounded sections instead of rewriting the entire file.
+If apply_patch fails once because of context mismatch or encoding issues, stop retrying blindly and switch to a safer read/modify/write approach.
+After editing, verify:
+no mojibake or corrupted Vietnamese text
+no duplicated requirement IDs
+no broken numbering or lost zero-padding
+no unintended changes outside the requested section
+For documentation-only tasks, do not run build/test commands unless explicitly requested.
+
 Khi có mâu thuẫn giữa các nguồn tài liệu, ưu tiên theo thứ tự:
 
 1. **Yêu cầu trực tiếp mới nhất của người dùng/team.**
