@@ -2,6 +2,7 @@
 /dist
 /node_modules
 /build
+/uploads
 .gitnexus/
 .claude/
 
@@ -64,3 +65,4 @@ capstone_db_v3_1_balanced_49_tables.sql
 database_v3_2_compact_39_tables.md
 database_v3_2_compact_39_tables.sql
 UseCase_List_SMRMPTS.xlsx
+~$UseCase_List_SMRMPTS.xlsx

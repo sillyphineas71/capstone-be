@@ -1,0 +1,69 @@
+# =============================================================================
+# CAPSTONE Backend — Local Development Services
+# Usage: docker compose -f docker-compose.dev.yml up -d
+# =============================================================================
+# NOTE: PostgreSQL is commented out because .env already points to localhost:5432.
+#       Uncomment the postgres section if you want a containerised database.
+# NOTE: MQTT/Mosquitto is intentionally excluded (not used in v1).
+# =============================================================================
+
+services:
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: capstone-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── MinIO (S3-compatible object storage) ───────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: capstone-minio
+    ports:
+      - "9000:9000"   # API
+      - "9002:9002"   # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9002"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── PostgreSQL (OPTIONAL — uncomment if not running PG locally) ────────────
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: capstone-postgres
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: "123456"
+  #     POSTGRES_DB: capstone_db
+  #   volumes:
+  #     - pg-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:
+  minio-data:
+  # pg-data:
