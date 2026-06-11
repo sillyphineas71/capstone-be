@@ -5,6 +5,16 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { CommonModule } from './common/common.module';
 import { DatabaseModule } from './database/database.module';
+// Infrastructure
+import { envValidationSchema } from './config/env.validation.js';
+import { RedisModule } from './modules/redis/redis.module.js';
+import { MailModule } from './modules/mail/mail.module.js';
+import { StorageModule } from './modules/storage/storage.module.js';
+import { HealthModule } from './modules/health/health.module.js';
+import { QueueModule } from './modules/queue/queue.module.js';
+import { SchedulerModule } from './modules/scheduler/scheduler.module.js';
+import { WebsocketModule } from './modules/websocket/websocket.module.js';
+// Business modules
 import { AccountsModule } from './modules/accounts/accounts.module';
 import { AdministrationModule } from './modules/administration/administration.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -27,14 +37,54 @@ import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TranscriptionModule } from './modules/transcription/transcription.module';
 import { UtilizationModule } from './modules/utilization/utilization.module';
 
+/**
+ * Dev-only module — chỉ load khi NODE_ENV=development.
+ * Tránh import static để không bị tree-shake sai hoặc load ở production.
+ */
+async function loadDevModule(): Promise<(new () => unknown)[]> {
+  if (process.env['NODE_ENV'] === 'development') {
+    const { DevModule } = await import('./modules/dev/dev.module.js');
+    return [DevModule];
+  }
+  return [];
+}
+
+// Resolve dev modules synchronously at module definition time
+const devModules =
+  process.env['NODE_ENV'] === 'development'
+    ? (() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { DevModule } = require('./modules/dev/dev.module');
+        return [DevModule];
+      })()
+    : [];
+
+void loadDevModule; // suppress unused warning
+
 @Module({
   imports: [
+    // ─── Config với Joi validation ──────────────────────────────────────────────
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validationSchema: envValidationSchema,
+      validationOptions: {
+        abortEarly: false,  // hiện tất cả lỗi validation cùng lúc
+        allowUnknown: true, // cho phép env chưa khai báo
+      },
     }),
+    // ─── Core infrastructure (global modules) ──────────────────────────────────
     CommonModule,
     DatabaseModule,
+    RedisModule,
+    MailModule,
+    StorageModule,
+    AdministrationModule,  // @Global — exports BackgroundJobsService, AuditLogsService
+    QueueModule,           // @Global — exports QueueService
+    HealthModule,
+    SchedulerModule,
+    WebsocketModule,
+    // ─── Business modules ──────────────────────────────────────────────────────
     AuthModule,
     AccountsModule,
     MeetingsModule,
@@ -54,7 +104,8 @@ import { UtilizationModule } from './modules/utilization/utilization.module';
     NotificationsModule,
     ReportsModule,
     AnalyticsModule,
-    AdministrationModule,
+    // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
+    ...devModules,
   ],
   controllers: [AppController],
   providers: [
@@ -75,3 +126,4 @@ import { UtilizationModule } from './modules/utilization/utilization.module';
   ],
 })
 export class AppModule {}
+
