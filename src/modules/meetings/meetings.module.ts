@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MeetingRecurrenceRuleEntity } from './entities/meeting-recurrence-rule.entity.js';
 import { MeetingEntity } from './entities/meeting.entity.js';
@@ -17,8 +17,12 @@ import { AuthModule } from '../auth/auth.module.js';
 import { MeetingsController } from './controllers/meetings.controller.js';
 import { MeetingsService } from './services/meetings.service.js';
 import { MeetingRequestReviewService } from './services/meeting-request-review.service.js';
+import { WarningTokenUtil } from './utils/warning-token.util.js';
 import { IsFutureDateConstraint } from './validators/is-future-date.validator.js';
 import { IsAfterStartTimeConstraint } from './validators/is-after-start-time.validator.js';
+import { MediaFileEntity } from '../recording/entities/media-file.entity.js';
+import { RecordingConfigEntity } from '../recording/entities/recording-config.entity.js';
+import { IsIanaTimezoneConstraint } from './validators/is-iana-timezone.validator.js';
 
 /**
  * MeetingsModule quản lý tất cả entities thuộc domain Meeting Core & Scheduling:
@@ -52,14 +56,18 @@ import { IsAfterStartTimeConstraint } from './validators/is-after-start-time.val
       MeetingNoteEntity,
       RoomEntity,
       RoomBookingEntity,
+      MediaFileEntity,
+      RecordingConfigEntity,
     ]),
   ],
   controllers: [MeetingsController],
   providers: [
     MeetingsService,
     MeetingRequestReviewService,
+    WarningTokenUtil,
     IsFutureDateConstraint,
     IsAfterStartTimeConstraint,
+    IsIanaTimezoneConstraint,
   ],
   exports: [TypeOrmModule],
 })

@@ -1,4 +1,4 @@
-import {
+﻿import {
   Body,
   Controller,
   Get,
@@ -15,6 +15,7 @@ import {
   UseGuards,
   UsePipes,
   ValidationPipe,
+  Delete,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -29,6 +30,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 
 import { MeetingsService } from '../services/meetings.service.js';
 import type { UpdateMeetingTimeResponse } from '../services/meetings.service.js';
@@ -41,10 +43,18 @@ import { UpdateMeetingTimeDto } from '../dto/update-meeting-time.dto.js';
 import { UpdateMeetingRoomDto } from '../dto/update-meeting-room.dto.js';
 import type { UpdateMeetingRoomResponseDto } from '../dto/update-meeting-room-response.dto.js';
 import type { AvailableRoomDto } from '../dto/available-room.dto.js';
+import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.js';
+import type { IAddInternalParticipantResponse } from '../dto/add-internal-participant-response.dto.js';
 import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js';
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
 import { ApproveResponseDto } from '../dto/approve-response.dto.js';
 import { RejectResponseDto } from '../dto/reject-response.dto.js';
+import { MyScheduleQueryDto } from '../dto/my-schedule-query.dto.js';
+import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
+import { MyScheduleDetailDto } from '../dto/my-schedule-detail.dto.js';
+import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
+import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
+import { RemoveParticipantResponseDto } from '../dto/remove-participant-response.dto.js';
 
 @Controller()
 export class MeetingsController {
@@ -157,6 +167,44 @@ export class MeetingsController {
       success: true,
       message: 'Danh sách phòng khả dụng',
       data: rooms,
+    };
+  }
+
+  @Post('meetings/:meetingId/participants/internal')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.participant.add.internal')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async addInternalParticipant(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() dto: AddInternalParticipantDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: IAddInternalParticipantResponse;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.meetingsService.addInternalParticipant(
+      meetingId,
+      dto,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+    );
+
+    return {
+      success: true,
+      message: 'Thành viên nội bộ đã được thêm vào cuộc họp thành công',
+      data: result,
     };
   }
 
@@ -389,4 +437,92 @@ export class MeetingsController {
       data: result,
     };
   }
+  @Get('me/schedule')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('schedule.read.self')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async getMySchedule(
+    @CurrentUser() user: { userId: string },
+    @Query() dto: MyScheduleQueryDto,
+  ): Promise<{ success: boolean; message: string; data: ScheduleResponseDto }> {
+    const result = await this.meetingsService.getMySchedule(user.userId, dto);
+
+    return {
+      success: true,
+      message: 'Lay lich thanh cong',
+      data: result,
+    };
+  }
+
+  @Get('me/schedule/:meetingId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('schedule.read.self')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  )
+  async getMyScheduleDetail(
+    @CurrentUser() user: { userId: string },
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+  ): Promise<{ success: boolean; message: string; data: MyScheduleDetailDto }> {
+    const result = await this.meetingsService.getMyScheduleDetail(
+      user.userId,
+      meetingId,
+    );
+
+    return {
+      success: true,
+      message: 'Chi tiet cuoc hop',
+      data: result,
+    };
+  }
+
+  @Delete(':meetingId/participants/:participantUserId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async removeParticipant(
+    @Param() params: RemoveParticipantParamsDto,
+    @Body() body: RemoveParticipantBodyDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: RemoveParticipantResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.meetingsService.removeParticipant(
+      params.meetingId,
+      params.participantUserId,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+      body,
+    );
+
+    return {
+      success: true,
+      message: 'Đã gỡ bỏ thành viên khỏi cuộc họp thành công',
+      data: result,
+    };
+  }
 }
+

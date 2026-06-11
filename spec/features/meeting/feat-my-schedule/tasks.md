@@ -1,4 +1,5 @@
-# Tasks: UC-MM-05 Tra cứu lịch trình cá nhân (My Schedule)
+﻿# Tasks: UC-MM-05 Tra cứu lịch trình cá nhân (My Schedule)
+> **2026-06-11**: Trien khai code toan bo Phase 1-6 (seed, DTOs, service, controller, tests)
 
 **Input**: Design documents from `spec/features/meeting/feat-my-schedule/`
 **Prerequisites**: plan.md ✅, spec.md ✅, research.md ✅, data-model.md ✅, contracts/ ✅, quickstart.md ✅
@@ -13,9 +14,9 @@
 
 **Purpose**: Seed permission, verify entity registration, implement foundational utilities
 
-- [ ] T001 Create seed migration `20260609000002-seed-schedule-read-self.ts` in `src/database/seeds/`: insert `schedule.read.self` into `permissions` table, assign to admin/manager/employee roles via `role_permissions`
-- [ ] T002 [P] Verify and add missing entity imports in `MeetingsModule`: ensure `MediaFileEntity`, `RecordingConfigEntity`, `UserEntity` are registered in `TypeOrmModule.forFeature([...])` of `src/modules/meetings/meetings.module.ts`
-- [ ] T003 [P] Create custom `IsIanaTimezone` validator in `src/modules/meetings/validators/is-iana-timezone.validator.ts` using `Intl.supportedValuesOf('timeZone')` or a helper function
+- [x] T001 Create seed migration `20260609000002-seed-schedule-read-self.ts` in `src/database/seeds/`: insert `schedule.read.self` into `permissions` table, assign to admin/manager/employee roles via `role_permissions`
+- [x] T002 [P] Verify and add missing entity imports in `MeetingsModule`: ensure `MediaFileEntity`, `RecordingConfigEntity`, `UserEntity` are registered in `TypeOrmModule.forFeature([...])` of `src/modules/meetings/meetings.module.ts`
+- [x] T003 [P] Create custom `IsIanaTimezone` validator in `src/modules/meetings/validators/is-iana-timezone.validator.ts` using `Intl.supportedValuesOf('timeZone')` or a helper function
 
 **Checkpoint**: Permission seeded, entities importable, timezone validator ready
 
@@ -25,7 +26,7 @@
 
 **Purpose**: Create all DTO classes with class-validator decorators
 
-- [ ] T004 [P] [US1] Create `MyScheduleQueryDto` in `src/modules/meetings/dto/my-schedule-query.dto.ts` with fields:
+- [x] T004 [P] [US1] Create `MyScheduleQueryDto` in `src/modules/meetings/dto/my-schedule-query.dto.ts` with fields:
   - `view`: `@IsEnum(['day', 'week', 'month'])` required
   - `from`: `@IsDateString({ strict: true })` required — add `@Transform(({ value }) => new Date(value).toISOString())` for ISO normalization
   - `to`: `@IsDateString({ strict: true })` required — add `@Transform(({ value }) => new Date(value).toISOString())` for ISO normalization
@@ -34,12 +35,12 @@
   - `role`: `@IsOptional()` + `@IsEnum(['organizer', 'host', 'attendee'])`
   - `roomId`: `@IsOptional()` + `@IsUUID('4')`
   - `q`: `@IsOptional()` + `@MaxLength(200)` — trim whitespace in service
-- [ ] T005 [P] [US1] Create `ScheduleResponseDto` in `src/modules/meetings/dto/schedule-response.dto.ts` with fields: `items: ScheduleEventDto[]`, `range: ScheduleRangeDto`, `empty: boolean`
-- [ ] T006 [P] [US1] Create `ScheduleEventDto` in `src/modules/meetings/dto/schedule-event.dto.ts` with: `meetingId`, `meetingCode`, `title`, `startTime`, `endTime`, `timezone`, `status`, `userRole`, `room` (nested `ScheduleRoomDto`), `colorKey`, `isCurrent`, `isPast`
-- [ ] T007 [P] [US1] Create `ScheduleRoomDto` in `src/modules/meetings/dto/schedule-room.dto.ts` with: `id`, `roomName`, `roomCode`, `location`
-- [ ] T008 [P] [US1] Create `ScheduleRangeDto` in `src/modules/meetings/dto/schedule-range.dto.ts` with: `view`, `from`, `to`, `timezone`
-- [ ] T009 [P] [US2] Create `MyScheduleDetailDto` in `src/modules/meetings/dto/my-schedule-detail.dto.ts` with nested objects for: `meeting`, `room`, `organizer`, `host`, `participants[]`, `externalParticipants[]`, `agendas[]`, `attachments[]`, `recordingConfig`, `userRole`
-- [ ] T010 [P] [US2] Create nested detail sub-DTOs: `DetailMeetingDto`, `DetailRoomDto`, `DetailUserDto`, `DetailParticipantDto`, `DetailExternalParticipantDto`, `DetailAgendaDto`, `DetailAttachmentDto`, `DetailRecordingConfigDto` in `src/modules/meetings/dto/`
+- [x] T005 [P] [US1] Create `ScheduleResponseDto` in `src/modules/meetings/dto/schedule-response.dto.ts` with fields: `items: ScheduleEventDto[]`, `range: ScheduleRangeDto`, `empty: boolean`
+- [x] T006 [P] [US1] Create `ScheduleEventDto` in `src/modules/meetings/dto/schedule-event.dto.ts` with: `meetingId`, `meetingCode`, `title`, `startTime`, `endTime`, `timezone`, `status`, `userRole`, `room` (nested `ScheduleRoomDto`), `colorKey`, `isCurrent`, `isPast`
+- [x] T007 [P] [US1] Create `ScheduleRoomDto` in `src/modules/meetings/dto/schedule-room.dto.ts` with: `id`, `roomName`, `roomCode`, `location`
+- [x] T008 [P] [US1] Create `ScheduleRangeDto` in `src/modules/meetings/dto/schedule-range.dto.ts` with: `view`, `from`, `to`, `timezone`
+- [x] T009 [P] [US2] Create `MyScheduleDetailDto` in `src/modules/meetings/dto/my-schedule-detail.dto.ts` with nested objects for: `meeting`, `room`, `organizer`, `host`, `participants[]`, `externalParticipants[]`, `agendas[]`, `attachments[]`, `recordingConfig`, `userRole`
+- [x] T010 [P] [US2] Create nested detail sub-DTOs: `DetailMeetingDto`, `DetailRoomDto`, `DetailUserDto`, `DetailParticipantDto`, `DetailExternalParticipantDto`, `DetailAgendaDto`, `DetailAttachmentDto`, `DetailRecordingConfigDto` in `src/modules/meetings/dto/`
 
 **Checkpoint**: All DTOs defined with validators — ready for service implementation
 
@@ -51,7 +52,7 @@
 
 **Independent Test**: Call `GET /api/v1/me/schedule?view=week&from=2026-06-08T00:00:00%2B07:00&to=2026-06-15T00:00:00%2B07:00` → expect 200 with items array
 
-- [ ] T010 [US1] Implement `getMySchedule(userId: string, query: MyScheduleQueryDto)` method in `src/modules/meetings/services/meetings.service.ts`:
+- [x] T010 [US1] Implement `getMySchedule(userId: string, query: MyScheduleQueryDto)` method in `src/modules/meetings/services/meetings.service.ts`:
   - Validate date range (from < to, within view limits) — throw `UnprocessableEntityException` with `INVALID_DATE_RANGE` or `DATE_RANGE_TOO_WIDE`
   - Validate from/to format (strict ISO-8601 with offset) — throw `BadRequestException` with `INVALID_DATETIME_FORMAT`
   - Build TypeORM QueryBuilder on `meetings` table:
@@ -80,15 +81,15 @@
   - Compute `isCurrent` (NOW() BETWEEN start_time AND end_time) and `isPast` (end_time < NOW())
   - Set `colorKey` = status value
   - Return `{ items: ScheduleEventDto[], range: ScheduleRangeDto, empty: boolean }`
-- [ ] T011 [US1] Implement `validateScheduleDateRange()` private helper in service:
+- [x] T011 [US1] Implement `validateScheduleDateRange()` private helper in service:
   - If `from >= to` → throw 422 `INVALID_DATE_RANGE`
   - If `view=month` and diff > 31 days → throw 422 `DATE_RANGE_TOO_WIDE`
   - If `view=week` and diff > 7 days → throw 422 `DATE_RANGE_TOO_WIDE`
   - If `view=day` and diff > 1 day → throw 422 `DATE_RANGE_TOO_WIDE`
-- [ ] T012 [US1] Implement `resolveEffectiveUserRole()` private helper in service:
+- [x] T012 [US1] Implement `resolveEffectiveUserRole()` private helper in service:
   - Priority: organizer_id = userId → 'organizer' > host_id = userId → 'host' > participant → 'attendee'
   - Used both in query (CASE WHEN) and detail endpoint
-- [ ] T013 [US1] Implement `normalizeSearchQuery()` private helper:
+- [x] T013 [US1] Implement `normalizeSearchQuery()` private helper:
   - Trim whitespace from `q`
   - If empty after trim → skip filter entirely (return null)
   - Return `%{q}%` for ILIKE matching
@@ -103,18 +104,18 @@
 
 **Independent Test**: Call `GET /api/v1/me/schedule/{meetingId}` with valid meetingId where user is participant → expect 200 with full detail
 
-- [ ] T014 [US2] Implement `getMyScheduleDetail(userId: string, meetingId: string)` method in `src/modules/meetings/services/meetings.service.ts`:
+- [x] T014 [US2] Implement `getMyScheduleDetail(userId: string, meetingId: string)` method in `src/modules/meetings/services/meetings.service.ts`:
   - Load meeting with `organizer` and `host` relations via `findOne({ where: { id: meetingId }, relations: ['organizer', 'host'] })`
   - If not found → throw `NotFoundException` with `MEETING_NOT_FOUND`
   - Access check: verify user is organizer (meeting.organizerId === userId) OR host (meeting.hostId === userId) OR participant (query `meeting_participants` table)
   - If not authorized → throw `ForbiddenException` with `FORBIDDEN_NOT_PARTICIPANT`
-- [ ] T015 [P] [US2] Load room info: query `rooms` table by `meeting.roomId` (if not null)
-- [ ] T016 [P] [US2] Load participants list: query `meeting_participants` JOIN `users`, sorted by `participant_role`
-- [ ] T017 [P] [US2] Load external participants: query `meeting_external_participants` by `meeting_id`
-- [ ] T018 [P] [US2] Load agendas: query `meeting_agendas` by `meeting_id`, ordered by `sort_order ASC`
-- [ ] T019 [P] [US2] Load attachments: query `media_files` by `reference_type = 'meeting'` AND `reference_id = meetingId`
-- [ ] T020 [P] [US2] Load recording config: query `recording_configs` by `meeting_id` (limit 1)
-- [ ] T021 [US2] Assemble all loaded data into `MyScheduleDetailDto` and return it
+- [x] T015 [P] [US2] Load room info: query `rooms` table by `meeting.roomId` (if not null)
+- [x] T016 [P] [US2] Load participants list: query `meeting_participants` JOIN `users`, sorted by `participant_role`
+- [x] T017 [P] [US2] Load external participants: query `meeting_external_participants` by `meeting_id`
+- [x] T018 [P] [US2] Load agendas: query `meeting_agendas` by `meeting_id`, ordered by `sort_order ASC`
+- [x] T019 [P] [US2] Load attachments: query `media_files` by `reference_type = 'meeting'` AND `reference_id = meetingId`
+- [x] T020 [P] [US2] Load recording config: query `recording_configs` by `meeting_id` (limit 1)
+- [x] T021 [US2] Assemble all loaded data into `MyScheduleDetailDto` and return it
 
 **Checkpoint**: `getMyScheduleDetail()` functional — can return full meeting detail for authorized users
 
@@ -124,7 +125,7 @@
 
 **Goal**: Wire up both endpoints with guards, permissions, and validation
 
-- [ ] T022 [US1] Add controller method `getMySchedule()` in `src/modules/meetings/controllers/meetings.controller.ts`:
+- [x] T022 [US1] Add controller method `getMySchedule()` in `src/modules/meetings/controllers/meetings.controller.ts`:
   ```typescript
   @Get('me/schedule')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -137,7 +138,7 @@
   ```
   - Call `this.meetingsService.getMySchedule(user.userId, dto)`
   - Return `{ success: true, message: 'Lấy lịch thành công', data: result }`
-- [ ] T023 [US2] Add controller method `getMyScheduleDetail()` in `src/modules/meetings/controllers/meetings.controller.ts`:
+- [x] T023 [US2] Add controller method `getMyScheduleDetail()` in `src/modules/meetings/controllers/meetings.controller.ts`:
   ```typescript
   @Get('me/schedule/:meetingId')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -293,3 +294,5 @@ Phase 1 Setup & Foundational ──► Phase 2 DTOs
 ### MVP Scope
 
 Complete **Phases 1–3 + T022** for a working schedule list endpoint (US1). This covers the primary use case: user can view their schedule. Add US2 (Phase 4) and tests (Phase 6) incrementally.
+
+> **2026-06-11**: Hoan thanh code toan bo feature (build pass, cac test moi cho service/controller/DTO da duoc tao)

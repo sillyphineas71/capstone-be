@@ -1,4 +1,4 @@
-import {
+﻿import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -20,6 +20,7 @@ export enum NotificationType {
   MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   MEETING_ROOM_UPDATED = 'meeting_room_updated',
+  MEETING_PARTICIPANT_REMOVED = 'meeting_participant_removed',
 }
 
 export enum NotificationChannel {
@@ -148,3 +149,4 @@ export class NotificationEntity {
   @JoinColumn({ name: 'created_by' })
   createdByUser: UserEntity | null;
 }
+

@@ -14,16 +14,14 @@ export async function seedMeetingCancelPermissions(
         name: 'Hủy cuộc họp của mình',
         module: 'meetings',
         action: 'cancel.own',
-        description:
-          'Cho phép hủy cuộc họp khi user là organizer hoặc host',
+        description: 'Cho phép hủy cuộc họp khi user là organizer hoặc host',
       },
       {
         code: 'meeting.cancel.any',
         name: 'Hủy bất kỳ cuộc họp nào',
         module: 'meetings',
         action: 'cancel.any',
-        description:
-          'Cho phép hủy bất kỳ cuộc họp nào (bỏ qua quyền sở hữu)',
+        description: 'Cho phép hủy bất kỳ cuộc họp nào (bỏ qua quyền sở hữu)',
       },
     ];
 

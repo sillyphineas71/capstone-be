@@ -1,9 +1,10 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { MeetingsController } from './meetings.controller.js';
 import { MeetingsService } from '../services/meetings.service.js';
 import { MeetingRequestReviewService } from '../services/meeting-request-review.service.js';
 import { CreateMeetingDto } from '../dto/create-meeting.dto.js';
 import { UpdateMeetingRoomDto } from '../dto/update-meeting-room.dto.js';
+import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { CreateMeetingResponseDto } from '../dto/create-meeting-response.dto.js';
@@ -11,7 +12,14 @@ import { CancelMeetingResponseDto } from '../dto/cancel-meeting-response.dto.js'
 
 describe('MeetingsController', () => {
   let controller: MeetingsController;
-  let service: { create: jest.Mock; getAvailableRooms: jest.Mock; getAvailableRoomsForMeeting: jest.Mock; updateMeetingRoom: jest.Mock; cancelMeeting: jest.Mock };
+  let service: {
+    create: jest.Mock;
+    getAvailableRooms: jest.Mock;
+    getAvailableRoomsForMeeting: jest.Mock;
+    updateMeetingRoom: jest.Mock;
+    cancelMeeting: jest.Mock;
+    addInternalParticipant: jest.Mock;
+  };
   let reviewService: { approve: jest.Mock; reject: jest.Mock };
 
   const mockMeetingResponse = new CreateMeetingResponseDto({
@@ -39,6 +47,7 @@ describe('MeetingsController', () => {
       getAvailableRoomsForMeeting: jest.fn(),
       updateMeetingRoom: jest.fn(),
       cancelMeeting: jest.fn(),
+      addInternalParticipant: jest.fn(),
     };
 
     reviewService = {
@@ -294,7 +303,13 @@ describe('MeetingsController', () => {
       } as unknown as Request;
 
       await expect(
-        controller.cancelMeeting('nonexistent-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+        controller.cancelMeeting(
+          'nonexistent-uuid',
+          {},
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
       ).rejects.toThrow();
     });
 
@@ -312,7 +327,13 @@ describe('MeetingsController', () => {
       } as unknown as Request;
 
       await expect(
-        controller.cancelMeeting('meeting-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+        controller.cancelMeeting(
+          'meeting-uuid',
+          {},
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
       ).rejects.toThrow();
     });
 
@@ -330,8 +351,201 @@ describe('MeetingsController', () => {
       } as unknown as Request;
 
       await expect(
-        controller.cancelMeeting('meeting-uuid', {}, request, '127.0.0.1', 'Mozilla/5.0'),
+        controller.cancelMeeting(
+          'meeting-uuid',
+          {},
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
       ).rejects.toThrow();
+    });
+  });
+
+  describe('addInternalParticipant', () => {
+    const mockResponse = {
+      participantId: 'saved-participant-id',
+      meetingId: 'meeting-uuid',
+      userId: 'invited-user-uuid',
+      role: 'attendee',
+      status: 'pending',
+    };
+
+    it('should return 200 with success response', async () => {
+      const dto: AddInternalParticipantDto = {
+        userId: 'invited-user-uuid',
+      };
+
+      service.addInternalParticipant.mockResolvedValue(mockResponse);
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.addInternalParticipant(
+        'meeting-uuid',
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+      );
+
+      expect(service.addInternalParticipant).toHaveBeenCalledWith(
+        'meeting-uuid',
+        dto,
+        { userId: 'auth-user-uuid' },
+        { ipAddress: '127.0.0.1', userAgent: 'Mozilla/5.0' },
+      );
+      expect(result.success).toBe(true);
+      expect(result.data.participantId).toBe('saved-participant-id');
+      expect(result.data.userId).toBe('invited-user-uuid');
+    });
+
+    it('should return 422 when service throws UnprocessableEntityException', async () => {
+      const dto: AddInternalParticipantDto = {
+        userId: 'invited-user-uuid',
+      };
+
+      service.addInternalParticipant.mockRejectedValue(
+        new (require('@nestjs/common').UnprocessableEntityException)({
+          success: false,
+          message: 'Phát hiện xung đột lịch hoặc cảnh báo sức chứa',
+          error: { code: 'WARNING_CONFIRMATION_REQUIRED' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.addInternalParticipant(
+          'meeting-uuid',
+          dto,
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('should return 404 when service throws NotFoundException', async () => {
+      const dto: AddInternalParticipantDto = {
+        userId: 'nonexistent-user',
+      };
+
+      service.addInternalParticipant.mockRejectedValue(
+        new (require('@nestjs/common').NotFoundException)({
+          success: false,
+          message: 'Không tìm thấy cuộc họp',
+          error: { code: 'MEETING_NOT_FOUND' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.addInternalParticipant(
+          'meeting-uuid',
+          dto,
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('should return 409 when service throws ConflictException', async () => {
+      const dto: AddInternalParticipantDto = {
+        userId: 'existing-user-uuid',
+      };
+
+      service.addInternalParticipant.mockRejectedValue(
+        new (require('@nestjs/common').ConflictException)({
+          success: false,
+          message: 'Người dùng đã có trong danh sách tham gia cuộc họp',
+          error: { code: 'PARTICIPANT_ALREADY_EXISTS' },
+        }),
+      );
+
+      const request = {
+        user: { userId: 'auth-user-uuid' },
+      } as unknown as Request;
+
+      await expect(
+        controller.addInternalParticipant(
+          'meeting-uuid',
+          dto,
+          request,
+          '127.0.0.1',
+          'Mozilla/5.0',
+        ),
+      ).rejects.toThrow();
+    });
+  });
+  describe('getMySchedule', () => {
+    beforeEach(() => {
+      service.getMySchedule = jest.fn();
+    });
+
+    it('[T039] should return 200 with correct response structure', async () => {
+      const mockResponse = {
+        items: [],
+        range: { view: 'week', from: '2026-06-08T00:00:00.000Z', to: '2026-06-15T00:00:00.000Z', timezone: 'Asia/Ho_Chi_Minh' },
+        empty: true,
+      };
+      service.getMySchedule.mockResolvedValue(mockResponse);
+
+      const result = await controller.getMySchedule(
+        { userId: 'auth-user-uuid' },
+        { view: 'week', from: '2026-06-08T00:00:00+07:00', to: '2026-06-15T00:00:00+07:00' } as any,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data).toBeDefined();
+      expect(result.data.empty).toBe(true);
+    });
+  });
+
+  describe('getMyScheduleDetail', () => {
+    beforeEach(() => {
+      service.getMyScheduleDetail = jest.fn();
+    });
+
+    it('[T041] should throw 403 for non-participant', async () => {
+      const meetingId = '550e8400-e29b-41d4-a716-446655440000';
+      const forbiddenError = new (require('@nestjs/common').ForbiddenException)({
+        success: false,
+        message: 'Ban khong co quyen xem cuoc hop nay',
+        error: { code: 'FORBIDDEN_NOT_PARTICIPANT', details: { meetingId } },
+      });
+      service.getMyScheduleDetail.mockRejectedValue(forbiddenError);
+
+      await expect(
+        controller.getMyScheduleDetail(
+          { userId: 'other-user-uuid' },
+          meetingId,
+        ),
+      ).rejects.toThrow(require('@nestjs/common').ForbiddenException);
+    });
+
+    it('[T042] should throw 404 for non-existent meeting', async () => {
+      const meetingId = '550e8400-e29b-41d4-a716-446655440000';
+      const notFoundError = new (require('@nestjs/common').NotFoundException)({
+        success: false,
+        message: 'Khong tim thay cuoc hop',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+      service.getMyScheduleDetail.mockRejectedValue(notFoundError);
+
+      await expect(
+        controller.getMyScheduleDetail(
+          { userId: 'auth-user-uuid' },
+          meetingId,
+        ),
+      ).rejects.toThrow(require('@nestjs/common').NotFoundException);
     });
   });
 });

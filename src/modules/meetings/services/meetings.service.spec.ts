@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   DataSource,
@@ -61,13 +61,20 @@ import {
   AccountStatus,
 } from '../../accounts/entities/user.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
+import { WarningTokenUtil } from '../utils/warning-token.util.js';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 describe('MeetingsService', () => {
   let service: MeetingsService;
   let dataSource: jest.Mocked<DataSource>;
   let em: jest.Mocked<EntityManager>;
+  let module: TestingModule;
   let mockRepo: jest.Mocked<
-    Pick<Repository<any>, 'findOne' | 'find' | 'count' | 'save' | 'create' | 'createQueryBuilder'>
+    Pick<
+      Repository<any>,
+      'findOne' | 'find' | 'count' | 'save' | 'create' | 'createQueryBuilder'
+    >
   >;
 
   const mockQueryBuilder = () => {
@@ -76,6 +83,7 @@ describe('MeetingsService', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       innerJoin: jest.fn().mockReturnThis(),
+      innerJoinAndSelect: jest.fn().mockReturnThis(),
       distinct: jest.fn().mockReturnThis(),
       getMany: jest.fn(),
       getOne: jest.fn(),
@@ -117,10 +125,19 @@ describe('MeetingsService', () => {
       getRepository: jest.fn().mockReturnValue(mockRepo),
     } as unknown as jest.Mocked<DataSource>;
 
-    const module: TestingModule = await Test.createTestingModule({
+    module = await Test.createTestingModule({
       providers: [
         MeetingsService,
         { provide: DataSource, useValue: dataSource },
+        WarningTokenUtil,
+        {
+          provide: JwtService,
+          useValue: { sign: jest.fn(), verify: jest.fn() },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
       ],
     }).compile();
 
@@ -839,10 +856,25 @@ describe('MeetingsService', () => {
       mockRepo.findOne.mockImplementation(async (options?: any) => {
         const id = options?.where?.id;
         if (id === 'meeting-uuid') return customMocks?.meeting ?? fakeMeeting;
-        if (id === 'old-room-uuid') return { id: 'old-room-uuid', roomName: 'Old Room', capacity: 10 };
+        if (id === 'old-room-uuid')
+          return { id: 'old-room-uuid', roomName: 'Old Room', capacity: 10 };
         if (id === 'new-room-uuid') return customMocks?.newRoom ?? fakeNewRoom;
-        if (id === 'small-room') return { id: 'small-room', roomName: 'Small', capacity: 2, isActive: true, currentStatus: 'available' };
-        if (id === 'null-cap-room') return { id: 'null-cap-room', roomName: 'NullCap', capacity: null, isActive: true, currentStatus: 'available' };
+        if (id === 'small-room')
+          return {
+            id: 'small-room',
+            roomName: 'Small',
+            capacity: 2,
+            isActive: true,
+            currentStatus: 'available',
+          };
+        if (id === 'null-cap-room')
+          return {
+            id: 'null-cap-room',
+            roomName: 'NullCap',
+            capacity: null,
+            isActive: true,
+            currentStatus: 'available',
+          };
         return null;
       });
     }
@@ -895,7 +927,13 @@ describe('MeetingsService', () => {
     });
 
     it('[T012-2] should update room successfully for host', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, hostId: 'host-uuid', organizerId: 'other-uuid' } });
+      setupFindOneMocks({
+        meeting: {
+          ...fakeMeeting,
+          hostId: 'host-uuid',
+          organizerId: 'other-uuid',
+        },
+      });
       setupAttendeeCountMocks(5);
       setupTransactionMocks();
       mockRepo.find.mockResolvedValue([]);
@@ -914,7 +952,13 @@ describe('MeetingsService', () => {
     });
 
     it('[T012-3] should update room successfully for admin', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, organizerId: 'other-uuid', hostId: 'other-uuid' } });
+      setupFindOneMocks({
+        meeting: {
+          ...fakeMeeting,
+          organizerId: 'other-uuid',
+          hostId: 'other-uuid',
+        },
+      });
 
       mockRepo.count.mockResolvedValue(5);
 
@@ -942,34 +986,69 @@ describe('MeetingsService', () => {
     });
 
     it('[T012-4] should throw 403 for participant', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, organizerId: 'other-uuid', hostId: 'other-uuid' } });
+      setupFindOneMocks({
+        meeting: {
+          ...fakeMeeting,
+          organizerId: 'other-uuid',
+          hostId: 'other-uuid',
+        },
+      });
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, { userId: 'participant-uuid' }, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          { userId: 'participant-uuid' },
+          clientContext,
+        ),
       ).rejects.toThrow(ForbiddenException);
     });
 
     it('[T012-5] should throw 409 for non-SCHEDULED meeting', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, status: MeetingStatus.COMPLETED } });
+      setupFindOneMocks({
+        meeting: { ...fakeMeeting, status: MeetingStatus.COMPLETED },
+      });
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
     it('[T012-6] should throw 409 when meeting already started', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, startTime: new Date('2026-06-01T10:00:00Z') } });
+      setupFindOneMocks({
+        meeting: {
+          ...fakeMeeting,
+          startTime: new Date('2026-06-01T10:00:00Z'),
+        },
+      });
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
     it('[T012-7] should throw 422 when same room', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, roomId: 'new-room-uuid' } });
+      setupFindOneMocks({
+        meeting: { ...fakeMeeting, roomId: 'new-room-uuid' },
+      });
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
@@ -985,12 +1064,19 @@ describe('MeetingsService', () => {
         .mockReturnValueOnce(conflictQb);
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
     it('[T012-9] should throw 422 when capacity too low without override', async () => {
-      setupFindOneMocks({ newRoom: { ...fakeNewRoom, id: 'small-room', capacity: 2 } });
+      setupFindOneMocks({
+        newRoom: { ...fakeNewRoom, id: 'small-room', capacity: 2 },
+      });
       mockRepo.count.mockResolvedValue(10);
       const extQb = mockQueryBuilder();
       extQb.getRawOne.mockResolvedValue({ total: 0 });
@@ -1001,12 +1087,19 @@ describe('MeetingsService', () => {
         .mockReturnValueOnce(conflictQb);
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'small-room' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'small-room' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
     it('[T012-10] should override capacity warning and pass', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, roomId: 'old-room-uuid' } });
+      setupFindOneMocks({
+        meeting: { ...fakeMeeting, roomId: 'old-room-uuid' },
+      });
       mockRepo.count.mockResolvedValue(10);
       const extQb = mockQueryBuilder();
       extQb.getRawOne.mockResolvedValue({ total: 0 });
@@ -1031,22 +1124,46 @@ describe('MeetingsService', () => {
     });
 
     it('[T012-11] should throw 422 when new room capacity is null', async () => {
-      setupFindOneMocks({ newRoom: { id: 'null-cap-room', roomName: 'NullCap', capacity: null, isActive: true, currentStatus: 'available' } });
+      setupFindOneMocks({
+        newRoom: {
+          id: 'null-cap-room',
+          roomName: 'NullCap',
+          capacity: null,
+          isActive: true,
+          currentStatus: 'available',
+        },
+      });
       mockRepo.count.mockResolvedValue(5);
       const extQb = mockQueryBuilder();
       extQb.getRawOne.mockResolvedValue({ total: 0 });
       mockRepo.createQueryBuilder.mockReturnValueOnce(extQb);
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'null-cap-room' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'null-cap-room' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
     it('[T012-12] should throw 409 for recurring series master', async () => {
-      setupFindOneMocks({ meeting: { ...fakeMeeting, recurrenceRuleId: 'rule-uuid', parentMeetingId: null } });
+      setupFindOneMocks({
+        meeting: {
+          ...fakeMeeting,
+          recurrenceRuleId: 'rule-uuid',
+          parentMeetingId: null,
+        },
+      });
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1057,7 +1174,12 @@ describe('MeetingsService', () => {
       em.save.mockRejectedValue(new Error('DB Error'));
 
       await expect(
-        service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext),
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow('DB Error');
     });
 
@@ -1069,7 +1191,12 @@ describe('MeetingsService', () => {
       (mockRepo.create as jest.Mock).mockImplementation((data: any) => data);
       mockRepo.save.mockResolvedValue({ id: 'saved-id' });
 
-      const result = await service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext);
+      const result = await service.updateMeetingRoom(
+        'meeting-uuid',
+        { newRoomId: 'new-room-uuid' },
+        authUser,
+        clientContext,
+      );
 
       expect(result.meetingId).toBe('meeting-uuid');
       expect(dataSource.transaction).toHaveBeenCalled();
@@ -1081,7 +1208,12 @@ describe('MeetingsService', () => {
       setupTransactionMocks();
       mockRepo.save.mockRejectedValue(new Error('Send failed'));
 
-      const result = await service.updateMeetingRoom('meeting-uuid', { newRoomId: 'new-room-uuid' }, authUser, clientContext);
+      const result = await service.updateMeetingRoom(
+        'meeting-uuid',
+        { newRoomId: 'new-room-uuid' },
+        authUser,
+        clientContext,
+      );
 
       expect(result.notificationStatus).toBe('failed');
     });
@@ -1133,35 +1265,33 @@ describe('MeetingsService', () => {
       },
     ];
 
-    const FULL_USAGE = [
-      { id: 'usage-uuid', usage_status: 'not_started' },
-    ];
+    const FULL_USAGE = [{ id: 'usage-uuid', usage_status: 'not_started' }];
 
     const CANCELLED_AT = new Date('2026-06-01T12:00:00Z');
 
     function setupEmQueryFullFlow(cancelledAt: Date = CANCELLED_AT) {
       em.query
-        .mockResolvedValueOnce(LOCKED_MEETING)           // 4a: Lock meeting
-        .mockResolvedValueOnce(FULL_BOOKING)               // 4c: Lock bookings
-        .mockResolvedValueOnce(FULL_USAGE)                // 4d: Lock usages
-        .mockResolvedValueOnce(undefined)                 // 4e: Update booking
-        .mockResolvedValueOnce(undefined)                 // 4f: Update usage
-        .mockResolvedValueOnce(undefined)                 // 4g: Insert room event
-        .mockResolvedValueOnce(undefined)                 // 4h: Insert audit (release)
-        .mockResolvedValueOnce(undefined)                 // 4i: Update meeting
+        .mockResolvedValueOnce(LOCKED_MEETING) // 4a: Lock meeting
+        .mockResolvedValueOnce(FULL_BOOKING) // 4c: Lock bookings
+        .mockResolvedValueOnce(FULL_USAGE) // 4d: Lock usages
+        .mockResolvedValueOnce(undefined) // 4e: Update booking
+        .mockResolvedValueOnce(undefined) // 4f: Update usage
+        .mockResolvedValueOnce(undefined) // 4g: Insert room event
+        .mockResolvedValueOnce(undefined) // 4h: Insert audit (release)
+        .mockResolvedValueOnce(undefined) // 4i: Update meeting
         .mockResolvedValueOnce([{ updated_at: cancelledAt }]) // 4j: Select updated_at
-        .mockResolvedValueOnce(undefined)                 // 4k: Insert meeting event
-        .mockResolvedValueOnce(undefined);                // 4l: Insert audit (cancel)
+        .mockResolvedValueOnce(undefined) // 4k: Insert meeting event
+        .mockResolvedValueOnce(undefined); // 4l: Insert audit (cancel)
     }
 
     function setupEmQueryNoBooking() {
       em.query
-        .mockResolvedValueOnce(LOCKED_MEETING)           // 4a: Lock meeting
-        .mockResolvedValueOnce([])                         // 4c: No bookings
-        .mockResolvedValueOnce(undefined)                 // 4i: Update meeting
+        .mockResolvedValueOnce(LOCKED_MEETING) // 4a: Lock meeting
+        .mockResolvedValueOnce([]) // 4c: No bookings
+        .mockResolvedValueOnce(undefined) // 4i: Update meeting
         .mockResolvedValueOnce([{ updated_at: CANCELLED_AT }]) // 4j: Select updated_at
-        .mockResolvedValueOnce(undefined)                 // 4k: Insert meeting event
-        .mockResolvedValueOnce(undefined);                // 4l: Insert audit (cancel)
+        .mockResolvedValueOnce(undefined) // 4k: Insert meeting event
+        .mockResolvedValueOnce(undefined); // 4l: Insert audit (cancel)
     }
 
     function setupNotificationMocks() {
@@ -1170,9 +1300,7 @@ describe('MeetingsService', () => {
           { userId: 'participant-1' },
           { userId: 'participant-2' },
         ])
-        .mockResolvedValueOnce([
-          { email: 'external@example.com' },
-        ]);
+        .mockResolvedValueOnce([{ email: 'external@example.com' }]);
       (mockRepo.create as jest.Mock).mockImplementation((data: any) => data);
       mockRepo.save.mockResolvedValue({ id: 'saved-id' });
     }
@@ -1186,7 +1314,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, 'Lý do',
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        'Lý do',
       );
 
       expect(result.meetingId).toBe('meeting-uuid');
@@ -1209,7 +1340,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.status).toBe('cancelled');
@@ -1223,14 +1357,20 @@ describe('MeetingsService', () => {
       });
       mockRepo.findOne.mockResolvedValue(meeting);
 
-      const permQb = { ...mockQueryBuilder(), getOne: jest.fn().mockResolvedValue({ id: 'user' }) };
+      const permQb = {
+        ...mockQueryBuilder(),
+        getOne: jest.fn().mockResolvedValue({ id: 'user' }),
+      };
       mockRepo.createQueryBuilder.mockReturnValue(permQb);
 
       setupEmQueryFullFlow();
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', { userId: 'admin-uuid' }, clientContext, undefined,
+        'meeting-uuid',
+        { userId: 'admin-uuid' },
+        clientContext,
+        undefined,
       );
 
       expect(result.status).toBe('cancelled');
@@ -1245,12 +1385,18 @@ describe('MeetingsService', () => {
       });
       mockRepo.findOne.mockResolvedValue(meeting);
 
-      const permQb = { ...mockQueryBuilder(), getOne: jest.fn().mockResolvedValue(null) };
+      const permQb = {
+        ...mockQueryBuilder(),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
       mockRepo.createQueryBuilder.mockReturnValue(permQb);
 
       await expect(
         service.cancelMeeting(
-          'meeting-uuid', { userId: 'participant-uuid' }, clientContext, undefined,
+          'meeting-uuid',
+          { userId: 'participant-uuid' },
+          clientContext,
+          undefined,
         ),
       ).rejects.toThrow(ForbiddenException);
     });
@@ -1262,12 +1408,18 @@ describe('MeetingsService', () => {
       });
       mockRepo.findOne.mockResolvedValue(meeting);
 
-      const permQb = { ...mockQueryBuilder(), getOne: jest.fn().mockResolvedValue(null) };
+      const permQb = {
+        ...mockQueryBuilder(),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
       mockRepo.createQueryBuilder.mockReturnValue(permQb);
 
       await expect(
         service.cancelMeeting(
-          'meeting-uuid', { userId: 'other-with-own' }, clientContext, undefined,
+          'meeting-uuid',
+          { userId: 'other-with-own' },
+          clientContext,
+          undefined,
         ),
       ).rejects.toThrow(ForbiddenException);
     });
@@ -1280,7 +1432,12 @@ describe('MeetingsService', () => {
       );
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1290,7 +1447,12 @@ describe('MeetingsService', () => {
       );
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1300,7 +1462,12 @@ describe('MeetingsService', () => {
       );
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1310,7 +1477,12 @@ describe('MeetingsService', () => {
       );
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1320,7 +1492,12 @@ describe('MeetingsService', () => {
       mockRepo.findOne.mockResolvedValue(null);
 
       await expect(
-        service.cancelMeeting('nonexistent-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'nonexistent-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -1330,7 +1507,12 @@ describe('MeetingsService', () => {
       );
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -1354,7 +1536,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, 'Lý do cụ thể',
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        'Lý do cụ thể',
       );
 
       expect(result.roomReleased).toBe(true);
@@ -1362,15 +1547,16 @@ describe('MeetingsService', () => {
     });
 
     it('[T006-12] should set roomReleased=false when no booking exists', async () => {
-      mockRepo.findOne.mockResolvedValue(
-        buildMeeting({ roomId: null }),
-      );
+      mockRepo.findOne.mockResolvedValue(buildMeeting({ roomId: null }));
 
       setupEmQueryNoBooking();
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.roomReleased).toBe(false);
@@ -1383,7 +1569,9 @@ describe('MeetingsService', () => {
       em.query
         .mockResolvedValueOnce(LOCKED_MEETING)
         .mockResolvedValueOnce(FULL_BOOKING)
-        .mockResolvedValueOnce([{ id: 'usage-uuid', usage_status: 'not_started' }])
+        .mockResolvedValueOnce([
+          { id: 'usage-uuid', usage_status: 'not_started' },
+        ])
         .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce(undefined)
@@ -1395,7 +1583,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.roomReleased).toBe(true);
@@ -1408,18 +1599,21 @@ describe('MeetingsService', () => {
       em.query
         .mockResolvedValueOnce(LOCKED_MEETING)
         .mockResolvedValueOnce(FULL_BOOKING)
-        .mockResolvedValueOnce([])                           // No usage
-        .mockResolvedValueOnce(undefined)                     // Update booking
-        .mockResolvedValueOnce(undefined)                     // Insert room event
-        .mockResolvedValueOnce(undefined)                     // Insert audit (release)
-        .mockResolvedValueOnce(undefined)                     // Update meeting
+        .mockResolvedValueOnce([]) // No usage
+        .mockResolvedValueOnce(undefined) // Update booking
+        .mockResolvedValueOnce(undefined) // Insert room event
+        .mockResolvedValueOnce(undefined) // Insert audit (release)
+        .mockResolvedValueOnce(undefined) // Update meeting
         .mockResolvedValueOnce([{ updated_at: CANCELLED_AT }])
-        .mockResolvedValueOnce(undefined)                     // Insert meeting event
-        .mockResolvedValueOnce(undefined);                    // Insert audit (cancel)
+        .mockResolvedValueOnce(undefined) // Insert meeting event
+        .mockResolvedValueOnce(undefined); // Insert audit (cancel)
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.roomReleased).toBe(true);
@@ -1434,7 +1628,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.status).toBe('cancelled');
@@ -1450,7 +1647,10 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       const roomEventCall = em.query.mock.calls[5];
@@ -1471,12 +1671,17 @@ describe('MeetingsService', () => {
       mockRepo.save.mockResolvedValue({ id: 'notif-id' });
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.notificationStatus).toBe('queued');
       const createCalls = (mockRepo.create as jest.Mock).mock.calls;
-      const notifArg = createCalls.find((args: any[]) => args[0]?.subject?.startsWith('[CANCELLED]'));
+      const notifArg = createCalls.find((args: any[]) =>
+        args[0]?.subject?.startsWith('[CANCELLED]'),
+      );
       expect(notifArg).toBeDefined();
     });
 
@@ -1491,7 +1696,10 @@ describe('MeetingsService', () => {
       mockRepo.save.mockResolvedValue({ id: 'notif-id' });
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, 'Hết giờ',
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        'Hết giờ',
       );
 
       expect(result.notificationStatus).toBe('queued');
@@ -1511,11 +1719,14 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
-      const auditCalls = em.query.mock.calls.filter(
-        (call: any[]) => call[0].includes('INSERT INTO audit_logs'),
+      const auditCalls = em.query.mock.calls.filter((call: any[]) =>
+        call[0].includes('INSERT INTO audit_logs'),
       );
       expect(auditCalls.length).toBe(2);
       expect(auditCalls[0][0]).toContain('release_room');
@@ -1527,7 +1738,8 @@ describe('MeetingsService', () => {
     it('[T006-20] should throw 409 for concurrent cancel request', async () => {
       mockRepo.findOne.mockResolvedValue(buildMeeting());
 
-      em.query.mockResolvedValueOnce([                    // 4a: Lock meeting (already cancelled)
+      em.query.mockResolvedValueOnce([
+        // 4a: Lock meeting (already cancelled)
         {
           id: 'meeting-uuid',
           status: 'cancelled',
@@ -1542,7 +1754,12 @@ describe('MeetingsService', () => {
       ]);
 
       await expect(
-        service.cancelMeeting('meeting-uuid', authUser, clientContext, undefined),
+        service.cancelMeeting(
+          'meeting-uuid',
+          authUser,
+          clientContext,
+          undefined,
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1561,7 +1778,10 @@ describe('MeetingsService', () => {
         .mockResolvedValue({ id: 'audit-id' });
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.meetingId).toBe('meeting-uuid');
@@ -1576,7 +1796,10 @@ describe('MeetingsService', () => {
       mockRepo.find.mockRejectedValue(new Error('DB error'));
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, undefined,
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        undefined,
       );
 
       expect(result.meetingId).toBe('meeting-uuid');
@@ -1593,11 +1816,817 @@ describe('MeetingsService', () => {
       setupNotificationMocks();
 
       const result = await service.cancelMeeting(
-        'meeting-uuid', authUser, clientContext, '  lý do  ',
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        '  lý do  ',
       );
 
       expect(result.status).toBe('cancelled');
       expect(result.meetingId).toBe('meeting-uuid');
+    });
+  });
+
+  describe('addInternalParticipant', () => {
+    const authUser = { userId: 'auth-user-uuid' };
+    const clientContext = { ipAddress: '127.0.0.1', userAgent: 'test' };
+
+    const fakeMeeting = {
+      id: 'meeting-uuid',
+      meetingCode: 'MT-20260701-001',
+      title: 'Họp dự án',
+      roomId: 'room-uuid',
+      organizerId: 'auth-user-uuid',
+      hostId: 'auth-user-uuid',
+      startTime: new Date('2026-07-01T10:00:00Z'),
+      endTime: new Date('2026-07-01T11:00:00Z'),
+      visibilityLevel: 'PUBLIC',
+      status: MeetingStatus.SCHEDULED,
+      recurrenceRuleId: null,
+      parentMeetingId: null,
+      deletedAt: null,
+    };
+
+    function setupFindOneMocks(customMocks?: Record<string, any>) {
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const id = options?.where?.id;
+        const userId = options?.where?.userId;
+        const meetingId = options?.where?.meetingId;
+        const configKey = options?.where?.configKey;
+
+        if (id === 'meeting-uuid') return customMocks?.meeting ?? fakeMeeting;
+        if (id === 'invited-user-uuid')
+          return {
+            id: 'invited-user-uuid',
+            accountStatus: AccountStatus.ACTIVE,
+          };
+        if (id === 'inactive-user-uuid')
+          return {
+            id: 'inactive-user-uuid',
+            accountStatus: AccountStatus.INACTIVE,
+          };
+        if (id === 'room-uuid')
+          return { id: 'room-uuid', capacity: 10, isActive: true };
+        if (id === 'small-room')
+          return { id: 'small-room', capacity: 2, isActive: true };
+        if (userId === 'invited-user-uuid' && meetingId === 'meeting-uuid')
+          return null;
+        if (userId === 'existing-user-uuid' && meetingId === 'meeting-uuid')
+          return { id: 'existing-participant-id' };
+        if (configKey === 'meeting.capacity_policy')
+          return customMocks?.capacityConfig ?? { configValue: 'warning' };
+        return null;
+      });
+    }
+
+    function setupAttendeeCountMocks(count: number) {
+      mockRepo.count.mockResolvedValue(count);
+    }
+
+    function setupConflictMock(conflicts: any[] = []) {
+      const conflictQb = mockQueryBuilder();
+      conflictQb.getMany.mockResolvedValue(conflicts);
+      return conflictQb;
+    }
+
+    function setupTransactionMocks() {
+      em.findOne.mockImplementation(async (_entity: any, options?: any) => {
+        if (options?.lock) return fakeMeeting;
+        return null;
+      });
+      em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
+      em.save.mockImplementation(async (_entity: any, data: any) => {
+        if (data && typeof data === 'object') {
+          if (!data.id) data.id = 'saved-participant-id';
+          return data;
+        }
+        return _entity;
+      });
+    }
+
+    it('should add participant successfully with no warnings', async () => {
+      setupFindOneMocks();
+      setupAttendeeCountMocks(3);
+      setupTransactionMocks();
+      mockRepo.find.mockResolvedValue([]);
+      (mockRepo.create as jest.Mock).mockImplementation((data: any) => data);
+      mockRepo.save.mockResolvedValue({ id: 'saved-notification-id' });
+      mockRepo.createQueryBuilder.mockReturnValue(setupConflictMock([]));
+
+      const result = await service.addInternalParticipant(
+        'meeting-uuid',
+        { userId: 'invited-user-uuid' },
+        authUser,
+        clientContext,
+      );
+
+      expect(result.participantId).toBe('saved-participant-id');
+      expect(result.meetingId).toBe('meeting-uuid');
+      expect(result.userId).toBe('invited-user-uuid');
+      expect(result.role).toBe('attendee');
+      expect(result.status).toBe('pending');
+    });
+
+    it('should throw 404 when meeting not found', async () => {
+      mockRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.addInternalParticipant(
+          'nonexistent-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw 404 when meeting is soft-deleted', async () => {
+      mockRepo.findOne.mockResolvedValue({
+        ...fakeMeeting,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw 400 when meeting status is not SCHEDULED or IN_PROGRESS', async () => {
+      mockRepo.findOne.mockResolvedValue({
+        ...fakeMeeting,
+        status: MeetingStatus.COMPLETED,
+      });
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw 404 when invited user not found', async () => {
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        if (options?.where?.id === 'meeting-uuid') return fakeMeeting;
+        return null;
+      });
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'nonexistent-user' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw 404 when invited user is inactive', async () => {
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const id = options?.where?.id;
+        if (id === 'meeting-uuid') return fakeMeeting;
+        if (id === 'inactive-user-uuid')
+          return {
+            id: 'inactive-user-uuid',
+            accountStatus: AccountStatus.INACTIVE,
+          };
+        return null;
+      });
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'inactive-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw 409 when participant already exists', async () => {
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const id = options?.where?.id;
+        const userId = options?.where?.userId;
+        const meetingId = options?.where?.meetingId;
+        if (id === 'meeting-uuid') return fakeMeeting;
+        if (id === 'existing-user-uuid')
+          return {
+            id: 'existing-user-uuid',
+            accountStatus: AccountStatus.ACTIVE,
+          };
+        if (userId === 'existing-user-uuid' && meetingId === 'meeting-uuid')
+          return { id: 'existing-participant-id' };
+        return null;
+      });
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'existing-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw 422 with warningToken when schedule conflict exists', async () => {
+      setupFindOneMocks();
+      mockRepo.count.mockResolvedValue(3);
+      const conflictQb = mockQueryBuilder();
+      conflictQb.getMany.mockResolvedValue([
+        {
+          userId: 'invited-user-uuid',
+          meeting: {
+            id: 'conflict-meeting',
+            title: 'Conflicting Meeting',
+            startTime: new Date('2026-07-01T09:30:00Z'),
+            endTime: new Date('2026-07-01T10:30:00Z'),
+          },
+        },
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(conflictQb);
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('should add participant when warnings are overridden with valid token', async () => {
+      setupFindOneMocks();
+      setupAttendeeCountMocks(3);
+      setupTransactionMocks();
+      mockRepo.find.mockResolvedValue([]);
+      (mockRepo.create as jest.Mock).mockImplementation((data: any) => data);
+      mockRepo.save.mockResolvedValue({ id: 'saved-notification-id' });
+      mockRepo.createQueryBuilder.mockReturnValue(setupConflictMock([]));
+      const jwtService = module.get<JwtService>(JwtService);
+      (jwtService.verify as jest.Mock).mockReturnValue({
+        sub: 'warning:meet-add-participant',
+        meetingId: 'meeting-uuid',
+        userId: 'invited-user-uuid',
+        warnings: [],
+      });
+
+      const result = await service.addInternalParticipant(
+        'meeting-uuid',
+        {
+          userId: 'invited-user-uuid',
+          overrideWarnings: true,
+          warningToken: 'valid-token',
+        },
+        authUser,
+        clientContext,
+      );
+
+      expect(result.participantId).toBe('saved-participant-id');
+    });
+
+    it('should throw 422 for room capacity policy=block', async () => {
+      setupFindOneMocks({ capacityConfig: { configValue: 'block' } });
+      mockRepo.count.mockResolvedValue(10);
+      mockRepo.createQueryBuilder.mockReturnValue(setupConflictMock([]));
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('should throw 422 with capacity warning when no override', async () => {
+      setupFindOneMocks();
+      mockRepo.count.mockResolvedValue(10);
+      mockRepo.createQueryBuilder.mockReturnValue(setupConflictMock([]));
+
+      await expect(
+        service.addInternalParticipant(
+          'meeting-uuid',
+          { userId: 'invited-user-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+  });
+  // ════════════════════════════════════════════════════════════════
+  //  My Schedule (UC-MM-05)
+  // ════════════════════════════════════════════════════════════════
+
+  function buildScheduleQb(overrides?: Partial<Record<string, jest.Mock>>) {
+    const qb: any = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      addGroupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      distinct: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+      getOne: jest.fn().mockResolvedValue(null),
+      getRawMany: jest.fn().mockResolvedValue([]),
+      getRawOne: jest.fn().mockResolvedValue(null),
+      ...overrides,
+    };
+    return qb;
+  }
+
+  describe('getMySchedule', () => {
+    it('[T024] should return events for valid range', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'Sprint Planning',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'organizer',
+          room_id: 'room-1',
+          room_name: 'Phong A',
+          room_code: 'RM-A',
+          room_location: 'Tang 5',
+          is_current: false,
+          is_past: false,
+        },
+        {
+          m_id: 'meeting-2',
+          m_meeting_code: 'MTG-002',
+          m_title: 'Daily Standup',
+          m_start_time: new Date('2026-06-09T09:00:00Z'),
+          m_end_time: new Date('2026-06-09T09:15:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'completed',
+          effective_user_role: 'attendee',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: true,
+        },
+        {
+          m_id: 'meeting-3',
+          m_meeting_code: 'MTG-003',
+          m_title: '1:1 with Manager',
+          m_start_time: new Date('2026-06-11T14:00:00Z'),
+          m_end_time: new Date('2026-06-11T14:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'attendee',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+        timezone: 'Asia/Ho_Chi_Minh',
+      } as any);
+
+      expect(result.items).toHaveLength(3);
+      expect(result.empty).toBe(false);
+      expect(result.items[0].meetingId).toBe('meeting-1');
+      expect(result.items[0].userRole).toBe('organizer');
+      expect(result.items[1].userRole).toBe('attendee');
+      expect(result.items[1].isPast).toBe(true);
+      expect(result.range.view).toBe('week');
+    });
+
+    it('[T025] overlap boundary - meeting starts before from, ends after from', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'Crossing Meeting',
+          m_start_time: new Date('2026-06-07T23:00:00+07:00'),
+          m_end_time: new Date('2026-06-08T01:00:00+07:00'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'attendee',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'day',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-09T00:00:00+07:00',
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].title).toBe('Crossing Meeting');
+    });
+
+    it('[T026] empty range returns empty items with empty=true', async () => {
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue([]) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'day',
+        from: '2025-01-01T00:00:00+07:00',
+        to: '2025-01-02T00:00:00+07:00',
+      } as any);
+
+      expect(result.items).toHaveLength(0);
+      expect(result.empty).toBe(true);
+    });
+
+    it('[T027] effectiveUserRole - user is both organizer and participant, returns one event with organizer', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'My Meeting',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'organizer',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].userRole).toBe('organizer');
+    });
+
+    it('[T028] role filter - user is organizer, filter role=attendee excludes meeting', async () => {
+      const rawEvents: any[] = [];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+        role: 'attendee',
+      } as any);
+
+      expect(result.items).toHaveLength(0);
+      expect(result.empty).toBe(true);
+    });
+
+    it('[T029] q search on meeting_code', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-2026-001',
+          m_title: 'Test Meeting',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'attendee',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+        q: '001',
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].meetingCode).toBe('MTG-2026-001');
+    });
+
+    it('[T030] q whitespace-only ignored, all results returned', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'Sprint Planning',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'organizer',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+        q: '   ',
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+    });
+
+    it('[T031] invalid date range from >= to throws 422', async () => {
+      await expect(
+        service.getMySchedule('user-1', {
+          view: 'week',
+          from: '2026-06-15T00:00:00+07:00',
+          to: '2026-06-08T00:00:00+07:00',
+        } as any),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('[T032] range too wide - 60 days for month view throws 422', async () => {
+      await expect(
+        service.getMySchedule('user-1', {
+          view: 'month',
+          from: '2026-01-01T00:00:00+07:00',
+          to: '2026-03-01T00:00:00+07:00',
+        } as any),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('[T033] cancelled meeting still appears with status=cancelled', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-cancelled',
+          m_meeting_code: 'MTG-CAN',
+          m_title: 'Cancelled Meeting',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'cancelled',
+          effective_user_role: 'organizer',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].status).toBe('cancelled');
+      expect(result.items[0].colorKey).toBe('cancelled');
+    });
+
+    it('[T034] filter by status returns only matching meetings', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'Ongoing Meeting',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T10:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'in_progress',
+          effective_user_role: 'organizer',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+        status: ['in_progress'],
+      } as any);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].status).toBe('in_progress');
+    });
+
+    it('[T035] sort by start_time ASC', async () => {
+      const rawEvents = [
+        {
+          m_id: 'meeting-1',
+          m_meeting_code: 'MTG-001',
+          m_title: 'Later Meeting',
+          m_start_time: new Date('2026-06-10T10:00:00Z'),
+          m_end_time: new Date('2026-06-10T11:00:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'attendee',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+        {
+          m_id: 'meeting-2',
+          m_meeting_code: 'MTG-002',
+          m_title: 'Earlier Meeting',
+          m_start_time: new Date('2026-06-10T09:00:00Z'),
+          m_end_time: new Date('2026-06-10T09:30:00Z'),
+          m_timezone: 'Asia/Ho_Chi_Minh',
+          m_status: 'scheduled',
+          effective_user_role: 'organizer',
+          room_id: null,
+          room_name: null,
+          room_code: null,
+          room_location: null,
+          is_current: false,
+          is_past: false,
+        },
+      ];
+
+      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.getMySchedule('user-1', {
+        view: 'week',
+        from: '2026-06-08T00:00:00+07:00',
+        to: '2026-06-15T00:00:00+07:00',
+      } as any);
+
+      expect(result.items).toHaveLength(2);
+    });
+  });
+
+  describe('getMyScheduleDetail', () => {
+    it('[T036] returns full detail for participant', async () => {
+      const mockMeeting = {
+        id: 'meeting-uuid',
+        meetingCode: 'MTG-001',
+        title: 'Test Meeting',
+        description: 'A test meeting',
+        startTime: new Date('2026-06-10T09:00:00Z'),
+        endTime: new Date('2026-06-10T10:30:00Z'),
+        timezone: 'Asia/Ho_Chi_Minh',
+        status: 'scheduled',
+        organizerId: 'org-user-id',
+        hostId: 'host-user-id',
+        roomId: 'room-uuid',
+        recurrenceRuleId: null,
+        parentMeetingId: null,
+        deletedAt: null,
+        organizer: {
+          id: 'org-user-id',
+          fullName: 'Org User',
+          email: 'org@test.com',
+        },
+        host: {
+          id: 'host-user-id',
+          fullName: 'Host User',
+          email: 'host@test.com',
+        },
+      };
+
+      const mockRoom = {
+        id: 'room-uuid',
+        roomName: 'Phong A',
+        roomCode: 'RM-A',
+        siteName: 'Building B',
+        areaName: 'Floor 1',
+        locationDescription: 'Phong A, Tang 1',
+      };
+
+      const mockParticipants = [
+        {
+          id: 'part-1',
+          userId: 'participant-1',
+          meetingId: 'meeting-uuid',
+          participantRole: 'member',
+          invitationStatus: 'accepted',
+          attendanceStatus: 'not_yet',
+          user: { id: 'participant-1', fullName: 'Part User', email: 'part@test.com' },
+        },
+      ];
+
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const where = options?.where ?? {};
+        const id = where.id;
+        if (id === 'meeting-uuid') return mockMeeting;
+        if (id === 'room-uuid') return mockRoom;
+        if (where.meetingId === 'meeting-uuid' && where.userId === 'participant-1') return mockParticipants[0];
+        if (where.meetingId === 'meeting-uuid') return null;
+        if (where.meetingId) return null;
+        return null;
+      });
+
+      const findQb = buildScheduleQb({ getMany: jest.fn().mockResolvedValue(mockParticipants) });
+      mockRepo.createQueryBuilder.mockReturnValue(findQb);
+
+      const findMock = jest.fn().mockResolvedValue([]);
+      mockRepo.find = findMock;
+      mockRepo.find.mockResolvedValue([]);
+
+      const result = await service.getMyScheduleDetail('participant-1', 'meeting-uuid');
+
+      expect(result.meeting.meetingId).toBe('meeting-uuid');
+      expect(result.room).toBeDefined();
+      expect(result.meeting.title).toBe('Test Meeting');
+      expect(result.userRole).toBe('attendee');
+    });
+
+    it('[T037] non-participant throws 403', async () => {
+      const mockMeeting = {
+        id: 'meeting-uuid',
+        organizerId: 'org-user-id',
+        hostId: 'host-user-id',
+        deletedAt: null,
+      };
+
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const where = options?.where ?? {};
+        if (where.id === 'meeting-uuid') return mockMeeting;
+        if (where.id === 'room-uuid') return null;
+        if (where.meetingId === 'meeting-uuid' && where.userId === 'other-user') return null;
+        return null;
+      });
+
+      const qb = buildScheduleQb({ getMany: jest.fn().mockResolvedValue([]) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await expect(
+        service.getMyScheduleDetail('other-user', 'meeting-uuid'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('[T038] meeting not found throws 404', async () => {
+      mockRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getMyScheduleDetail('user-1', 'non-existent-id'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

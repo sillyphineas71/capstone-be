@@ -7,13 +7,21 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, EntityManager, In, Not, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  Not,
+  MoreThanOrEqual,
+  LessThanOrEqual,
+} from 'typeorm';
 
 import {
   MeetingEntity,
   MeetingStatus,
   MeetingType,
   MeetingMode,
+  MeetingVisibilityLevel,
 } from '../entities/meeting.entity.js';
 import {
   MeetingRequestEntity,
@@ -34,6 +42,7 @@ import {
   MeetingEventType,
   MeetingEventSourceType,
 } from '../entities/meeting-event.entity.js';
+import { MeetingAgendaEntity } from '../entities/meeting-agenda.entity.js';
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { RoomEventEntity } from '../../rooms/entities/room-event.entity.js';
 import {
@@ -68,12 +77,42 @@ import { UpdateMeetingTimeDto } from '../dto/update-meeting-time.dto.js';
 import { UpdateMeetingRoomDto } from '../dto/update-meeting-room.dto.js';
 import type { UpdateMeetingRoomResponseDto } from '../dto/update-meeting-room-response.dto.js';
 import type { CancelMeetingResponseDto } from '../dto/cancel-meeting-response.dto.js';
-import type { AvailableRoomDto, CapacityWarning } from '../dto/available-room.dto.js';
+import type {
+  AvailableRoomDto,
+  CapacityWarning,
+} from '../dto/available-room.dto.js';
 import {
   BackgroundJobEntity,
   BackgroundJobType,
   BackgroundJobStatus,
 } from '../../administration/entities/background-job.entity.js';
+import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
+import { RecordingConfigEntity } from '../../recording/entities/recording-config.entity.js';
+import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.js';
+import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
+import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
+import { RemoveParticipantResponseDto } from '../dto/remove-participant-response.dto.js';
+import { RemoveScope } from '../types/remove-scope.type.js';
+import type { IAddInternalParticipantResponse } from '../dto/add-internal-participant-response.dto.js';
+import { MyScheduleQueryDto } from '../dto/my-schedule-query.dto.js';
+import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
+import { ScheduleEventDto } from '../dto/schedule-event.dto.js';
+import { ScheduleRoomDto } from '../dto/schedule-room.dto.js';
+import { ScheduleRangeDto } from '../dto/schedule-range.dto.js';
+import {
+  MyScheduleDetailDto,
+  DetailMeetingDto,
+  DetailRoomDto,
+  DetailUserDto,
+  DetailParticipantDto,
+} from '../dto/my-schedule-detail.dto.js';
+import {
+  DetailExternalParticipantDto,
+  DetailAgendaDto,
+  DetailAttachmentDto,
+  DetailRecordingConfigDto,
+} from '../dto/my-schedule-detail.dto.js';
+import { WarningTokenUtil } from '../utils/warning-token.util.js';
 
 export interface AuthUser {
   userId: string;
@@ -118,7 +157,10 @@ interface ParticipantConflictResult {
 export class MeetingsService {
   private readonly logger = new Logger(MeetingsService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly warningTokenUtil: WarningTokenUtil,
+  ) {}
 
   async getRoomAvailability(
     roomId: string,
@@ -1244,7 +1286,8 @@ export class MeetingsService {
       const locationParts: string[] = [];
       if (room.siteName) locationParts.push(room.siteName);
       if (room.areaName) locationParts.push(room.areaName);
-      if (room.locationDescription) locationParts.push(room.locationDescription);
+      if (room.locationDescription)
+        locationParts.push(room.locationDescription);
 
       result.push({
         roomId: room.id,
@@ -1310,7 +1353,8 @@ export class MeetingsService {
     if (meeting.status !== MeetingStatus.SCHEDULED) {
       throw new ConflictException({
         success: false,
-        message: 'Chỉ có thể đổi phòng cho cuộc họp đang ở trạng thái Đã lên lịch.',
+        message:
+          'Chỉ có thể đổi phòng cho cuộc họp đang ở trạng thái Đã lên lịch.',
         error: {
           code: 'INVALID_MEETING_STATUS',
           details: { meetingId, currentStatus: meeting.status },
@@ -1381,7 +1425,10 @@ export class MeetingsService {
       throw new UnprocessableEntityException({
         success: false,
         message: 'Phòng họp này hiện không khả dụng.',
-        error: { code: 'ROOM_NOT_AVAILABLE', details: { roomId: dto.newRoomId } },
+        error: {
+          code: 'ROOM_NOT_AVAILABLE',
+          details: { roomId: dto.newRoomId },
+        },
       });
     }
 
@@ -1517,14 +1564,10 @@ export class MeetingsService {
         await em.save(RoomBookingEntity, newBooking);
         newBookingId = newBooking.id;
 
-        await em.update(
-          MeetingEntity,
-          meetingId,
-          {
-            roomId: dto.newRoomId,
-            updatedBy: authUser.userId,
-          },
-        );
+        await em.update(MeetingEntity, meetingId, {
+          roomId: dto.newRoomId,
+          updatedBy: authUser.userId,
+        });
 
         await em.save(MeetingEventEntity, {
           meetingId,
@@ -1669,26 +1712,29 @@ export class MeetingsService {
           },
           createdBy: authUser.userId,
         });
-      await this.dataSource.getRepository(NotificationEntity).save(notification);
+      await this.dataSource
+        .getRepository(NotificationEntity)
+        .save(notification);
 
-      const emailRecipients = allUserIds.filter(
-        (id) => id !== authUser.userId,
-      );
-      if (emailRecipients.length > 0 || (externalParticipants || []).length > 0) {
-          const bgJob = this.dataSource
-            .getRepository(BackgroundJobEntity)
-            .create({
-              jobType: BackgroundJobType.SEND_EMAIL,
-              relatedEntityType: 'meeting',
-              relatedEntityId: meetingId,
-              status: BackgroundJobStatus.QUEUED,
-              inputJson: {
-                notificationId: notification.id,
-                template: 'meeting_room_updated',
-                maxRetries: 3,
-              } as any,
-              requestedBy: authUser.userId,
-            });
+      const emailRecipients = allUserIds.filter((id) => id !== authUser.userId);
+      if (
+        emailRecipients.length > 0 ||
+        (externalParticipants || []).length > 0
+      ) {
+        const bgJob = this.dataSource
+          .getRepository(BackgroundJobEntity)
+          .create({
+            jobType: BackgroundJobType.SEND_EMAIL,
+            relatedEntityType: 'meeting',
+            relatedEntityId: meetingId,
+            status: BackgroundJobStatus.QUEUED,
+            inputJson: {
+              notificationId: notification.id,
+              template: 'meeting_room_updated',
+              maxRetries: 3,
+            },
+            requestedBy: authUser.userId,
+          });
         await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
       }
 
@@ -1702,7 +1748,7 @@ export class MeetingsService {
 
     return {
       meetingId,
-      oldRoom: { id: meeting.roomId!, name: oldRoomName },
+      oldRoom: { id: meeting.roomId, name: oldRoomName },
       newRoom: { id: dto.newRoomId, name: newRoomName },
       oldBookingId: oldBooking?.id || '',
       newBookingId,
@@ -1765,7 +1811,7 @@ export class MeetingsService {
     if (meeting.status !== MeetingStatus.SCHEDULED) {
       const message =
         meeting.status === MeetingStatus.IN_PROGRESS
-          ? 'Cuộc họp đã bắt đầu. Bạn không thể hủy mà chỉ có thể chọn \'Kết thúc sớm\'.'
+          ? "Cuộc họp đã bắt đầu. Bạn không thể hủy mà chỉ có thể chọn 'Kết thúc sớm'."
           : 'Trạng thái cuộc họp không hợp lệ để thực hiện thao tác này.';
       throw new ConflictException({
         success: false,
@@ -1785,7 +1831,7 @@ export class MeetingsService {
       throw new ConflictException({
         success: false,
         message:
-          'Cuộc họp đã bắt đầu. Bạn không thể hủy mà chỉ có thể chọn \'Kết thúc sớm\'.',
+          "Cuộc họp đã bắt đầu. Bạn không thể hủy mà chỉ có thể chọn 'Kết thúc sớm'.",
         error: {
           code: 'MEETING_ALREADY_STARTED',
           details: {
@@ -1951,9 +1997,7 @@ export class MeetingsService {
             meetingId,
             authUser.userId,
             `Cuộc họp "${lockedMeetingData.title}" đã bị hủy.` +
-              (cancellationReason
-                ? ` Lý do: ${cancellationReason}`
-                : ''),
+              (cancellationReason ? ` Lý do: ${cancellationReason}` : ''),
             JSON.stringify({ status: lockedMeetingData.status }),
             JSON.stringify({ status: 'cancelled' }),
             JSON.stringify({
@@ -2059,10 +2103,12 @@ export class MeetingsService {
             action: 'cancel_meeting',
             meetingId,
             reason: cancellationReason ?? null,
-          } as any,
+          },
           createdBy: authUser.userId,
         });
-      await this.dataSource.getRepository(NotificationEntity).save(notification);
+      await this.dataSource
+        .getRepository(NotificationEntity)
+        .save(notification);
 
       if (allUserIds.length > 0 || allRecipientEmails.length > 0) {
         const bgJob = this.dataSource
@@ -2075,7 +2121,7 @@ export class MeetingsService {
             inputJson: {
               notificationId: notification.id,
               template: 'meeting_cancelled',
-            } as any,
+            },
             requestedBy: authUser.userId,
           });
         await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
@@ -2111,6 +2157,782 @@ export class MeetingsService {
     };
   }
 
+  async addInternalParticipant(
+    meetingId: string,
+    dto: AddInternalParticipantDto,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<IAddInternalParticipantResponse> {
+    // ── Step 1: Pre-validation ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    if (
+      meeting.status !== MeetingStatus.SCHEDULED &&
+      meeting.status !== MeetingStatus.IN_PROGRESS
+    ) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Cuộc họp không ở trạng thái cho phép thêm thành viên',
+        error: {
+          code: 'INVALID_MEETING_STATUS',
+          details: {
+            currentStatus: meeting.status,
+            allowedStatuses: ['scheduled', 'in_progress'],
+          },
+        },
+      });
+    }
+
+    const invitedUser = await this.dataSource
+      .getRepository(UserEntity)
+      .findOne({
+        where: { id: dto.userId },
+      });
+
+    if (!invitedUser || invitedUser.accountStatus !== AccountStatus.ACTIVE) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Người dùng không tồn tại hoặc không hoạt động',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    const existingParticipant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({
+        where: { meetingId, userId: dto.userId },
+      });
+
+    if (existingParticipant) {
+      throw new ConflictException({
+        success: false,
+        message: 'Người dùng đã có trong danh sách tham gia cuộc họp',
+        error: { code: 'PARTICIPANT_ALREADY_EXISTS', details: {} },
+      });
+    }
+
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+
+    if (
+      meeting.visibilityLevel === MeetingVisibilityLevel.PRIVATE &&
+      !isOwner
+    ) {
+      const isAdmin = await this.checkUserPermission(
+        authUser.userId,
+        'admin.all',
+      );
+      if (!isAdmin) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền thêm thành viên vào cuộc họp này',
+          error: {
+            code: 'FORBIDDEN_ACCESS',
+            details: {
+              reason:
+                'Meeting là Private và bạn không phải Organizer/Host/Admin',
+            },
+          },
+        });
+      }
+    }
+
+    // ── Step 2: Warning check ──
+    const warnings: Array<{ type: string; message: string }> = [];
+
+    const conflictResult = await this.checkParticipantConflicts(
+      [dto.userId],
+      meeting.startTime,
+      meeting.endTime,
+    );
+
+    for (const conflict of conflictResult.conflicts) {
+      warnings.push({
+        type: 'SCHEDULE_CONFLICT',
+        message: `Người dùng đang có cuộc họp trùng giờ: '${conflict.meetingTitle}' (${conflict.startTime.toISOString()}-${conflict.endTime.toISOString()}).`,
+      });
+    }
+
+    if (meeting.roomId) {
+      const attendeeCount = await this.getAttendeeCount(meetingId);
+      const room = await this.dataSource.getRepository(RoomEntity).findOne({
+        where: { id: meeting.roomId },
+      });
+
+      if (room && attendeeCount + 1 > room.capacity) {
+        const capacityConfig = await this.dataSource
+          .getRepository(SystemConfigEntity)
+          .findOne({
+            where: {
+              configKey: 'meeting.capacity_policy',
+              isActive: true,
+            },
+          });
+
+        const capacityPolicy =
+          (capacityConfig?.configValue as string) ?? 'warning';
+
+        if (capacityPolicy === 'block') {
+          throw new UnprocessableEntityException({
+            success: false,
+            message:
+              'Phòng họp đã đạt sức chứa tối đa. Chính sách hiện tại không cho phép thêm người.',
+            error: {
+              code: 'ROOM_CAPACITY_EXCEEDED',
+              details: {
+                capacityPolicy: 'block',
+                reason: "meeting.capacity_policy = 'block'",
+              },
+            },
+          });
+        }
+
+        warnings.push({
+          type: 'ROOM_CAPACITY_WARNING',
+          message: `Sức chứa phòng (${room.capacity} người) không đủ cho tổng số người tham dự (${attendeeCount + 1} người).`,
+        });
+      }
+    }
+
+    if (
+      warnings.length > 0 &&
+      (dto.overrideWarnings !== true || !dto.warningToken)
+    ) {
+      const warningToken = this.warningTokenUtil.generateToken(
+        meetingId,
+        dto.userId,
+        warnings,
+      );
+
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Phát hiện xung đột lịch hoặc cảnh báo sức chứa. Vui lòng xác nhận.',
+        error: {
+          code: 'WARNING_CONFIRMATION_REQUIRED',
+          details: {
+            warningToken,
+            warnings,
+          },
+        },
+      });
+    }
+
+    // ── Step 3: Override processing ──
+    if (dto.overrideWarnings === true && dto.warningToken) {
+      const verifyResult = this.warningTokenUtil.verifyToken(
+        dto.warningToken,
+        meetingId,
+        dto.userId,
+      );
+
+      if (!verifyResult.valid) {
+        throw new BadRequestException({
+          success: false,
+          message: 'warningToken không hợp lệ hoặc đã hết hạn',
+          error: { code: 'INVALID_WARNING_TOKEN', details: {} },
+        });
+      }
+
+      const hasCapacityWarning = (verifyResult.warnings ?? []).some(
+        (w) => w.type === 'ROOM_CAPACITY_WARNING',
+      );
+
+      if (hasCapacityWarning) {
+        const capacityConfig = await this.dataSource
+          .getRepository(SystemConfigEntity)
+          .findOne({
+            where: {
+              configKey: 'meeting.capacity_policy',
+              isActive: true,
+            },
+          });
+
+        const capacityPolicy =
+          (capacityConfig?.configValue as string) ?? 'warning';
+
+        if (capacityPolicy === 'block') {
+          throw new UnprocessableEntityException({
+            success: false,
+            message:
+              'Phòng họp đã đạt sức chứa tối đa. Chính sách hiện tại không cho phép thêm người.',
+            error: {
+              code: 'ROOM_CAPACITY_EXCEEDED',
+              details: {
+                capacityPolicy: 'block',
+                reason: "meeting.capacity_policy = 'block'",
+              },
+            },
+          });
+        }
+
+        const canOverride = await this.checkUserPermission(
+          authUser.userId,
+          'meeting.participant.override_capacity',
+        );
+
+        if (!canOverride) {
+          throw new UnprocessableEntityException({
+            success: false,
+            message:
+              'Phòng họp đã đạt sức chứa tối đa. Chính sách hiện tại không cho phép thêm người.',
+            error: {
+              code: 'ROOM_CAPACITY_EXCEEDED',
+              details: {
+                capacityPolicy: 'warning',
+                reason: 'Người dùng không có quyền override_capacity',
+              },
+            },
+          });
+        }
+      }
+    }
+
+    // ── Step 4: Transaction ──
+    let participantId: string;
+
+    try {
+      participantId = await this.dataSource.transaction(async (em) => {
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        const dupCheck = await em.findOne(MeetingParticipantEntity, {
+          where: { meetingId, userId: dto.userId },
+        });
+
+        if (dupCheck) {
+          throw new ConflictException({
+            success: false,
+            message: 'Người dùng đã có trong danh sách tham gia cuộc họp',
+            error: { code: 'PARTICIPANT_ALREADY_EXISTS', details: {} },
+          });
+        }
+
+        const participant = em.create(MeetingParticipantEntity, {
+          meetingId,
+          userId: dto.userId,
+          participantRole: ParticipantRole.ATTENDEE,
+          invitationStatus: InvitationStatus.PENDING,
+          attendanceRequired: true,
+          isRequired: true,
+          invitedBy: authUser.userId,
+        });
+        await em.save(MeetingParticipantEntity, participant);
+
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'ADD_PARTICIPANT',
+          entityType: 'meeting_participant',
+          entityId: participant.id,
+          newValueJson: {
+            userId: dto.userId,
+            meetingId,
+            invitedBy: authUser.userId,
+          } as any,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        return participant.id;
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for addInternalParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 5: Post-transaction async (best-effort) ──
+    try {
+      const notification = this.dataSource
+        .getRepository(NotificationEntity)
+        .create({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.IN_APP,
+          subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
+          content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIdsJson: [dto.userId],
+          priority: NotificationPriority.NORMAL,
+          deliveryStatus: NotificationDeliveryStatus.QUEUED,
+          payloadJson: { invitedBy: authUser.userId },
+          createdBy: authUser.userId,
+        });
+      await this.dataSource
+        .getRepository(NotificationEntity)
+        .save(notification);
+
+      const bgJob = this.dataSource.getRepository(BackgroundJobEntity).create({
+        jobType: BackgroundJobType.SEND_EMAIL,
+        relatedEntityType: 'meeting',
+        relatedEntityId: meetingId,
+        status: BackgroundJobStatus.QUEUED,
+        inputJson: {
+          notificationId: notification.id,
+          template: 'meeting_invite',
+        },
+        requestedBy: authUser.userId,
+      });
+      await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `Failed to create notification for add participant: ${(notifError as Error).message}`,
+      );
+    }
+
+    if (meeting.status === MeetingStatus.IN_PROGRESS) {
+      this.logger.log(
+        `[Device Sync] Meeting ${meetingId}: participant ${dto.userId} added. Device sync event emitted (best-effort).`,
+      );
+    }
+
+    return {
+      participantId,
+      meetingId,
+      userId: dto.userId,
+      role: 'attendee',
+      status: 'pending',
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  My Schedule (UC-MM-05)
+  // ════════════════════════════════════════════════════════════════
+
+  async getMySchedule(
+    userId: string,
+    query: MyScheduleQueryDto,
+  ): Promise<ScheduleResponseDto> {
+    const { view, from, to, status, role, roomId, q } = query;
+
+    // ── 1. Validate date range ──
+    this.validateScheduleDateRange(view, from, to);
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    // ── 2. Build QueryBuilder ──
+    const qb = this.dataSource
+      .getRepository(MeetingEntity)
+      .createQueryBuilder('m')
+      .select([
+        'm.id',
+        'm.meeting_code',
+        'm.title',
+        'm.start_time',
+        'm.end_time',
+        'm.timezone',
+        'm.status',
+      ])
+      .addSelect(
+        `CASE WHEN m.organizer_id = :userId THEN 'organizer'
+                   WHEN m.host_id = :userId THEN 'host'
+                   ELSE 'attendee' END`,
+        'effective_user_role',
+      )
+      .addSelect(
+        `CASE WHEN NOW() BETWEEN m.start_time AND m.end_time THEN true ELSE false END`,
+        'is_current',
+      )
+      .addSelect(
+        `CASE WHEN m.end_time < NOW() THEN true ELSE false END`,
+        'is_past',
+      )
+      .addSelect('r.id', 'room_id')
+      .addSelect('r.room_name', 'room_name')
+      .addSelect('r.room_code', 'room_code')
+      .addSelect(
+        `COALESCE(r.site_name || ', ' || r.area_name, r.location_description, '')`,
+        'room_location',
+      )
+      .leftJoin(
+        'meeting_participants',
+        'mp',
+        'mp.meeting_id = m.id AND mp.user_id = :userId',
+        { userId },
+      )
+      .leftJoin('rooms', 'r', 'r.id = m.room_id')
+      .where(
+        '(m.organizer_id = :userId OR m.host_id = :userId OR mp.id IS NOT NULL)',
+        { userId },
+      )
+      .andWhere('m.status NOT IN (:...excludedStatuses)', {
+        excludedStatuses: ['draft', 'pending_approval'],
+      })
+      .andWhere('m.start_time < :to', { to: toDate })
+      .andWhere('m.end_time > :from', { from: fromDate })
+      .andWhere('m.deleted_at IS NULL')
+      .groupBy('m.id')
+      .addGroupBy('r.id')
+      .addGroupBy('effective_user_role')
+      .orderBy('m.start_time', 'ASC');
+
+    // Optional: status filter
+    if (status && status.length > 0) {
+      qb.andWhere('m.status IN (:...status)', { status });
+    }
+
+    // Optional: role filter
+    if (role) {
+      qb.andWhere(
+        `CASE WHEN m.organizer_id = :userId2 THEN 'organizer'
+                   WHEN m.host_id = :userId2 THEN 'host'
+                   ELSE 'attendee' END = :role`,
+        { userId2: userId, role },
+      );
+    }
+
+    // Optional: roomId filter
+    if (roomId) {
+      qb.andWhere('m.room_id = :roomId', { roomId });
+    }
+
+    // Optional: q search (ILIKE on title and meeting_code)
+    const normalizedQ = this.normalizeSearchQuery(q);
+    if (normalizedQ) {
+      qb.andWhere('(m.title ILIKE :q OR m.meeting_code ILIKE :q)', {
+        q: normalizedQ,
+      });
+    }
+
+    // ── 3. Execute query ──
+    let rawResults: any[];
+    try {
+      rawResults = await qb.getRawMany();
+    } catch (err) {
+      this.logger.error(
+        `getMySchedule query failed: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      throw err;
+    }
+
+    // ── 4. Map to DTOs ──
+    const items = rawResults.map((row) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+      const room: ScheduleRoomDto | null = row.room_id
+        ? new ScheduleRoomDto({
+            id: row.room_id,
+            roomName: row.room_name ?? '',
+            roomCode: row.room_code ?? '',
+            location: row.room_location ?? '',
+          })
+        : null;
+
+      const startTime =
+        row.m_start_time instanceof Date
+          ? row.m_start_time.toISOString()
+          : new Date(row.m_start_time).toISOString();
+      const endTime =
+        row.m_end_time instanceof Date
+          ? row.m_end_time.toISOString()
+          : new Date(row.m_end_time).toISOString();
+      const isCurrent = row.is_current === true || row.is_current === 'true';
+      const isPast = row.is_past === true || row.is_past === 'true';
+
+      return new ScheduleEventDto({
+        meetingId: row.m_id,
+        meetingCode: row.m_meeting_code,
+        title: row.m_title,
+        startTime,
+        endTime,
+        timezone: row.m_timezone ?? 'Asia/Ho_Chi_Minh',
+        status: row.m_status,
+        userRole: row.effective_user_role as 'organizer' | 'host' | 'attendee',
+        room,
+        colorKey: row.m_status,
+        isCurrent,
+        isPast,
+      });
+    });
+
+    // ── 5. Build response ──
+    return new ScheduleResponseDto({
+      items,
+      range: new ScheduleRangeDto({
+        view,
+        from,
+        to,
+        timezone: query.timezone ?? 'Asia/Ho_Chi_Minh',
+      }),
+      empty: items.length === 0,
+    });
+  }
+
+  async getMyScheduleDetail(
+    userId: string,
+    meetingId: string,
+  ): Promise<MyScheduleDetailDto> {
+    // ── 1. Load meeting with organizer and host ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+      relations: { organizer: true, host: true },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay cuoc hop',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── 2. Access check ──
+    const isOrganizer = meeting.organizerId === userId;
+    const isHost = meeting.hostId === userId;
+
+    let isParticipant = false;
+    if (!isOrganizer && !isHost) {
+      const participant = await this.dataSource
+        .getRepository(MeetingParticipantEntity)
+        .findOne({
+          where: { meetingId, userId },
+        });
+      isParticipant = !!participant;
+    }
+
+    if (!isOrganizer && !isHost && !isParticipant) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Ban khong co quyen xem cuoc hop nay',
+        error: { code: 'FORBIDDEN_NOT_PARTICIPANT', details: { meetingId } },
+      });
+    }
+
+    // ── 3. Compute effectiveUserRole ──
+    const userRole = this.resolveEffectiveUserRole(
+      meeting.organizerId,
+      meeting.hostId,
+      userId,
+    );
+
+    // ── 4. Load related data in parallel ──
+    const [
+      room,
+      participants,
+      externalParticipants,
+      agendas,
+      attachments,
+      recordingConfig,
+    ] = await Promise.all([
+      // Room info
+      meeting.roomId
+        ? this.dataSource
+            .getRepository(RoomEntity)
+            .findOne({ where: { id: meeting.roomId } })
+        : Promise.resolve(null),
+
+      // Participants list
+      this.dataSource
+        .getRepository(MeetingParticipantEntity)
+        .find({
+          where: { meetingId },
+          relations: { user: true },
+          order: { participantRole: 'ASC' },
+        }),
+
+      // External participants
+      this.dataSource
+        .getRepository(MeetingExternalParticipantEntity)
+        .find({ where: { meetingId } }),
+
+      // Agendas
+      this.dataSource
+        .getRepository(MeetingAgendaEntity)
+        .find({ where: { meetingId }, order: { agendaOrder: 'ASC' } }),
+
+      // Attachments (media_files)
+      this.dataSource.getRepository(MediaFileEntity).find({
+        where: {
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          isActive: true,
+        },
+      }),
+
+      // Recording config
+      this.dataSource
+        .getRepository(RecordingConfigEntity)
+        .findOne({ where: { meetingId } }),
+    ]);
+
+    // ── 5. Assemble DTO ──
+    return new MyScheduleDetailDto({
+      meeting: new DetailMeetingDto({
+        meetingId: meeting.id,
+        meetingCode: meeting.meetingCode,
+        title: meeting.title,
+        description: meeting.description,
+        startTime: meeting.startTime.toISOString(),
+        endTime: meeting.endTime.toISOString(),
+        timezone: meeting.timezone,
+        status: meeting.status,
+        recurrenceRuleId: meeting.recurrenceRuleId,
+        parentMeetingId: meeting.parentMeetingId,
+      }),
+      room: room
+        ? new DetailRoomDto({
+            id: room.id,
+            roomName: room.roomName,
+            roomCode: room.roomCode,
+            siteName: room.siteName ?? null,
+            areaName: room.areaName ?? null,
+            location: room.locationDescription ?? null,
+          })
+        : null,
+      organizer: new DetailUserDto({
+        id: meeting.organizer?.id ?? meeting.organizerId,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+        fullName: (meeting.organizer as any)?.fullName ?? '',
+        email: (meeting.organizer as any)?.email ?? '',
+      }),
+      host: meeting.host
+        ? new DetailUserDto({
+            id: meeting.host.id,
+            fullName: meeting.host.fullName,
+            email: meeting.host.email,
+          })
+        : null,
+      participants: (participants ?? []).map(
+        (p) =>
+          new DetailParticipantDto({
+            id: p.id,
+            fullName: (p.user as any)?.fullName ?? '',
+            email: (p.user as any)?.email ?? '',
+            participantRole: p.participantRole,
+            invitationStatus: p.invitationStatus,
+            attendanceStatus: p.attendanceStatus,
+          }),
+      ),
+      externalParticipants: (externalParticipants ?? []).map(
+        (ep) =>
+          new DetailExternalParticipantDto({
+            name: (ep as any).fullName ?? (ep as any).name ?? '',
+            email: ep.email ?? '',
+          }),
+      ),
+      agendas: (agendas ?? []).map(
+        (a) =>
+          new DetailAgendaDto({
+            id: a.id,
+            title: a.title,
+            durationMinutes: a.plannedDurationMinutes,
+            sortOrder: a.agendaOrder,
+          }),
+      ),
+      attachments: (attachments ?? []).map(
+        (a) =>
+          new DetailAttachmentDto({
+            id: a.id,
+            fileName: a.fileName,
+            fileUrl: a.fileUrl,
+            fileType: a.fileType,
+            fileSize: a.fileSizeBytes?.toString() ?? null,
+          }),
+      ),
+      recordingConfig: recordingConfig
+        ? new DetailRecordingConfigDto({
+            autoRecord: recordingConfig.autoStart,
+            allowRecording:
+              recordingConfig.enableVideo || recordingConfig.enableAudio,
+            enableTranscription: recordingConfig.enableTranscription,
+          })
+        : null,
+      userRole,
+    });
+  }
+
+  // ── Private helpers ──
+
+  private validateScheduleDateRange(
+    view: string,
+    from: string,
+    to: string,
+  ): void {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      throw new BadRequestException({
+        success: false,
+        message: 'from hoac to khong dung dinh dang ISO',
+        error: { code: 'INVALID_DATETIME_FORMAT', details: {} },
+      });
+    }
+
+    if (fromDate >= toDate) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Khoang thoi gian khong hop le: from phai truoc to',
+        error: {
+          code: 'INVALID_DATE_RANGE',
+          details: { from, to },
+        },
+      });
+    }
+
+    const diffMs = toDate.getTime() - fromDate.getTime();
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+    const maxDays: Record<string, number> = {
+      day: 1,
+      week: 7,
+      month: 31,
+    };
+
+    const limit = maxDays[view];
+    if (limit && diffDays > limit) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: `Khoang thoi gian qua rong cho view ${view}: toi da ${limit} ngay`,
+        error: {
+          code: 'DATE_RANGE_TOO_WIDE',
+          details: { maxDays: limit, view, actualDays: Math.ceil(diffDays) },
+        },
+      });
+    }
+  }
+
+  private resolveEffectiveUserRole(
+    organizerId: string,
+    hostId: string | null,
+    userId: string,
+  ): 'organizer' | 'host' | 'attendee' {
+    if (organizerId === userId) return 'organizer';
+    if (hostId === userId) return 'host';
+    return 'attendee';
+  }
+
+  private normalizeSearchQuery(q: string | undefined): string | null {
+    if (!q) return null;
+    const trimmed = q.trim();
+    if (trimmed.length === 0) return null;
+    return `%${trimmed}%`;
+  }
   private async checkUserPermission(
     userId: string,
     permissionCode: string,
@@ -2126,9 +2948,7 @@ export class MeetingsService {
         .where('u.id = :userId', { userId })
         .andWhere('p.permissionCode = :permCode', { permissionCode })
         .andWhere('ur.isActive = :isActive', { isActive: true })
-        .andWhere(
-          '(ur.expiredAt IS NULL OR ur.expiredAt > NOW())',
-        )
+        .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > NOW())')
         .getOne();
 
       return !!result;
@@ -2137,6 +2957,274 @@ export class MeetingsService {
     }
   }
 
+
+  // ════════════════════════════════════════════════════════════════
+  //  Remove Internal Meeting Participant (UC-MM-08)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Gỡ bỏ internal participant khỏi cuộc họp.
+   * Chỉ áp dụng cho meeting ở trạng thái scheduled.
+   * Không được gỡ Host/Organizer (kể cả Admin).
+   * Không được gỡ participant đang là owner của agenda items.
+   * Chỉ áp dụng cho một meeting instance cụ thể (FR-019).
+   * Nếu body.scope = 'series' → reject với 422 RECURRING_SERIES_SCOPE_NOT_SUPPORTED (FR-020).
+   */
+  async removeParticipant(
+    meetingId: string,
+    participantUserId: string,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+    body?: RemoveParticipantBodyDto,
+  ): Promise<RemoveParticipantResponseDto> {
+    // ── Step 1: Pre-validation ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    if (meeting.status !== MeetingStatus.SCHEDULED) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Không thể gỡ thành viên: cuộc họp không ở trạng thái scheduled',
+        error: {
+          code: 'MEETING_NOT_REMOVABLE',
+          details: { currentStatus: meeting.status },
+        },
+      });
+    }
+
+    // ── Step 2: Authorization check ──
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+    const hasPermission = await this.checkUserPermission(
+      authUser.userId,
+      'meeting.participant.remove',
+    );
+
+    if (!isOwner && !hasPermission) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền gỡ thành viên khỏi cuộc họp này',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    // ── Step 3: Participant existence check ──
+    const participant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({
+        where: { meetingId, userId: participantUserId },
+      });
+
+    if (!participant) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Thành viên không có trong cuộc họp này',
+        error: { code: 'PARTICIPANT_NOT_IN_MEETING', details: {} },
+      });
+    }
+
+    // ── Step 4: Host/Organizer protection check ──
+    const isTargetHost = meeting.hostId === participantUserId;
+    const isTargetOrganizer = meeting.organizerId === participantUserId;
+
+    if (isTargetHost || isTargetOrganizer) {
+      throw new ConflictException({
+        success: false,
+        message: 'Không thể gỡ Host hoặc Organizer khỏi cuộc họp',
+        error: {
+          code: 'CANNOT_REMOVE_HOST_OR_ORGANIZER',
+          details: {
+            targetRole: isTargetHost ? 'host' : 'organizer',
+          },
+        },
+      });
+    }
+
+    // ── Step 5: Agenda owner check ──
+    const ownedAgendas = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .find({
+        where: { meetingId, ownerId: participantUserId },
+        select: { id: true },
+      });
+
+    if (ownedAgendas.length > 0) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Thành viên đang là chủ sở hữu của một hoặc nhiều agenda items và không thể bị gỡ trước khi chuyển quyền sở hữu.',
+        error: {
+          code: 'PARTICIPANT_OWNS_AGENDA_ITEMS',
+          details: {
+            agendaItemIds: ownedAgendas.map((a) => a.id),
+          },
+        },
+      });
+    }
+
+    // ── Step 6: Recurring scope check ──
+    const scope = body?.scope ?? RemoveScope.INSTANCE;
+    if (scope === RemoveScope.SERIES) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Không thể gỡ thành viên khỏi toàn bộ recurring series. Chỉ hỗ trợ gỡ trên một instance cụ thể.',
+        error: {
+          code: 'RECURRING_SERIES_SCOPE_NOT_SUPPORTED',
+          details: {},
+        },
+      });
+    }
+
+    // ── Step 7: Transaction ──
+    let removedAt!: Date;
+    let notificationId!: string;
+    let backgroundJobId!: string;
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        // Pessimistic lock on meeting row
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        // Double-check participant still exists inside transaction
+        const dupCheck = await em.findOne(MeetingParticipantEntity, {
+          where: { meetingId, userId: participantUserId },
+        });
+
+        if (!dupCheck) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Thành viên không có trong cuộc họp này',
+            error: { code: 'PARTICIPANT_NOT_IN_MEETING', details: {} },
+          });
+        }
+
+        // 7a: Hard delete participant row
+        await em.delete(MeetingParticipantEntity, {
+          meetingId,
+          userId: participantUserId,
+        });
+
+        // 7b: Insert meeting event
+        const event = em.create(MeetingEventEntity, {
+          meetingId,
+          eventType: MeetingEventType.PARTICIPANT_REMOVED,
+          actorUserId: authUser.userId,
+          sourceType: MeetingEventSourceType.MANUAL,
+          description: `Participant ${participantUserId} removed from meeting ${meetingId}`,
+          metadataJson: {
+            removedUserId: participantUserId,
+            removedByUserId: authUser.userId,
+            reason: body?.reason ?? null,
+          } as any,
+        });
+        await em.save(MeetingEventEntity, event);
+
+        // 7c: Insert audit log
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'remove_participant',
+          entityType: 'meeting_participant',
+          entityId: participantUserId,
+          oldValueJson: {
+            meetingId,
+            participantRole: participant.participantRole,
+          } as any,
+          newValueJson: {
+            removed: true,
+            removedAt: new Date(),
+            reason: body?.reason ?? null,
+          } as any,
+          ipAddress: clientContext.ipAddress ?? null,
+          userAgent: clientContext.userAgent ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        // 7d: Insert notification
+        const notification = em.create(NotificationEntity, {
+          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+          channel: NotificationChannel.IN_APP,
+          subject: 'Bạn đã bị gỡ khỏi cuộc họp',
+          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIdsJson: [participantUserId],
+          priority: NotificationPriority.NORMAL,
+          deliveryStatus: NotificationDeliveryStatus.QUEUED,
+          payloadJson: {
+            removedBy: authUser.userId,
+            reason: body?.reason ?? null,
+          } as any,
+          createdBy: authUser.userId,
+        });
+        await em.save(NotificationEntity, notification);
+        notificationId = notification.id;
+
+        // 7e: Insert background job for email
+        const bgJob = em.create(BackgroundJobEntity, {
+          jobType: BackgroundJobType.SEND_EMAIL,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          status: BackgroundJobStatus.QUEUED,
+          inputJson: {
+            notificationId: notification.id,
+            recipientId: participantUserId,
+            template: 'meeting_participant_removed',
+          } as any,
+          requestedBy: authUser.userId,
+        });
+        await em.save(BackgroundJobEntity, bgJob);
+        backgroundJobId = bgJob.id;
+
+        removedAt = new Date();
+
+        this.logger.log(
+          `[RemoveParticipant] Meeting ${meetingId}: participant ${participantUserId} removed by ${authUser.userId}`,
+        );
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for removeParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 8: Build response ──
+    return new RemoveParticipantResponseDto({
+      meetingId,
+      removedParticipantUserId: participantUserId,
+      removed: true,
+      removedAt,
+      notificationQueued: true,
+      notificationId,
+      backgroundJobId,
+    });
+  }
   private async resolveApproverIds(): Promise<string[]> {
     try {
       const config = await this.dataSource
@@ -2187,3 +3275,4 @@ export class MeetingsService {
     }
   }
 }
+

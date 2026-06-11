@@ -1,4 +1,4 @@
-import {
+﻿import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -19,6 +19,7 @@ export enum MeetingEventType {
   MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   ROOM_CHANGED = 'room_changed',
+  PARTICIPANT_REMOVED = 'participant_removed',
 }
 
 export enum MeetingEventSourceType {
@@ -75,3 +76,4 @@ export class MeetingEventEntity {
   @JoinColumn({ name: 'actor_user_id' })
   actorUser: UserEntity | null;
 }
+
