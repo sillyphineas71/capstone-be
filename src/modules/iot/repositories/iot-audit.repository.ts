@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
-import { maskSensitiveMetadata } from '../../../common/utils/masking.util';
+import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
 
 @Injectable()
 export class IotAuditRepository {

@@ -10,11 +10,11 @@ import {
   Param,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
-import { AssignRoomDto } from '../dto/assign-room.dto';
-import { IotDevicesService } from '../services/iot-devices.service';
-import { toIotDeviceResponse } from '../dto/iot-device-response.dto';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
+import { AssignRoomDto } from '../dto/assign-room.dto.js';
+import { IotDevicesService } from '../services/iot-devices.service.js';
+import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 
 // Mocks for PermissionsGuard since it's not implemented in auth module yet
 const MockPermissionsGuard = class {

@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
-import { IotDevicesService } from './iot-devices.service';
+import { IotDevicesService } from './iot-devices.service.js';
 import { DataSource } from 'typeorm';
-import { IotAuditRepository } from '../repositories/iot-audit.repository';
+import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 import { ConflictException, NotFoundException } from '@nestjs/common';
-import { IotDeviceType } from '../entities/iot-device.entity';
+import { IoTDeviceType } from '../entities/iot-device.entity.js';
 
 describe('IotDevicesService', () => {
   let service: IotDevicesService;
@@ -64,7 +64,7 @@ describe('IotDevicesService', () => {
     const dto = {
       deviceName: 'Test Camera',
       deviceCode: 'CAM-001',
-      deviceType: IotDeviceType.ROOM_CAMERA,
+      deviceType: IoTDeviceType.ROOM_CAMERA,
     };
 
     const result = await service.create('user-id', dto);
@@ -95,7 +95,7 @@ describe('IotDevicesService', () => {
     const dto = {
       deviceName: 'Test Camera',
       deviceCode: 'CAM-001',
-      deviceType: IotDeviceType.ROOM_CAMERA,
+      deviceType: IoTDeviceType.ROOM_CAMERA,
     };
 
     await expect(service.create('user-id', dto)).rejects.toThrow(
@@ -118,7 +118,7 @@ describe('IotDevicesService', () => {
     const dto = {
       deviceName: 'Test Camera',
       deviceCode: 'CAM-002',
-      deviceType: IotDeviceType.ROOM_CAMERA,
+      deviceType: IoTDeviceType.ROOM_CAMERA,
       macAddress: 'AA:BB:CC',
     };
 
@@ -139,7 +139,7 @@ describe('IotDevicesService', () => {
     it('should throw ConflictException if device type is invalid', async () => {
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
         id: 'dev-1',
-        deviceType: IotDeviceType.MICROPHONE,
+        deviceType: IoTDeviceType.MICROPHONE,
       });
       await expect(
         service.assignRoom('user-id', 'dev-1', { roomId: 'room-1' }),
@@ -149,7 +149,7 @@ describe('IotDevicesService', () => {
     it('should throw ConflictException if device is already assigned to a DIFFERENT room', async () => {
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: 'room-2',
       });
       await expect(
@@ -160,7 +160,7 @@ describe('IotDevicesService', () => {
     it('should return 200 OK (return early) if device is assigned to the SAME room', async () => {
       const device = {
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: 'room-1',
       };
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
@@ -175,7 +175,7 @@ describe('IotDevicesService', () => {
     it('should throw NotFoundException if room is not found', async () => {
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: null,
       });
       (dataSourceMock.manager.query as jest.Mock).mockResolvedValue([]);
@@ -188,7 +188,7 @@ describe('IotDevicesService', () => {
     it('should throw ConflictException if room is not active', async () => {
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: null,
       });
       (dataSourceMock.manager.query as jest.Mock).mockResolvedValue([
@@ -203,7 +203,7 @@ describe('IotDevicesService', () => {
     it('should successfully assign room, log audit and commit transaction', async () => {
       const device = {
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: null,
       };
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
@@ -230,7 +230,7 @@ describe('IotDevicesService', () => {
     it('should rollback transaction if audit log fails', async () => {
       const device = {
         id: 'dev-1',
-        deviceType: IotDeviceType.ROOM_CAMERA,
+        deviceType: IoTDeviceType.ROOM_CAMERA,
         roomId: null,
       };
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);

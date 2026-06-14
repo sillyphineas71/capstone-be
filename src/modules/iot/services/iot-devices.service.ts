@@ -4,30 +4,34 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { IotDevice } from '../entities/iot-device.entity';
-import { CreateIotDeviceDto } from '../dto/create-iot-device.dto';
-import { AssignRoomDto } from '../dto/assign-room.dto';
-import { IotAuditRepository } from '../repositories/iot-audit.repository';
-import { IotDeviceType } from '../entities/iot-device.entity';
+import {
+  IoTDeviceEntity,
+  IoTDeviceType,
+  IoTDeviceStatus,
+  IoTDeviceHealthStatus,
+} from '../entities/iot-device.entity.js';
+import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
+import { AssignRoomDto } from '../dto/assign-room.dto.js';
+import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 
 @Injectable()
 export class IotDevicesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
-  ) {}
+  ) { }
 
   async create(
     userId: string | null,
     dto: CreateIotDeviceDto,
-  ): Promise<IotDevice> {
+  ): Promise<IoTDeviceEntity> {
     const queryRunner = this.dataSource.createQueryRunner();
 
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      const existingCode = await queryRunner.manager.findOne(IotDevice, {
+      const existingCode = await queryRunner.manager.findOne(IoTDeviceEntity, {
         where: { deviceCode: dto.deviceCode },
       });
 
@@ -39,7 +43,7 @@ export class IotDevicesService {
       }
 
       if (dto.macAddress) {
-        const existingMac = await queryRunner.manager.findOne(IotDevice, {
+        const existingMac = await queryRunner.manager.findOne(IoTDeviceEntity, {
           where: { macAddress: dto.macAddress },
         });
 
@@ -51,20 +55,22 @@ export class IotDevicesService {
         }
       }
 
-      const newDevice = queryRunner.manager.create(IotDevice, {
+      const newDevice = queryRunner.manager.create(IoTDeviceEntity, {
         deviceName: dto.deviceName,
         deviceCode: dto.deviceCode,
         deviceType: dto.deviceType,
         ipAddress: dto.ipAddress || null,
         macAddress: dto.macAddress || null,
         metadataJson: dto.metadataJson || null,
-        createdBy: userId,
-        status: 'offline',
-        healthStatus: 'unknown',
+        status: IoTDeviceStatus.OFFLINE,
+        healthStatus: IoTDeviceHealthStatus.UNKNOWN,
         lastSeenAt: null,
       });
 
-      const savedDevice = await queryRunner.manager.save(IotDevice, newDevice);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        newDevice,
+      );
 
       let createdByName: string | null = null;
       if (userId) {
@@ -101,9 +107,9 @@ export class IotDevicesService {
     userId: string | null,
     deviceId: string,
     dto: AssignRoomDto,
-  ): Promise<IotDevice> {
+  ): Promise<IoTDeviceEntity> {
     // Validate device
-    const device = await this.dataSource.manager.findOne(IotDevice, {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
       where: { id: deviceId },
     });
 
@@ -115,20 +121,20 @@ export class IotDevicesService {
     }
 
     if (
-      device.status === 'deleted' ||
-      device.healthStatus === 'inactive' ||
-      device.healthStatus === 'disabled'
+      device.status === IoTDeviceStatus.DISABLED ||
+      device.status === IoTDeviceStatus.MAINTENANCE ||
+      device.healthStatus === IoTDeviceHealthStatus.FAULTY
     ) {
       throw new ConflictException({
         code: 'DEVICE_NOT_ACTIVE',
-        message: 'Cannot assign room to an inactive or deleted device.',
+        message: 'Cannot assign room to an inactive device.',
       });
     }
 
     const allowedTypes = [
-      IotDeviceType.DOOR_FACE_TERMINAL,
-      IotDeviceType.IP_ROOM_CAMERA,
-      IotDeviceType.ROOM_CAMERA,
+      IoTDeviceType.FACE_SERVER,
+      IoTDeviceType.IP_CAMERA,
+      IoTDeviceType.ROOM_CAMERA,
     ];
 
     if (!allowedTypes.includes(device.deviceType)) {
@@ -179,7 +185,10 @@ export class IotDevicesService {
       const oldRoomId = device.roomId;
 
       device.roomId = dto.roomId;
-      const savedDevice = await queryRunner.manager.save(IotDevice, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logAssignRoom(queryRunner.manager, {
         userId,
@@ -189,17 +198,6 @@ export class IotDevicesService {
       });
 
       await queryRunner.commitTransaction();
-
-      // Fetch createdByName based on the creator of the device
-      if (savedDevice.createdBy) {
-        const userRow = (await queryRunner.query(
-          'SELECT full_name FROM users WHERE id = $1',
-          [savedDevice.createdBy],
-        )) as Array<{ full_name: string }>;
-        if (userRow && userRow.length > 0) {
-          Object.assign(savedDevice, { createdByName: userRow[0].full_name });
-        }
-      }
 
       return savedDevice;
     } catch (error) {

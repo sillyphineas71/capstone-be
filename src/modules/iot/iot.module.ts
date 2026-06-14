@@ -1,21 +1,32 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthModule } from '../auth/auth.module';
 import { JwtModule } from '@nestjs/jwt';
 import { CacheModule } from '@nestjs/cache-manager';
-import { IotDevice } from './entities/iot-device.entity';
-import { IotDevicesController } from './controllers/iot-devices.controller';
-import { IotDevicesService } from './services/iot-devices.service';
-import { IotAuditRepository } from './repositories/iot-audit.repository';
+import { AuthModule } from '../auth/auth.module.js';
+import { IoTDeviceEntity } from './entities/iot-device.entity.js';
+import { IoTDeviceEventEntity } from './entities/iot-device-event.entity.js';
+import { DeviceUserMappingEntity } from './entities/device-user-mapping.entity.js';
+import { CaptureSessionEntity } from './entities/capture-session.entity.js';
+import { CaptureSessionChannelEntity } from './entities/capture-session-channel.entity.js';
+import { IotDevicesController } from './controllers/iot-devices.controller.js';
+import { IotDevicesService } from './services/iot-devices.service.js';
+import { IotAuditRepository } from './repositories/iot-audit.repository.js';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([IotDevice]),
+    TypeOrmModule.forFeature([
+      IoTDeviceEntity,
+      IoTDeviceEventEntity,
+      DeviceUserMappingEntity,
+      CaptureSessionEntity,
+      CaptureSessionChannelEntity,
+    ]),
     AuthModule,
     JwtModule.register({}),
     CacheModule.register(),
   ],
   controllers: [IotDevicesController],
   providers: [IotDevicesService, IotAuditRepository],
+  exports: [TypeOrmModule],
 })
 export class IotModule {}

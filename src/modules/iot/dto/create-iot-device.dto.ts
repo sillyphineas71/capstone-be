@@ -9,8 +9,8 @@ import {
   IsObject,
 } from 'class-validator';
 import { Expose, Transform } from 'class-transformer';
-import { IotDeviceType } from '../entities/iot-device.entity';
-import { normalizeMacAddress } from '../../../common/utils/mac.util';
+import { IoTDeviceType } from '../entities/iot-device.entity.js';
+import { normalizeMacAddress } from '../../../common/utils/mac.util.js';
 
 export class CreateIotDeviceDto {
   @Expose({ name: 'device_name' })
@@ -26,8 +26,8 @@ export class CreateIotDeviceDto {
   deviceCode: string;
 
   @Expose({ name: 'device_type' })
-  @IsEnum(IotDeviceType)
-  deviceType: IotDeviceType;
+  @IsEnum(IoTDeviceType)
+  deviceType: IoTDeviceType;
 
   @Expose({ name: 'ip_address' })
   @IsOptional()
