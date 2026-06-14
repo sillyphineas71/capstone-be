@@ -1,30 +1,31 @@
 import { Injectable } from '@nestjs/common';
 import { AUTH_ERROR_CODES } from '../constants/auth-error-codes';
 import { AuthConfigService } from './auth-config.service';
+import { RedisService } from '../../redis/redis.service';
 
 @Injectable()
 export class RateLimitService {
-  private readonly attempts = new Map<string, number[]>();
+  private readonly PREFIX = 'rate_limit:login:';
 
-  constructor(private readonly authConfigService: AuthConfigService) {}
+  constructor(
+    private readonly authConfigService: AuthConfigService,
+    private readonly redisService: RedisService,
+  ) {}
 
-  checkOrThrow(ipAddress: string | undefined, email: string): void {
+  async checkOrThrow(ipAddress: string | undefined, email: string): Promise<void> {
     const maxAttempts = this.authConfigService.getRateLimitMaxAttempts();
     const windowSeconds = this.authConfigService.getRateLimitWindowSeconds();
-    const now = Date.now();
-    const windowStart = now - windowSeconds * 1000;
-    const key = `${ipAddress ?? 'unknown'}:${email}`;
-    const currentAttempts = (this.attempts.get(key) ?? []).filter(
-      (timestamp) => timestamp >= windowStart,
-    );
+    const key = `${this.PREFIX}${ipAddress ?? 'unknown'}:${email}`;
 
-    if (currentAttempts.length >= maxAttempts) {
+    const current = await this.redisService.incr(key);
+    if (current === 1) {
+      await this.redisService.expire(key, windowSeconds);
+    }
+
+    if (current > maxAttempts) {
       const error = new Error(AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS);
       error.name = AUTH_ERROR_CODES.AUTH_TOO_MANY_ATTEMPTS;
       throw error;
     }
-
-    currentAttempts.push(now);
-    this.attempts.set(key, currentAttempts);
   }
 }
