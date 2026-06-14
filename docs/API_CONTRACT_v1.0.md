@@ -15,6 +15,8 @@
 | Ngày | Tóm tắt | Ghi chú |
 |---|---|---|
 | 2026-06-03 | Tạo mới toàn bộ API Contract v1.0 từ UseCase_List_SMRMPTS.xlsx + Database v3.2 Compact | Tạo mới |
+| 2026-06-15 | Thêm IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera (PATCH /api/v1/iot-devices/{deviceId}), permission `iot.device.update`. Tránh trùng UC-73 (đã là "Lưu raw event"). | Section 8 (sau UC-69) |
+| 2026-06-15 | Sửa ví dụ request/response của IOT-011 sang **snake_case** cho khớp wire-format thật (`toIotDeviceResponse`). Ghi chú UC-67 đang camelCase chưa đồng bộ. | Section 8 (IOT-011) |
 
 ---
 
@@ -2665,6 +2667,59 @@
   }
 }
 ```
+
+---
+
+### IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `PATCH` |
+| Endpoint | `/api/v1/iot-devices/{deviceId}` |
+| Permission | `iot.device.update` |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-update-iot-device` (IOT-011). Chỉ cập nhật trường mô tả/kết nối tổng quát. Các field ngoài allowlist bị từ chối 400 (`forbidNonWhitelisted`). Không sửa `room_id` (dùng assign-room), `stream_url` (UC-69), Face Server config (UC-68), `status`/`health_status`/`last_seen_at` (hệ thống tự quản), `device_code`/`device_type` (bất biến), `metadata_json`/`equipment_id`/`agent_version`/`firmware_version`/`mqtt_topic` (ngoài phạm vi).
+
+> **Casing**: wire-format thực tế dùng **snake_case** (DTO input `@Expose` snake + presenter `toIotDeviceResponse()` xuất snake). Ví dụ dưới đây bám đúng code thật. (Lưu ý: ví dụ UC-67 ở trên đang minh hoạ camelCase nhưng response thật của create cũng là snake_case — UC-67 nên được đồng bộ riêng.)
+
+**Request Body (partial — chỉ 4 trường allowlist, snake_case):**
+```json
+{
+  "device_name": "Camera góc phòng họp A — tầng 3",
+  "ip_address": "192.168.1.51",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "network_identifier": "ipcam-a3-floor3"
+}
+```
+
+**Response 200 (full device, snake_case — theo `toIotDeviceResponse`):**
+```json
+{
+  "success": true,
+  "message": "IoT device updated successfully",
+  "data": {
+    "id": "uuid",
+    "device_name": "Camera góc phòng họp A — tầng 3",
+    "device_code": "IPCAM-A3-01",
+    "device_type": "ip_camera",
+    "room_id": "uuid|null",
+    "ip_address": "192.168.1.51",
+    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "status": "online",
+    "health_status": "healthy",
+    "last_seen_at": "2026-06-15T09:00:00+07:00",
+    "metadata_json": { "manufacturer": "Hikvision" },
+    "created_by_name": null,
+    "created_at": "2026-06-03T10:00:00+07:00",
+    "updated_at": "2026-06-15T09:05:00+07:00"
+  }
+}
+```
+
+- `409 MAC_ADDRESS_EXISTS` nếu `mac_address` mới trùng thiết bị khác.
+- `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`.
+- Ghi `audit_logs` (action_type: `update`, entity_type: `iot_devices`).
 
 ---
 

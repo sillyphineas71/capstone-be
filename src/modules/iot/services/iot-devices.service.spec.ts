@@ -1,10 +1,14 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service.js';
 import { DataSource } from 'typeorm';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 import { IotDeviceEventsService } from './iot-device-events.service.js';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { IoTDeviceType } from '../entities/iot-device.entity.js';
 
 describe('IotDevicesService', () => {
@@ -39,6 +43,7 @@ describe('IotDevicesService', () => {
     auditRepoMock = {
       logDeviceCreation: jest.fn(),
       logAssignRoom: jest.fn(),
+      logDeviceUpdate: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -51,7 +56,7 @@ describe('IotDevicesService', () => {
         },
         {
           provide: IotDeviceEventsService,
-          useValue: { storeRawEvent: jest.fn() } as unknown as IotDeviceEventsService,
+          useValue: { storeRawEvent: jest.fn() },
         },
       ],
     }).compile();
@@ -254,6 +259,172 @@ describe('IotDevicesService', () => {
 
       await expect(
         service.assignRoom('user-id', 'dev-1', { roomId: 'room-1' }),
+      ).rejects.toThrow('DB Error');
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('update', () => {
+    it('T1 happy: updates fields, saves and logs audit', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Old Cam',
+        ipAddress: '192.168.1.1',
+        macAddress: null,
+        networkIdentifier: null,
+        status: 'online',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        deviceName: 'New Cam',
+        ipAddress: '192.168.1.2',
+      });
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceUpdate).toHaveBeenCalledTimes(1);
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(result.deviceName).toBe('New Cam');
+      expect(result.ipAddress).toBe('192.168.1.2');
+    });
+
+    it('T2 idempotent: same values => no transaction, no audit', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Same Cam',
+        ipAddress: '192.168.1.1',
+        macAddress: null,
+        networkIdentifier: null,
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+
+      const result = await service.update('user-id', 'dev-1', {
+        deviceName: 'Same Cam',
+      });
+
+      expect(result).toEqual(device);
+      expect(queryRunnerMock.startTransaction).not.toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).not.toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceUpdate).not.toHaveBeenCalled();
+    });
+
+    it('T3 mac conflict: existing mac on another device => ConflictException', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Cam',
+        macAddress: 'AA:AA:AA:AA:AA:AA',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockImplementation(
+        async (_entity: unknown, options: any) => {
+          if (options.where.macAddress !== undefined) return { id: 'other' };
+          return device;
+        },
+      );
+
+      await expect(
+        service.update('user-id', 'dev-1', {
+          macAddress: 'BB:BB:BB:BB:BB:BB',
+        }),
+      ).rejects.toThrow(ConflictException);
+      await expect(
+        service.update('user-id', 'dev-1', {
+          macAddress: 'BB:BB:BB:BB:BB:BB',
+        }),
+      ).rejects.toThrow('MAC address already exists in the system.');
+    });
+
+    it('T4 not found: device missing => NotFoundException', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(
+        service.update('user-id', 'dev-1', { deviceName: 'X' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('T5 empty body: no allowlist field => BadRequestException NO_UPDATABLE_FIELDS', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'dev-1',
+        deviceName: 'Cam',
+      });
+      await expect(service.update('user-id', 'dev-1', {})).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.update('user-id', 'dev-1', {})).rejects.toThrow(
+        'No updatable fields were provided.',
+      );
+    });
+
+    it('T6 set null: clears a connection field (ip_address -> null)', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Cam',
+        ipAddress: '192.168.1.1',
+        macAddress: null,
+        networkIdentifier: null,
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        ipAddress: null,
+      });
+
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceUpdate).toHaveBeenCalledTimes(1);
+      expect(result.ipAddress).toBeNull();
+    });
+
+    it('T7 does not touch status/health/last_seen', async () => {
+      const lastSeen = new Date('2026-06-15T00:00:00Z');
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Old',
+        ipAddress: null,
+        macAddress: null,
+        networkIdentifier: null,
+        status: 'online',
+        healthStatus: 'healthy',
+        lastSeenAt: lastSeen,
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        deviceName: 'New',
+      });
+
+      expect(result.status).toBe('online');
+      expect(result.healthStatus).toBe('healthy');
+      expect(result.lastSeenAt).toBe(lastSeen);
+    });
+
+    it('T8 rollback: audit failure rolls back transaction', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Old',
+        ipAddress: null,
+        macAddress: null,
+        networkIdentifier: null,
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+      (auditRepoMock.logDeviceUpdate as jest.Mock).mockRejectedValue(
+        new Error('DB Error'),
+      );
+
+      await expect(
+        service.update('user-id', 'dev-1', { deviceName: 'New' }),
       ).rejects.toThrow('DB Error');
 
       expect(queryRunnerMock.startTransaction).toHaveBeenCalled();

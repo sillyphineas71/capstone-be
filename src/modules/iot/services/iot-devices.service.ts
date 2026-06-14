@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, Not } from 'typeorm';
 import * as crypto from 'crypto';
 import {
   IoTDeviceEntity,
@@ -16,6 +16,7 @@ import {
   IoTDeviceHealthStatus,
 } from '../entities/iot-device.entity.js';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
+import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
@@ -126,6 +127,107 @@ export class IotDevicesService {
 
       // Attach dynamic property so the presenter can use it
       Object.assign(savedDevice, { createdByName });
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async update(
+    userId: string | null,
+    deviceId: string,
+    dto: UpdateIotDeviceDto,
+  ): Promise<IoTDeviceEntity> {
+    // 1. Load device (404 nếu không có)
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 2. Build updates: chỉ nạp field hiện diện trong payload (!== undefined).
+    //    Phân biệt "không gửi" (undefined) vs "gửi null" (xóa = set NULL).
+    const updates: Partial<
+      Pick<
+        IoTDeviceEntity,
+        'deviceName' | 'ipAddress' | 'macAddress' | 'networkIdentifier'
+      >
+    > = {};
+    if (dto.deviceName !== undefined) updates.deviceName = dto.deviceName;
+    if (dto.ipAddress !== undefined) updates.ipAddress = dto.ipAddress;
+    if (dto.macAddress !== undefined) updates.macAddress = dto.macAddress;
+    if (dto.networkIdentifier !== undefined)
+      updates.networkIdentifier = dto.networkIdentifier;
+
+    if (Object.keys(updates).length === 0) {
+      throw new BadRequestException({
+        code: 'NO_UPDATABLE_FIELDS',
+        message: 'No updatable fields were provided.',
+      });
+    }
+
+    // 3. MAC unique (khi có gửi, khác null và khác giá trị hiện tại) — loại trừ chính nó.
+    if (
+      updates.macAddress !== undefined &&
+      updates.macAddress !== null &&
+      updates.macAddress !== device.macAddress
+    ) {
+      const existingMac = await this.dataSource.manager.findOne(
+        IoTDeviceEntity,
+        { where: { macAddress: updates.macAddress, id: Not(deviceId) } },
+      );
+
+      if (existingMac) {
+        throw new ConflictException({
+          code: 'MAC_ADDRESS_EXISTS',
+          message: 'MAC address already exists in the system.',
+        });
+      }
+    }
+
+    // 4. Idempotent: chỉ giữ field thực sự đổi giá trị.
+    const changes: Record<string, { old: unknown; new: unknown }> = {};
+    (Object.keys(updates) as (keyof typeof updates)[]).forEach((key) => {
+      const newVal = updates[key];
+      const oldVal = device[key];
+      if (newVal !== oldVal) {
+        changes[key] = { old: oldVal ?? null, new: newVal ?? null };
+      }
+    });
+
+    if (Object.keys(changes).length === 0) {
+      // Không có thay đổi thực → 200, không ghi DB, không audit.
+      return device;
+    }
+
+    // 5. Transaction: cập nhật device + ghi audit (KHÔNG chạm status/health/last_seen).
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      Object.assign(device, updates);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+
+      await this.iotAuditRepository.logDeviceUpdate(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        changes,
+      });
+
+      await queryRunner.commitTransaction();
 
       return savedDevice;
     } catch (error) {
