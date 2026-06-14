@@ -161,7 +161,7 @@ export const envValidationSchema = Joi.object({
 
   // ─── O. Seed ─────────────────────────────────────────────────────────────────
   SEED_RUN_ON_STARTUP: Joi.boolean().default(false),
-  SEED_ADMIN_EMAIL: Joi.string().email().default('admin@capstone.local'),
+  SEED_ADMIN_EMAIL: Joi.string().email({ tlds: { allow: false } }).default('admin@capstone.local'),
   SEED_ADMIN_PASSWORD: Joi.string().optional(),
   SEED_ADMIN_FULL_NAME: Joi.string().optional(),
 
@@ -187,7 +187,7 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().allow('').optional(),
   }),
   MAIL_FROM_NAME: Joi.string().default('CAPSTONE System'),
-  MAIL_FROM: Joi.string().email().default('noreply@capstone.local'),
+  MAIL_FROM: Joi.string().email({ tlds: { allow: false } }).default('noreply@capstone.local'),
   MAIL_TIMEOUT_MS: Joi.number().integer().default(10000),
 })
   .unknown(true) // cho phép các env chưa định nghĩa (tránh strict-mode phá build)

@@ -2,8 +2,8 @@ import { Module, Global } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { RedisService } from './redis.service.js';
+import { REDIS_CLIENT } from './redis.constants.js';
 
-export const REDIS_CLIENT = 'REDIS_CLIENT';
 
 /**
  * RedisModule — Global module cung cấp Redis client (ioredis) dùng chung.

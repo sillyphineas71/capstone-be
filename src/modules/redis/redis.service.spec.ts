@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RedisService } from './redis.service.js';
-import { REDIS_CLIENT } from './redis.module.js';
+import { REDIS_CLIENT } from './redis.constants.js';
 
 /**
  * Unit test cho RedisService.

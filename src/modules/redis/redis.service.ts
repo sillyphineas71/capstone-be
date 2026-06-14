@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
-import { REDIS_CLIENT } from './redis.module.js';
+import { REDIS_CLIENT } from './redis.constants.js';
 
 /**
  * RedisService — Service dùng chung cho cache/session/rate-limit.
