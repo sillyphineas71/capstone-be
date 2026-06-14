@@ -1,43 +1,54 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { AuthEmailService } from './auth-email.service';
+import { MailService } from '../../mail/mail.service';
 
 describe('AuthEmailService', () => {
   let service: AuthEmailService;
-  let configService: { get: jest.Mock };
+  let mailService: { sendMail: jest.Mock };
 
   beforeEach(async () => {
-    configService = {
-      get: jest.fn(),
-    };
+    mailService = { sendMail: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthEmailService,
-        { provide: ConfigService, useValue: configService },
+        { provide: MailService, useValue: mailService },
       ],
     }).compile();
 
     service = module.get<AuthEmailService>(AuthEmailService);
   });
 
-  it('should successfully "send" OTP email', async () => {
-    const email = 'user@example.com';
-    const otp = '123456';
+  it('should send OTP email via MailService', async () => {
+    mailService.sendMail.mockResolvedValue({ success: true, messageId: 'mock-id' });
 
-    await expect(service.sendOtp(email, otp)).resolves.toBeUndefined();
+    await expect(service.sendOtp('user@example.com', '123456')).resolves.toBeUndefined();
+    expect(mailService.sendMail).toHaveBeenCalledWith({
+      to: 'user@example.com',
+      subject: expect.stringContaining('Khôi ph?c m?t kh?u'),
+      text: expect.stringContaining('123456'),
+    });
   });
 
-  it('should throw InternalServerErrorException with AUTH_EMAIL_DISPATCH_FAILED when SMTP dispatch fails', async () => {
-    const email = 'user@error.com';
-    const otp = '123456';
+  it('should throw AUTH_EMAIL_DISPATCH_FAILED when MailService returns failure', async () => {
+    mailService.sendMail.mockResolvedValue({ success: false, error: 'SMTP error' });
 
-    await expect(service.sendOtp(email, otp)).rejects.toThrow(
+    await expect(service.sendOtp('user@example.com', '123456')).rejects.toThrow(
       InternalServerErrorException,
     );
-    await expect(service.sendOtp(email, otp)).rejects.toThrow(
+    await expect(service.sendOtp('user@example.com', '123456')).rejects.toThrow(
       'AUTH_EMAIL_DISPATCH_FAILED',
     );
+  });
+
+  it('should throw AUTH_EMAIL_DISPATCH_FAILED for @error.com emails (simulated failure)', async () => {
+    await expect(service.sendOtp('user@error.com', '123456')).rejects.toThrow(
+      InternalServerErrorException,
+    );
+    await expect(service.sendOtp('user@error.com', '123456')).rejects.toThrow(
+      'AUTH_EMAIL_DISPATCH_FAILED',
+    );
+    expect(mailService.sendMail).not.toHaveBeenCalled();
   });
 });

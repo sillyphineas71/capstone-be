@@ -44,7 +44,7 @@ export class LoginService {
     const normalizedEmail = normalizeLoginEmail(loginDto.email);
 
     try {
-      this.rateLimitService.checkOrThrow(
+      await this.rateLimitService.checkOrThrow(
         requestContext.ipAddress,
         normalizedEmail,
       );
