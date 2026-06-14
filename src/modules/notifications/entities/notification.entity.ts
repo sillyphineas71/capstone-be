@@ -21,6 +21,7 @@ export enum NotificationType {
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   MEETING_ROOM_UPDATED = 'meeting_room_updated',
   MEETING_PARTICIPANT_REMOVED = 'meeting_participant_removed',
+  ACCOUNT_WELCOME = 'account_welcome',
 }
 
 export enum NotificationChannel {

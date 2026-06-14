@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -11,6 +11,7 @@ import {
 
 import { UsersService } from './users.service.js';
 import { PasswordGeneratorService } from './password-generator.service.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import {
   UserEntity,
@@ -36,6 +37,7 @@ describe('UsersService', () => {
   let service: UsersService;
   let dataSource: jest.Mocked<DataSource>;
   let passwordGeneratorService: jest.Mocked<PasswordGeneratorService>;
+  let notificationsService: jest.Mocked<NotificationsService>;
   let em: jest.Mocked<EntityManager>;
 
   beforeEach(async () => {
@@ -62,6 +64,14 @@ describe('UsersService', () => {
       generateTemporaryPassword: jest.fn().mockReturnValue('tempPassword123!'),
     } as unknown as jest.Mocked<PasswordGeneratorService>;
 
+    // Mock NotificationsService
+    notificationsService = {
+      enqueueEmailNotification: jest.fn().mockResolvedValue({
+        notification: { id: 'notif-id' },
+        jobId: 'bull-job-id',
+      }),
+    } as unknown as jest.Mocked<NotificationsService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
@@ -69,6 +79,10 @@ describe('UsersService', () => {
         {
           provide: PasswordGeneratorService,
           useValue: passwordGeneratorService,
+        },
+        {
+          provide: NotificationsService,
+          useValue: notificationsService,
         },
       ],
     }).compile();
@@ -153,7 +167,6 @@ describe('UsersService', () => {
       em.find.mockImplementation(async (entityClass, options: any) => {
         if (entityClass === UserRoleEntity) {
           if (options?.where?.userId === authUserId) {
-            // System Admin role
             return [
               {
                 role: {
@@ -210,7 +223,6 @@ describe('UsersService', () => {
       em.find.mockImplementation(async (entityClass, options: any) => {
         if (entityClass === UserRoleEntity) {
           if (options?.where?.userId === authUserId) {
-            // Business Admin role (isSystemRole = false)
             return [{ role: { id: 'bizadmin-role-id', isSystemRole: false } }];
           }
           if (options?.where?.userId === targetUserId) {
@@ -218,7 +230,6 @@ describe('UsersService', () => {
           }
         }
         if (entityClass === DepartmentEntity) {
-          // For scope resolution: return children for adminDeptId
           if (options?.where?.parentDepartmentId === adminDeptId) {
             return childDeptIds.map((id) => ({ id }));
           }
@@ -236,7 +247,7 @@ describe('UsersService', () => {
 
     // ===== HAPPY PATH TESTS (T007) =====
 
-    it('[HP1] System Admin xem user detail — HTTP 200, đầy đủ 17 fields (AC-001, AC-012)', async () => {
+    it('[HP1] System Admin xem user detail — HTTP 200, d?y d? 17 fields (AC-001, AC-012)', async () => {
       setupSystemAdmin();
 
       const result = await service.getUserDetail(targetUserId, authUserId);
@@ -266,7 +277,6 @@ describe('UsersService', () => {
       expect(result.hasFaceProfile).toBe(true);
       expect(result.createdAt).toBe('2026-01-15T08:00:00.000Z');
 
-      // Verify 16 fields exist
       const fieldCount = Object.keys(result).length;
       expect(fieldCount).toBe(16);
     });
@@ -281,7 +291,7 @@ describe('UsersService', () => {
       expect(result.fullName).toBe('Nguyen Van A');
     });
 
-    it('[HP3] Business Admin xem user ở child department — HTTP 200 (AC-013)', async () => {
+    it('[HP3] Business Admin xem user child department — HTTP 200 (AC-013)', async () => {
       setupBusinessAdmin('parent-dept', 'child-dept', ['child-dept']);
 
       const result = await service.getUserDetail(targetUserId, authUserId);
@@ -291,7 +301,6 @@ describe('UsersService', () => {
     });
 
     it('[HP4] Self-view (Business Admin xem chính mình) — bypass scope (AC-014)', async () => {
-      // Self-view: targetUserId === authUserId
       em.findOne.mockImplementation(async (entityClass, options: any) => {
         if (entityClass === UserEntity) {
           if (options?.where?.id === authUserId) {
@@ -304,7 +313,7 @@ describe('UsersService', () => {
           return null;
         }
         if (entityClass === FaceProfileEntity) {
-          return null; // No face profile for self
+          return null;
         }
         return null;
       });
@@ -325,7 +334,6 @@ describe('UsersService', () => {
         async (_entityClass: unknown, entity: unknown) => entity,
       );
 
-      // Should NOT throw ForbiddenException despite being out of scope
       const result = await service.getUserDetail(authUserId, authUserId);
 
       expect(result).toBeDefined();
@@ -335,7 +343,7 @@ describe('UsersService', () => {
 
     // ===== ERROR CASE TESTS (T008) =====
 
-    it('[E5] User không tồn tại — 404 USER_NOT_FOUND (AC-007)', async () => {
+    it('[E5] User không t?n t?i — 404 USER_NOT_FOUND (AC-007)', async () => {
       em.findOne.mockImplementation(async (entityClass: unknown) => {
         if (entityClass === UserEntity) return null;
         return null;
@@ -348,7 +356,6 @@ describe('UsersService', () => {
     });
 
     it('[E6] User soft-deleted — 404 USER_NOT_FOUND (AC-008)', async () => {
-      // Mock: findOne returns null for the target (as if soft-deleted)
       em.findOne.mockImplementation(
         async (entityClass: unknown, options: any) => {
           if (entityClass === UserEntity) {
@@ -356,7 +363,7 @@ describe('UsersService', () => {
               options?.where?.id === targetUserId &&
               options?.where?.deletedAt !== undefined
             ) {
-              return null; // Soft-deleted user is excluded by deletedAt: IsNull()
+              return null;
             }
           }
           return null;
@@ -379,7 +386,6 @@ describe('UsersService', () => {
     it('Audit log failure không block response (non-blocking try/catch)', async () => {
       setupSystemAdmin();
 
-      // Make audit log save fail
       em.save.mockImplementation(async (entityClass: unknown) => {
         if (entityClass === AuditLogEntity) {
           throw new Error('Audit service down');
@@ -404,7 +410,6 @@ describe('UsersService', () => {
 
     it('[HP4] hasFaceProfile = false khi không có face_profile (AC-002)', async () => {
       setupSystemAdmin();
-      // Override face profile to return null
       em.findOne.mockImplementation(
         async (entityClass: unknown, options: any) => {
           if (entityClass === UserEntity) {
@@ -414,7 +419,7 @@ describe('UsersService', () => {
             return null;
           }
           if (entityClass === FaceProfileEntity) {
-            return null; // No face profile
+            return null;
           }
           return null;
         },
@@ -458,7 +463,6 @@ describe('UsersService', () => {
 
       const result = await service.getUserDetail(targetUserId, authUserId);
       expect(result.directManager).toBeNull();
-      // Verify field is present (not omitted)
       expect(result).toHaveProperty('directManager');
     });
 
@@ -498,7 +502,7 @@ describe('UsersService', () => {
       expect(result.avatarUrl).toBeNull();
     });
 
-    it('[HP7] avatarUrl có giá trị từ DB (AC-017)', async () => {
+    it('[HP7] avatarUrl có giá tr? t? DB (AC-017)', async () => {
       setupSystemAdmin();
       const result = await service.getUserDetail(targetUserId, authUserId);
       expect(result.avatarUrl).toBe(
@@ -506,7 +510,7 @@ describe('UsersService', () => {
       );
     });
 
-    it('[AC-018] employmentStatus chỉ nhận 4 enum values', async () => {
+    it('[AC-018] employmentStatus ch? nh?n 4 enum values', async () => {
       setupSystemAdmin();
       const result = await service.getUserDetail(targetUserId, authUserId);
       expect(['active', 'probation', 'resigned', 'transferred']).toContain(
@@ -518,17 +522,13 @@ describe('UsersService', () => {
       setupSystemAdmin();
       await service.getUserDetail(targetUserId, authUserId);
 
-      // findOne and find should have been called for SELECT operations
       expect(em.findOne).toHaveBeenCalled();
       expect(em.find).toHaveBeenCalled();
-      // Verify no save was called for data mutation (audit log save is allowed)
-      // Audit log save is non-blocking but still a save operation
     });
   });
 
   describe('createUser', () => {
-    it('should create user successfully (Happy Path)', async () => {
-      // Mock checks passing
+    it('should create user and enqueue credential email (Happy Path)', async () => {
       em.findOne.mockImplementation(
         async (entityClass, options?: MockFindOneOptions) => {
           if (entityClass === UserEntity) {
@@ -539,7 +539,6 @@ describe('UsersService', () => {
                 employmentStatus: 'active',
               };
             }
-            // No email / username / employeeCode exists
             return null;
           }
           if (entityClass === DepartmentEntity) {
@@ -560,7 +559,6 @@ describe('UsersService', () => {
         },
       );
 
-      // Mock save results
       const mockSavedUser = {
         id: 'new-user-id',
         fullName: 'Nguyen Van A',
@@ -593,8 +591,18 @@ describe('UsersService', () => {
       expect(result.mustChangePassword).toBe(true);
       expect(result.roles[0].roleCode).toBe('employee');
 
+      // Transaction contains 3 saves: User + UserRole + AuditLog
       expect(dataSource.transaction).toHaveBeenCalled();
-      expect(em.save).toHaveBeenCalledTimes(4); // User + UserRole + BackgroundJob + AuditLog
+      expect(em.save).toHaveBeenCalledTimes(3);
+
+      // After transaction: enqueueEmailNotification called
+      expect(notificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toEmails: ['nva@company.com'],
+          relatedEntityType: 'users',
+          relatedEntityId: 'new-user-id',
+        }),
+      );
     });
 
     it('should throw ConflictException if email already exists', async () => {
@@ -635,7 +643,7 @@ describe('UsersService', () => {
     it('should throw NotFoundException if department does not exist', async () => {
       em.findOne.mockImplementation(async (entityClass) => {
         if (entityClass === UserEntity) return null;
-        if (entityClass === DepartmentEntity) return null; // not found
+        if (entityClass === DepartmentEntity) return null;
         return null;
       });
 
@@ -648,10 +656,7 @@ describe('UsersService', () => {
       em.findOne.mockImplementation(async (entityClass) => {
         if (entityClass === UserEntity) return null;
         if (entityClass === DepartmentEntity) {
-          return {
-            id: 'dept-id',
-            isActive: false,
-          }; // inactive
+          return { id: 'dept-id', isActive: false };
         }
         return null;
       });
@@ -665,11 +670,8 @@ describe('UsersService', () => {
       em.findOne.mockImplementation(async (entityClass) => {
         if (entityClass === UserEntity) return null;
         if (entityClass === DepartmentEntity)
-          return {
-            id: 'dept-id',
-            isActive: true,
-          };
-        if (entityClass === RoleEntity) return null; // role not found
+          return { id: 'dept-id', isActive: true };
+        if (entityClass === RoleEntity) return null;
         return null;
       });
 
@@ -682,12 +684,9 @@ describe('UsersService', () => {
       em.findOne.mockImplementation(async (entityClass) => {
         if (entityClass === UserEntity) return null;
         if (entityClass === DepartmentEntity)
-          return {
-            id: 'dept-id',
-            isActive: true,
-          };
+          return { id: 'dept-id', isActive: true };
         if (entityClass === RoleEntity)
-          return { id: 'role-id-1', isActive: false }; // inactive
+          return { id: 'role-id-1', isActive: false };
         return null;
       });
 
@@ -706,10 +705,7 @@ describe('UsersService', () => {
               return { id: 'existing-id' };
           }
           if (entityClass === DepartmentEntity)
-            return {
-              id: 'dept-id',
-              isActive: true,
-            };
+            return { id: 'dept-id', isActive: true };
           if (entityClass === RoleEntity)
             return { id: 'role-id-1', isActive: true };
           return null;
@@ -725,14 +721,11 @@ describe('UsersService', () => {
       em.findOne.mockImplementation(
         async (entityClass, options?: MockFindOneOptions) => {
           if (entityClass === UserEntity) {
-            if (options?.where?.id === 'manager-id') return null; // manager not found
+            if (options?.where?.id === 'manager-id') return null;
             return null;
           }
           if (entityClass === DepartmentEntity)
-            return {
-              id: 'dept-id',
-              isActive: true,
-            };
+            return { id: 'dept-id', isActive: true };
           if (entityClass === RoleEntity)
             return { id: 'role-id-1', isActive: true };
           return null;
@@ -751,17 +744,14 @@ describe('UsersService', () => {
             if (options?.where?.id === 'manager-id') {
               return {
                 id: 'manager-id',
-                accountStatus: 'inactive', // inactive
+                accountStatus: 'inactive',
                 employmentStatus: 'active',
               };
             }
             return null;
           }
           if (entityClass === DepartmentEntity)
-            return {
-              id: 'dept-id',
-              isActive: true,
-            };
+            return { id: 'dept-id', isActive: true };
           if (entityClass === RoleEntity)
             return { id: 'role-id-1', isActive: true };
           return null;
@@ -773,8 +763,7 @@ describe('UsersService', () => {
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
-    it('should propagate error and rollback if background job fails to queue', async () => {
-      // Mock checks passing
+    it('should create user successfully even if notification enqueue fails (non-blocking)', async () => {
       em.findOne.mockImplementation(
         async (entityClass, options?: MockFindOneOptions) => {
           if (entityClass === UserEntity) {
@@ -788,45 +777,46 @@ describe('UsersService', () => {
             return null;
           }
           if (entityClass === DepartmentEntity)
-            return {
-              id: 'dept-id',
-              isActive: true,
-            };
+            return { id: 'dept-id', isActive: true };
           if (entityClass === RoleEntity)
             return { id: 'role-id-1', isActive: true };
           return null;
         },
       );
 
+      const mockSavedUser = {
+        id: 'new-user-id',
+        fullName: 'Nguyen Van A',
+        email: 'nva@company.com',
+        accountStatus: 'active',
+        mustChangePassword: true,
+        createdAt: new Date(),
+      };
       em.create.mockImplementation(
         <T>(_entityClass: unknown, plain: T): T => plain,
       );
       em.save.mockImplementation(
         async <T>(entityClass: unknown, entity: T): Promise<T> => {
           if (entityClass === UserEntity) {
-            return {
-              id: 'new-user-id',
-              email: 'nva@company.com',
-            } as unknown as T;
-          }
-          // Fail when saving background job
-          if (
-            typeof entityClass === 'function' &&
-            entityClass.name === 'BackgroundJobEntity'
-          ) {
-            throw new Error('Database connection failed');
+            return mockSavedUser as unknown as T;
           }
           return entity;
         },
       );
 
-      await expect(
-        service.createUser(validDto, 'creator-id', {}),
-      ).rejects.toThrow('Database connection failed');
+      // Make notification enqueue fail
+      notificationsService.enqueueEmailNotification.mockRejectedValue(
+        new Error('Queue service down'),
+      );
+
+      const result = await service.createUser(validDto, 'creator-id', {});
+
+      // User creation still succeeds
+      expect(result).toBeDefined();
+      expect(result.id).toBe('new-user-id');
     });
 
     it('should not block user creation if audit log writing fails', async () => {
-      // Mock checks passing
       em.findOne.mockImplementation(
         async (entityClass, options?: MockFindOneOptions) => {
           if (entityClass === UserEntity) {
@@ -840,10 +830,7 @@ describe('UsersService', () => {
             return null;
           }
           if (entityClass === DepartmentEntity)
-            return {
-              id: 'dept-id',
-              isActive: true,
-            };
+            return { id: 'dept-id', isActive: true };
           if (entityClass === RoleEntity)
             return { id: 'role-id-1', isActive: true };
           return null;
@@ -866,7 +853,6 @@ describe('UsersService', () => {
           if (entityClass === UserEntity) {
             return mockSavedUser as unknown as T;
           }
-          // Fail when saving audit log
           if (
             typeof entityClass === 'function' &&
             entityClass.name === 'AuditLogEntity'
@@ -880,7 +866,6 @@ describe('UsersService', () => {
       const result = await service.createUser(validDto, 'creator-id', {});
       expect(result).toBeDefined();
       expect(result.id).toBe('new-user-id');
-      // Audit log failed, but user creation succeeded
     });
   });
 });

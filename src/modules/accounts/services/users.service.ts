@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   Logger,
   ConflictException,
@@ -19,14 +19,12 @@ import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
 import { FaceProfileEntity } from '../entities/face-profile.entity.js';
 import {
-  BackgroundJobEntity,
-  BackgroundJobType,
-  BackgroundJobStatus,
-} from '../../administration/entities/background-job.entity.js';
-import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import { NotificationType, NotificationChannel } from '../../notifications/entities/notification.entity.js';
 
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -56,6 +54,7 @@ export class UsersService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly passwordGeneratorService: PasswordGeneratorService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createUser(
@@ -69,7 +68,7 @@ export class UsersService {
     let createdUser: UserEntity;
     let roles: RoleEntity[] = [];
 
-    // Run transaction
+    // ── Transaction: core business data only ──
     await this.dataSource.transaction(async (em) => {
       // 1. Check duplicate email
       const existingEmail = await em.findOne(UserEntity, {
@@ -78,7 +77,7 @@ export class UsersService {
       if (existingEmail) {
         throw new ConflictException({
           success: false,
-          message: 'Địa chỉ email này đã được sử dụng cho một tài khoản khác.',
+          message: 'Äá»‹a chá»‰ email nÃ y Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng cho má»™t tÃ i khoáº£n khÃ¡c.',
           error: { code: 'ACCOUNT_EMAIL_ALREADY_EXISTS', details: { email } },
         });
       }
@@ -90,7 +89,7 @@ export class UsersService {
       if (existingUsername) {
         throw new ConflictException({
           success: false,
-          message: 'Tên người dùng này đã tồn tại trong hệ thống.',
+          message: 'TÃªn ngÆ°á»i dÃ¹ng nÃ y Ä‘Ã£ tá»“n táº¡i trong há»‡ thá»‘ng.',
           error: {
             code: 'ACCOUNT_USERNAME_ALREADY_EXISTS',
             details: { username: email },
@@ -105,7 +104,7 @@ export class UsersService {
       if (!department) {
         throw new NotFoundException({
           success: false,
-          message: 'Phòng ban được chỉ định không tồn tại.',
+          message: 'PhÃ²ng ban Ä‘Æ°á»£c chá»‰ Ä‘á»‹nh khÃ´ng tá»“n táº¡i.',
           error: {
             code: 'DEPARTMENT_NOT_FOUND',
             details: { departmentId: dto.departmentId },
@@ -115,7 +114,7 @@ export class UsersService {
       if (!department.isActive) {
         throw new UnprocessableEntityException({
           success: false,
-          message: 'Phòng ban được chỉ định không hoạt động hoặc đã bị xóa.',
+          message: 'PhÃ²ng ban Ä‘Æ°á»£c chá»‰ Ä‘á»‹nh khÃ´ng hoáº¡t Ä‘á»™ng hoáº·c Ä‘Ã£ bá»‹ xÃ³a.',
           error: {
             code: 'DEPARTMENT_INACTIVE_OR_DELETED',
             details: { departmentId: dto.departmentId },
@@ -132,7 +131,7 @@ export class UsersService {
         if (!role) {
           throw new NotFoundException({
             success: false,
-            message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
+            message: 'Má»™t hoáº·c nhiá»u vai trÃ² Ä‘Æ°á»£c chá»‰ Ä‘á»‹nh khÃ´ng tá»“n táº¡i.',
             error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
           });
         }
@@ -140,7 +139,7 @@ export class UsersService {
           throw new UnprocessableEntityException({
             success: false,
             message:
-              'Một hoặc nhiều vai trò được chọn đang ở trạng thái không hoạt động.',
+              'Má»™t hoáº·c nhiá»u vai trÃ² Ä‘Æ°á»£c chá»n Ä‘ang á»Ÿ tráº¡ng thÃ¡i khÃ´ng hoáº¡t Ä‘á»™ng.',
             error: { code: 'ROLE_INACTIVE', details: { roleId } },
           });
         }
@@ -155,7 +154,7 @@ export class UsersService {
         if (existingCode) {
           throw new ConflictException({
             success: false,
-            message: 'Mã nhân viên này đã được đăng ký bởi tài khoản khác.',
+            message: 'MÃ£ nhÃ¢n viÃªn nÃ y Ä‘Ã£ Ä‘Æ°á»£c Ä‘Äƒng kÃ½ bá»Ÿi tÃ i khoáº£n khÃ¡c.',
             error: {
               code: 'ACCOUNT_EMPLOYEE_CODE_ALREADY_EXISTS',
               details: { employeeCode },
@@ -172,7 +171,7 @@ export class UsersService {
         if (!manager) {
           throw new NotFoundException({
             success: false,
-            message: 'Người quản lý trực tiếp không tồn tại trong hệ thống.',
+            message: 'NgÆ°á»i quáº£n lÃ½ trá»±c tiáº¿p khÃ´ng tá»“n táº¡i trong há»‡ thá»‘ng.',
             error: {
               code: 'MANAGER_NOT_FOUND',
               details: { directManagerId: dto.directManagerId },
@@ -186,7 +185,7 @@ export class UsersService {
           throw new UnprocessableEntityException({
             success: false,
             message:
-              'Người quản lý trực tiếp đang bị khóa, chưa kích hoạt hoặc đã nghỉ việc.',
+              'NgÆ°á»i quáº£n lÃ½ trá»±c tiáº¿p Ä‘ang bá»‹ khÃ³a, chÆ°a kÃ­ch hoáº¡t hoáº·c Ä‘Ã£ nghá»‰ viá»‡c.',
             error: {
               code: 'MANAGER_INACTIVE_OR_UNAVAILABLE',
               details: { directManagerId: dto.directManagerId },
@@ -230,33 +229,7 @@ export class UsersService {
         await em.save(UserRoleEntity, userRole);
       }
 
-      // 10. Queue credential email in background_jobs
-      const inputJson = {
-        to: email,
-        subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
-        template: 'welcome-credential',
-        context: {
-          fullName: createdUser.fullName,
-          username: email,
-          temporaryPassword: tempPassword,
-          mustChangePassword: true,
-        },
-      };
-
-      const emailJob = em.create(BackgroundJobEntity, {
-        jobType: BackgroundJobType.SEND_EMAIL,
-        relatedEntityType: 'users',
-        relatedEntityId: createdUser.id,
-        requestedBy: creatorId,
-        status: BackgroundJobStatus.QUEUED,
-        priority: 0,
-        retryCount: 0,
-        inputJson,
-      });
-
-      await em.save(BackgroundJobEntity, emailJob);
-
-      // 11. Write audit log (non-blocking)
+      // 10. Write audit log (non-blocking, inside transaction)
       try {
         const auditLog = em.create(AuditLogEntity, {
           userId: creatorId,
@@ -286,6 +259,66 @@ export class UsersService {
         );
       }
     });
+
+    // ── After transaction: enqueue credential email via NotificationsService ──
+    const credentialContent = [
+      'Kính g?i ' + createdUser!.fullName + ',',
+      '',
+      'Tài kho?n Smart Meeting c?a b?n dã du?c t?o thành công.',
+      '',
+      'Thông tin d?ng nh?p:',
+      '- Email: ' + email,
+      '',
+      'Vui lòng d?ng nh?p và d?i m?t kh?u ngay sau l?n d?u tiên.',
+      '',
+      'Trân tr?ng,',
+      'H? th?ng Smart Meeting Management',
+    ].join('\n');
+
+    try {
+      await this.notificationsService.enqueueEmailNotification({
+        notificationType: NotificationType.ACCOUNT_WELCOME,
+        channel: NotificationChannel.EMAIL,
+        subject: 'Thông tin tài kho?n Smart Meeting m?i c?a b?n',
+        content: credentialContent,
+        toEmails: [email],
+        relatedEntityType: 'users',
+        relatedEntityId: createdUser!.id,
+        recipientScope: 'user_list',
+        createdBy: creatorId,
+        payloadJson: {
+          fullName: createdUser!.fullName,
+          username: email,
+          mustChangePassword: true,
+        },
+      });
+    } catch (enqueueError) {
+      this.logger.error(
+        `Failed to enqueue welcome email for user ${createdUser!.id}: ${(enqueueError as Error).message}`,
+      );
+      // Non-blocking: write warning audit log, do NOT rollback user creation
+      try {
+        const em = this.dataSource.manager;
+        await em.save(AuditLogEntity, {
+          userId: creatorId,
+          actionType: 'NOTIFICATION_ENQUEUE_FAILED',
+          entityType: 'users',
+          entityId: createdUser!.id,
+          severity: AuditLogSeverity.WARNING,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+          metadataJson: {
+            error: 'Failed to enqueue welcome credential email',
+            details: (enqueueError as Error).message,
+          },
+        } as any);
+      } catch (auditError) {
+        this.logger.error(
+          `Failed to write audit log for notification failure of user ${createdUser!.id}: ${(auditError as Error).message}`,
+        );
+      }
+    }
 
     // Map roles to DTO structure
     const rolesDto: UserRoleResponseDto[] = roles.map((role) => ({
@@ -322,12 +355,12 @@ export class UsersService {
     if (!targetUser) {
       throw new NotFoundException({
         success: false,
-        message: 'Không tìm thấy tài khoản.',
+        message: 'Không tìm th?y tài kho?n.',
         error: { code: 'USER_NOT_FOUND', details: {} },
       });
     }
 
-    // 2. Determine authenticated user's role
+    // 2. Determine authenticated user role
     const authUserRoles = await em.find(UserRoleEntity, {
       where: { userId: authenticatedUserId, isActive: true },
       relations: { role: true },
@@ -344,7 +377,7 @@ export class UsersService {
       if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
         throw new ForbiddenException({
           success: false,
-          message: 'Bạn không có quyền xem hồ sơ của nhân sự này.',
+          message: 'B?n không có quy?n xem h? s? c?a nhân s? này.',
           error: { code: 'FORBIDDEN', details: {} },
         });
       }
