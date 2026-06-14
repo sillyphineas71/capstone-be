@@ -1,30 +1,32 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
+import { ConfigService } from '@nestjs/config';
 import { NotificationEntity } from './entities/notification.entity.js';
 import { NotificationsService } from './notifications.service.js';
-import { AccountsModule } from '../accounts/accounts.module.js';
+import { NotificationWorkerService } from './notification-worker.service.js';
+import { BackgroundJobEntity } from '../administration/entities/background-job.entity.js';
 
-/**
- * NotificationsModule — Module quản lý notifications.
- *
- * NotificationsService cung cấp:
- * - createNotification(): tạo row trong bảng notifications
- * - enqueueEmailNotification(): full chain (notification row + background_job + BullMQ job)
- * - markQueued/markSent/markFailed(): lifecycle tracking
- *
- * Phụ thuộc vào (inject qua @Global modules):
- * - QueueService (từ QueueModule @Global)
- * - BackgroundJobsService (từ AdministrationModule @Global)
- */
 @Module({
-  imports: [
-    ConfigModule,
-    AccountsModule,
-    TypeOrmModule.forFeature([NotificationEntity]),
-  ],
-  providers: [NotificationsService],
-  exports: [TypeOrmModule, NotificationsService],
+    imports: [
+        ConfigModule,
+        TypeOrmModule.forFeature([
+            NotificationEntity,
+            BackgroundJobEntity,
+        ]),
+        BullModule.registerQueueAsync({
+            name: 'QUEUE_NOTIFICATION_NAME',
+            inject: [ConfigService],
+            useFactory: (cs: ConfigService) => ({
+                name: cs.get<string>('QUEUE_NOTIFICATION', 'notification'),
+            }),
+        }),
+    ],
+    providers: [
+        NotificationsService,
+        NotificationWorkerService,
+    ],
+    exports: [TypeOrmModule, NotificationsService],
 })
 export class NotificationsModule {}
-
