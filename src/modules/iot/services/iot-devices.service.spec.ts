@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service.js';
 import { DataSource } from 'typeorm';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
+import { IotDeviceEventsService } from './iot-device-events.service.js';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { IoTDeviceType } from '../entities/iot-device.entity.js';
 
@@ -47,6 +48,10 @@ describe('IotDevicesService', () => {
         {
           provide: IotAuditRepository,
           useValue: auditRepoMock as IotAuditRepository,
+        },
+        {
+          provide: IotDeviceEventsService,
+          useValue: { storeRawEvent: jest.fn() } as unknown as IotDeviceEventsService,
         },
       ],
     }).compile();

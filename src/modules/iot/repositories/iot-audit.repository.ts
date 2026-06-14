@@ -49,4 +49,51 @@ export class IotAuditRepository {
       [params.userId, params.deviceId, JSON.stringify(metadata)],
     );
   }
+
+  async logConfigureFaceServer(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      configMetadata: Record<string, any>;
+    },
+  ): Promise<void> {
+    // metadata must not contain one_time_callback_token or callback_token_hash
+    const safeMetadata = { ...params.configMetadata };
+    delete safeMetadata.one_time_callback_token;
+    delete safeMetadata.callback_token_hash;
+
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'configure_face_server', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [params.userId, params.deviceId, JSON.stringify(safeMetadata)],
+    );
+  }
+
+  async logConfigureRtsp(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      configMetadata: Record<string, any>;
+      passwordProvided: boolean;
+    },
+  ): Promise<void> {
+    // SEC-01: the real RTSP password must never reach this layer. We only record a
+    // boolean derived from whether the caller supplied one in this request.
+    const safeMetadata = { ...params.configMetadata };
+    safeMetadata.rtsp_password_configured = params.passwordProvided;
+    delete safeMetadata.rtsp_password;
+    delete safeMetadata.rtsp_password_encrypted;
+
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'configure_rtsp', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [params.userId, params.deviceId, JSON.stringify(safeMetadata)],
+    );
+  }
 }

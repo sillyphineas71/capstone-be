@@ -9,7 +9,12 @@ import { DeviceUserMappingEntity } from './entities/device-user-mapping.entity.j
 import { CaptureSessionEntity } from './entities/capture-session.entity.js';
 import { CaptureSessionChannelEntity } from './entities/capture-session-channel.entity.js';
 import { IotDevicesController } from './controllers/iot-devices.controller.js';
+import { DeviceCallbacksController } from './controllers/device-callbacks.controller.js';
+import { ShortDeviceCallbacksController } from './controllers/short-device-callbacks.controller.js';
+import { VerifyShortDeviceCallbacksController } from './controllers/verify-short-device-callbacks.controller.js';
+import { StrangerShortDeviceCallbacksController } from './controllers/stranger-short-device-callbacks.controller.js';
 import { IotDevicesService } from './services/iot-devices.service.js';
+import { IotDeviceEventsService } from './services/iot-device-events.service.js';
 import { IotAuditRepository } from './repositories/iot-audit.repository.js';
 
 @Module({
@@ -25,8 +30,14 @@ import { IotAuditRepository } from './repositories/iot-audit.repository.js';
     JwtModule.register({}),
     CacheModule.register(),
   ],
-  controllers: [IotDevicesController],
-  providers: [IotDevicesService, IotAuditRepository],
-  exports: [TypeOrmModule],
+  controllers: [
+    IotDevicesController,
+    DeviceCallbacksController,
+    ShortDeviceCallbacksController,
+    VerifyShortDeviceCallbacksController,
+    StrangerShortDeviceCallbacksController,
+  ],
+  providers: [IotDevicesService, IotDeviceEventsService, IotAuditRepository],
+  exports: [TypeOrmModule, IotDevicesService, IotDeviceEventsService],
 })
 export class IotModule {}

@@ -24,13 +24,10 @@ export class AuthConfigService {
   }
 
   getRateLimitMaxAttempts(): number {
-    return this.configService.get<number>('AUTH_RATE_LIMIT_MAX_ATTEMPTS', 5);
+    return this.configService.get<number>('AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS', 5);
   }
 
   getRateLimitWindowSeconds(): number {
-    return this.configService.get<number>(
-      'AUTH_RATE_LIMIT_WINDOW_SECONDS',
-      300,
-    );
+    return this.configService.get<number>('AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS', 300);
   }
 }

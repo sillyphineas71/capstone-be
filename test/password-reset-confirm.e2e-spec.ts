@@ -21,7 +21,9 @@ jest.mock('typeorm', () => {
       initialize = jest.fn().mockResolvedValue(this);
       destroy = jest.fn().mockResolvedValue(undefined);
       query = jest.fn().mockResolvedValue([]);
-      transaction = jest.fn().mockImplementation((cb) => cb({ query: jest.fn() }));
+      transaction = jest
+        .fn()
+        .mockImplementation((cb) => cb({ query: jest.fn() }));
     },
   };
 });

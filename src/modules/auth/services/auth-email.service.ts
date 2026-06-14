@@ -1,53 +1,41 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { MailService } from '../../mail/mail.service';
 
 @Injectable()
 export class AuthEmailService {
   private readonly logger = new Logger(AuthEmailService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly mailService: MailService) {}
 
-  /**
-   * Sends a Vietnamese password reset OTP email to the user.
-   * If the email ends with '@error.com', it simulates an SMTP dispatch failure.
-   */
   async sendOtp(email: string, otp: string): Promise<void> {
-    try {
-      this.logger.log(
-        `[Email Service] Gửi mã OTP khôi phục mật khẩu đến: ${email}`,
-      );
+    // Test hook: simulate SMTP failure for error handling verification
+    if (email.endsWith('@error.com')) {
+      throw new InternalServerErrorException('AUTH_EMAIL_DISPATCH_FAILED');
+    }
 
-      const mailContent = `
-========================================================================
-Kính gửi người dùng,
+    const subject = 'Kh�i ph?c m?t kh?u - Smart Meeting Management';
+    const text = [
+      'K�nh g?i ngu?i d�ng,',
+      '',
+      'B?n d� g?i y�u c?u d?t l?i m?t kh?u tr�n h? th?ng Smart Meeting Management.',
+      `M� OTP x�c th?c c?a b?n l�: ${otp}`,
+      '',
+      'M� OTP n�y c� hi?u l?c trong v�ng 10 ph�t. �? b?o m?t, vui l�ng kh�ng chia s? m� n�y cho b?t k? ai.',
+      'N?u b?n kh�ng g?i y�u c?u n�y, vui l�ng b? qua email n�y v� b?o m?t t�i kho?n.',
+      '',
+      'Tr�n tr?ng,',
+      'H? th?ng Smart Meeting Management',
+    ].join('\n');
 
-Bạn đã gửi yêu cầu đặt lại mật khẩu trên hệ thống Smart Meeting Management.
-Mã OTP xác thực của bạn là: ${otp}
+    const result = await this.mailService.sendMail({ to: email, subject, text });
 
-Mã OTP này có hiệu lực trong vòng 10 phút. Để bảo mật, vui lòng không chia sẻ mã này cho bất kỳ ai.
-Nếu bạn không gửi yêu cầu này, vui lòng bỏ qua email này và bảo mật tài khoản.
-
-Trân trọng,
-Hệ thống Smart Meeting Management
-========================================================================
-      `;
-
-      this.logger.log(mailContent);
-
-      // Simulating external SMTP failure for error handling verification
-      if (email.endsWith('@error.com')) {
-        throw new Error('Simulated SMTP connection failed');
-      }
-    } catch (error) {
+    if (!result.success) {
       this.logger.error(
-        `Lỗi khi gửi email đến ${email}: ${error.message}`,
-        error.stack,
+        `Failed to send OTP email to ${email}: ${result.error}`,
       );
       throw new InternalServerErrorException('AUTH_EMAIL_DISPATCH_FAILED');
     }
+
+    this.logger.log(`OTP email sent to ${email}`);
   }
 }

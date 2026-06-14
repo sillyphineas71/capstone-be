@@ -1,0 +1,79 @@
+﻿import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
+import { MeetingEntity } from './meeting.entity.js';
+
+export enum MeetingEventType {
+  MEETING_STARTED = 'meeting_started',
+  MEETING_ENDED = 'meeting_ended',
+  EXTENSION_REQUESTED = 'extension_requested',
+  WARNING_SENT = 'warning_sent',
+  STATUS_CHANGED = 'status_changed',
+  MEETING_REQUEST_CREATED = 'meeting_request_created',
+  MEETING_REQUEST_APPROVED = 'meeting_request_approved',
+  MEETING_REQUEST_REJECTED = 'meeting_request_rejected',
+  MEETING_TIME_UPDATED = 'meeting_time_updated',
+  ROOM_CHANGED = 'room_changed',
+  PARTICIPANT_REMOVED = 'participant_removed',
+}
+
+export enum MeetingEventSourceType {
+  MANUAL = 'manual',
+  SYSTEM = 'system',
+  WEBSOCKET = 'websocket',
+  MQTT = 'mqtt',
+  SCHEDULER = 'scheduler',
+}
+
+@Entity('meeting_events')
+export class MeetingEventEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'meeting_id', type: 'uuid' })
+  meetingId: string;
+
+  @Column({ name: 'event_type', type: 'varchar', length: 60 })
+  eventType: MeetingEventType;
+
+  @Column({ name: 'event_time', type: 'timestamptz', default: () => 'now()' })
+  eventTime: Date;
+
+  @Column({ name: 'actor_user_id', type: 'uuid', nullable: true })
+  actorUserId: string | null;
+
+  @Column({
+    name: 'source_type',
+    type: 'varchar',
+    length: 30,
+    default: MeetingEventSourceType.SYSTEM,
+  })
+  sourceType: MeetingEventSourceType;
+
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
+
+  @Column({ name: 'old_value_json', type: 'jsonb', nullable: true })
+  oldValueJson: Record<string, unknown> | null;
+
+  @Column({ name: 'new_value_json', type: 'jsonb', nullable: true })
+  newValueJson: Record<string, unknown> | null;
+
+  @Column({ name: 'metadata_json', type: 'jsonb', nullable: true })
+  metadataJson: Record<string, unknown> | null;
+
+  // Relations
+  @ManyToOne(() => MeetingEntity, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'meeting_id' })
+  meeting: MeetingEntity;
+
+  @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'actor_user_id' })
+  actorUser: UserEntity | null;
+}
+

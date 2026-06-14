@@ -1,13 +1,6 @@
-import {
-  Inject,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-// import { Cache } from 'cache-manager';
-import type { Cache } from 'cache-manager';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { PasswordResetOtpSession } from '../types/password-reset.types';
+import { RedisService } from '../../redis/redis.service';
 
 @Injectable()
 export class PasswordResetCacheService {
@@ -17,24 +10,12 @@ export class PasswordResetCacheService {
   private readonly LIMIT_PREFIX = 'otp_limit:password_reset:';
   private readonly BLOCK_PREFIX = 'otp_blocked:password_reset:';
 
-  constructor(@Inject(CACHE_MANAGER) private readonly cacheManager: Cache) {}
+  constructor(private readonly redisService: RedisService) {}
 
-  /**
-   * Retrieves the current OTP session from cache.
-   */
   async getOtpSession(email: string): Promise<PasswordResetOtpSession | null> {
     try {
       const key = `${this.OTP_PREFIX}${email}`;
-      const data = await this.cacheManager.get<
-        string | PasswordResetOtpSession
-      >(key);
-      if (!data) return null;
-
-      // Handle cases where store parses JSON automatically vs returns a string
-      if (typeof data === 'string') {
-        return JSON.parse(data) as PasswordResetOtpSession;
-      }
-      return data;
+      return await this.redisService.getJson<PasswordResetOtpSession>(key);
     } catch (error) {
       this.logger.error(
         `Error getting OTP session for ${email}: ${error.message}`,
@@ -46,9 +27,6 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Saves the OTP session to cache with a given TTL.
-   */
   async setOtpSession(
     email: string,
     session: PasswordResetOtpSession,
@@ -56,9 +34,8 @@ export class PasswordResetCacheService {
   ): Promise<void> {
     try {
       const key = `${this.OTP_PREFIX}${email}`;
-      // nestjs/cache-manager with memory/redis store usually takes TTL in milliseconds or seconds depending on version.
-      // We will save it. Let's pass the ttlMs.
-      await this.cacheManager.set(key, session, ttlMs);
+      const ttlSeconds = Math.ceil(ttlMs / 1000);
+      await this.redisService.setJsonWithTtl(key, session, ttlSeconds);
     } catch (error) {
       this.logger.error(
         `Error setting OTP session for ${email}: ${error.message}`,
@@ -70,13 +47,10 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Deletes the OTP session from cache.
-   */
   async deleteOtpSession(email: string): Promise<void> {
     try {
       const key = `${this.OTP_PREFIX}${email}`;
-      await this.cacheManager.del(key);
+      await this.redisService.del(key);
     } catch (error) {
       this.logger.error(
         `Error deleting OTP session for ${email}: ${error.message}`,
@@ -88,15 +62,11 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Retrieves the request/resend limit counter for an email.
-   */
   async getLimitCounter(email: string): Promise<number> {
     try {
       const key = `${this.LIMIT_PREFIX}${email}`;
-      const count = await this.cacheManager.get<number | string>(key);
-      if (!count) return 0;
-      return typeof count === 'string' ? parseInt(count, 10) : count;
+      const count = await this.redisService.get(key);
+      return count !== null ? parseInt(count, 10) : 0;
     } catch (error) {
       this.logger.error(
         `Error getting limit counter for ${email}: ${error.message}`,
@@ -108,16 +78,12 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Increments the request limit counter for an email and returns the new value.
-   * If the counter doesn't exist, it initializes with 1 and sets TTL.
-   */
   async incrementLimitCounter(email: string, ttlMs: number): Promise<number> {
     try {
       const key = `${this.LIMIT_PREFIX}${email}`;
-      const current = await this.getLimitCounter(email);
-      const nextVal = current + 1;
-      await this.cacheManager.set(key, nextVal, ttlMs);
+      const ttlSeconds = Math.ceil(ttlMs / 1000);
+      const nextVal = await this.redisService.incr(key);
+      await this.redisService.expire(key, ttlSeconds);
       return nextVal;
     } catch (error) {
       this.logger.error(
@@ -130,13 +96,10 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Deletes the limit counter.
-   */
   async deleteLimitCounter(email: string): Promise<void> {
     try {
       const key = `${this.LIMIT_PREFIX}${email}`;
-      await this.cacheManager.del(key);
+      await this.redisService.del(key);
     } catch (error) {
       this.logger.error(
         `Error deleting limit counter for ${email}: ${error.message}`,
@@ -148,14 +111,10 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Checks if an email is currently blocked from requesting OTPs.
-   */
   async isBlocked(email: string): Promise<boolean> {
     try {
       const key = `${this.BLOCK_PREFIX}${email}`;
-      const blocked = await this.cacheManager.get(key);
-      return !!blocked;
+      return await this.redisService.exists(key);
     } catch (error) {
       this.logger.error(
         `Error checking block status for ${email}: ${error.message}`,
@@ -167,13 +126,11 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Blocks an email from requesting OTPs for a given TTL.
-   */
   async blockEmail(email: string, ttlMs: number): Promise<void> {
     try {
       const key = `${this.BLOCK_PREFIX}${email}`;
-      await this.cacheManager.set(key, true, ttlMs);
+      const ttlSeconds = Math.ceil(ttlMs / 1000);
+      await this.redisService.setWithTtl(key, '1', ttlSeconds);
     } catch (error) {
       this.logger.error(
         `Error blocking email ${email}: ${error.message}`,
@@ -183,13 +140,10 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Deletes the block key.
-   */
   async deleteBlockKey(email: string): Promise<void> {
     try {
       const key = `${this.BLOCK_PREFIX}${email}`;
-      await this.cacheManager.del(key);
+      await this.redisService.del(key);
     } catch (error) {
       this.logger.error(
         `Error deleting block key for ${email}: ${error.message}`,
@@ -199,13 +153,11 @@ export class PasswordResetCacheService {
     }
   }
 
-  /**
-   * Sets a token invalidation timestamp for the user in Redis.
-   */
   async invalidateUserTokens(userId: string, ttlMs: number): Promise<void> {
     try {
       const key = `auth:user:${userId}:invalid_after`;
-      await this.cacheManager.set(key, Date.now(), ttlMs);
+      const ttlSeconds = Math.ceil(ttlMs / 1000);
+      await this.redisService.setWithTtl(key, String(Date.now()), ttlSeconds);
     } catch (error) {
       this.logger.error(
         `Error invalidating user tokens for ${userId}: ${error.message}`,

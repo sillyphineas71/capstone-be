@@ -1,0 +1,86 @@
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsUUID,
+  IsDateString,
+  IsArray,
+  IsBoolean,
+  IsInt,
+  Min,
+  MaxLength,
+  Validate,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsFutureDateConstraint } from '../validators/is-future-date.validator.js';
+import { IsAfterStartTimeConstraint } from '../validators/is-after-start-time.validator.js';
+import { ExternalParticipantDto } from './external-participant.dto.js';
+
+export class CreateMeetingDto {
+  @IsString({ message: 'Tiêu đề cuộc họp phải là chuỗi ký tự' })
+  @IsNotEmpty({ message: 'Tiêu đề cuộc họp không được để trống' })
+  @MaxLength(255, { message: 'Tiêu đề cuộc họp tối đa 255 ký tự' })
+  title: string;
+
+  @IsString({ message: 'Mô tả phải là chuỗi ký tự' })
+  @MaxLength(2000, { message: 'Mô tả tối đa 2000 ký tự' })
+  @IsOptional()
+  description?: string;
+
+  @IsUUID('4', { message: 'host_id phải là định dạng UUID' })
+  @IsOptional()
+  hostId?: string;
+
+  @IsDateString(
+    { strict: true },
+    { message: 'start_time phải là định dạng ISO 8601' },
+  )
+  @Validate(IsFutureDateConstraint, {
+    message: 'Thời gian bắt đầu không được nằm trong quá khứ',
+  })
+  startTime: string;
+
+  @IsDateString(
+    { strict: true },
+    { message: 'end_time phải là định dạng ISO 8601' },
+  )
+  @Validate(IsAfterStartTimeConstraint, ['startTime'], {
+    message: 'Thời gian kết thúc phải sau thời gian bắt đầu',
+  })
+  endTime: string;
+
+  @IsUUID('4', { message: 'room_id phải là định dạng UUID' })
+  @IsNotEmpty({ message: 'room_id không được để trống' })
+  roomId: string;
+
+  @IsString({ message: 'meeting_type phải là chuỗi ký tự' })
+  @IsOptional()
+  meetingType?: string;
+
+  @IsString({ message: 'meeting_mode phải là chuỗi ký tự' })
+  @IsOptional()
+  meetingMode?: string;
+
+  @IsInt({ message: 'expected_attendee_count phải là số nguyên' })
+  @Min(1, { message: 'expected_attendee_count phải lớn hơn hoặc bằng 1' })
+  @IsOptional()
+  expectedAttendeeCount?: number;
+
+  @IsBoolean({ message: 'capacity_override_confirmed phải là boolean' })
+  @IsOptional()
+  capacityOverrideConfirmed?: boolean;
+
+  @IsArray({ message: 'participant_user_ids phải là mảng' })
+  @IsUUID('4', {
+    each: true,
+    message: 'Mỗi participant_user_id phải là định dạng UUID',
+  })
+  @IsOptional()
+  participantUserIds?: string[];
+
+  @ValidateNested({ each: true })
+  @Type(() => ExternalParticipantDto)
+  @IsOptional()
+  externalParticipants?: ExternalParticipantDto[];
+}

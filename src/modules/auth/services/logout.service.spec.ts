@@ -1,23 +1,23 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { LogoutService } from './logout.service';
+import { RedisService } from '../../redis/redis.service';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { Request } from 'express';
 
 describe('LogoutService', () => {
   let service: LogoutService;
-  let cacheManager: { set: jest.Mock };
+  let redisService: { setWithTtl: jest.Mock };
   let authAuditRepository: { logLogoutSuccess: jest.Mock };
 
   beforeEach(async () => {
-    cacheManager = { set: (jest.Mock = jest.fn()) };
-    authAuditRepository = { logLogoutSuccess: (jest.Mock = jest.fn()) };
+    redisService = { setWithTtl: jest.fn() };
+    authAuditRepository = { logLogoutSuccess: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LogoutService,
-        { provide: CACHE_MANAGER, useValue: cacheManager },
+        { provide: RedisService, useValue: redisService },
         { provide: AuthAuditRepository, useValue: authAuditRepository },
       ],
     }).compile();
@@ -36,10 +36,11 @@ describe('LogoutService', () => {
       await service.logout(jti, exp);
 
       const expectedTtlMillis = exp * 1000 - now;
-      expect(cacheManager.set).toHaveBeenCalledWith(
+      const expectedTtlSeconds = Math.ceil(expectedTtlMillis / 1000);
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
         `blacklist:${jti}`,
-        true,
-        expectedTtlMillis,
+        '1',
+        expectedTtlSeconds,
       );
     });
 
@@ -47,7 +48,7 @@ describe('LogoutService', () => {
       const jti = 'some-jti';
       const exp = Math.floor(Date.now() / 1000) + 3600;
 
-      cacheManager.set.mockRejectedValue(new Error('Redis error'));
+      redisService.setWithTtl.mockRejectedValue(new Error('Redis error'));
 
       await expect(service.logout(jti, exp)).rejects.toThrow(
         InternalServerErrorException,
@@ -60,7 +61,7 @@ describe('LogoutService', () => {
 
       await service.logout(jti, exp);
 
-      expect(cacheManager.set).not.toHaveBeenCalled();
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
     });
   });
 
@@ -89,7 +90,6 @@ describe('LogoutService', () => {
       );
       const req = { ip: '127.0.0.1', headers: {} } as unknown as Request;
 
-      // Should resolve normally despite inner error
       await expect(
         service.logLogoutAudit('user-1', 'jti-1', req),
       ).resolves.toBeUndefined();

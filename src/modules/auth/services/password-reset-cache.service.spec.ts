@@ -1,28 +1,38 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { PasswordResetCacheService } from './password-reset-cache.service';
+import { RedisService } from '../../redis/redis.service';
 import { PasswordResetOtpSession } from '../types/password-reset.types';
 
 describe('PasswordResetCacheService', () => {
   let service: PasswordResetCacheService;
-  let cacheManager: {
-    get: jest.Mock;
-    set: jest.Mock;
+  let redisService: {
+    getJson: jest.Mock;
+    setJsonWithTtl: jest.Mock;
     del: jest.Mock;
+    get: jest.Mock;
+    setWithTtl: jest.Mock;
+    incr: jest.Mock;
+    expire: jest.Mock;
+    exists: jest.Mock;
   };
 
   beforeEach(async () => {
-    cacheManager = {
-      get: jest.fn(),
-      set: jest.fn(),
+    redisService = {
+      getJson: jest.fn(),
+      setJsonWithTtl: jest.fn(),
       del: jest.fn(),
+      get: jest.fn(),
+      setWithTtl: jest.fn(),
+      incr: jest.fn(),
+      expire: jest.fn(),
+      exists: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PasswordResetCacheService,
-        { provide: CACHE_MANAGER, useValue: cacheManager },
+        { provide: RedisService, useValue: redisService },
       ],
     }).compile();
 
@@ -37,51 +47,45 @@ describe('PasswordResetCacheService', () => {
       createdAt: new Date().toISOString(),
     };
 
-    it('should get OTP session successfully when it returns an object', async () => {
-      cacheManager.get.mockResolvedValue(mockSession);
+    it('should get OTP session successfully', async () => {
+      redisService.getJson.mockResolvedValue(mockSession);
 
       const result = await service.getOtpSession(email);
       expect(result).toEqual(mockSession);
-      expect(cacheManager.get).toHaveBeenCalledWith(
+      expect(redisService.getJson).toHaveBeenCalledWith(
         `otp:password_reset:${email}`,
       );
     });
 
-    it('should get OTP session successfully when it returns a JSON string', async () => {
-      cacheManager.get.mockResolvedValue(JSON.stringify(mockSession));
-
-      const result = await service.getOtpSession(email);
-      expect(result).toEqual(mockSession);
-    });
-
     it('should return null when OTP session is not found', async () => {
-      cacheManager.get.mockResolvedValue(null);
+      redisService.getJson.mockResolvedValue(null);
 
       const result = await service.getOtpSession(email);
       expect(result).toBeNull();
     });
 
     it('should throw InternalServerErrorException when get fails', async () => {
-      cacheManager.get.mockRejectedValue(new Error('Cache error'));
+      redisService.getJson.mockRejectedValue(new Error('Cache error'));
 
       await expect(service.getOtpSession(email)).rejects.toThrow(
         InternalServerErrorException,
       );
     });
 
-    it('should set OTP session with correct key and TTL', async () => {
+    it('should set OTP session with correct key and TTL (ms converted to seconds)', async () => {
       const ttlMs = 600000; // 10 mins
+      const expectedTtlSeconds = Math.ceil(ttlMs / 1000);
       await service.setOtpSession(email, mockSession, ttlMs);
 
-      expect(cacheManager.set).toHaveBeenCalledWith(
+      expect(redisService.setJsonWithTtl).toHaveBeenCalledWith(
         `otp:password_reset:${email}`,
         mockSession,
-        ttlMs,
+        expectedTtlSeconds,
       );
     });
 
     it('should throw InternalServerErrorException when set fails', async () => {
-      cacheManager.set.mockRejectedValue(new Error('Cache error'));
+      redisService.setJsonWithTtl.mockRejectedValue(new Error('Cache error'));
 
       await expect(
         service.setOtpSession(email, mockSession, 600000),
@@ -91,13 +95,13 @@ describe('PasswordResetCacheService', () => {
     it('should delete OTP session successfully', async () => {
       await service.deleteOtpSession(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(
+      expect(redisService.del).toHaveBeenCalledWith(
         `otp:password_reset:${email}`,
       );
     });
 
     it('should throw InternalServerErrorException when delete fails', async () => {
-      cacheManager.del.mockRejectedValue(new Error('Cache error'));
+      redisService.del.mockRejectedValue(new Error('Cache error'));
 
       await expect(service.deleteOtpSession(email)).rejects.toThrow(
         InternalServerErrorException,
@@ -109,64 +113,55 @@ describe('PasswordResetCacheService', () => {
     const email = 'test@example.com';
 
     it('should return 0 when limit counter is not found', async () => {
-      cacheManager.get.mockResolvedValue(null);
+      redisService.get.mockResolvedValue(null);
 
       const result = await service.getLimitCounter(email);
       expect(result).toBe(0);
     });
 
-    it('should return numeric value when limit counter is a number', async () => {
-      cacheManager.get.mockResolvedValue(2);
+    it('should return numeric value when limit counter exists', async () => {
+      redisService.get.mockResolvedValue('2');
 
       const result = await service.getLimitCounter(email);
       expect(result).toBe(2);
     });
 
-    it('should return numeric value when limit counter is a string', async () => {
-      cacheManager.get.mockResolvedValue('3');
-
-      const result = await service.getLimitCounter(email);
-      expect(result).toBe(3);
-    });
-
     it('should throw InternalServerErrorException when get limit counter fails', async () => {
-      cacheManager.get.mockRejectedValue(new Error('Cache error'));
+      redisService.get.mockRejectedValue(new Error('Cache error'));
 
       await expect(service.getLimitCounter(email)).rejects.toThrow(
         InternalServerErrorException,
       );
     });
 
-    it('should increment limit counter from 0 to 1', async () => {
-      cacheManager.get.mockResolvedValue(null);
+    it('should increment limit counter using incr and set expire', async () => {
+      redisService.incr.mockResolvedValue(1);
       const ttlMs = 300000; // 5 mins
+      const expectedTtlSeconds = Math.ceil(ttlMs / 1000);
 
       const result = await service.incrementLimitCounter(email, ttlMs);
       expect(result).toBe(1);
-      expect(cacheManager.set).toHaveBeenCalledWith(
+      expect(redisService.incr).toHaveBeenCalledWith(
         `otp_limit:password_reset:${email}`,
-        1,
-        ttlMs,
+      );
+      expect(redisService.expire).toHaveBeenCalledWith(
+        `otp_limit:password_reset:${email}`,
+        expectedTtlSeconds,
       );
     });
 
     it('should increment limit counter from 2 to 3', async () => {
-      cacheManager.get.mockResolvedValue(2);
+      redisService.incr.mockResolvedValue(3);
       const ttlMs = 300000;
 
       const result = await service.incrementLimitCounter(email, ttlMs);
       expect(result).toBe(3);
-      expect(cacheManager.set).toHaveBeenCalledWith(
-        `otp_limit:password_reset:${email}`,
-        3,
-        ttlMs,
-      );
     });
 
     it('should delete limit counter successfully', async () => {
       await service.deleteLimitCounter(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(
+      expect(redisService.del).toHaveBeenCalledWith(
         `otp_limit:password_reset:${email}`,
       );
     });
@@ -176,34 +171,35 @@ describe('PasswordResetCacheService', () => {
     const email = 'test@example.com';
 
     it('should return false when block key is not found', async () => {
-      cacheManager.get.mockResolvedValue(null);
+      redisService.exists.mockResolvedValue(false);
 
       const result = await service.isBlocked(email);
       expect(result).toBe(false);
     });
 
     it('should return true when block key exists', async () => {
-      cacheManager.get.mockResolvedValue(true);
+      redisService.exists.mockResolvedValue(true);
 
       const result = await service.isBlocked(email);
       expect(result).toBe(true);
     });
 
-    it('should block email with correct key and TTL', async () => {
+    it('should block email with correct key and TTL (ms converted to seconds)', async () => {
       const ttlMs = 3600000; // 60 mins
+      const expectedTtlSeconds = Math.ceil(ttlMs / 1000);
       await service.blockEmail(email, ttlMs);
 
-      expect(cacheManager.set).toHaveBeenCalledWith(
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
         `otp_blocked:password_reset:${email}`,
-        true,
-        ttlMs,
+        '1',
+        expectedTtlSeconds,
       );
     });
 
     it('should delete block key successfully', async () => {
       await service.deleteBlockKey(email);
 
-      expect(cacheManager.del).toHaveBeenCalledWith(
+      expect(redisService.del).toHaveBeenCalledWith(
         `otp_blocked:password_reset:${email}`,
       );
     });

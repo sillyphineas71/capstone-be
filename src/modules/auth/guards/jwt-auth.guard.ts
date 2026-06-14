@@ -1,16 +1,13 @@
 import {
   CanActivate,
   ExecutionContext,
-  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-// import { Cache } from 'cache-manager';
-import type { Cache } from 'cache-manager';
+import { RedisService } from '../../redis/redis.service';
 import { AuthConfigService } from '../services/auth-config.service';
 
 @Injectable()
@@ -18,7 +15,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly authConfigService: AuthConfigService,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly redisService: RedisService,
     private readonly reflector: Reflector,
   ) {}
 
@@ -35,14 +32,13 @@ export class JwtAuthGuard implements CanActivate {
         secret: this.authConfigService.getAccessTokenSecret(),
       });
 
-      // Check blacklist (T005 logic)
       if (payload.jti) {
         const ignoreBlacklist = this.reflector.get<boolean>(
           'ignoreBlacklist',
           context.getHandler(),
         );
         if (!ignoreBlacklist) {
-          const isBlacklisted = await this.cacheManager.get(
+          const isBlacklisted = await this.redisService.exists(
             `blacklist:${payload.jti}`,
           );
           if (isBlacklisted) {
@@ -51,17 +47,11 @@ export class JwtAuthGuard implements CanActivate {
         }
       }
 
-      // Check user-level token invalidation (e.g. password reset)
       if (payload.sub) {
         const invalidAfterKey = `auth:user:${payload.sub}:invalid_after`;
-        const invalidAfter = await this.cacheManager.get<number | string>(
-          invalidAfterKey,
-        );
-        if (invalidAfter) {
-          const invalidAfterMs =
-            typeof invalidAfter === 'string'
-              ? parseInt(invalidAfter, 10)
-              : invalidAfter;
+        const invalidAfter = await this.redisService.get(invalidAfterKey);
+        if (invalidAfter !== null) {
+          const invalidAfterMs = parseInt(invalidAfter, 10);
           if (payload.iat * 1000 < invalidAfterMs) {
             throw new UnauthorizedException(
               'Token has been revoked due to password change',

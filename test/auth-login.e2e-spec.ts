@@ -29,7 +29,11 @@ describe('Auth Login (e2e)', () => {
   it('rejects unsupported fields with validation-style error payload', async () => {
     const response = await request(app.getHttpServer())
       .post('/auth/login')
-      .send({ email: 'user@example.com', password: 'secret', rememberDevice: true })
+      .send({
+        email: 'user@example.com',
+        password: 'secret',
+        rememberDevice: true,
+      })
       .expect(200);
 
     expect(response.body.success).toBe(false);

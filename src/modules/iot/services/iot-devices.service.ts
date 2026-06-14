@@ -1,9 +1,14 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
+  UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import * as crypto from 'crypto';
 import {
   IoTDeviceEntity,
   IoTDeviceType,
@@ -12,14 +17,45 @@ import {
 } from '../entities/iot-device.entity.js';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
+import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
+import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
+import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
+import { IotDeviceEventsService } from './iot-device-events.service.js';
+
+export interface HeartbeatInput {
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, any> | null;
+  query: Record<string, string | undefined>;
+  params?: Record<string, string | undefined>;
+  clientIp: string | undefined;
+}
+
+export interface VerifyEventInput {
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, any> | null;
+  query: Record<string, string | undefined>;
+  params?: Record<string, string | undefined>;
+  clientIp: string | undefined;
+  files?: any[];
+}
+
+export interface StrangerEventInput {
+  headers: Record<string, string | string[] | undefined>;
+  body: Record<string, any> | null;
+  query: Record<string, string | undefined>;
+  params?: Record<string, string | undefined>;
+  clientIp: string | undefined;
+  files?: any[];
+}
 
 @Injectable()
 export class IotDevicesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
-  ) { }
+    private readonly iotDeviceEventsService: IotDeviceEventsService,
+  ) {}
 
   async create(
     userId: string | null,
@@ -67,10 +103,7 @@ export class IotDevicesService {
         lastSeenAt: null,
       });
 
-      const savedDevice = await queryRunner.manager.save(
-        IoTDeviceEntity,
-        newDevice,
-      );
+      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, newDevice);
 
       let createdByName: string | null = null;
       if (userId) {
@@ -120,6 +153,12 @@ export class IotDevicesService {
       });
     }
 
+    // [NEEDS CLARIFICATION] assignRoom availability guard.
+    // Original code blocked status 'deleted' / health 'inactive'/'disabled' (decommissioned).
+    // Tai's enum has no 'deleted'/'inactive'. The general "không khả dụng" convention also
+    // lists OFFLINE, but a freshly created device defaults to OFFLINE, so blocking OFFLINE
+    // here would make it impossible to assign a room to a new device. We therefore block only
+    // DISABLED / MAINTENANCE / health FAULTY and exclude OFFLINE. Confirm if OFFLINE should block.
     if (
       device.status === IoTDeviceStatus.DISABLED ||
       device.status === IoTDeviceStatus.MAINTENANCE ||
@@ -127,7 +166,7 @@ export class IotDevicesService {
     ) {
       throw new ConflictException({
         code: 'DEVICE_NOT_ACTIVE',
-        message: 'Cannot assign room to an inactive device.',
+        message: 'Cannot assign room to an unavailable device.',
       });
     }
 
@@ -185,10 +224,7 @@ export class IotDevicesService {
       const oldRoomId = device.roomId;
 
       device.roomId = dto.roomId;
-      const savedDevice = await queryRunner.manager.save(
-        IoTDeviceEntity,
-        device,
-      );
+      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
 
       await this.iotAuditRepository.logAssignRoom(queryRunner.manager, {
         userId,
@@ -206,5 +242,988 @@ export class IotDevicesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  async configureFaceServer(
+    userId: string | null,
+    deviceId: string,
+    dto: ConfigureFaceServerDto,
+  ): Promise<{ device: IoTDeviceEntity; oneTimeCallbackToken: string }> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (device.deviceType !== IoTDeviceType.FACE_SERVER) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message:
+          'Only door face terminal devices can be configured as a face server.',
+      });
+    }
+
+    if (!device.roomId) {
+      throw new ConflictException({
+        code: 'DEVICE_ROOM_ASSIGNMENT_REQUIRED',
+        message:
+          'Device must be assigned to a room before configuring face server.',
+      });
+    }
+
+    // Process DTO and defaults
+    const callback_enabled =
+      dto.callback_enabled !== undefined ? dto.callback_enabled : true;
+
+    // Generate short token (base64url) to fit hardware URL length limit
+    const plainToken = crypto.randomBytes(16).toString('base64url');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(plainToken)
+      .digest('hex');
+    const tokenLast4 = plainToken.slice(-4);
+    const configuredAt = new Date().toISOString();
+
+    const newFaceConfig = {
+      callback_enabled,
+      callback_protocol: dto.callback_protocol,
+      callback_base_url: dto.callback_base_url,
+      heartbeat_path: dto.heartbeat_path,
+      verify_path: dto.verify_path,
+      stranger_path: dto.stranger_path,
+      allowed_source_ip: dto.allowed_source_ip,
+      callback_token_hash: tokenHash,
+      callback_token_last4: tokenLast4,
+      configured_at: configuredAt,
+    };
+
+    const currentMetadata = device.metadataJson || {};
+    const updatedMetadata = {
+      ...currentMetadata,
+      face_server_config: newFaceConfig,
+    };
+
+    device.metadataJson = updatedMetadata;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+
+      await this.iotAuditRepository.logConfigureFaceServer(
+        queryRunner.manager,
+        {
+          userId,
+          deviceId: savedDevice.id,
+          configMetadata: newFaceConfig,
+        },
+      );
+
+      await queryRunner.commitTransaction();
+
+      return {
+        device: savedDevice,
+        oneTimeCallbackToken: plainToken,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+  async configureRtsp(
+    userId: string | null,
+    deviceId: string,
+    dto: ConfigureRtspDto,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (
+      device.deviceType !== IoTDeviceType.IP_CAMERA &&
+      device.deviceType !== IoTDeviceType.ROOM_CAMERA
+    ) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_RTSP_CAMERA',
+        message: 'Only IP room cameras can be configured with RTSP.',
+      });
+    }
+
+    if (!device.roomId) {
+      throw new ConflictException({
+        code: 'DEVICE_ROOM_ASSIGNMENT_REQUIRED',
+        message: 'Device must be assigned to a room before configuring RTSP.',
+      });
+    }
+
+    const currentMetadata = device.metadataJson || {};
+    const currentRtspConfig = (currentMetadata.rtsp_config as any) || {};
+
+    const rtsp_enabled =
+      dto.rtsp_enabled !== undefined ? dto.rtsp_enabled : true;
+    const rtsp_port = dto.rtsp_port !== undefined ? dto.rtsp_port : 554;
+    const stream_profile = dto.stream_profile || 'main';
+
+    // SEC-01: never persist the RTSP password (no encryption util exists in the
+    // codebase). The connection URL is written to stream_url WITHOUT credentials;
+    // we only keep a boolean flag indicating whether a password was configured.
+    const passwordProvided =
+      dto.rtsp_password !== undefined && dto.rtsp_password !== '';
+    const rtsp_password_configured =
+      passwordProvided || currentRtspConfig.rtsp_password_configured === true;
+
+    // RTSP connection string stored in the stream_url column (no user:pass@).
+    const streamUrl = `${dto.rtsp_protocol}://${dto.rtsp_host}:${rtsp_port}${dto.rtsp_path}`;
+    device.streamUrl = streamUrl;
+
+    const newRtspConfig = {
+      rtsp_enabled,
+      rtsp_protocol: dto.rtsp_protocol,
+      rtsp_host: dto.rtsp_host,
+      rtsp_port,
+      rtsp_path: dto.rtsp_path,
+      rtsp_username: dto.rtsp_username ?? null,
+      stream_profile,
+      rtsp_password_configured,
+      configured_at: new Date().toISOString(),
+    };
+
+    const updatedMetadata = {
+      ...currentMetadata,
+      rtsp_config: newRtspConfig,
+    };
+
+    device.metadataJson = updatedMetadata;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+
+      await this.iotAuditRepository.logConfigureRtsp(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        configMetadata: newRtspConfig,
+        passwordProvided,
+      });
+
+      await queryRunner.commitTransaction();
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+  async checkAvailability(
+    userId: string | null,
+    deviceId: string,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (
+      device.deviceType !== IoTDeviceType.FACE_SERVER &&
+      device.deviceType !== IoTDeviceType.IP_CAMERA
+    ) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_CAMERA',
+        message: 'This device type is not supported for availability check.',
+      });
+    }
+
+    let is_available = false;
+    let check_type = '';
+    let runtime_verified = false;
+    let reason_code: string | null = null;
+    let message = 'Camera availability checked successfully';
+
+    if (device.deviceType === IoTDeviceType.FACE_SERVER) {
+      check_type = 'heartbeat_status';
+      if (device.lastSeenAt) {
+        const now = new Date();
+        const diffInMinutes =
+          (now.getTime() - device.lastSeenAt.getTime()) / 60000;
+
+        if (diffInMinutes <= 5) {
+          is_available = true;
+          runtime_verified = true;
+          reason_code = null;
+          device.status = IoTDeviceStatus.ONLINE;
+          device.healthStatus = IoTDeviceHealthStatus.HEALTHY;
+        } else {
+          is_available = false;
+          runtime_verified = true;
+          reason_code = 'HEARTBEAT_STALE';
+          device.status = IoTDeviceStatus.OFFLINE;
+          // [NEEDS CLARIFICATION] old value 'unhealthy' has no equivalent in Tai's
+          // enum {healthy,warning,faulty,unknown}; mapped stale heartbeat -> FAULTY.
+          device.healthStatus = IoTDeviceHealthStatus.FAULTY;
+        }
+      } else {
+        is_available = false;
+        runtime_verified = false;
+        reason_code = 'HEARTBEAT_NOT_SEEN';
+        device.status = IoTDeviceStatus.OFFLINE;
+        device.healthStatus = IoTDeviceHealthStatus.UNKNOWN;
+      }
+    } else if (device.deviceType === IoTDeviceType.IP_CAMERA) {
+      check_type = 'rtsp_config_readiness';
+      runtime_verified = false;
+
+      const rtspConfig = device.metadataJson?.rtsp_config as any;
+
+      // Old value 'not_configured' has no equivalent in Tai's health enum; "config not
+      // ready" cases map to WARNING. Readiness is derived from the stream_url column
+      // (host/port/path live there, not in metadata).
+      if (!device.roomId) {
+        is_available = false;
+        reason_code = 'DEVICE_ROOM_ASSIGNMENT_REQUIRED';
+        device.healthStatus = IoTDeviceHealthStatus.WARNING;
+      } else if (!device.streamUrl || !rtspConfig) {
+        is_available = false;
+        reason_code = 'RTSP_CONFIG_MISSING';
+        device.healthStatus = IoTDeviceHealthStatus.WARNING;
+      } else if (rtspConfig.rtsp_enabled === false) {
+        is_available = false;
+        reason_code = 'RTSP_DISABLED';
+        device.healthStatus = IoTDeviceHealthStatus.WARNING;
+      } else {
+        is_available = true;
+        reason_code = null;
+        message =
+          'RTSP configuration is ready. Runtime stream probing is not performed in this version.';
+        device.healthStatus = IoTDeviceHealthStatus.UNKNOWN;
+      }
+    }
+
+    const currentMetadata = device.metadataJson || {};
+
+    device.metadataJson = {
+      ...currentMetadata,
+      last_availability_check: {
+        is_available,
+        check_type,
+        runtime_verified,
+        reason_code,
+        message,
+        checked_at: new Date().toISOString(),
+        checked_by: userId,
+      },
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+
+      // No audit log for this UC
+
+      await queryRunner.commitTransaction();
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private readonly logger = new Logger(IotDevicesService.name);
+
+  async receiveHeartbeat(input: HeartbeatInput) {
+    const { headers, body, query, params, clientIp } = input;
+
+    // 1. Extract device_code: header → body → query device_code → query d → path param deviceCode
+    const deviceCode = this.extractValue(
+      headers['x-device-code'],
+      body?.device_code,
+      query?.device_code,
+      query?.d,
+      params?.deviceCode,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException({
+        code: 'DEVICE_CODE_REQUIRED',
+        message:
+          'device_code is required (header X-Device-Code, body, or query param).',
+      });
+    }
+
+    // 2. Find device by device_code
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { deviceCode },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 3. Check device type
+    if (device.deviceType !== IoTDeviceType.FACE_SERVER) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message: 'Only door face terminal devices support heartbeat callback.',
+      });
+    }
+
+    // 4. Check callback_enabled
+    const faceConfig = device.metadataJson?.face_server_config as any;
+    if (!faceConfig || faceConfig.callback_enabled !== true) {
+      throw new ConflictException({
+        code: 'FACE_CALLBACK_NOT_ENABLED',
+        message: 'Face server callback is not enabled for this device.',
+      });
+    }
+
+    // 5. Extract callback_token: header → body → query callback_token → query t → path param callbackToken
+    const callbackToken = this.extractValue(
+      headers['x-callback-token'],
+      body?.callback_token,
+      query?.callback_token,
+      query?.t,
+      params?.callbackToken,
+    );
+    if (!callbackToken) {
+      throw new UnauthorizedException({
+        code: 'CALLBACK_TOKEN_REQUIRED',
+        message:
+          'callback_token is required (header X-Callback-Token, body, or query param).',
+      });
+    }
+
+    // 6. Verify callback token via SHA-256 hash
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(callbackToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+
+    // 7. Check allowed_source_ip (best-effort)
+    if (faceConfig.allowed_source_ip) {
+      const normalizedClientIp = this.normalizeIp(clientIp);
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+
+    // 8. Process heartbeat
+    const now = new Date();
+    device.lastSeenAt = now;
+    device.status = IoTDeviceStatus.ONLINE;
+    device.healthStatus = IoTDeviceHealthStatus.HEALTHY;
+
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    const rawSample = maskSensitiveMetadata(body || {}) || {};
+
+    const currentMetadata = device.metadataJson || {};
+    device.metadataJson = {
+      ...currentMetadata,
+      last_heartbeat: {
+        received_at: now.toISOString(),
+        source_ip: normalizedClientIp || null,
+        payload_timestamp: body?.timestamp || null,
+        device_status: body?.status || null,
+        raw_payload_sample: rawSample,
+      },
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager.save(IoTDeviceEntity, device);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      device_code: device.deviceCode,
+      status: device.status,
+      health_status: device.healthStatus,
+      last_seen_at: device.lastSeenAt,
+      received_at: now,
+    };
+  }
+
+  async receiveVerifyEvent(input: VerifyEventInput) {
+    const { headers, body, query, params, clientIp, files } = input;
+
+    // 1. Extract device_code
+    const deviceCode = this.extractValue(
+      headers['x-device-code'],
+      body?.device_code,
+      query?.device_code,
+      query?.d,
+      params?.deviceCode,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException({
+        code: 'DEVICE_CODE_REQUIRED',
+        message: 'device_code is required.',
+      });
+    }
+
+    // 2. Find device by device_code
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { deviceCode },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 3. Check device type
+    if (device.deviceType !== IoTDeviceType.FACE_SERVER) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message: 'Only door face terminal devices support verify callback.',
+      });
+    }
+
+    // 4. Check callback_enabled
+    const faceConfig = device.metadataJson?.face_server_config as any;
+    if (!faceConfig || faceConfig.callback_enabled !== true) {
+      throw new ConflictException({
+        code: 'FACE_CALLBACK_NOT_ENABLED',
+        message: 'Face server callback is not enabled for this device.',
+      });
+    }
+
+    // 5. Extract callback_token
+    const callbackToken = this.extractValue(
+      headers['x-callback-token'],
+      body?.callback_token,
+      query?.callback_token,
+      query?.t,
+      params?.callbackToken,
+    );
+    if (!callbackToken) {
+      throw new UnauthorizedException({
+        code: 'CALLBACK_TOKEN_REQUIRED',
+        message: 'callback_token is required.',
+      });
+    }
+
+    // 6. Verify callback token via SHA-256 hash
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(callbackToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+
+    // 7. Check allowed_source_ip (best-effort)
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    if (faceConfig.allowed_source_ip) {
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+
+    // 8. Process payload tolerant ingestion
+    const now = new Date();
+    const extractedFields: any = {
+      person_id: body?.person_id || null,
+      person_name: body?.person_name || null,
+      verify_time: body?.verify_time || null,
+      verify_result: body?.verify_result || null,
+      similarity: body?.similarity || null,
+    };
+
+    let payloadToMask: any = {};
+    if (body) {
+      // Create a shallow copy to mask
+      payloadToMask = { ...body };
+    } else {
+      payloadToMask = {
+        _unparseable: true,
+        content_type: headers['content-type'] || 'unknown',
+        content_length: headers['content-length'] || '0',
+      };
+    }
+
+    // Add file metadata if files exist (don't log/save buffers)
+    if (files && files.length > 0) {
+      payloadToMask._files = files.map((f: any) => ({
+        fieldname: f.fieldname,
+        originalname: f.originalname,
+        mimetype: f.mimetype,
+        size: f.size,
+      }));
+    }
+
+    // Truncate long string fields
+    let truncated = false;
+    for (const key in payloadToMask) {
+      if (
+        typeof payloadToMask[key] === 'string' &&
+        payloadToMask[key].length > 2000
+      ) {
+        payloadToMask[key] =
+          payloadToMask[key].substring(0, 2000) + '... [TRUNCATED]';
+        truncated = true;
+      }
+    }
+    if (truncated) {
+      payloadToMask.truncated = true;
+    }
+
+    const maskedSample = maskSensitiveMetadata(payloadToMask) || {};
+
+    const newSample = {
+      received_at: now.toISOString(),
+      source_ip: normalizedClientIp || null,
+      extracted_fields: extractedFields,
+      raw_payload_sample: maskedSample,
+    };
+
+    // 9. Update DB
+    device.lastSeenAt = now;
+    device.status = IoTDeviceStatus.ONLINE;
+    device.healthStatus = IoTDeviceHealthStatus.HEALTHY;
+
+    const currentMetadata = device.metadataJson || {};
+    const oldSamples = Array.isArray(
+      currentMetadata.recent_verify_event_samples,
+    )
+      ? currentMetadata.recent_verify_event_samples
+      : [];
+
+    device.metadataJson = {
+      ...currentMetadata,
+      last_verify_event_sample: newSample,
+      recent_verify_event_samples: [newSample, ...oldSamples].slice(0, 5),
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await this.iotDeviceEventsService.storeRawEvent(
+        {
+          device,
+          eventType: 'face_verify',
+          sourceProtocol: 'http',
+          severity: 'info',
+          receivedAt: now,
+          occurredAt: extractedFields.verify_time
+            ? new Date(extractedFields.verify_time)
+            : null,
+          sourceIp: normalizedClientIp || 'unknown',
+          httpMethod: (headers['method'] ||
+            headers['x-http-method-override'] ||
+            'POST') as string,
+          contentType: (headers['content-type'] || 'unknown') as string,
+          contentLength: (headers['content-length'] || '0') as string,
+          rawPayloadSample: maskedSample,
+          fileMetadata: payloadToMask._files || [],
+          extractedFields,
+          storedByUc: 'IOT-009',
+        },
+        queryRunner.manager,
+      );
+      await queryRunner.manager.save(IoTDeviceEntity, device);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      device_code: device.deviceCode,
+      event_type: 'face_verify',
+      received_at: now.toISOString(),
+    };
+  }
+
+  async receiveStrangerEvent(input: StrangerEventInput) {
+    const { headers, body, query, params, clientIp, files } = input;
+
+    // 1. Extract device_code
+    const deviceCode = this.extractValue(
+      headers['x-device-code'],
+      body?.device_code,
+      query?.device_code,
+      query?.d,
+      params?.deviceCode,
+    );
+    if (!deviceCode) {
+      throw new BadRequestException({
+        code: 'DEVICE_CODE_REQUIRED',
+        message: 'device_code is required.',
+      });
+    }
+
+    // 2. Find device by device_code
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { deviceCode },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // 3. Check device type
+    if (device.deviceType !== IoTDeviceType.FACE_SERVER) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message: 'Only door face terminal devices support stranger callback.',
+      });
+    }
+
+    // 4. Check callback_enabled
+    const faceConfig = device.metadataJson?.face_server_config as any;
+    if (!faceConfig || faceConfig.callback_enabled !== true) {
+      throw new ConflictException({
+        code: 'FACE_CALLBACK_NOT_ENABLED',
+        message: 'Face server callback is not enabled for this device.',
+      });
+    }
+
+    // 5. Extract callback_token
+    const callbackToken = this.extractValue(
+      headers['x-callback-token'],
+      body?.callback_token,
+      query?.callback_token,
+      query?.t,
+      params?.callbackToken,
+    );
+    if (!callbackToken) {
+      throw new UnauthorizedException({
+        code: 'CALLBACK_TOKEN_REQUIRED',
+        message: 'callback_token is required.',
+      });
+    }
+
+    // 6. Verify callback token via SHA-256 hash
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(callbackToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+
+    // 7. Check allowed_source_ip (best-effort)
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    if (faceConfig.allowed_source_ip) {
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+
+    // 8. Process payload tolerant ingestion
+    const now = new Date();
+    const extractedFields: any = {
+      stranger_id: body?.stranger_id || null,
+      event_time: body?.event_time || null,
+      capture_time: body?.capture_time || null,
+      similarity: body?.similarity || null,
+      event_result: 'stranger',
+    };
+
+    let payloadToMask: any = {};
+    if (body && Object.keys(body).length > 0) {
+      // Create a shallow copy to mask
+      payloadToMask = { ...body };
+    } else {
+      payloadToMask = {
+        _unparseable: true,
+        content_type: headers['content-type'] || 'unknown',
+        content_length: headers['content-length'] || '0',
+        method: headers['method'] || 'unknown',
+      };
+    }
+
+    // Add file metadata if files exist (don't log/save buffers)
+    if (files && files.length > 0) {
+      payloadToMask._files = files.map((f: any) => ({
+        fieldname: f.fieldname,
+        originalname: f.originalname,
+        mimetype: f.mimetype,
+        size: f.size,
+      }));
+    }
+
+    // Truncate long string fields
+    let truncated = false;
+    for (const key in payloadToMask) {
+      if (
+        typeof payloadToMask[key] === 'string' &&
+        payloadToMask[key].length > 2000
+      ) {
+        payloadToMask[key] =
+          payloadToMask[key].substring(0, 2000) + '... [TRUNCATED]';
+        truncated = true;
+      }
+    }
+    if (truncated) {
+      payloadToMask.truncated = true;
+    }
+
+    const maskedSample = maskSensitiveMetadata(payloadToMask) || {};
+
+    const newSample = {
+      received_at: now.toISOString(),
+      source_ip: normalizedClientIp || null,
+      extracted_fields: extractedFields,
+      raw_payload_sample: maskedSample,
+    };
+
+    // 9. Update DB
+    device.lastSeenAt = now;
+    device.status = IoTDeviceStatus.ONLINE;
+    device.healthStatus = IoTDeviceHealthStatus.HEALTHY;
+
+    const currentMetadata = device.metadataJson || {};
+    const oldSamples = Array.isArray(
+      currentMetadata.recent_stranger_event_samples,
+    )
+      ? currentMetadata.recent_stranger_event_samples
+      : [];
+
+    device.metadataJson = {
+      ...currentMetadata,
+      last_stranger_event_sample: newSample,
+      recent_stranger_event_samples: [newSample, ...oldSamples].slice(0, 5),
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await this.iotDeviceEventsService.storeRawEvent(
+        {
+          device,
+          eventType: 'face_stranger',
+          sourceProtocol: 'http',
+          severity: 'warning',
+          receivedAt: now,
+          occurredAt:
+            extractedFields.event_time || extractedFields.capture_time
+              ? new Date(
+                  extractedFields.event_time || extractedFields.capture_time,
+                )
+              : null,
+          sourceIp: normalizedClientIp || 'unknown',
+          httpMethod: (headers['method'] ||
+            headers['x-http-method-override'] ||
+            'POST') as string,
+          contentType: (headers['content-type'] || 'unknown') as string,
+          contentLength: (headers['content-length'] || '0') as string,
+          rawPayloadSample: maskedSample,
+          fileMetadata: payloadToMask._files || [],
+          extractedFields,
+          storedByUc: 'IOT-009',
+        },
+        queryRunner.manager,
+      );
+      await queryRunner.manager.save(IoTDeviceEntity, device);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      device_code: device.deviceCode,
+      event_type: 'face_stranger',
+      received_at: now.toISOString(),
+    };
+  }
+
+  private extractValue(
+    headerVal: string | string[] | undefined,
+    bodyVal: any,
+    queryVal: string | string[] | undefined,
+    shortAliasVal?: string | string[],
+    pathParamVal?: string | string[],
+  ): string | null {
+    // Header first
+    if (headerVal) {
+      const val = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Body second
+    if (bodyVal !== undefined && bodyVal !== null) {
+      const trimmed = String(bodyVal).trim();
+      if (trimmed) return trimmed;
+    }
+    // Query third
+    if (queryVal) {
+      const val = Array.isArray(queryVal) ? queryVal[0] : queryVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Short Alias fourth
+    if (shortAliasVal) {
+      const val = Array.isArray(shortAliasVal)
+        ? shortAliasVal[0]
+        : shortAliasVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    // Path Param fifth
+    if (pathParamVal) {
+      const val = Array.isArray(pathParamVal) ? pathParamVal[0] : pathParamVal;
+      const trimmed = String(val).trim();
+      if (trimmed) return trimmed;
+    }
+    return null;
+  }
+
+  private normalizeIp(ip: string | undefined): string | null {
+    if (!ip) return null;
+    // Strip ::ffff: prefix for IPv4-mapped IPv6
+    if (ip.startsWith('::ffff:')) {
+      return ip.substring(7);
+    }
+    return ip;
   }
 }

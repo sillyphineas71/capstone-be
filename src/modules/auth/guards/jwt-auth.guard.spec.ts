@@ -1,21 +1,21 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ExecutionContext } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { RedisService } from '../../redis/redis.service';
 import { AuthConfigService } from '../services/auth-config.service';
 
 describe('JwtAuthGuard', () => {
   let guard: JwtAuthGuard;
   let jwtService: { verifyAsync: jest.Mock };
-  let cacheManager: { get: jest.Mock };
+  let redisService: { exists: jest.Mock; get: jest.Mock };
   let authConfigService: { getAccessTokenSecret: jest.Mock };
 
   beforeEach(async () => {
     jwtService = { verifyAsync: jest.fn() };
-    cacheManager = { get: jest.fn() };
+    redisService = { exists: jest.fn(), get: jest.fn() };
     authConfigService = {
       getAccessTokenSecret: jest.fn().mockReturnValue('secret'),
     };
@@ -24,7 +24,7 @@ describe('JwtAuthGuard', () => {
       providers: [
         JwtAuthGuard,
         { provide: JwtService, useValue: jwtService },
-        { provide: CACHE_MANAGER, useValue: cacheManager },
+        { provide: RedisService, useValue: redisService },
         { provide: AuthConfigService, useValue: authConfigService },
       ],
     }).compile();
@@ -64,12 +64,12 @@ describe('JwtAuthGuard', () => {
       jti: 'jti-1',
       exp: 123456,
     });
-    cacheManager.get.mockResolvedValue(true);
+    redisService.exists.mockResolvedValue(true);
 
     await expect(guard.canActivate(context)).rejects.toThrow(
       UnauthorizedException,
     );
-    expect(cacheManager.get).toHaveBeenCalledWith('blacklist:jti-1');
+    expect(redisService.exists).toHaveBeenCalledWith('blacklist:jti-1');
   });
 
   it('should attach user to request and return true if token is valid and not blacklisted', async () => {
@@ -86,7 +86,7 @@ describe('JwtAuthGuard', () => {
       jti: 'jti-1',
       exp: 123456,
     });
-    cacheManager.get.mockResolvedValue(null);
+    redisService.exists.mockResolvedValue(false);
 
     const result = await guard.canActivate(context);
 
@@ -116,9 +116,9 @@ describe('JwtAuthGuard', () => {
       iat: nowSeconds - 10,
     });
 
-    cacheManager.get.mockImplementation(async (key: string) => {
-      if (key === 'blacklist:jti-1') return null;
-      if (key === 'auth:user:user-1:invalid_after') return Date.now();
+    redisService.exists.mockResolvedValue(false);
+    redisService.get.mockImplementation(async (key: string) => {
+      if (key === 'auth:user:user-1:invalid_after') return String(Date.now());
       return null;
     });
 
@@ -144,9 +144,9 @@ describe('JwtAuthGuard', () => {
       iat: nowSeconds + 10,
     });
 
-    cacheManager.get.mockImplementation(async (key: string) => {
-      if (key === 'blacklist:jti-1') return null;
-      if (key === 'auth:user:user-1:invalid_after') return Date.now() - 10000;
+    redisService.exists.mockResolvedValue(false);
+    redisService.get.mockImplementation(async (key: string) => {
+      if (key === 'auth:user:user-1:invalid_after') return String(Date.now() - 10000);
       return null;
     });
 

@@ -1,12 +1,5 @@
-import {
-  Inject,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-// import { Cache } from 'cache-manager';
-import type { Cache } from 'cache-manager';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { RedisService } from '../../redis/redis.service';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { Request } from 'express';
 
@@ -15,7 +8,7 @@ export class LogoutService {
   private readonly logger = new Logger(LogoutService.name);
 
   constructor(
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly redisService: RedisService,
     private readonly authAuditRepository: AuthAuditRepository,
   ) {}
 
@@ -23,7 +16,8 @@ export class LogoutService {
     const ttlMillis = exp * 1000 - Date.now();
     if (ttlMillis > 0) {
       try {
-        await this.cacheManager.set(`blacklist:${jti}`, true, ttlMillis);
+        const ttlSeconds = Math.ceil(ttlMillis / 1000);
+        await this.redisService.setWithTtl(`blacklist:${jti}`, '1', ttlSeconds);
       } catch (error) {
         this.logger.error(
           `Failed to blacklist token: ${error.message}`,
@@ -53,7 +47,6 @@ export class LogoutService {
         `Failed to insert audit log for logout: ${error.message}`,
         error.stack,
       );
-      // Non-blocking: Do not throw
     }
   }
 }
