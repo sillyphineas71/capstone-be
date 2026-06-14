@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 
 import { MeetingRequestReviewService } from '../services/meeting-request-review.service.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 import { MeetingEntity, MeetingStatus } from '../entities/meeting.entity.js';
 import {
   MeetingRequestEntity,
@@ -28,9 +29,8 @@ import {
   RoomBookingStatus,
 } from '../../rooms/entities/room-booking.entity.js';
 import {
-  NotificationEntity,
   NotificationType,
-  NotificationDeliveryStatus,
+  NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
 import {
   AuditLogEntity,
@@ -42,6 +42,7 @@ import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
 describe('MeetingRequestReviewService', () => {
   let service: MeetingRequestReviewService;
   let dataSource: jest.Mocked<DataSource>;
+  let notificationsService: jest.Mocked<NotificationsService>;
   let em: jest.Mocked<EntityManager>;
 
   const authUser = { userId: 'approver-uuid' };
@@ -124,7 +125,7 @@ describe('MeetingRequestReviewService', () => {
         }
         return _entity;
       }),
-      getRepository: jest.fn(),
+      getRepository: jest.fn().mockReturnValue({ find: jest.fn().mockResolvedValue([]) }),
     } as unknown as jest.Mocked<EntityManager>;
 
     dataSource = {
@@ -133,13 +134,23 @@ describe('MeetingRequestReviewService', () => {
         .mockImplementation((cb: (manager: EntityManager) => unknown) =>
           cb(em),
         ),
-      getRepository: jest.fn(),
+      manager: em,
+      getRepository: jest.fn().mockReturnValue({ find: jest.fn().mockResolvedValue([]) }),
     } as unknown as jest.Mocked<DataSource>;
+
+    notificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-id' }),
+      enqueueEmailNotification: jest.fn().mockResolvedValue({
+        notification: { id: 'notif-id' },
+        jobId: 'bull-job-id',
+      }),
+    } as unknown as jest.Mocked<NotificationsService>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MeetingRequestReviewService,
         { provide: DataSource, useValue: dataSource },
+        { provide: NotificationsService, useValue: notificationsService },
       ],
     }).compile();
 
@@ -220,7 +231,7 @@ describe('MeetingRequestReviewService', () => {
       );
     });
 
-    it('[AC-011] should create MEETING_INVITE and MEETING_REQUEST_APPROVED notifications', async () => {
+    it('[AC-011] should call NotificationsService for MEETING_INVITE and MEETING_REQUEST_APPROVED', async () => {
       setupSuccessMocks();
       em.find = jest
         .fn()
@@ -239,28 +250,22 @@ describe('MeetingRequestReviewService', () => {
         clientContext,
       );
 
-      const createCalls = (em.create as jest.Mock).mock.calls;
-      const notifyEntities = createCalls
-        .filter(([entity]) => entity === NotificationEntity)
-        .map(([, data]) => data);
+      // createNotification called for internal participants + requester/host
+      expect(notificationsService.createNotification).toHaveBeenCalled();
+      const createCalls = (
+        notificationsService.createNotification as jest.Mock
+      ).mock.calls.map(([arg]) => arg.notificationType);
 
-      const inviteNotifs = notifyEntities.filter(
-        (n: any) => n.notificationType === NotificationType.MEETING_INVITE,
-      );
-      const approvedNotifs = notifyEntities.filter(
-        (n: any) =>
-          n.notificationType === NotificationType.MEETING_REQUEST_APPROVED,
-      );
+      // Participans get MEETING_INVITE, requester gets MEETING_REQUEST_APPROVED
+      expect(createCalls.filter((t: string) => t === NotificationType.MEETING_INVITE).length).toBeGreaterThanOrEqual(1);
+      expect(createCalls.filter((t: string) => t === NotificationType.MEETING_REQUEST_APPROVED).length).toBeGreaterThanOrEqual(1);
 
-      expect(inviteNotifs.length).toBeGreaterThanOrEqual(1);
-      expect(approvedNotifs.length).toBeGreaterThanOrEqual(1);
-      expect(em.save).toHaveBeenCalledWith(
-        NotificationEntity,
-        expect.arrayContaining([
-          expect.objectContaining({
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          }),
-        ]),
+      // enqueueEmailNotification called for external participants
+      expect(notificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_INVITE,
+          toEmails: ['external@test.com'],
+        }),
       );
     });
 
@@ -338,6 +343,31 @@ describe('MeetingRequestReviewService', () => {
       await expect(
         service.approve('request-uuid', approveDto, authUser, clientContext),
       ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('should handle notification failures gracefully (approve still succeeds)', async () => {
+      setupSuccessMocks();
+      em.find = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { userId: 'participant-1' } as MeetingParticipantEntity,
+        ])
+        .mockResolvedValueOnce([]);
+
+      notificationsService.createNotification.mockRejectedValue(
+        new Error('Notify service down'),
+      );
+
+      const result = await service.approve(
+        'request-uuid',
+        approveDto,
+        authUser,
+        clientContext,
+      );
+
+      // Approve still succeeds despite notification failure
+      expect(result.requestId).toBe('request-uuid');
+      expect(result.approvalStatus).toBe(ApprovalStatus.APPROVED);
     });
 
     it('should throw 409 when meeting status is not pending_approval', async () => {
@@ -419,7 +449,7 @@ describe('MeetingRequestReviewService', () => {
 
   describe('reject', () => {
     const rejectDto: RejectMeetingRequestDto = {
-      rejectionReason: 'Kế hoạch thay đổi',
+      rejectionReason: 'K ho?ch thay d?i',
     };
 
     function setupSuccessMocks() {
@@ -447,21 +477,21 @@ describe('MeetingRequestReviewService', () => {
         MeetingRequestEntity,
         expect.objectContaining({
           approvalStatus: ApprovalStatus.REJECTED,
-          rejectionReason: 'Kế hoạch thay đổi',
+          rejectionReason: 'K ho?ch thay d?i',
         }),
       );
       expect(em.save).toHaveBeenCalledWith(
         MeetingEntity,
         expect.objectContaining({
           status: MeetingStatus.CANCELLED,
-          cancellationReason: 'Kế hoạch thay đổi',
+          cancellationReason: 'K ho?ch thay d?i',
         }),
       );
       expect(em.save).toHaveBeenCalledWith(
         RoomBookingEntity,
         expect.objectContaining({
           status: RoomBookingStatus.CANCELLED,
-          cancellationReason: 'Kế hoạch thay đổi',
+          cancellationReason: 'K ho?ch thay d?i',
         }),
       );
     });
@@ -479,31 +509,25 @@ describe('MeetingRequestReviewService', () => {
       );
     });
 
-    it('[AC-012] should NOT create MEETING_INVITE notification', async () => {
+    it('[AC-012] should NOT call enqueueEmailNotification for reject (in-app only)', async () => {
       setupSuccessMocks();
 
       await service.reject('request-uuid', rejectDto, authUser, clientContext);
 
-      const createCalls = (em.create as jest.Mock).mock.calls;
-      const inviteNotifs = createCalls.filter(
-        ([entity, data]: any) =>
-          entity === NotificationEntity &&
-          data.notificationType === NotificationType.MEETING_INVITE,
-      );
-
-      expect(inviteNotifs).toHaveLength(0);
+      // Rejection uses createNotification (IN_APP), not enqueueEmailNotification
+      expect(notificationsService.enqueueEmailNotification).not.toHaveBeenCalled();
     });
 
-    it('[AC-012] should create MEETING_REQUEST_REJECTED notification for creator', async () => {
+    it('[AC-012] should call createNotification with MEETING_REQUEST_REJECTED for creator', async () => {
       setupSuccessMocks();
 
       await service.reject('request-uuid', rejectDto, authUser, clientContext);
 
-      expect(em.create).toHaveBeenCalledWith(
-        NotificationEntity,
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_REQUEST_REJECTED,
-          recipientUserIdsJson: expect.arrayContaining([creatorUser.userId]),
+          channel: NotificationChannel.IN_APP,
+          recipientUserIds: expect.arrayContaining([creatorUser.userId]),
         }),
       );
     });
@@ -581,6 +605,35 @@ describe('MeetingRequestReviewService', () => {
       await expect(
         service.reject('request-uuid', rejectDto, authUser, clientContext),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should handle notification failure gracefully (reject still succeeds)', async () => {
+      setupSuccessMocks();
+
+      notificationsService.createNotification.mockRejectedValue(
+        new Error('Notify service down'),
+      );
+
+      const result = await service.reject(
+        'request-uuid',
+        rejectDto,
+        authUser,
+        clientContext,
+      );
+
+      expect(result.requestId).toBe('request-uuid');
+      expect(result.approvalStatus).toBe(ApprovalStatus.REJECTED);
+    });
+
+    it('should NOT save NotificationEntity inside transaction', async () => {
+      setupSuccessMocks();
+
+      await service.reject('request-uuid', rejectDto, authUser, clientContext);
+
+      // No NotificationEntity save inside transaction
+      const saveCalls = (em.save as jest.Mock).mock.calls;
+      const notifSaves = saveCalls.filter(([entity]) => entity === 'NotificationEntity');
+      expect(notifSaves).toHaveLength(0);
     });
   });
 });

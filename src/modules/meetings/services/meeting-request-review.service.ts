@@ -1,3 +1,4 @@
+﻿import { UserEntity } from '../../accounts/entities/user.entity.js';
 import {
   Injectable,
   Logger,
@@ -27,15 +28,15 @@ import {
   RoomBookingStatus,
 } from '../../rooms/entities/room-booking.entity.js';
 import {
-  NotificationEntity,
   NotificationType,
   NotificationChannel,
-  NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js';
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
@@ -44,11 +45,27 @@ import { RejectResponseDto } from '../dto/reject-response.dto.js';
 
 import type { AuthUser, ClientContext } from './meetings.service.js';
 
+interface MeetingApprovalResult {
+  meetingId: string;
+  meetingTitle: string;
+  meetingStartTime: Date;
+  bookingId: string;
+  appliedAt: Date;
+  participantIds: string[];
+  externalEmails: string[];
+  requesterId: string;
+  hostId: string | null;
+  decisionNote: string | null;
+}
+
 @Injectable()
 export class MeetingRequestReviewService {
   private readonly logger = new Logger(MeetingRequestReviewService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async approve(
     requestId: string,
@@ -56,7 +73,7 @@ export class MeetingRequestReviewService {
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<ApproveResponseDto> {
-    return this.dataSource.transaction(async (em) => {
+    const approvalResult = await this.dataSource.transaction(async (em) => {
       const request = await em.findOne(MeetingRequestEntity, {
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -65,7 +82,7 @@ export class MeetingRequestReviewService {
       if (!request) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy yêu cầu cuộc họp',
+          message: 'Không tìm th?y yêu c?u cu?c h?p',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting_request', entityId: requestId },
@@ -76,7 +93,7 @@ export class MeetingRequestReviewService {
       if (request.requestType !== MeetingRequestType.CREATE_MEETING) {
         throw new UnprocessableEntityException({
           success: false,
-          message: 'Loại yêu cầu không được hỗ trợ',
+          message: 'Lo?i yêu c?u không du?c h? tr?',
           error: {
             code: 'UNSUPPORTED_REQUEST_TYPE',
             details: {
@@ -90,7 +107,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu cầu cuộc họp không còn ở trạng thái chờ duyệt',
+          message: 'Yêu c?u cu?c h?p không còn tr?ng thái ch? duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -108,7 +125,7 @@ export class MeetingRequestReviewService {
       if (!meeting) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy cuộc họp liên quan',
+          message: 'Không tìm th?y cu?c h?p liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting', entityId: request.meetingId },
@@ -119,7 +136,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cuộc họp không còn ở trạng thái chờ phê duyệt',
+          message: 'Cu?c h?p không còn tr?ng thái ch? phê duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -137,7 +154,7 @@ export class MeetingRequestReviewService {
       if (!booking) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy booking phòng họp liên quan',
+          message: 'Không tìm th?y booking phòng h?p liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'room_booking', entityId: meeting.id },
@@ -148,7 +165,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng họp không còn ở trạng thái chờ duyệt',
+          message: 'Booking phòng h?p không còn tr?ng thái ch? duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -165,7 +182,7 @@ export class MeetingRequestReviewService {
       ) {
         throw new ForbiddenException({
           success: false,
-          message: 'Bạn không thể tự duyệt yêu cầu cuộc họp do chính mình tạo',
+          message: 'B?n không th? t? duy?t yêu c?u cu?c h?p do chính mình t?o',
           error: { code: 'SELF_APPROVAL_NOT_ALLOWED' },
         });
       }
@@ -201,7 +218,7 @@ export class MeetingRequestReviewService {
 
         throw new ConflictException({
           success: false,
-          message: 'Phòng họp đã có booking khác trong khung giờ này',
+          message: 'Phòng h?p ã có booking khác trong khung gi? này',
           error: {
             code: 'ROOM_CONFLICT',
             details: {
@@ -239,7 +256,7 @@ export class MeetingRequestReviewService {
         eventType: MeetingEventType.MEETING_REQUEST_APPROVED,
         actorUserId: authUser.userId,
         sourceType: MeetingEventSourceType.MANUAL,
-        description: `Yêu cầu cuộc họp "${meeting.title}" đã được phê duyệt`,
+        description: `Yêu c?u cu?c h?p "${meeting.title}" ã du?c phê duy?t`,
         oldValueJson: {
           approvalStatus: ApprovalStatus.PENDING,
           meetingStatus: MeetingStatus.PENDING_APPROVAL,
@@ -270,67 +287,6 @@ export class MeetingRequestReviewService {
         .map((ep) => ep.email)
         .filter((email): email is string => !!email);
 
-      const notifications: NotificationEntity[] = [];
-
-      for (const uid of participantIds) {
-        notifications.push(
-          em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_INVITE,
-            channel: NotificationChannel.IN_APP,
-            subject: `Thư mời tham dự cuộc họp: ${meeting.title}`,
-            content: `Bạn được mời tham dự cuộc họp "${meeting.title}" vào lúc ${meeting.startTime.toISOString()}`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: requestId,
-            recipientScope: 'user_list',
-            recipientUserIdsJson: [uid],
-            priority: 'normal' as any,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          }),
-        );
-      }
-
-      for (const email of externalEmails) {
-        notifications.push(
-          em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_INVITE,
-            channel: NotificationChannel.EMAIL,
-            subject: `Thư mời tham dự cuộc họp: ${meeting.title}`,
-            content: `Bạn được mời tham dự cuộc họp "${meeting.title}" vào lúc ${meeting.startTime.toISOString()}`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: requestId,
-            recipientScope: 'user_list',
-            recipientEmailsJson: [email],
-            priority: 'normal' as any,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          }),
-        );
-      }
-
-      const notifyUserIds: string[] = [request.requestedBy];
-      if (meeting.hostId && !notifyUserIds.includes(meeting.hostId)) {
-        notifyUserIds.push(meeting.hostId);
-      }
-
-      notifications.push(
-        em.create(NotificationEntity, {
-          notificationType: NotificationType.MEETING_REQUEST_APPROVED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Yêu cầu cuộc họp "${meeting.title}" đã được phê duyệt`,
-          content: `Yêu cầu cuộc họp "${meeting.title}" của bạn đã được phê duyệt`,
-          relatedEntityType: 'meeting_request',
-          relatedEntityId: requestId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: notifyUserIds,
-          priority: 'normal' as any,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          createdBy: authUser.userId,
-        }),
-      );
-
-      await em.save(NotificationEntity, notifications);
-
       const auditLog = em.create(AuditLogEntity, {
         userId: authUser.userId,
         actionType: 'approve',
@@ -358,14 +314,135 @@ export class MeetingRequestReviewService {
       });
       await em.save(AuditLogEntity, auditLog);
 
-      return new ApproveResponseDto({
-        requestId,
-        approvalStatus: ApprovalStatus.APPROVED,
+      return {
         meetingId: meeting.id,
+        meetingTitle: meeting.title,
+        meetingStartTime: meeting.startTime,
         bookingId: booking.id,
         appliedAt: now,
-      });
+        participantIds,
+        externalEmails,
+        requesterId: request.requestedBy,
+        hostId: meeting.hostId,
+        decisionNote: dto.decisionNote || null,
+      } as MeetingApprovalResult;
     });
+
+    // ── After transaction: enqueue notifications ──
+    await this.enqueueApprovalNotifications(approvalResult, authUser, clientContext);
+
+    return new ApproveResponseDto({
+      requestId,
+      approvalStatus: ApprovalStatus.APPROVED,
+      meetingId: approvalResult.meetingId,
+      bookingId: approvalResult.bookingId,
+      appliedAt: approvalResult.appliedAt,
+    });
+  }
+
+  private async enqueueApprovalNotifications(
+    result: MeetingApprovalResult,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<void> {
+    const meetingId = result.meetingId;
+
+    // 1. Internal participants — in-app MEETING_INVITE
+    for (const uid of result.participantIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.IN_APP,
+          subject: `Thu m?i tham d? cu?c h?p: ${result.meetingTitle}`,
+          content: `B?n du?c m?i tham d? cu?c h?p "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send IN_APP notify to participant ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to notify participant ${uid}: ${(error as Error).message}`);
+      }
+    }
+
+    // 2. External participants — email MEETING_INVITE
+    for (const email of result.externalEmails) {
+      try {
+        await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.EMAIL,
+          subject: `Thu m?i tham d? cu?c h?p: ${result.meetingTitle}`,
+          content: `B?n du?c m?i tham d? cu?c h?p "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          toEmails: [email],
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send email to external ${email}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to email external ${email}: ${(error as Error).message}`);
+      }
+    }
+
+    // 3. Requester + host — in-app MEETING_REQUEST_APPROVED
+    const notifyUserIds: string[] = [result.requesterId];
+    if (result.hostId && !notifyUserIds.includes(result.hostId)) {
+      notifyUserIds.push(result.hostId);
+    }
+    for (const uid of notifyUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_APPROVED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Yêu c?u cu?c h?p "${result.meetingTitle}" ã du?c phê duy?t`,
+          content: `Yêu c?u cu?c h?p "${result.meetingTitle}" c?a b?n ã du?c phê duy?t`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send approved notify to ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to notify ${uid} of approval: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  private async writeNotificationFailureAudit(
+    meetingId: string,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+    detail: string,
+  ): Promise<void> {
+    try {
+      await this.dataSource.manager.save(AuditLogEntity, {
+        userId: authUser.userId,
+        actionType: 'NOTIFICATION_FAILURE',
+        entityType: 'meeting',
+        entityId: meetingId,
+        severity: AuditLogSeverity.WARNING,
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        metadataJson: { error: detail },
+      } as any);
+    } catch (auditError) {
+      this.logger.error(
+        `Failed to write notification failure audit log: ${(auditError as Error).message}`,
+      );
+    }
   }
 
   async reject(
@@ -374,7 +451,7 @@ export class MeetingRequestReviewService {
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<RejectResponseDto> {
-    return this.dataSource.transaction(async (em) => {
+    const rejectResult = await this.dataSource.transaction(async (em) => {
       const request = await em.findOne(MeetingRequestEntity, {
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -383,7 +460,7 @@ export class MeetingRequestReviewService {
       if (!request) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy yêu cầu cuộc họp',
+          message: 'Không tìm th?y yêu c?u cu?c h?p',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting_request', entityId: requestId },
@@ -394,7 +471,7 @@ export class MeetingRequestReviewService {
       if (request.requestType !== MeetingRequestType.CREATE_MEETING) {
         throw new UnprocessableEntityException({
           success: false,
-          message: 'Loại yêu cầu không được hỗ trợ',
+          message: 'Lo?i yêu c?u không du?c h? tr?',
           error: {
             code: 'UNSUPPORTED_REQUEST_TYPE',
             details: {
@@ -408,7 +485,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu cầu cuộc họp không còn ở trạng thái chờ duyệt',
+          message: 'Yêu c?u cu?c h?p không còn tr?ng thái ch? duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -426,7 +503,7 @@ export class MeetingRequestReviewService {
       if (!meeting) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy cuộc họp liên quan',
+          message: 'Không tìm th?y cu?c h?p liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting', entityId: request.meetingId },
@@ -437,7 +514,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cuộc họp không còn ở trạng thái chờ phê duyệt',
+          message: 'Cu?c h?p không còn tr?ng thái ch? phê duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -455,7 +532,7 @@ export class MeetingRequestReviewService {
       if (!booking) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm thấy booking phòng họp liên quan',
+          message: 'Không tìm th?y booking phòng h?p liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'room_booking', entityId: meeting.id },
@@ -466,7 +543,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng họp không còn ở trạng thái chờ duyệt',
+          message: 'Booking phòng h?p không còn tr?ng thái ch? duy?t',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -483,7 +560,7 @@ export class MeetingRequestReviewService {
       ) {
         throw new ForbiddenException({
           success: false,
-          message: 'Bạn không thể tự duyệt yêu cầu cuộc họp do chính mình tạo',
+          message: 'B?n không th? t? duy?t yêu c?u cu?c h?p do chính mình t?o',
           error: { code: 'SELF_APPROVAL_NOT_ALLOWED' },
         });
       }
@@ -511,7 +588,7 @@ export class MeetingRequestReviewService {
         eventType: MeetingEventType.MEETING_REQUEST_REJECTED,
         actorUserId: authUser.userId,
         sourceType: MeetingEventSourceType.MANUAL,
-        description: `Yêu cầu cuộc họp "${meeting.title}" đã bị từ chối. Lý do: ${dto.rejectionReason}`,
+        description: `Yêu c?u cu?c h?p "${meeting.title}" ã b? t? ch?i. Lý do: ${dto.rejectionReason}`,
         oldValueJson: {
           approvalStatus: ApprovalStatus.PENDING,
           meetingStatus: MeetingStatus.PENDING_APPROVAL,
@@ -524,26 +601,6 @@ export class MeetingRequestReviewService {
         } as any,
       });
       await em.save(MeetingEventEntity, event);
-
-      const notifyUserIds: string[] = [request.requestedBy];
-      if (meeting.hostId && !notifyUserIds.includes(meeting.hostId)) {
-        notifyUserIds.push(meeting.hostId);
-      }
-
-      const notification = em.create(NotificationEntity, {
-        notificationType: NotificationType.MEETING_REQUEST_REJECTED,
-        channel: NotificationChannel.IN_APP,
-        subject: `Yêu cầu cuộc họp "${meeting.title}" đã bị từ chối`,
-        content: `Yêu cầu cuộc họp "${meeting.title}" của bạn đã bị từ chối. Lý do: ${dto.rejectionReason}`,
-        relatedEntityType: 'meeting_request',
-        relatedEntityId: requestId,
-        recipientScope: 'user_list',
-        recipientUserIdsJson: notifyUserIds,
-        priority: 'normal' as any,
-        deliveryStatus: NotificationDeliveryStatus.QUEUED,
-        createdBy: authUser.userId,
-      });
-      await em.save(NotificationEntity, notification);
 
       const auditLog = em.create(AuditLogEntity, {
         userId: authUser.userId,
@@ -572,11 +629,55 @@ export class MeetingRequestReviewService {
       });
       await em.save(AuditLogEntity, auditLog);
 
-      return new RejectResponseDto({
-        requestId,
-        approvalStatus: ApprovalStatus.REJECTED,
-        decisionAt: now,
-      });
+      return {
+        meetingTitle: meeting.title,
+        meetingId: meeting.id,
+        appliedAt: now,
+        requesterId: request.requestedBy,
+        hostId: meeting.hostId,
+      };
+    });
+
+    // ── After transaction: enqueue notification ──
+    await this.enqueueRejectionNotifications(rejectResult, authUser, clientContext);
+
+    return new RejectResponseDto({
+      requestId,
+      approvalStatus: ApprovalStatus.REJECTED,
+      decisionAt: rejectResult.appliedAt,
     });
   }
+
+  private async enqueueRejectionNotifications(
+    result: { meetingTitle: string; meetingId: string; requesterId: string; hostId: string | null },
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<void> {
+    const notifyUserIds: string[] = [result.requesterId];
+    if (result.hostId && !notifyUserIds.includes(result.hostId)) {
+      notifyUserIds.push(result.hostId);
+    }
+    for (const uid of notifyUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_REJECTED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Yêu c?u cu?c h?p "${result.meetingTitle}" ã b? t? ch?i`,
+          content: `Yêu c?u cu?c h?p "${result.meetingTitle}" c?a b?n ã b? t? ch?i.`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: result.meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Reject] Failed to send rejection notify to ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(result.meetingId, authUser, clientContext,
+          `Failed to notify ${uid} of rejection: ${(error as Error).message}`);
+      }
+    }
+  }
 }
+
