@@ -50,6 +50,29 @@ export class IotAuditRepository {
     );
   }
 
+  async logDeviceUpdate(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      changes: Record<string, { old: unknown; new: unknown }>;
+    },
+  ): Promise<void> {
+    // SEC-01: chỉ 4 trường allowlist (device_name/ip/mac/network) đi vào đây,
+    // không chứa secret. KHÔNG ghi metadata_json của thiết bị.
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'update', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [
+        params.userId,
+        params.deviceId,
+        JSON.stringify({ changed_fields: params.changes }),
+      ],
+    );
+  }
+
   async logConfigureFaceServer(
     entityManager: EntityManager,
     params: {
