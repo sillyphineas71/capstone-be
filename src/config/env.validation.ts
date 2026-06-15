@@ -140,6 +140,10 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_NOTIFICATION_REMINDER_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_CRON: Joi.string().default('0 * * * *'),
 
+  // ─── K2. Device Probe (IOT-014) ──────────────────────────────────────────────
+  DEVICE_OFFLINE_DETECT_ENABLED: Joi.boolean().default(true),
+  RTSP_PROBE_TIMEOUT_MS: Joi.number().integer().min(100).default(3000),
+
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),
   SYSTEM_CONFIG_CACHE_TTL_SECONDS: Joi.number().integer().default(300),

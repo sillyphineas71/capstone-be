@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
+import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -21,15 +22,34 @@ export class SchedulerService {
   private readonly noShowEnabled: boolean;
   private readonly autoReleaseEnabled: boolean;
   private readonly reminderEnabled: boolean;
+  private readonly deviceOfflineDetectEnabled: boolean;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly iotDevicesService: IotDevicesService,
+  ) {
     this.schedulerEnabled = this.configService.get<boolean>('SCHEDULER_ENABLED', true);
     this.noShowEnabled = this.configService.get<boolean>('SCHEDULER_NO_SHOW_CHECK_ENABLED', false);
     this.autoReleaseEnabled = this.configService.get<boolean>('SCHEDULER_AUTO_RELEASE_ENABLED', false);
     this.reminderEnabled = this.configService.get<boolean>('SCHEDULER_NOTIFICATION_REMINDER_ENABLED', false);
+    this.deviceOfflineDetectEnabled = this.configService.get<boolean>('DEVICE_OFFLINE_DETECT_ENABLED', true);
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled}`,
+    );
+  }
+
+  /**
+   * IOT-014 — Active probe phát hiện camera offline.
+   * Cron cố định EVERY_MINUTE; gate SCHEDULER_ENABLED && DEVICE_OFFLINE_DETECT_ENABLED.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'device-offline-detect' })
+  async detectOfflineDevices(): Promise<void> {
+    if (!this.schedulerEnabled || !this.deviceOfflineDetectEnabled) return;
+
+    const r = await this.iotDevicesService.detectOfflineDevices(null);
+    this.logger.log(
+      `[Scheduler] device-offline-detect: checked=${r.checked} online=${r.online_count} offline=${r.offline_count} transitions=${r.transitions.length}`,
     );
   }
 
