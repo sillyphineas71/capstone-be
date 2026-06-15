@@ -24,6 +24,8 @@ export class RecordingProcessManager {
   private readonly logger = new Logger(RecordingProcessManager.name);
   private readonly procs = new Map<string, ProcEntry>();
   private static readonly MAX_TAIL = 20;
+  /** Thời gian chờ ffmpeg tự thoát sau khi gửi 'q' trước khi SIGKILL (REC-003). */
+  static readonly STOP_TIMEOUT_MS = 3000;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -89,6 +91,55 @@ export class RecordingProcessManager {
   markStopping(sessionId: string): void {
     const entry = this.procs.get(sessionId);
     if (entry) entry.stopping = true;
+  }
+
+  /**
+   * Dừng ÊM tiến trình ffmpeg (REC-003):
+   * markStopping → ghi 'q' vào stdin → đợi 'exit'. Quá timeoutMs → SIGKILL.
+   * Trả 'orphan' nếu không còn handle, 'exited' nếu tự thoát, 'killed' nếu phải kill.
+   * KHÔNG treo promise; luôn dọn Map khi kết thúc.
+   */
+  async stop(
+    sessionId: string,
+    timeoutMs = RecordingProcessManager.STOP_TIMEOUT_MS,
+  ): Promise<'exited' | 'killed' | 'orphan'> {
+    const entry = this.procs.get(sessionId);
+    if (!entry) return 'orphan';
+    this.markStopping(sessionId);
+    const { proc } = entry;
+
+    // Đã thoát trước đó (race) → dọn Map và coi như exited.
+    if (proc.exitCode !== null || proc.killed) {
+      this.procs.delete(sessionId);
+      return 'exited';
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timedOut = false;
+      const finish = (r: 'exited' | 'killed') => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.procs.delete(sessionId);
+        resolve(r);
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // process có thể đã thoát; 'exit' sẽ xử lý.
+        }
+      }, timeoutMs);
+      proc.once('exit', () => finish(timedOut ? 'killed' : 'exited'));
+      proc.once('error', () => finish(timedOut ? 'killed' : 'exited'));
+      try {
+        proc.stdin?.write('q');
+      } catch {
+        // stdin đã đóng → dựa vào timeout → kill.
+      }
+    });
   }
 
   private async markFailed(

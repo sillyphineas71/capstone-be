@@ -53,4 +53,27 @@ export class RecordingSessionController {
       data,
     };
   }
+
+  // REC-003 (UC-116): dừng ghi hình video. v1 đồng bộ → 200.
+  @Post('live-meetings/:meetingId/recording/:sessionId/stop-video')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.video.stop')
+  async stopVideo(
+    @Req() req: any,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    const data = await this.recordingSessionService.stopVideo(
+      meetingId,
+      sessionId,
+      userId,
+    );
+    return {
+      success: true,
+      message: 'Video recording stopped',
+      data,
+    };
+  }
 }

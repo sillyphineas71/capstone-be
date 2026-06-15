@@ -12,6 +12,11 @@ import { RecordingSessionService } from './recording-session.service.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { redactUrl } from '../utils/ffmpeg.util.js';
+import { EventEmitter } from 'events';
+import * as fs from 'fs';
+
+jest.mock('fs');
+const fsMock = fs as jest.Mocked<typeof fs>;
 
 describe('RecordingSessionService (REC-002)', () => {
   let service: RecordingSessionService;
@@ -205,5 +210,181 @@ describe('RecordingSessionService (REC-002)', () => {
     expect(redacted).not.toContain(encoded);
     expect(redacted).not.toContain('p%40ss');
     expect(redacted).not.toContain(raw);
+  });
+});
+
+// ─── REC-003: stopVideo ───
+describe('RecordingSessionService.stopVideo (REC-003)', () => {
+  let service: RecordingSessionService;
+  let dataSourceMock: any;
+  let managerMock: any;
+  let qr: any;
+
+  const baseSession = (over: any = {}) => ({
+    id: 'sess-1',
+    meeting_id: 'm1',
+    status: 'recording',
+    storage_path: '/rec/sess-1.mp4',
+    started_at: new Date(Date.now() - 60000).toISOString(),
+    paused_duration_seconds: 0,
+    metadata_json: null,
+    ...over,
+  });
+
+  // manager.query router: SELECT recording_sessions → session; UPDATE → [].
+  const selectReturns =
+    (session: any[] | null) =>
+    (sql: string): Promise<any[]> => {
+      if (sql.includes('SELECT') && sql.includes('recording_sessions'))
+        return Promise.resolve(session ?? []);
+      return Promise.resolve([]);
+    };
+
+  const fakeReadStream = () => {
+    const s = new EventEmitter();
+    process.nextTick(() => s.emit('end'));
+    return s as any;
+  };
+
+  beforeEach(async () => {
+    qr = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      startTransaction: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn(),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+    };
+    dataSourceMock = {
+      manager: { query: jest.fn() },
+      createQueryRunner: jest.fn(() => qr),
+    };
+    managerMock = {
+      has: jest.fn().mockReturnValue(true),
+      stop: jest.fn().mockResolvedValue('exited'),
+    };
+
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.statSync.mockReturnValue({ size: 1024 } as any);
+    fsMock.createReadStream.mockImplementation(() => fakeReadStream());
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RecordingSessionService,
+        { provide: DataSource, useValue: dataSourceMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+        { provide: RecordingProcessManager, useValue: managerMock },
+      ],
+    }).compile();
+    service = module.get(RecordingSessionService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('happy: 200 stopped + INSERT media_files + UPDATE session', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }]) // INSERT RETURNING id
+      .mockResolvedValueOnce(undefined); // UPDATE session
+
+    const r = await service.stopVideo('m1', 'sess-1', 'u1');
+
+    expect(r.status).toBe('stopped');
+    expect(r.mediaFileId).toBe('media-1');
+    expect(r.fileSizeBytes).toBe('1024');
+    expect(r.durationSeconds).toBeGreaterThanOrEqual(0);
+    expect(managerMock.stop).toHaveBeenCalledWith('sess-1');
+    expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(qr.query).toHaveBeenCalledTimes(2);
+    // INSERT đúng cột video/mp4/local
+    const insertParams = qr.query.mock.calls[0][1];
+    expect(insertParams).toEqual(
+      expect.arrayContaining(['video', 'video/mp4', 'local']),
+    );
+  });
+
+  it('404: session không tồn tại', async () => {
+    dataSourceMock.manager.query.mockImplementation(selectReturns([]));
+    await expect(service.stopVideo('m1', 'sess-1', 'u1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('404: meeting_id không khớp', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession({ meeting_id: 'other' })]),
+    );
+    await expect(service.stopVideo('m1', 'sess-1', 'u1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('409: session không active (đã stopped)', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession({ status: 'stopped' })]),
+    );
+    await expect(service.stopVideo('m1', 'sess-1', 'u1')).rejects.toThrow(
+      ConflictException,
+    );
+  });
+
+  it('orphan: manager.has=false → vẫn stopped + metadata orphan_stop', async () => {
+    managerMock.has.mockReturnValue(false);
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+
+    const r = await service.stopVideo('m1', 'sess-1', 'u1');
+
+    expect(r.status).toBe('stopped');
+    expect(managerMock.stop).not.toHaveBeenCalled();
+    // UPDATE (call thứ 2) chứa metadata_json có orphan_stop
+    const updateParams = qr.query.mock.calls[1][1];
+    const metaJson = updateParams.find(
+      (p: unknown) => typeof p === 'string' && p.includes('orphan_stop'),
+    );
+    expect(metaJson).toBeDefined();
+  });
+
+  it('empty file: size 0 → stopped, KHÔNG media_files, mediaFileId null', async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+
+    const r = await service.stopVideo('m1', 'sess-1', 'u1');
+
+    expect(r.status).toBe('stopped');
+    expect(r.mediaFileId).toBeNull();
+    expect(r.fileSizeBytes).toBe('0');
+    expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+    // UPDATE empty-file đi qua manager.query với error_message='empty file'
+    const calls = dataSourceMock.manager.query.mock.calls;
+    const updateCall = calls.find((c: any[]) =>
+      String(c[0]).includes('UPDATE recording_sessions'),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall[1]).toEqual(expect.arrayContaining(['empty file']));
+  });
+
+  it('rollback: INSERT lỗi → 500 RECORDING_STOP_FAILED', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query.mockRejectedValueOnce(new Error('db insert failed'));
+
+    await expect(service.stopVideo('m1', 'sess-1', 'u1')).rejects.toThrow(
+      InternalServerErrorException,
+    );
+    expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
+    expect(qr.release).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -168,6 +168,190 @@ export class RecordingSessionService {
       startedAt,
       cameraDeviceId: device.id,
     };
+  }
+
+  async stopVideo(
+    meetingId: string,
+    sessionId: string,
+    userId: string | null,
+  ): Promise<{
+    recordingSessionId: string;
+    status: string;
+    stoppedAt: Date;
+    durationSeconds: number;
+    fileSizeBytes: string;
+    mediaFileId: string | null;
+  }> {
+    // 1. Load session
+    const rows: Array<{
+      id: string;
+      meeting_id: string;
+      status: string;
+      storage_path: string | null;
+      started_at: string | Date;
+      paused_duration_seconds: number | null;
+      metadata_json: Record<string, unknown> | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, meeting_id, status, storage_path, started_at,
+              paused_duration_seconds, metadata_json
+       FROM recording_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const session = rows?.[0];
+    if (!session || session.meeting_id !== meetingId) {
+      throw new NotFoundException({
+        code: 'RECORDING_SESSION_NOT_FOUND',
+        message: 'Recording session not found.',
+      });
+    }
+
+    // 2. Active?
+    const activeStatuses = [
+      RecordingSessionStatus.STARTING,
+      RecordingSessionStatus.RECORDING,
+      RecordingSessionStatus.PAUSED,
+    ];
+    if (!activeStatuses.includes(session.status as RecordingSessionStatus)) {
+      throw new ConflictException({
+        code: 'RECORDING_NOT_ACTIVE',
+        message: 'Recording session is not active.',
+      });
+    }
+
+    // 3. Dừng tiến trình (graceful → kill). Không còn handle → orphan.
+    const stopResult = this.processManager.has(sessionId)
+      ? await this.processManager.stop(sessionId)
+      : 'orphan';
+    const isOrphan = stopResult === 'orphan';
+
+    // 4. Chốt file (đợi exit ở bước 3 xong mới đọc).
+    const stoppedAt = new Date();
+    const startedAt = new Date(session.started_at);
+    const paused = session.paused_duration_seconds ?? 0;
+    const durationSeconds = Math.max(
+      0,
+      Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
+    );
+    const storagePath = session.storage_path;
+    const exists = !!storagePath && fs.existsSync(storagePath);
+    const size = exists ? fs.statSync(storagePath).size : 0;
+
+    const baseMeta = session.metadata_json ?? {};
+    const metadata = isOrphan ? { ...baseMeta, orphan_stop: true } : baseMeta;
+
+    // 5a. File thiếu / rỗng → stopped nhưng KHÔNG tạo media_files.
+    if (!exists || size === 0) {
+      await this.dataSource.manager.query(
+        `UPDATE recording_sessions
+         SET status = $1, stopped_at = $2, stopped_by = $3,
+             duration_seconds = $4, error_message = $5, metadata_json = $6
+         WHERE id = $7`,
+        [
+          RecordingSessionStatus.STOPPED,
+          stoppedAt,
+          userId,
+          durationSeconds,
+          'empty file',
+          JSON.stringify(metadata),
+          sessionId,
+        ],
+      );
+      return {
+        recordingSessionId: sessionId,
+        status: RecordingSessionStatus.STOPPED,
+        stoppedAt,
+        durationSeconds,
+        fileSizeBytes: '0',
+        mediaFileId: null,
+      };
+    }
+
+    // 5b. Có file → checksum stream + transaction (media_files + session).
+    const fileSizeBytes = String(size);
+    const checksum = await this.sha256Stream(storagePath);
+    const fileName = `${sessionId}.mp4`;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let mediaFileId: string;
+    try {
+      const insert = (await queryRunner.query(
+        `INSERT INTO media_files
+           (file_name, file_type, mime_type, storage_provider, storage_key,
+            recording_session_id, meeting_id, uploaded_by,
+            file_size_bytes, checksum, duration_seconds)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id`,
+        [
+          fileName,
+          'video',
+          'video/mp4',
+          'local',
+          storagePath,
+          sessionId,
+          meetingId,
+          userId,
+          fileSizeBytes,
+          checksum,
+          durationSeconds,
+        ],
+      )) as Array<{ id: string }>;
+      mediaFileId = insert[0].id;
+
+      await queryRunner.query(
+        `UPDATE recording_sessions
+         SET status = $1, stopped_at = $2, stopped_by = $3,
+             file_size_bytes = $4, duration_seconds = $5, checksum = $6,
+             metadata_json = $7
+         WHERE id = $8`,
+        [
+          RecordingSessionStatus.STOPPED,
+          stoppedAt,
+          userId,
+          fileSizeBytes,
+          durationSeconds,
+          checksum,
+          JSON.stringify(metadata),
+          sessionId,
+        ],
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `stopVideo finalize failed for session ${sessionId}: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      throw new InternalServerErrorException({
+        code: 'RECORDING_STOP_FAILED',
+        message: 'Failed to finalize recording.',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      recordingSessionId: sessionId,
+      status: RecordingSessionStatus.STOPPED,
+      stoppedAt,
+      durationSeconds,
+      fileSizeBytes,
+      mediaFileId,
+    };
+  }
+
+  /** sha256 hex của file qua stream (không nạp toàn file vào RAM). */
+  private sha256Stream(filePath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const hash = createHash('sha256');
+      const stream = fs.createReadStream(filePath);
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', (err) => reject(err));
+    });
   }
 
   /** rtsp://[user[:pass]@]host:port/path — chỉ dùng nội bộ, không log. */

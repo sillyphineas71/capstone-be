@@ -1,14 +1,19 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import { EventEmitter } from 'events';
 import { DataSource } from 'typeorm';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import * as ffmpegUtil from '../utils/ffmpeg.util.js';
 
-// Fake ChildProcess: EventEmitter + stderr emitter + exitCode/killed
+// Fake ChildProcess: EventEmitter + stderr emitter + stdin/kill + exitCode/killed
 class FakeProc extends EventEmitter {
   stderr = new EventEmitter();
+  stdin = { write: jest.fn() };
   exitCode: number | null = null;
   killed = false;
+  kill = jest.fn(() => {
+    this.killed = true;
+    return true;
+  });
 }
 
 describe('RecordingProcessManager (REC-002)', () => {
@@ -85,5 +90,39 @@ describe('RecordingProcessManager (REC-002)', () => {
     expect(dataSourceMock.manager.update).toHaveBeenCalled();
     const arg = dataSourceMock.manager.update.mock.calls[0][2];
     expect(arg.errorMessage).not.toContain('pw@');
+  });
+
+  // ─── REC-003: stop() ───
+  it('stop: ghi q → exit → exited + dọn Map (KHÔNG markFailed)', async () => {
+    manager.start('s1', 'url', '/o.mp4');
+    const p = manager.stop('s1');
+    expect(fake.stdin.write).toHaveBeenCalledWith('q');
+    fake.emit('exit', 0);
+    expect(await p).toBe('exited');
+    expect(manager.has('s1')).toBe(false);
+    expect(dataSourceMock.manager.update).not.toHaveBeenCalled();
+  });
+
+  it('stop: không còn handle → orphan', async () => {
+    expect(await manager.stop('nope')).toBe('orphan');
+  });
+
+  it('stop: process đã exit trước → exited ngay', async () => {
+    manager.start('s1', 'url', '/o.mp4');
+    fake.exitCode = 0; // đã thoát
+    expect(await manager.stop('s1')).toBe('exited');
+    expect(manager.has('s1')).toBe(false);
+  });
+
+  it('stop: quá timeout → SIGKILL → killed', async () => {
+    jest.useFakeTimers();
+    manager.start('s1', 'url', '/o.mp4');
+    const p = manager.stop('s1', 50);
+    jest.advanceTimersByTime(60); // kích hoạt timeout → kill
+    expect(fake.kill).toHaveBeenCalledWith('SIGKILL');
+    fake.emit('exit', null); // process thoát sau khi bị kill
+    jest.useRealTimers();
+    expect(await p).toBe('killed');
+    expect(manager.has('s1')).toBe(false);
   });
 });
