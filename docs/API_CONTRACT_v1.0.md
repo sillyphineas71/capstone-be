@@ -20,6 +20,7 @@
 | 2026-06-15 | Thêm IOT-012 (Feature #13) — Disable/Re-enable thiết bị IoT/Camera (POST /:id/disable, /:id/enable, @HttpCode(200), no body), permission `iot.device.disable`/`iot.device.enable`. | Section 8 (sau IOT-011) |
 | 2026-06-15 | Thêm IOT-013 (Feature #14) — List + Detail thiết bị IoT/Camera (GET /iot-devices, GET /:id), permission `iot.device.read`. Read-only; data snake_case, meta camelCase {page,limit,total,totalPages}. | Section 8 (sau IOT-012) |
 | 2026-06-15 | Thêm IOT-014 (Feature #15) — Phát hiện camera offline bằng active TCP probe (POST /iot-devices/probe-status + cron EVERY_MINUTE), permission `iot.device.probe`. Đổi status ip_camera, audit auto_online/auto_offline. | Section 8 (sau IOT-013) |
+| 2026-06-15 | Đánh dấu UC-30/108/109/110 (recording-config) = ✅ Đã implement (REC-001). | Section 5 (UC-30), Section 12 (UC-108/109/110) |
 
 ---
 
@@ -1298,6 +1299,8 @@
 ---
 
 ### UC-30 — Cấu hình tính năng ghi hình cho cuộc họp
+
+> ✅ **Đã implement (REC-001)** — `spec/features/recording/feat-configure-recording`.
 
 | Field | Value |
 |---|---|
@@ -3746,11 +3749,13 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 
 ### UC-108 — Tạo cấu hình ghi âm/ghi hình
 
-> Xem `POST /api/v1/meetings/{meetingId}/recording-config` tại [UC-30](#uc-30--cấu-hình-tính-năng-ghi-hình-cho-cuộc-họp).
+> ✅ **Đã implement (REC-001)**. Xem `POST /api/v1/meetings/{meetingId}/recording-config` tại [UC-30](#uc-30--cấu-hình-tính-năng-ghi-hình-cho-cuộc-họp).
 
 ---
 
 ### UC-109 — Xem cấu hình ghi âm/ghi hình
+
+> ✅ **Đã implement (REC-001)** — GET trả 404 `RECORDING_CONFIG_NOT_FOUND` nếu meeting chưa có config.
 
 | Field | Value |
 |---|---|
@@ -3783,6 +3788,8 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 ---
 
 ### UC-110 — Cập nhật cấu hình ghi âm/ghi hình
+
+> ✅ **Đã implement (REC-001)** — PATCH partial; 404 nếu chưa có; 409 `RECORDING_IN_PROGRESS` khi đang ghi.
 
 | Field | Value |
 |---|---|
