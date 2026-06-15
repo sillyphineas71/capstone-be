@@ -13,6 +13,7 @@ import { RecordingConfigAuditRepository } from './repositories/recording-config-
 import { RecordingSessionController } from './controllers/recording-session.controller.js';
 import { RecordingSessionService } from './services/recording-session.service.js';
 import { RecordingProcessManager } from './services/recording-process-manager.js';
+import { RecordingReconcileService } from './services/recording-reconcile.service.js';
 
 /**
  * RecordingModule quản lý các entity recording + CRUD recording-config (REC-001).
@@ -39,6 +40,7 @@ import { RecordingProcessManager } from './services/recording-process-manager.js
     RecordingConfigAuditRepository,
     RecordingSessionService,
     RecordingProcessManager,
+    RecordingReconcileService,
   ],
   exports: [TypeOrmModule],
 })

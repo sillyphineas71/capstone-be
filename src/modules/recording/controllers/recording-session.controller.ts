@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Post,
   HttpCode,
   Req,
@@ -73,6 +74,26 @@ export class RecordingSessionController {
     return {
       success: true,
       message: 'Video recording stopped',
+      data,
+    };
+  }
+
+  // REC-004 (Phần A): đọc trạng thái phiên ghi (read-only).
+  @Get('live-meetings/:meetingId/recording/:sessionId/status')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.video.status')
+  async getStatus(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
+  ) {
+    const data = await this.recordingSessionService.getStatus(
+      meetingId,
+      sessionId,
+    );
+    return {
+      success: true,
+      message: 'Recording status retrieved',
       data,
     };
   }

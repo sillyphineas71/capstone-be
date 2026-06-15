@@ -266,9 +266,60 @@ export class RecordingSessionService {
       };
     }
 
-    // 5b. Có file → checksum stream + transaction (media_files + session).
-    const fileSizeBytes = String(size);
+    // 5b. Có file → finalize (size/checksum/duration + transaction). Dùng chung helper.
+    const result = await this.finalizeFileToStopped({
+      sessionId,
+      meetingId,
+      storagePath,
+      startedAt,
+      paused,
+      userId,
+      baseMetadata: metadata,
+    });
+
+    return {
+      recordingSessionId: sessionId,
+      status: RecordingSessionStatus.STOPPED,
+      stoppedAt: result.stoppedAt,
+      durationSeconds: result.durationSeconds,
+      fileSizeBytes: result.fileSizeBytes,
+      mediaFileId: result.mediaFileId,
+    };
+  }
+
+  /**
+   * Chốt file recording → stopped: size + sha256 + duration + transaction
+   * (INSERT media_files + UPDATE recording_session). Dùng chung bởi REC-003 (stopVideo)
+   * và REC-004 reconcile. `recovered=true` thêm metadata recovered. Ném
+   * InternalServerErrorException (RECORDING_STOP_FAILED) nếu transaction lỗi.
+   */
+  async finalizeFileToStopped(params: {
+    sessionId: string;
+    meetingId: string;
+    storagePath: string;
+    startedAt: Date;
+    paused: number;
+    userId: string | null;
+    baseMetadata: Record<string, unknown>;
+    recovered?: boolean;
+  }): Promise<{
+    stoppedAt: Date;
+    durationSeconds: number;
+    fileSizeBytes: string;
+    mediaFileId: string;
+  }> {
+    const { sessionId, meetingId, storagePath, startedAt, paused, userId } =
+      params;
+    const stoppedAt = new Date();
+    const durationSeconds = Math.max(
+      0,
+      Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
+    );
+    const fileSizeBytes = String(fs.statSync(storagePath).size);
     const checksum = await this.sha256Stream(storagePath);
+    const metadata = params.recovered
+      ? { ...params.baseMetadata, recovered: true }
+      : params.baseMetadata;
     const fileName = `${sessionId}.mp4`;
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -321,7 +372,7 @@ export class RecordingSessionService {
     } catch (e) {
       await queryRunner.rollbackTransaction();
       this.logger.error(
-        `stopVideo finalize failed for session ${sessionId}: ${
+        `finalize failed for session ${sessionId}: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );
@@ -333,13 +384,86 @@ export class RecordingSessionService {
       await queryRunner.release();
     }
 
+    return { stoppedAt, durationSeconds, fileSizeBytes, mediaFileId };
+  }
+
+  /**
+   * REC-004 Phần A — đọc trạng thái phiên ghi (READ-ONLY, không đụng tiến trình/DB).
+   * Live (recording & stopped_at null) → duration wall-clock + fs.stat size hiện tại.
+   */
+  async getStatus(
+    meetingId: string,
+    sessionId: string,
+  ): Promise<{
+    recordingSessionId: string;
+    meetingId: string;
+    sessionType: string;
+    status: string;
+    startedAt: string | Date;
+    stoppedAt: string | Date | null;
+    live: boolean;
+    durationSeconds: number | null;
+    fileSizeBytes: string | null;
+    hasProcessHandle: boolean;
+  }> {
+    const rows: Array<{
+      id: string;
+      meeting_id: string;
+      session_type: string;
+      status: string;
+      started_at: string | Date;
+      stopped_at: string | Date | null;
+      paused_duration_seconds: number | null;
+      storage_path: string | null;
+      file_size_bytes: string | null;
+      duration_seconds: number | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, meeting_id, session_type, status, started_at, stopped_at,
+              paused_duration_seconds, storage_path, file_size_bytes, duration_seconds
+       FROM recording_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const s = rows?.[0];
+    if (!s || s.meeting_id !== meetingId) {
+      throw new NotFoundException({
+        code: 'RECORDING_SESSION_NOT_FOUND',
+        message: 'Recording session not found.',
+      });
+    }
+
+    const live =
+      (s.status as RecordingSessionStatus) ===
+        RecordingSessionStatus.RECORDING && s.stopped_at == null;
+
+    let durationSeconds: number | null;
+    let fileSizeBytes: string | null;
+    if (live) {
+      const startedAt = new Date(s.started_at);
+      const paused = s.paused_duration_seconds ?? 0;
+      durationSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - startedAt.getTime()) / 1000) - paused,
+      );
+      fileSizeBytes =
+        s.storage_path && fs.existsSync(s.storage_path)
+          ? String(fs.statSync(s.storage_path).size)
+          : null;
+    } else {
+      durationSeconds = s.duration_seconds ?? null;
+      fileSizeBytes = s.file_size_bytes ?? null;
+    }
+
     return {
-      recordingSessionId: sessionId,
-      status: RecordingSessionStatus.STOPPED,
-      stoppedAt,
+      recordingSessionId: s.id,
+      meetingId: s.meeting_id,
+      sessionType: s.session_type,
+      status: s.status,
+      startedAt: s.started_at,
+      stoppedAt: s.stopped_at ?? null,
+      live,
       durationSeconds,
       fileSizeBytes,
-      mediaFileId,
+      hasProcessHandle: this.processManager.has(sessionId),
     };
   }
 

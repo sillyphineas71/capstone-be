@@ -388,3 +388,88 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
     expect(qr.release).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── REC-004: getStatus ───
+describe('RecordingSessionService.getStatus (REC-004)', () => {
+  let service: RecordingSessionService;
+  let dataSourceMock: any;
+  let managerMock: any;
+
+  const baseRow = (over: any = {}) => ({
+    id: 'sess-1',
+    meeting_id: 'm1',
+    session_type: 'video',
+    status: 'recording',
+    started_at: new Date(Date.now() - 30000).toISOString(),
+    stopped_at: null,
+    paused_duration_seconds: 0,
+    storage_path: '/rec/sess-1.mp4',
+    file_size_bytes: null,
+    duration_seconds: null,
+    ...over,
+  });
+
+  beforeEach(async () => {
+    dataSourceMock = { manager: { query: jest.fn() } };
+    managerMock = { has: jest.fn().mockReturnValue(true) };
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.statSync.mockReturnValue({ size: 2048 } as any);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RecordingSessionService,
+        { provide: DataSource, useValue: dataSourceMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+        { provide: RecordingProcessManager, useValue: managerMock },
+      ],
+    }).compile();
+    service = module.get(RecordingSessionService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('live: durationSeconds wall-clock + fileSizeBytes từ fs.stat', async () => {
+    dataSourceMock.manager.query.mockResolvedValue([baseRow()]);
+    const r = await service.getStatus('m1', 'sess-1');
+    expect(r.live).toBe(true);
+    expect(r.durationSeconds).toBeGreaterThanOrEqual(0);
+    expect(r.fileSizeBytes).toBe('2048');
+    expect(r.hasProcessHandle).toBe(true);
+  });
+
+  it('stopped: trả duration/size từ DB (không đọc fs)', async () => {
+    managerMock.has.mockReturnValue(false);
+    dataSourceMock.manager.query.mockResolvedValue([
+      baseRow({
+        status: 'stopped',
+        stopped_at: new Date().toISOString(),
+        duration_seconds: 120,
+        file_size_bytes: '4096',
+      }),
+    ]);
+    const r = await service.getStatus('m1', 'sess-1');
+    expect(r.live).toBe(false);
+    expect(r.durationSeconds).toBe(120);
+    expect(r.fileSizeBytes).toBe('4096');
+    expect(fsMock.statSync).not.toHaveBeenCalled();
+  });
+
+  it('404: session không tồn tại', async () => {
+    dataSourceMock.manager.query.mockResolvedValue([]);
+    await expect(service.getStatus('m1', 'sess-1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('404: meeting mismatch', async () => {
+    dataSourceMock.manager.query.mockResolvedValue([
+      baseRow({ meeting_id: 'other' }),
+    ]);
+    await expect(service.getStatus('m1', 'sess-1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+});
