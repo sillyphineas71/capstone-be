@@ -34,6 +34,7 @@ describe('IotDevicesService', () => {
 
     dataSourceMock = {
       createQueryRunner: jest.fn().mockReturnValue(queryRunnerMock) as any,
+      getRepository: jest.fn(),
       manager: {
         findOne: jest.fn(),
         query: jest.fn(),
@@ -559,6 +560,96 @@ describe('IotDevicesService', () => {
     it('T8 not found: device missing -> NotFoundException', async () => {
       (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
       await expect(service.enable('user-id', 'dev-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('findAll', () => {
+    let qbMock: any;
+
+    beforeEach(() => {
+      qbMock = {
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn(),
+      };
+      (dataSourceMock.getRepository as jest.Mock).mockReturnValue({
+        createQueryBuilder: jest.fn().mockReturnValue(qbMock),
+      });
+    });
+
+    it('default: no filter, sort createdAt DESC, skip 0 take 20, meta correct', async () => {
+      qbMock.getManyAndCount.mockResolvedValue([
+        [{ id: 'd1', status: 'online' }],
+        42,
+      ]);
+
+      const result = await service.findAll({ page: 1, limit: 20 } as any);
+
+      expect(qbMock.andWhere).not.toHaveBeenCalled();
+      expect(qbMock.orderBy).toHaveBeenCalledWith('d.createdAt', 'DESC');
+      expect(qbMock.skip).toHaveBeenCalledWith(0);
+      expect(qbMock.take).toHaveBeenCalledWith(20);
+      expect(result.meta).toEqual({
+        page: 1,
+        limit: 20,
+        total: 42,
+        totalPages: 3,
+      });
+      expect(result.items).toHaveLength(1);
+    });
+
+    it('status filter: andWhere status', async () => {
+      qbMock.getManyAndCount.mockResolvedValue([[], 0]);
+      await service.findAll({ page: 1, limit: 20, status: 'disabled' } as any);
+      expect(qbMock.andWhere).toHaveBeenCalledWith('d.status = :status', {
+        status: 'disabled',
+      });
+    });
+
+    it('search: bound ILIKE on deviceName/deviceCode', async () => {
+      qbMock.getManyAndCount.mockResolvedValue([[], 0]);
+      await service.findAll({ page: 1, limit: 20, search: 'ipcam' } as any);
+      expect(qbMock.andWhere).toHaveBeenCalledWith(
+        '(d.deviceName ILIKE :s OR d.deviceCode ILIKE :s)',
+        { s: '%ipcam%' },
+      );
+    });
+
+    it('page 2: skip (2-1)*20 = 20', async () => {
+      qbMock.getManyAndCount.mockResolvedValue([[], 42]);
+      await service.findAll({ page: 2, limit: 20 } as any);
+      expect(qbMock.skip).toHaveBeenCalledWith(20);
+    });
+
+    it('empty: total 0 -> totalPages 0', async () => {
+      qbMock.getManyAndCount.mockResolvedValue([[], 0]);
+      const result = await service.findAll({ page: 1, limit: 20 } as any);
+      expect(result.items).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(result.meta.totalPages).toBe(0);
+    });
+  });
+
+  describe('findOne', () => {
+    it('happy: returns mapped response', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue({
+        id: 'd1',
+        deviceName: 'Cam',
+        deviceCode: 'C1',
+        status: 'online',
+      });
+      const result = await service.findOne('d1');
+      expect(result.id).toBe('d1');
+      expect(result.device_name).toBe('Cam');
+    });
+
+    it('404: not found -> NotFoundException', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.findOne('missing')).rejects.toThrow(
         NotFoundException,
       );
     });

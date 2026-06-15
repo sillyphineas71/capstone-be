@@ -18,6 +18,7 @@
 | 2026-06-15 | Thêm IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera (PATCH /api/v1/iot-devices/{deviceId}), permission `iot.device.update`. Tránh trùng UC-73 (đã là "Lưu raw event"). | Section 8 (sau UC-69) |
 | 2026-06-15 | Sửa ví dụ request/response của IOT-011 sang **snake_case** cho khớp wire-format thật (`toIotDeviceResponse`). Ghi chú UC-67 đang camelCase chưa đồng bộ. | Section 8 (IOT-011) |
 | 2026-06-15 | Thêm IOT-012 (Feature #13) — Disable/Re-enable thiết bị IoT/Camera (POST /:id/disable, /:id/enable, @HttpCode(200), no body), permission `iot.device.disable`/`iot.device.enable`. | Section 8 (sau IOT-011) |
+| 2026-06-15 | Thêm IOT-013 (Feature #14) — List + Detail thiết bị IoT/Camera (GET /iot-devices, GET /:id), permission `iot.device.read`. Read-only; data snake_case, meta camelCase {page,limit,total,totalPages}. | Section 8 (sau IOT-012) |
 
 ---
 
@@ -2767,6 +2768,62 @@
 
 - `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`; sai UUID → 400.
 - Ghi `audit_logs` (action_type: `disable` | `enable`, entity_type: `iot_devices`, `changed_fields.status` = { old, new }).
+
+---
+
+### IOT-013 (Feature #14) — Liệt kê & Xem chi tiết thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `GET` |
+| Endpoint | `/api/v1/iot-devices` (list) · `/api/v1/iot-devices/{deviceId}` (detail) |
+| Permission | `iot.device.read` (cả 2) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-list-iot-devices` (IOT-013). **Read-only** (không audit). List trả MỌI status (kể cả `disabled`); `status` filter để thu hẹp. Sort cố định `created_at DESC`. **`data[]` snake_case** (theo `toIotDeviceResponse`, mask `metadata_json`); **`meta` camelCase** (theo CLAUDE.md §8.4).
+
+**List query params:**
+
+| Param | Type | Default | Validation |
+|---|---|---|---|
+| `page` | int | 1 | min 1 |
+| `limit` | int | 20 | min 1, **max 100** (>100 → 400) |
+| `status` | enum | — | `online\|offline\|disabled\|maintenance` |
+| `device_type` | enum | — | `ip_camera\|door_camera\|room_camera\|face_server\|microphone\|capture_agent\|occupancy_sensor\|display` |
+| `room_id` | uuid | — | UUID v4 |
+| `search` | string | — | max 200, ILIKE trên `device_name`/`device_code` |
+
+**Response 200 (List):**
+```json
+{
+  "success": true,
+  "message": "IoT devices retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "device_name": "Camera góc phòng họp A",
+      "device_code": "IPCAM-A3-01",
+      "device_type": "ip_camera",
+      "room_id": "uuid|null",
+      "ip_address": "192.168.1.51",
+      "mac_address": "AA:BB:CC:DD:EE:FF",
+      "status": "online",
+      "health_status": "healthy",
+      "last_seen_at": "2026-06-15T09:00:00+07:00",
+      "metadata_json": { "manufacturer": "Hikvision" },
+      "created_by_name": null,
+      "created_at": "2026-06-03T10:00:00+07:00",
+      "updated_at": "2026-06-15T09:05:00+07:00"
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 42, "totalPages": 3 }
+}
+```
+
+**Response 200 (Detail):** `{ success, message: "IoT device retrieved successfully", data: <full device snake_case theo toIotDeviceResponse> }`.
+
+- `400 VALIDATION_ERROR` nếu page/limit/enum/uuid/search sai hoặc `limit > 100`; detail `{deviceId}` sai UUID → 400.
+- `404 IOT_DEVICE_NOT_FOUND` (detail) nếu không tìm thấy thiết bị. List rỗng → 200 `data: []`, `meta.total = 0`.
 
 ---
 
