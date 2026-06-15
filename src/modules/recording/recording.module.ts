@@ -1,21 +1,22 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { CacheModule } from '@nestjs/cache-manager';
 import { MediaFileEntity } from './entities/media-file.entity.js';
 import { RecordingConfigEntity } from './entities/recording-config.entity.js';
 import { RecordingSessionEntity } from './entities/recording-session.entity.js';
 import { RecordingSegmentEntity } from './entities/recording-segment.entity.js';
+import { AuthModule } from '../auth/auth.module.js';
+import { RecordingConfigController } from './controllers/recording-config.controller.js';
+import { RecordingConfigService } from './services/recording-config.service.js';
+import { RecordingConfigAuditRepository } from './repositories/recording-config-audit.repository.js';
 
 /**
- * RecordingModule quản lý:
- * - MediaFileEntity (media_files) — định nghĩa trước vì các entity khác reference nó
- * - RecordingConfigEntity (recording_configs)
- * - RecordingSessionEntity (recording_sessions)
- * - RecordingSegmentEntity (recording_segments)
+ * RecordingModule quản lý các entity recording + CRUD recording-config (REC-001).
  *
- * Module này KHÔNG import các business module khác (AccountsModule, MeetingsModule,
- * RoomsModule, IotModule) để tránh circular dependency.
- * Nó chỉ đăng ký entities và export TypeOrmModule.
- * Entity relations được TypeORM resolve tự động qua decorators.
+ * KHÔNG import MeetingsModule/IotModule (tránh circular) — RecordingConfigService đọc
+ * meeting/device/session qua dataSource.manager (raw, read-only). AuthModule + JwtModule +
+ * CacheModule import để JwtAuthGuard hoạt động (mirror IotModule).
  */
 @Module({
   imports: [
@@ -25,7 +26,12 @@ import { RecordingSegmentEntity } from './entities/recording-segment.entity.js';
       RecordingSessionEntity,
       RecordingSegmentEntity,
     ]),
+    AuthModule,
+    JwtModule.register({}),
+    CacheModule.register(),
   ],
+  controllers: [RecordingConfigController],
+  providers: [RecordingConfigService, RecordingConfigAuditRepository],
   exports: [TypeOrmModule],
 })
 export class RecordingModule {}
