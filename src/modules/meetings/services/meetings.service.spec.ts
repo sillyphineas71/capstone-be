@@ -1533,7 +1533,7 @@ describe('MeetingsService', () => {
       setupFindOneMocks();
       setupAttendeeCountMocks(5);
       setupTransactionMocks();
-      mockRepo.save.mockRejectedValue(new Error('Send failed'));
+      mockNotificationsService.createNotification.mockRejectedValue(new Error('Send failed'));
 
       const result = await service.updateMeetingRoom(
         'meeting-uuid',
@@ -2005,11 +2005,13 @@ describe('MeetingsService', () => {
       );
 
       expect(result.notificationStatus).toBe('queued');
-      const createCalls = (mockRepo.create as jest.Mock).mock.calls;
-      const notifArg = createCalls.find((args: any[]) =>
-        args[0]?.subject?.startsWith('[CANCELLED]'),
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.CANCELLATION,
+          channel: NotificationChannel.IN_APP,
+          subject: expect.stringContaining('[CANCELLED]'),
+        }),
       );
-      expect(notifArg).toBeDefined();
     });
 
     it('[T006-18] should include reason in notification content', async () => {
@@ -2030,11 +2032,13 @@ describe('MeetingsService', () => {
       );
 
       expect(result.notificationStatus).toBe('queued');
-      const createCalls = (mockRepo.create as jest.Mock).mock.calls;
-      const notifArg = createCalls.find((args: any[]) =>
-        args[0]?.content?.includes('Hết giờ'),
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.CANCELLATION,
+          channel: NotificationChannel.IN_APP,
+          content: expect.stringContaining('Hết giờ'),
+        }),
       );
-      expect(notifArg).toBeDefined();
     });
 
     // ── Audit ──
@@ -2099,10 +2103,9 @@ describe('MeetingsService', () => {
       mockRepo.find
         .mockResolvedValueOnce([{ userId: 'participant-1' }])
         .mockResolvedValueOnce([]);
-      (mockRepo.create as jest.Mock).mockImplementation((data: any) => data);
-      mockRepo.save
-        .mockRejectedValueOnce(new Error('DB connection lost'))
-        .mockResolvedValue({ id: 'audit-id' });
+      mockNotificationsService.createNotification.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
 
       const result = await service.cancelMeeting(
         'meeting-uuid',

@@ -1741,7 +1741,7 @@ export class MeetingsService {
       throw error;
     }
 
-    try {
+        try {
       const participants = await this.dataSource
         .getRepository(MeetingParticipantEntity)
         .find({ where: { meetingId } });
@@ -1762,64 +1762,55 @@ export class MeetingsService {
         ]),
       ];
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.MEETING_ROOM_UPDATED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Cập nhật phòng họp: ${meeting.title}`,
-          content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: (externalParticipants || [])
-            .filter((ep) => ep.email)
-            .map((ep) => ep.email) as string[],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            oldRoomId: meeting.roomId,
-            oldRoomName,
-            newRoomId: dto.newRoomId,
-            newRoomName,
-            changeReason: dto.changeReason || null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        oldRoomId: meeting.roomId,
+        oldRoomName,
+        newRoomId: dto.newRoomId,
+        newRoomName,
+        changeReason: dto.changeReason || null,
+      };
 
-      const emailRecipients = allUserIds.filter((id) => id !== authUser.userId);
-      if (
-        emailRecipients.length > 0 ||
-        (externalParticipants || []).length > 0
-      ) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_ROOM_UPDATED,
+        channel: NotificationChannel.IN_APP,
+        subject: `Cập nhật phòng họp: ${meeting.title}`,
+        content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL notification to non-actor + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || (externalParticipants || []).length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const toEmails = [...emailMap.values(), ...(externalParticipants || []).filter((ep) => !!ep.email).map((ep) => ep.email)].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.MEETING_ROOM_UPDATED,
+            channel: NotificationChannel.EMAIL,
+            subject: `Cập nhật phòng họp: ${meeting.title}`,
+            content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_room_updated',
-              maxRetries: 3,
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
-
-
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for meeting room update: ${(notifError as Error).message}`,
+        `[updateMeetingRoom] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
       );
-      notificationStatus = 'failed';
+      notificationStatus = "failed";
     }
+
 
     return {
       meetingId,
@@ -2116,8 +2107,8 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 5: Outside transaction — create notification + background_job ──
-    let notificationStatus = 'queued';
+        // ── Step 5: Outside transaction — notification via NotificationsService ──
+    let notificationStatus = "queued";
 
     try {
       const participants = await this.dataSource
@@ -2140,87 +2131,71 @@ export class MeetingsService {
         ]),
       ];
 
-      const allRecipientEmails = [
-        ...(participants || [])
-          .filter((p) => (p as unknown as Record<string, unknown>)?.email)
-          .map(
-            (p) =>
-              (
-                p as unknown as {
-                  email?: string;
-                }
-              ).email,
-          ),
-        ...(externalParticipants || [])
-          .filter((ep) => ep.email)
-          .map((ep) => ep.email),
-      ].filter(Boolean) as string[];
-
-      const notificationReason = cancellationReason
+      const notificationReasonStr = cancellationReason
         ? ` Lý do: ${cancellationReason}`
-        : '';
+        : "";
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.CANCELLATION,
-          channel: NotificationChannel.EMAIL,
-          subject: `[CANCELLED] ${meeting.title}`,
-          content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReason}`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: allRecipientEmails,
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            action: 'cancel_meeting',
-            meetingId,
-            reason: cancellationReason ?? null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        action: "cancel_meeting",
+        meetingId,
+        reason: cancellationReason ?? null,
+      };
 
-      if (allUserIds.length > 0 || allRecipientEmails.length > 0) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.CANCELLATION,
+        channel: NotificationChannel.IN_APP,
+        subject: `[CANCELLED] ${meeting.title}`,
+        content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReasonStr}`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL to internal (excluding actor) + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || (externalParticipants || []).length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const extEmails = (externalParticipants || []).filter((ep) => !!ep.email).map((ep) => ep.email);
+        const toEmails = [...emailMap.values(), ...extEmails].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.CANCELLATION,
+            channel: NotificationChannel.EMAIL,
+            subject: `[CANCELLED] ${meeting.title}`,
+            content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReasonStr}`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_cancelled',
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to queue cancellation notification: ${(notifError as Error).message}`,
+        `[cancelMeeting] Failed to queue cancellation notification for meeting ${meetingId}: ${(notifError as Error).message}`,
         (notifError as Error).stack,
       );
       await this.dataSource.getRepository(AuditLogEntity).save({
         userId: authUser.userId,
-        actionType: 'notification_failure',
-        entityType: 'meeting',
+        actionType: "notification_failure",
+        entityType: "meeting",
         entityId: meetingId,
         metadataJson: {
-          error: 'Failed to queue cancellation notification',
+          error: "Failed to queue cancellation notification",
           reason: cancellationReason ?? null,
         } as any,
         severity: AuditLogSeverity.WARNING,
       } as any);
-      notificationStatus = 'failed_to_queue';
+      notificationStatus = "failed_to_queue";
     }
 
-    // ── Step 6: Return response ──
+// ── Step 6: Return response ──
     return {
       meetingId,
       status: 'cancelled',
@@ -2539,47 +2514,46 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 5: Post-transaction async (best-effort) ──
+        // ── Step 5: Post-transaction async (best-effort) ──
     try {
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
+      // IN_APP notification for the added participant
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_INVITE,
+        channel: NotificationChannel.IN_APP,
+        subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
+        content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: [dto.userId],
+        payloadJson: { invitedBy: authUser.userId },
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL to the added participant
+      const emailMap = await this.resolveUserEmails([dto.userId], this.dataSource.manager);
+      const userEmail = emailMap.get(dto.userId);
+      if (userEmail) {
+        await this.notificationsService.enqueueEmailNotification({
           notificationType: NotificationType.MEETING_INVITE,
-          channel: NotificationChannel.IN_APP,
+          channel: NotificationChannel.EMAIL,
           subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
           content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
-          relatedEntityType: 'meeting',
+          toEmails: [userEmail],
+          relatedEntityType: "meeting",
           relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: [dto.userId],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
+          recipientScope: "user_list",
           payloadJson: { invitedBy: authUser.userId },
           createdBy: authUser.userId,
         });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
-
-      const bgJob = this.dataSource.getRepository(BackgroundJobEntity).create({
-        jobType: BackgroundJobType.SEND_EMAIL,
-        relatedEntityType: 'meeting',
-        relatedEntityId: meetingId,
-        status: BackgroundJobStatus.QUEUED,
-        inputJson: {
-          notificationId: notification.id,
-          template: 'meeting_invite',
-        },
-        requestedBy: authUser.userId,
-      });
-      await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+      }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for add participant: ${(notifError as Error).message}`,
+        `[addInternalParticipant] Failed to notify added participant: ${(notifError as Error).message}`,
       );
     }
 
-    if (meeting.status === MeetingStatus.IN_PROGRESS) {
+if (meeting.status === MeetingStatus.IN_PROGRESS) {
       this.logger.log(
         `[Device Sync] Meeting ${meetingId}: participant ${dto.userId} added. Device sync event emitted (best-effort).`,
       );
@@ -3164,8 +3138,6 @@ export class MeetingsService {
 
     // ── Step 7: Transaction ──
     let removedAt!: Date;
-    let notificationId!: string;
-    let backgroundJobId!: string;
 
     try {
       await this.dataSource.transaction(async (em) => {
@@ -3229,42 +3201,6 @@ export class MeetingsService {
           severity: AuditLogSeverity.INFO,
         });
 
-        // 7d: Insert notification
-        const notification = em.create(NotificationEntity, {
-          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
-          channel: NotificationChannel.IN_APP,
-          subject: 'Bạn đã bị gỡ khỏi cuộc họp',
-          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: [participantUserId],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            removedBy: authUser.userId,
-            reason: body?.reason ?? null,
-          } as any,
-          createdBy: authUser.userId,
-        });
-        await em.save(NotificationEntity, notification);
-        notificationId = notification.id;
-
-        // 7e: Insert background job for email
-        const bgJob = em.create(BackgroundJobEntity, {
-          jobType: BackgroundJobType.SEND_EMAIL,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          status: BackgroundJobStatus.QUEUED,
-          inputJson: {
-            notificationId: notification.id,
-            recipientId: participantUserId,
-            template: 'meeting_participant_removed',
-          } as any,
-          requestedBy: authUser.userId,
-        });
-        await em.save(BackgroundJobEntity, bgJob);
-        backgroundJobId = bgJob.id;
 
         removedAt = new Date();
 
@@ -3289,7 +3225,59 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 8: Build response ──
+        // ── Post-transaction: notify removed participant (best-effort) ──
+    let notificationId = "";
+    let backgroundJobId = "";
+
+    try {
+      // IN_APP notification for the removed participant
+      const notif = await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+        channel: NotificationChannel.IN_APP,
+        subject: "Bạn đã bị gỡ khỏi cuộc họp",
+        content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: [participantUserId],
+        payloadJson: {
+          removedBy: authUser.userId,
+          reason: body?.reason ?? null,
+        },
+        createdBy: authUser.userId,
+      });
+      notificationId = notif.id;
+
+      // EMAIL to the removed participant
+      const emailMap = await this.resolveUserEmails([participantUserId], this.dataSource.manager);
+      const userEmail = emailMap.get(participantUserId);
+      if (userEmail) {
+        const emailResult = await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+          channel: NotificationChannel.EMAIL,
+          subject: "Bạn đã bị gỡ khỏi cuộc họp",
+          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+          toEmails: [userEmail],
+          relatedEntityType: "meeting",
+          relatedEntityId: meetingId,
+          recipientScope: "user_list",
+          payloadJson: {
+            removedBy: authUser.userId,
+            reason: body?.reason ?? null,
+          },
+          createdBy: authUser.userId,
+        });
+        if (emailResult.jobId) {
+          backgroundJobId = emailResult.jobId;
+        }
+      }
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[removeParticipant] Failed to notify removed participant for meeting ${meetingId}: ${(notifError as Error).message}`,
+      );
+    }
+
+// ── Step 8: Build response ──
     return new RemoveParticipantResponseDto({
       meetingId,
       removedParticipantUserId: participantUserId,
