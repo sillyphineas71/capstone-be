@@ -57,6 +57,7 @@ import {
   NotificationPriority,
   NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -160,6 +161,7 @@ export class MeetingsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly warningTokenUtil: WarningTokenUtil,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async getRoomAvailability(
@@ -585,22 +587,6 @@ export class MeetingsService {
         });
         await em.save(MeetingEventEntity, event);
 
-        if (approverIds.length > 0) {
-          const notification = em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_REQUEST_CREATED,
-            channel: NotificationChannel.IN_APP,
-            subject: `Yêu cầu họp mới: ${dto.title}`,
-            content: `Người dùng ${authUser.userId} đã tạo yêu cầu cuộc họp "${dto.title}" chờ phê duyệt.`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: request.id,
-            recipientScope: 'user_list',
-            recipientUserIdsJson: approverIds,
-            priority: NotificationPriority.NORMAL,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          });
-          await em.save(NotificationEntity, notification);
-        }
 
         const auditLog = em.create(AuditLogEntity, {
           userId: authUser.userId,
@@ -622,6 +608,39 @@ export class MeetingsService {
       throw error;
     }
 
+
+    // Post-transaction: notify approvers (non-blocking, no rollback)
+    if (approverIds.length > 0) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Y\u00ea\u0301u c\u00e2\u0300u ho\u0323p m\u01a1\u0301i: ${dto.title}`,
+          content: `Ng\u01b0\u01a1\u0300i du\u0300ng ${authUser.userId} \u0111a\u0303 ta\u0323o y\u00eau c\u00e2\u0300u cu\u00f4\u0323c ho\u0323p "${dto.title}" ch\u01a1\u0300 ph\u00ea duy\u00ea\u0323t.`,
+          relatedEntityType: 'meeting_request',
+          relatedEntityId: request!.id,
+          recipientScope: 'user_list',
+          recipientUserIds: approverIds,
+          createdBy: authUser.userId,
+        });
+      } catch (notifError) {
+        this.logger.error("[Create] Failed to send approver notification for meeting " + meeting!.id + ": " + (notifError as Error).message);
+      }
+    }
+
+    try {
+      const emailMap = await this.resolveUserEmails([...new Set([...(dto.participantUserIds || []), hostId, authUser.userId])], this.dataSource.manager);
+      await this.notifyMeetingRecipients(
+        NotificationType.MEETING_INVITE,
+        `L\u1eddi m\u1eddi tham gia cu\u1ed9c h\u1ecdp: ${dto.title}`,
+        `B\u1ea1n \u0111\u00e3 \u0111\u01b0\u1ee3c th\u00eam v\u00e0o cu\u1ed9c h\u1ecdp "${dto.title}".`,
+        [...new Set([...(dto.participantUserIds || []), hostId, authUser.userId])],
+        (dto.externalParticipants || []).filter((ep: any) => ep.email).map((ep: any) => ep.email),
+        'meeting', meeting!.id, authUser.userId,
+      );
+    } catch (participantNotifError) {
+      this.logger.error("[Create] Participant block failed for meeting " + meeting!.id + ": " + (participantNotifError as Error).message);
+    }
     return new CreateMeetingResponseDto({
       id: meeting!.id,
       meetingCode,
@@ -641,6 +660,67 @@ export class MeetingsService {
       createdAt: meeting!.createdAt,
     });
   }
+
+  // --- Shared notification helpers ---
+
+  private async resolveUserEmails(userIds: string[], manager: any): Promise<Map<string, string>> {
+    if (userIds.length === 0) return new Map();
+    try {
+      const users = await manager.find(UserEntity, { where: { id: In(userIds) }, select: { id: true, email: true } });
+      return new Map(users.map((u: any) => [u.id, u.email]));
+    } catch (err) {
+      this.logger.error("[resolveUserEmails] Failed: " + (err as Error).message);
+      return new Map();
+    }
+  }
+
+  private async notifyMeetingRecipients(
+    notificationType: NotificationType,
+    subject: string, content: string,
+    internalUserIds: string[], externalEmails: string[],
+    relatedEntityType: string, relatedEntityId: string, createdBy: string,
+  ): Promise<void> {
+    const allUserIds = [...new Set(internalUserIds)];
+    const emailMap = await this.resolveUserEmails(allUserIds, this.dataSource.manager);
+    const allExternal = [...new Set(externalEmails.filter(Boolean))];
+    for (const uid of allUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType, channel: NotificationChannel.IN_APP,
+          subject, content, relatedEntityType, relatedEntityId,
+          recipientScope: 'user_list', recipientUserIds: [uid], createdBy,
+        });
+      } catch (err) {
+        this.logger.error("[notify] IN_APP failed for " + uid + ": " + (err as Error).message);
+      }
+      const userEmail = emailMap.get(uid);
+      if (userEmail) {
+        try {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType, channel: NotificationChannel.EMAIL,
+            subject, content, toEmails: [userEmail],
+            relatedEntityType, relatedEntityId,
+            recipientScope: 'user_list', createdBy,
+          });
+        } catch (err) {
+          this.logger.error("[notify] EMAIL failed for " + uid + ": " + (err as Error).message);
+        }
+      }
+    }
+    for (const email of allExternal) {
+      try {
+        await this.notificationsService.enqueueEmailNotification({
+          notificationType, channel: NotificationChannel.EMAIL,
+          subject, content, toEmails: [email],
+          relatedEntityType, relatedEntityId,
+          recipientScope: 'user_list', createdBy,
+        });
+      } catch (err) {
+        this.logger.error("[notify] External EMAIL failed for " + email + ": " + (err as Error).message);
+      }
+    }
+  }
+
 
   async updateMeetingTime(
     meetingId: string,
@@ -1139,62 +1219,57 @@ export class MeetingsService {
         ]),
       ];
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.MEETING_TIME_UPDATED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
-          content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: [
-            ...(externalParticipants
-              .filter((ep) => ep.email)
-              .map((ep) => ep.email) as string[]),
-          ],
-          priority: 'normal' as any,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            oldStartTime: oldMeetingData.startTime,
-            oldEndTime: oldMeetingData.endTime,
-            newStartTime: dto.startTime,
-            newEndTime: dto.endTime,
-            oldRoomId: meeting.roomId,
-            newRoomId: targetRoomId,
-            changeReason: dto.changeReason || null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        oldStartTime: oldMeetingData.startTime,
+        oldEndTime: oldMeetingData.endTime,
+        newStartTime: dto.startTime,
+        newEndTime: dto.endTime,
+        oldRoomId: meeting.roomId,
+        newRoomId: targetRoomId !== meeting.roomId ? targetRoomId : null,
+        changeReason: dto.changeReason || null,
+      };
 
-      const emailRecipients = allUserIds.filter((id) => id !== authUser.userId);
-      if (emailRecipients.length > 0 || externalParticipants.length > 0) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_TIME_UPDATED,
+        channel: NotificationChannel.IN_APP,
+        subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+        content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL notification to non-actor + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || externalParticipants.length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const toEmails = [...emailMap.values(), ...externalParticipants.filter((ep) => !!ep.email).map((ep) => ep.email)].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.MEETING_TIME_UPDATED,
+            channel: NotificationChannel.EMAIL,
+            subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+            content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_time_updated',
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for meeting time update: ${(notifError as Error).message}`,
+        `[updateMeetingTime] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
       );
-      notificationStatus = 'failed';
+      notificationStatus = "failed";
     }
+
 
     return {
       meetingId,
@@ -1738,7 +1813,7 @@ export class MeetingsService {
         await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
       }
 
-      notificationStatus = 'sent';
+
     } catch (notifError: unknown) {
       this.logger.error(
         `Failed to create notification for meeting room update: ${(notifError as Error).message}`,

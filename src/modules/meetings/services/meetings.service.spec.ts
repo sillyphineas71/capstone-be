@@ -47,11 +47,10 @@ import {
   BookingType,
 } from '../../rooms/entities/room-booking.entity.js';
 import {
-  NotificationEntity,
   NotificationType,
   NotificationChannel,
-  NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -70,6 +69,7 @@ describe('MeetingsService', () => {
   let dataSource: jest.Mocked<DataSource>;
   let em: jest.Mocked<EntityManager>;
   let module: TestingModule;
+  let mockNotificationsService: Record<string, jest.Mock>;
   let mockRepo: jest.Mocked<
     Pick<
       Repository<any>,
@@ -103,6 +103,11 @@ describe('MeetingsService', () => {
       createQueryBuilder: jest.fn(),
     };
 
+    mockNotificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: "notif-1" }),
+      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: "notif-1" } }),
+    };
+
     em = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -123,6 +128,7 @@ describe('MeetingsService', () => {
           cb(em),
         ),
       getRepository: jest.fn().mockReturnValue(mockRepo),
+      manager: em,
     } as unknown as jest.Mocked<DataSource>;
 
     module = await Test.createTestingModule({
@@ -130,6 +136,7 @@ describe('MeetingsService', () => {
         MeetingsService,
         { provide: DataSource, useValue: dataSource },
         WarningTokenUtil,
+        { provide: NotificationsService, useValue: mockNotificationsService },
         {
           provide: JwtService,
           useValue: { sign: jest.fn(), verify: jest.fn() },
@@ -398,13 +405,25 @@ describe('MeetingsService', () => {
       });
 
       mockRepo.find.mockImplementation(async (options?: any) => {
-        const ids: string[] = options?.where?.id?._value ?? [];
+        let ids: string[] = [];
+        const idFilter = options?.where?.id;
+        if (Array.isArray(idFilter)) {
+          ids = idFilter;
+        } else if (idFilter && typeof idFilter === 'object') {
+          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          ids = Array.isArray(possible) ? possible : [possible];
+        }
         return ids.map((uid: string) => ({
           id: uid,
+          email: uid + '@company.com',
           accountStatus: AccountStatus.ACTIVE,
         }));
       });
 
+      em.find = jest.fn().mockImplementation(async (entity: any, options?: any) => {
+        const ids: string[] = options?.where?.id?._value ?? [];
+        return ids.map((uid: string) => ({ id: uid, email: uid + "@company.com", accountStatus: AccountStatus.ACTIVE }));
+      });
       mockRepo.count.mockResolvedValue(0);
 
       const conflictQb = mockQueryBuilder();
@@ -483,9 +502,17 @@ describe('MeetingsService', () => {
         return { id: 'some-id', accountStatus: AccountStatus.ACTIVE };
       });
       mockRepo.find.mockImplementation(async (options?: any) => {
-        const ids: string[] = options?.where?.id?._value ?? [];
+        let ids: string[] = [];
+        const idFilter = options?.where?.id;
+        if (Array.isArray(idFilter)) {
+          ids = idFilter;
+        } else if (idFilter && typeof idFilter === 'object') {
+          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          ids = Array.isArray(possible) ? possible : [possible];
+        }
         return ids.map((uid: string) => ({
           id: uid,
+          email: uid + '@company.com',
           accountStatus: AccountStatus.ACTIVE,
         }));
       });
@@ -550,9 +577,17 @@ describe('MeetingsService', () => {
         return { id: 'some-id', accountStatus: AccountStatus.ACTIVE };
       });
       mockRepo.find.mockImplementation(async (options?: any) => {
-        const ids: string[] = options?.where?.id?._value ?? [];
+        let ids: string[] = [];
+        const idFilter = options?.where?.id;
+        if (Array.isArray(idFilter)) {
+          ids = idFilter;
+        } else if (idFilter && typeof idFilter === 'object') {
+          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          ids = Array.isArray(possible) ? possible : [possible];
+        }
         return ids.map((uid: string) => ({
           id: uid,
+          email: uid + '@company.com',
           accountStatus: AccountStatus.ACTIVE,
         }));
       });
@@ -605,9 +640,17 @@ describe('MeetingsService', () => {
         return { id: 'some-id', accountStatus: AccountStatus.ACTIVE };
       });
       mockRepo.find.mockImplementation(async (options?: any) => {
-        const ids: string[] = options?.where?.id?._value ?? [];
+        let ids: string[] = [];
+        const idFilter = options?.where?.id;
+        if (Array.isArray(idFilter)) {
+          ids = idFilter;
+        } else if (idFilter && typeof idFilter === 'object') {
+          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          ids = Array.isArray(possible) ? possible : [possible];
+        }
         return ids.map((uid: string) => ({
           id: uid,
+          email: uid + '@company.com',
           accountStatus: AccountStatus.ACTIVE,
         }));
       });
@@ -643,17 +686,38 @@ describe('MeetingsService', () => {
       expect(result.bookingCode).toMatch(/^BK-\d{8}-\d{3}$/);
     });
 
-    it('[T028] should create notification and audit log records', async () => {
+    it('[T028] should create notification for approvers + participants + audit log', async () => {
       setupDefaultMocks();
 
       await service.create(validDto, authUser, clientContext);
 
-      expect(em.create).toHaveBeenCalledWith(
-        NotificationEntity,
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
+          channel: NotificationChannel.IN_APP,
+          relatedEntityType: 'meeting_request',
+          recipientScope: 'user_list',
         }),
       );
+
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.IN_APP,
+          relatedEntityType: 'meeting',
+          recipientScope: 'user_list',
+        }),
+      );
+
+      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.EMAIL,
+          toEmails: expect.arrayContaining([expect.stringMatching(/@company\.com$/)]),
+          relatedEntityType: 'meeting',
+        }),
+      );
+
       expect(em.create).toHaveBeenCalledWith(
         AuditLogEntity,
         expect.objectContaining({
@@ -669,11 +733,59 @@ describe('MeetingsService', () => {
       dataSource.transaction.mockImplementation(async (_cb: any) => {
         throw new Error('DB Error');
       });
-
       await expect(
         service.create(validDto, authUser, clientContext),
       ).rejects.toThrow('DB Error');
     });
+
+    it('[T030] should send email to external participants via enqueueEmailNotification', async () => {
+      const dtoWithExternal = {
+        ...validDto,
+        externalParticipants: [
+          { fullName: 'Guest1', email: 'guest1@external.com' },
+          { fullName: 'Guest2', email: 'guest2@external.com' },
+        ],
+      };
+      setupDefaultMocks();
+
+      await service.create(dtoWithExternal as any, authUser, clientContext);
+
+      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toEmails: ['guest1@external.com'],
+        }),
+      );
+      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toEmails: ['guest2@external.com'],
+        }),
+      );
+    });
+
+    it('[T031] should succeed even if participant notification enqueue fails', async () => {
+      setupDefaultMocks();
+      mockNotificationsService.enqueueEmailNotification.mockRejectedValue(
+        new Error('Queue down'),
+      );
+
+      const result = await service.create(validDto, authUser, clientContext);
+
+      expect(result.id).toBeDefined();
+      expect(result.status).toBe(MeetingStatus.PENDING_APPROVAL);
+    });
+
+    it('[T032] should succeed even if createNotification for participants fails', async () => {
+      setupDefaultMocks();
+      mockNotificationsService.createNotification.mockRejectedValue(
+        new Error('Notify down'),
+      );
+
+      const result = await service.create(validDto, authUser, clientContext);
+
+      expect(result.id).toBeDefined();
+      expect(result.status).toBe(MeetingStatus.PENDING_APPROVAL);
+    });
+
 
     it('should throw BadRequest for past startTime', async () => {
       const pastDto = {
@@ -825,6 +937,221 @@ describe('MeetingsService', () => {
     });
   });
 
+  describe("updateMeetingTime", () => {
+    const authUser = { userId: "auth-user-uuid" };
+    const clientContext = { ipAddress: "127.0.0.1", userAgent: "test" };
+
+    function futureDate(hours: number, minutes: number = 0): Date {
+      const d = new Date();
+      d.setDate(d.getDate() + 30);
+      d.setHours(hours, minutes, 0, 0);
+      return d;
+    }
+
+    const fakeRoom = {
+      id: "room-uuid",
+      roomName: "Room A",
+      capacity: 20,
+      isActive: true,
+      currentStatus: "available",
+    };
+
+    const fakeMeeting = {
+      id: "meeting-uuid",
+      meetingCode: "MT-20260701-001",
+      title: "Test Meeting",
+      roomId: "room-uuid",
+      organizerId: "auth-user-uuid",
+      hostId: "auth-user-uuid",
+      startTime: futureDate(9, 0),
+      endTime: futureDate(10, 0),
+      status: MeetingStatus.SCHEDULED,
+      recurrenceRuleId: null,
+      parentMeetingId: null,
+      deletedAt: null,
+      organizer: { id: "auth-user-uuid", fullName: "Auth User", email: "auth@test.com" },
+    };
+
+    const fakeActiveBooking = {
+      id: "booking-uuid",
+      bookingCode: "BK-001",
+      meetingId: "meeting-uuid",
+      roomId: "room-uuid",
+      status: RoomBookingStatus.APPROVED,
+      reservedStartTime: futureDate(9, 0),
+      reservedEndTime: futureDate(10, 0),
+      bookingType: BookingType.SCHEDULED,
+      bookedBy: "auth-user-uuid",
+    };
+
+    function setupMocks() {
+      mockRepo.findOne.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        const id = where.id;
+        if (id === "meeting-uuid") return fakeMeeting;
+        if (id === "room-uuid") return fakeRoom;
+        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        return null;
+      });
+
+      mockRepo.find.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        if (where.meetingId === "meeting-uuid" && where.roomId) return [];
+        return [];
+      });
+
+      mockRepo.count.mockResolvedValue(0);
+
+      em.findOne.mockImplementation(async (_entity: any, options: any = {}) => {
+        if (options?.lock) return fakeActiveBooking;
+        return null;
+      });
+      em.find.mockResolvedValue([]);
+      em.create.mockImplementation((_: any, plain: any): any => plain);
+      em.save.mockImplementation(async (_entity: any, data: any) => {
+        if (data && typeof data === "object" && !data.id) data.id = "saved-id";
+        return data;
+      });
+      em.getRepository = jest.fn().mockImplementation((_entity: any) => ({
+        count: jest.fn().mockResolvedValue(0),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      }));
+
+      const qb = mockQueryBuilder();
+      qb.getMany.mockResolvedValue([]);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+    }
+
+    const validDto = {
+      startTime: futureDate(14, 0).toISOString(),
+      endTime: futureDate(15, 0).toISOString(),
+    };
+
+    it("should update meeting time and return correct response", async () => {
+      setupMocks();
+      const result = await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
+      expect(result.meetingId).toBe("meeting-uuid");
+      expect(result.newStartTime).toBe(validDto.startTime);
+      expect(result.newEndTime).toBe(validDto.endTime);
+      expect(result.bookingId).toBe("booking-uuid");
+      expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it("[T040] should call createNotification with MEETING_TIME_UPDATED and old/new times in payload", async () => {
+      setupMocks();
+      await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_TIME_UPDATED,
+          channel: NotificationChannel.IN_APP,
+          relatedEntityType: "meeting",
+          payloadJson: expect.objectContaining({
+            oldStartTime: expect.any(String),
+            oldEndTime: expect.any(String),
+            newStartTime: validDto.startTime,
+            newEndTime: validDto.endTime,
+          }),
+        }),
+      );
+    });
+
+    it("[T041] should call enqueueEmailNotification with correct recipients", async () => {
+      setupMocks();
+      mockRepo.find.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        if (where.meetingId === "meeting-uuid" && where.roomId) return [];
+        if (where.meetingId === "meeting-uuid") {
+          return [
+            { userId: "user-1" } as any,
+            { userId: "user-2" } as any,
+          ];
+        }
+        return [];
+      });
+
+      em.find = jest.fn().mockImplementation(async (_entity: any, options: any = {}) => {
+        const idVal = options?.where?.id;
+        if (idVal && idVal._value && Array.isArray(idVal._value)) {
+          return idVal._value.map((uid: string) => ({ id: uid, email: uid + "@company.com" }));
+        }
+        return [];
+      });
+
+      await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
+      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_TIME_UPDATED,
+          channel: NotificationChannel.EMAIL,
+          toEmails: expect.arrayContaining([expect.stringMatching(/@company\.com$/)]),
+        }),
+      );
+    });
+
+    it("[T042] should succeed and return notificationStatus=failed when notification/email fails", async () => {
+      setupMocks();
+      mockNotificationsService.createNotification.mockRejectedValue(new Error("Notify failed"));
+      const result = await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
+      expect(result.meetingId).toBe("meeting-uuid");
+      expect(result.notificationStatus).toBe("failed");
+    });
+
+    it("should throw 422 for past startTime", async () => {
+      setupMocks();
+      const pastDto = {
+        startTime: new Date("2020-01-01T10:00:00Z").toISOString(),
+        endTime: new Date("2020-01-01T11:00:00Z").toISOString(),
+      };
+      await expect(
+        service.updateMeetingTime("meeting-uuid", pastDto, authUser, clientContext),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it("should throw 422 for startTime >= endTime", async () => {
+      setupMocks();
+      const invalidDto = {
+        startTime: futureDate(15, 0).toISOString(),
+        endTime: futureDate(14, 0).toISOString(),
+      };
+      await expect(
+        service.updateMeetingTime("meeting-uuid", invalidDto, authUser, clientContext),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it("should throw 403 for non-owner/host", async () => {
+      setupMocks();
+      mockRepo.findOne.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        const id = where.id;
+        if (id === "meeting-uuid") {
+          return { ...fakeMeeting, organizerId: "other-user", hostId: "other-user" };
+        }
+        if (id === "room-uuid") return fakeRoom;
+        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        return null;
+      });
+      await expect(
+        service.updateMeetingTime("meeting-uuid", validDto, { userId: "unauth-user" }, clientContext),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it("should throw 409 for non-SCHEDULED meeting", async () => {
+      setupMocks();
+      mockRepo.findOne.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        const id = where.id;
+        if (id === "meeting-uuid") {
+          return { ...fakeMeeting, status: MeetingStatus.IN_PROGRESS };
+        }
+        if (id === "room-uuid") return fakeRoom;
+        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        return null;
+      });
+      await expect(
+        service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
   describe('updateMeetingRoom', () => {
     const authUser = { userId: 'auth-user-uuid' };
     const clientContext = { ipAddress: '127.0.0.1', userAgent: 'test' };
@@ -922,7 +1249,7 @@ describe('MeetingsService', () => {
       expect(result.meetingId).toBe('meeting-uuid');
       expect(result.oldRoom.id).toBe('old-room-uuid');
       expect(result.newRoom.id).toBe('new-room-uuid');
-      expect(result.notificationStatus).toBe('sent');
+      expect(result.notificationStatus).toBe('queued');
       expect(dataSource.transaction).toHaveBeenCalled();
     });
 
@@ -2630,3 +2957,4 @@ describe('MeetingsService', () => {
     });
   });
 });
+
