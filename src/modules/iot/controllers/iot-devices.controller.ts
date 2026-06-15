@@ -3,6 +3,7 @@ import {
   Controller,
   Post,
   Patch,
+  HttpCode,
   Req,
   UseGuards,
   UsePipes,
@@ -108,6 +109,41 @@ export class IotDevicesController {
     return {
       success: true,
       message: 'IoT device updated successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  // IOT-012: vô hiệu hóa thiết bị (status -> disabled). POST action, không body.
+  // @HttpCode(200) vì POST mặc định trả 201.
+  @Post(':id/disable')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot.device.disable')
+  async disable(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.disable(userId, id);
+
+    return {
+      success: true,
+      message: 'IoT device disabled successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  // IOT-012: kích hoạt lại thiết bị (disabled -> offline). POST action, không body.
+  @Post(':id/enable')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot.device.enable')
+  async enable(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.enable(userId, id);
+
+    return {
+      success: true,
+      message: 'IoT device enabled successfully',
       data: toIotDeviceResponse(device),
     };
   }

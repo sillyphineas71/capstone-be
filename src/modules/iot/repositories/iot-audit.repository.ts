@@ -73,6 +73,35 @@ export class IotAuditRepository {
     );
   }
 
+  async logDeviceStatusChange(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      action: 'disable' | 'enable';
+      oldStatus: string;
+      newStatus: string;
+    },
+  ): Promise<void> {
+    // SEC-01: chỉ ghi thay đổi status (không secret). action_type = 'disable' | 'enable'.
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, $2, 'iot_devices', $3, 'info', $4::jsonb)
+      `,
+      [
+        params.userId,
+        params.action,
+        params.deviceId,
+        JSON.stringify({
+          changed_fields: {
+            status: { old: params.oldStatus, new: params.newStatus },
+          },
+        }),
+      ],
+    );
+  }
+
   async logConfigureFaceServer(
     entityManager: EntityManager,
     params: {

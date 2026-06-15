@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service.js';
 import { DataSource } from 'typeorm';
@@ -44,6 +44,7 @@ describe('IotDevicesService', () => {
       logDeviceCreation: jest.fn(),
       logAssignRoom: jest.fn(),
       logDeviceUpdate: jest.fn(),
+      logDeviceStatusChange: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -429,6 +430,137 @@ describe('IotDevicesService', () => {
 
       expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
       expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('disable', () => {
+    it('T1 happy: online -> disabled, saves and logs status change', async () => {
+      const device = {
+        id: 'dev-1',
+        status: 'online',
+        healthStatus: 'healthy',
+        lastSeenAt: new Date('2026-06-15T00:00:00Z'),
+        roomId: 'room-1',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.disable('user-id', 'dev-1');
+
+      expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceStatusChange).toHaveBeenCalledTimes(1);
+      expect(auditRepoMock.logDeviceStatusChange).toHaveBeenCalledWith(
+        queryRunnerMock.manager,
+        expect.objectContaining({
+          action: 'disable',
+          oldStatus: 'online',
+          newStatus: 'disabled',
+        }),
+      );
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(result.status).toBe('disabled');
+    });
+
+    it('T2 idempotent: already disabled -> no-op, no transaction/audit', async () => {
+      const device = { id: 'dev-1', status: 'disabled' };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+
+      const result = await service.disable('user-id', 'dev-1');
+
+      expect(result).toEqual(device);
+      expect(queryRunnerMock.startTransaction).not.toHaveBeenCalled();
+      expect(queryRunnerMock.manager.save).not.toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceStatusChange).not.toHaveBeenCalled();
+    });
+
+    it('T3 not found: device missing -> NotFoundException', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.disable('user-id', 'dev-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('T4 does not touch health/last_seen/room', async () => {
+      const lastSeen = new Date('2026-06-15T00:00:00Z');
+      const device = {
+        id: 'dev-1',
+        status: 'online',
+        healthStatus: 'healthy',
+        lastSeenAt: lastSeen,
+        roomId: 'room-1',
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.disable('user-id', 'dev-1');
+
+      expect(result.status).toBe('disabled');
+      expect(result.healthStatus).toBe('healthy');
+      expect(result.lastSeenAt).toBe(lastSeen);
+      expect(result.roomId).toBe('room-1');
+    });
+
+    it('T5 rollback: audit failure rolls back transaction', async () => {
+      const device = { id: 'dev-1', status: 'online' };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+      (auditRepoMock.logDeviceStatusChange as jest.Mock).mockRejectedValue(
+        new Error('DB Error'),
+      );
+
+      await expect(service.disable('user-id', 'dev-1')).rejects.toThrow(
+        'DB Error',
+      );
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('enable', () => {
+    it('T6 happy: disabled -> offline, saves and logs status change', async () => {
+      const device = { id: 'dev-1', status: 'disabled' };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.enable('user-id', 'dev-1');
+
+      expect(queryRunnerMock.manager.save).toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceStatusChange).toHaveBeenCalledWith(
+        queryRunnerMock.manager,
+        expect.objectContaining({
+          action: 'enable',
+          oldStatus: 'disabled',
+          newStatus: 'offline',
+        }),
+      );
+      expect(result.status).toBe('offline');
+    });
+
+    it('T7 no-op when not disabled: online stays online, no audit', async () => {
+      const device = { id: 'dev-1', status: 'online' };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+
+      const result = await service.enable('user-id', 'dev-1');
+
+      expect(result).toEqual(device);
+      expect(result.status).toBe('online');
+      expect(queryRunnerMock.startTransaction).not.toHaveBeenCalled();
+      expect(auditRepoMock.logDeviceStatusChange).not.toHaveBeenCalled();
+    });
+
+    it('T8 not found: device missing -> NotFoundException', async () => {
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.enable('user-id', 'dev-1')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
