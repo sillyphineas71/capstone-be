@@ -17,7 +17,12 @@ import {
 } from '../entities/iot-device.entity.js';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
 import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
+import { ListIotDevicesQueryDto } from '../dto/list-iot-devices-query.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
+import {
+  toIotDeviceResponse,
+  IotDeviceResponseDto,
+} from '../dto/iot-device-response.dto.js';
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
@@ -236,6 +241,72 @@ export class IotDevicesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  async findAll(query: ListIotDevicesQueryDto): Promise<{
+    items: IotDeviceResponseDto[];
+    meta: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const qb = this.dataSource
+      .getRepository(IoTDeviceEntity)
+      .createQueryBuilder('d');
+
+    if (query.status) {
+      qb.andWhere('d.status = :status', { status: query.status });
+    }
+    if (query.deviceType) {
+      qb.andWhere('d.deviceType = :deviceType', {
+        deviceType: query.deviceType,
+      });
+    }
+    if (query.roomId) {
+      qb.andWhere('d.roomId = :roomId', { roomId: query.roomId });
+    }
+    if (query.search) {
+      // Bound param chống injection (NFR-002). ILIKE = không phân biệt hoa thường.
+      qb.andWhere('(d.deviceName ILIKE :s OR d.deviceCode ILIKE :s)', {
+        s: `%${query.search}%`,
+      });
+    }
+
+    qb.orderBy('d.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
+
+    return {
+      items: items.map((d) => toIotDeviceResponse(d)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findOne(deviceId: string): Promise<IotDeviceResponseDto> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    return toIotDeviceResponse(device);
   }
 
   async disable(

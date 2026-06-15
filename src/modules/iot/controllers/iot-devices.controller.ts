@@ -3,6 +3,8 @@ import {
   Controller,
   Post,
   Patch,
+  Get,
+  Query,
   HttpCode,
   Req,
   UseGuards,
@@ -14,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
 import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
+import { ListIotDevicesQueryDto } from '../dto/list-iot-devices-query.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
@@ -32,6 +35,36 @@ const Permissions =
 @Controller('iot-devices')
 export class IotDevicesController {
   constructor(private readonly iotDevicesService: IotDevicesService) {}
+
+  // IOT-013: liệt kê thiết bị (filter + phân trang). Read-only, query whitelist-only.
+  @Get()
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot.device.read')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async list(@Query() query: ListIotDevicesQueryDto) {
+    const { items, meta } = await this.iotDevicesService.findAll(query);
+
+    return {
+      success: true,
+      message: 'IoT devices retrieved successfully',
+      data: items,
+      meta,
+    };
+  }
+
+  // IOT-013: chi tiết thiết bị. Read-only.
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot.device.read')
+  async detail(@Param('id', ParseUUIDPipe) id: string) {
+    const data = await this.iotDevicesService.findOne(id);
+
+    return {
+      success: true,
+      message: 'IoT device retrieved successfully',
+      data,
+    };
+  }
 
   @Post()
   @UseGuards(JwtAuthGuard, MockPermissionsGuard)
