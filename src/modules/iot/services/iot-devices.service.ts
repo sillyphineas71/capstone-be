@@ -238,6 +238,110 @@ export class IotDevicesService {
     }
   }
 
+  async disable(
+    userId: string | null,
+    deviceId: string,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // No-op: đã disabled → 200, không transaction/audit.
+    if (device.status === IoTDeviceStatus.DISABLED) {
+      return device;
+    }
+
+    const oldStatus = device.status;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Chỉ đổi status — KHÔNG chạm health/last_seen/room/metadata.
+      device.status = IoTDeviceStatus.DISABLED;
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+
+      await this.iotAuditRepository.logDeviceStatusChange(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        action: 'disable',
+        oldStatus,
+        newStatus: IoTDeviceStatus.DISABLED,
+      });
+
+      await queryRunner.commitTransaction();
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async enable(
+    userId: string | null,
+    deviceId: string,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    // No-op: chỉ kích hoạt lại thiết bị đang disabled. Khác disabled → 200 không đổi.
+    if (device.status !== IoTDeviceStatus.DISABLED) {
+      return device;
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // disabled → offline (chờ heartbeat cập nhật online). KHÔNG chạm health/last_seen/room.
+      device.status = IoTDeviceStatus.OFFLINE;
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+
+      await this.iotAuditRepository.logDeviceStatusChange(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        action: 'enable',
+        oldStatus: IoTDeviceStatus.DISABLED,
+        newStatus: IoTDeviceStatus.OFFLINE,
+      });
+
+      await queryRunner.commitTransaction();
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async assignRoom(
     userId: string | null,
     deviceId: string,

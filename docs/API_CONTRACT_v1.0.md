@@ -17,6 +17,7 @@
 | 2026-06-03 | Tạo mới toàn bộ API Contract v1.0 từ UseCase_List_SMRMPTS.xlsx + Database v3.2 Compact | Tạo mới |
 | 2026-06-15 | Thêm IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera (PATCH /api/v1/iot-devices/{deviceId}), permission `iot.device.update`. Tránh trùng UC-73 (đã là "Lưu raw event"). | Section 8 (sau UC-69) |
 | 2026-06-15 | Sửa ví dụ request/response của IOT-011 sang **snake_case** cho khớp wire-format thật (`toIotDeviceResponse`). Ghi chú UC-67 đang camelCase chưa đồng bộ. | Section 8 (IOT-011) |
+| 2026-06-15 | Thêm IOT-012 (Feature #13) — Disable/Re-enable thiết bị IoT/Camera (POST /:id/disable, /:id/enable, @HttpCode(200), no body), permission `iot.device.disable`/`iot.device.enable`. | Section 8 (sau IOT-011) |
 
 ---
 
@@ -2720,6 +2721,52 @@
 - `409 MAC_ADDRESS_EXISTS` nếu `mac_address` mới trùng thiết bị khác.
 - `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`.
 - Ghi `audit_logs` (action_type: `update`, entity_type: `iot_devices`).
+
+---
+
+### IOT-012 (Feature #13) — Vô hiệu hóa / Kích hoạt lại thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `POST` |
+| Endpoint | `/api/v1/iot-devices/{deviceId}/disable` · `/api/v1/iot-devices/{deviceId}/enable` |
+| Permission | `iot.device.disable` (disable) · `iot.device.enable` (enable) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-disable-enable-iot-device` (IOT-012). 2 action endpoint **không body**, trả **200** (`@HttpCode(200)`). Soft theo **ADR-008**: chỉ đổi cột `status`, KHÔNG hard-delete/`deleted_at`, giữ `iot_device_events`. KHÔNG chạm `health_status`/`last_seen_at`/`room_id`/`metadata_json`. Idempotent: disable khi đã `disabled` (hoặc enable khi khác `disabled`) → 200 no-op, không ghi/audit.
+
+**Chuyển trạng thái:** disable: bất kỳ → `disabled`. enable: `disabled` → `offline` (chờ heartbeat cập nhật `online`).
+
+**Request Body:** (không) — `{deviceId}` qua path, `ParseUUIDPipe`.
+
+**Response 200 (full device, snake_case — theo `toIotDeviceResponse`):**
+```json
+{
+  "success": true,
+  "message": "IoT device disabled successfully",
+  "data": {
+    "id": "uuid",
+    "device_name": "Camera góc phòng họp A",
+    "device_code": "IPCAM-A3-01",
+    "device_type": "ip_camera",
+    "room_id": "uuid|null",
+    "ip_address": "192.168.1.51",
+    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "status": "disabled",
+    "health_status": "healthy",
+    "last_seen_at": "2026-06-15T09:00:00+07:00",
+    "metadata_json": { "manufacturer": "Hikvision" },
+    "created_by_name": null,
+    "created_at": "2026-06-03T10:00:00+07:00",
+    "updated_at": "2026-06-15T10:00:00+07:00"
+  }
+}
+```
+
+> Enable trả `"status": "offline"` và `"message": "IoT device enabled successfully"`. `health_status`/`last_seen_at`/`room_id`/`metadata_json` giữ nguyên giá trị cũ (chỉ `status` đổi).
+
+- `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`; sai UUID → 400.
+- Ghi `audit_logs` (action_type: `disable` | `enable`, entity_type: `iot_devices`, `changed_fields.status` = { old, new }).
 
 ---
 
