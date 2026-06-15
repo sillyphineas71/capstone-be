@@ -7,8 +7,10 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { DataSource, Not } from 'typeorm';
+import { DataSource, Not, In } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import { probeTcp } from '../utils/rtsp-probe.util.js';
 import {
   IoTDeviceEntity,
   IoTDeviceType,
@@ -57,10 +59,13 @@ export interface StrangerEventInput {
 
 @Injectable()
 export class IotDevicesService {
+  private static readonly PROBE_CONCURRENCY = 10;
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly iotAuditRepository: IotAuditRepository,
     private readonly iotDeviceEventsService: IotDeviceEventsService,
+    private readonly configService: ConfigService,
   ) {}
 
   async create(
@@ -307,6 +312,142 @@ export class IotDevicesService {
     }
 
     return toIotDeviceResponse(device);
+  }
+
+  /**
+   * IOT-014 — active TCP probe các ip_camera để maintain online↔offline.
+   * Chỉ đổi cột status; transition mới ghi audit. Read các camera status ∈ {online, offline}.
+   */
+  async detectOfflineDevices(actorUserId: string | null): Promise<{
+    checked: number;
+    online_count: number;
+    offline_count: number;
+    transitions: Array<{ id: string; from: string; to: string }>;
+  }> {
+    const timeoutMs = this.configService.get<number>(
+      'RTSP_PROBE_TIMEOUT_MS',
+      3000,
+    );
+
+    const cameras = await this.dataSource.manager.find(IoTDeviceEntity, {
+      where: {
+        deviceType: IoTDeviceType.IP_CAMERA,
+        status: In([IoTDeviceStatus.ONLINE, IoTDeviceStatus.OFFLINE]),
+      },
+    });
+
+    // Resolve địa chỉ probe; bỏ camera không có địa chỉ hợp lệ.
+    const targets: Array<{ device: IoTDeviceEntity; host: string; port: number }> =
+      [];
+    for (const device of cameras) {
+      const addr = this.resolveProbeAddress(device);
+      if (addr) targets.push({ device, host: addr.host, port: addr.port });
+    }
+
+    // Probe theo batch giới hạn đồng thời.
+    const results: Array<{
+      device: IoTDeviceEntity;
+      oldStatus: IoTDeviceStatus;
+      result: 'online' | 'offline';
+    }> = [];
+    const cap = IotDevicesService.PROBE_CONCURRENCY;
+    for (let i = 0; i < targets.length; i += cap) {
+      const batch = targets.slice(i, i + cap);
+      await Promise.allSettled(
+        batch.map((t) =>
+          probeTcp(t.host, t.port, timeoutMs).then((result) => {
+            results.push({
+              device: t.device,
+              oldStatus: t.device.status,
+              result,
+            });
+          }),
+        ),
+      );
+    }
+
+    let onlineCount = 0;
+    let offlineCount = 0;
+    const transitions: Array<{ id: string; from: string; to: string }> = [];
+
+    for (const r of results) {
+      if (r.result === 'online') onlineCount++;
+      else offlineCount++;
+
+      const newStatus =
+        r.result === 'online'
+          ? IoTDeviceStatus.ONLINE
+          : IoTDeviceStatus.OFFLINE;
+
+      if (newStatus === r.oldStatus) continue; // idempotent: không transition
+
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+      try {
+        r.device.status = newStatus;
+        await queryRunner.manager.save(IoTDeviceEntity, r.device);
+        await this.iotAuditRepository.logDeviceStatusChange(
+          queryRunner.manager,
+          {
+            userId: actorUserId,
+            deviceId: r.device.id,
+            action: r.result === 'online' ? 'auto_online' : 'auto_offline',
+            oldStatus: r.oldStatus,
+            newStatus,
+          },
+        );
+        await queryRunner.commitTransaction();
+        transitions.push({ id: r.device.id, from: r.oldStatus, to: newStatus });
+      } catch {
+        // Lỗi 1 transition → rollback chính nó, KHÔNG ảnh hưởng camera khác.
+        await queryRunner.rollbackTransaction();
+      } finally {
+        await queryRunner.release();
+      }
+    }
+
+    return {
+      checked: targets.length,
+      online_count: onlineCount,
+      offline_count: offlineCount,
+      transitions,
+    };
+  }
+
+  /**
+   * Parse host:port để probe: ưu tiên stream_url (rtsp://host:port/path),
+   * fallback ip_address:554. Validate port nguyên 1..65535. Không hợp lệ → null (skip).
+   */
+  private resolveProbeAddress(
+    device: IoTDeviceEntity,
+  ): { host: string; port: number } | null {
+    let host: string | null = null;
+    let port = 554;
+
+    if (device.streamUrl) {
+      try {
+        const u = new URL(device.streamUrl);
+        host = u.hostname || null;
+        if (u.port) port = Number(u.port);
+      } catch {
+        const m = /^rtsp:\/\/([^/:]+)(?::(\d+))?/i.exec(device.streamUrl);
+        if (m) {
+          host = m[1];
+          if (m[2]) port = Number(m[2]);
+        }
+      }
+    }
+
+    if (!host && device.ipAddress) {
+      host = device.ipAddress;
+      port = 554;
+    }
+
+    if (!host) return null;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+
+    return { host, port };
   }
 
   async disable(

@@ -19,6 +19,7 @@
 | 2026-06-15 | Sửa ví dụ request/response của IOT-011 sang **snake_case** cho khớp wire-format thật (`toIotDeviceResponse`). Ghi chú UC-67 đang camelCase chưa đồng bộ. | Section 8 (IOT-011) |
 | 2026-06-15 | Thêm IOT-012 (Feature #13) — Disable/Re-enable thiết bị IoT/Camera (POST /:id/disable, /:id/enable, @HttpCode(200), no body), permission `iot.device.disable`/`iot.device.enable`. | Section 8 (sau IOT-011) |
 | 2026-06-15 | Thêm IOT-013 (Feature #14) — List + Detail thiết bị IoT/Camera (GET /iot-devices, GET /:id), permission `iot.device.read`. Read-only; data snake_case, meta camelCase {page,limit,total,totalPages}. | Section 8 (sau IOT-012) |
+| 2026-06-15 | Thêm IOT-014 (Feature #15) — Phát hiện camera offline bằng active TCP probe (POST /iot-devices/probe-status + cron EVERY_MINUTE), permission `iot.device.probe`. Đổi status ip_camera, audit auto_online/auto_offline. | Section 8 (sau IOT-013) |
 
 ---
 
@@ -2824,6 +2825,45 @@
 
 - `400 VALIDATION_ERROR` nếu page/limit/enum/uuid/search sai hoặc `limit > 100`; detail `{deviceId}` sai UUID → 400.
 - `404 IOT_DEVICE_NOT_FOUND` (detail) nếu không tìm thấy thiết bị. List rỗng → 200 `data: []`, `meta.total = 0`.
+
+---
+
+### IOT-014 (Feature #15) — Phát hiện camera offline bằng Active Probe
+
+| Field | Value |
+|---|---|
+| Method | `POST` |
+| Endpoint | `/api/v1/iot-devices/probe-status` |
+| Permission | `iot.device.probe` |
+| HTTP code | `200` (`@HttpCode(200)`) |
+| Body | (không) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-detect-offline-devices` (IOT-014). Backend **active TCP probe** tới `host:port` RTSP của từng `ip_camera` (parse `stream_url`, fallback `ip_address:554`, validate port 1–65535); mở được → `online`, timeout/refuse → `offline`. Chỉ maintain camera `status ∈ {online, offline}` (**bỏ** `disabled`/`maintenance`). Chỉ đổi cột `status`; transition mới ghi `audit_logs` (`auto_online`/`auto_offline`). Idempotent: trạng thái không đổi → không ghi.
+>
+> **Cron**: chạy mỗi phút (`CronExpression.EVERY_MINUTE`, name `device-offline-detect`) **cùng logic** `detectOfflineDevices`, gate `SCHEDULER_ENABLED && DEVICE_OFFLINE_DETECT_ENABLED` (actor = null). **Endpoint** dưới đây là bản chạy tay (admin), **không** gate ENV (actor = user JWT).
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Device status probe completed",
+  "data": {
+    "checked": 12,
+    "online_count": 9,
+    "offline_count": 3,
+    "transitions": [
+      { "id": "uuid", "from": "online", "to": "offline" },
+      { "id": "uuid", "from": "offline", "to": "online" }
+    ]
+  }
+}
+```
+
+- `checked` = số camera thực sự probe (đã trừ disabled/maintenance/không-địa-chỉ). `transitions` chỉ gồm camera đổi trạng thái.
+- `401 UNAUTHORIZED` nếu thiếu JWT; `403 FORBIDDEN` nếu thiếu `iot.device.probe`.
+- Ghi `audit_logs` (action_type: `auto_online` | `auto_offline`, entity_type: `iot_devices`, `changed_fields.status` = { old, new }).
+- **Config**: `DEVICE_OFFLINE_DETECT_ENABLED` (default true), `RTSP_PROBE_TIMEOUT_MS` (default 3000). v1 chỉ TCP-connect (không ffprobe/RTSP auth); probe song song cap 10.
 
 ---
 

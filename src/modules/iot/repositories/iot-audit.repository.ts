@@ -78,7 +78,7 @@ export class IotAuditRepository {
     params: {
       userId: string | null;
       deviceId: string;
-      action: 'disable' | 'enable';
+      action: 'disable' | 'enable' | 'auto_offline' | 'auto_online';
       oldStatus: string;
       newStatus: string;
     },

@@ -92,6 +92,24 @@ export class IotDevicesController {
     };
   }
 
+  // IOT-014: chạy tay một lượt active probe online/offline (không body, không gate ENV).
+  // Route static 'probe-status' — khai báo trước các route động @Post(':id/...').
+  @Post('probe-status')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot.device.probe')
+  async probeStatus(@Req() req: any) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const data = await this.iotDevicesService.detectOfflineDevices(userId);
+
+    return {
+      success: true,
+      message: 'Device status probe completed',
+      data,
+    };
+  }
+
   @Post(':id/assign-room')
   @UseGuards(JwtAuthGuard, MockPermissionsGuard)
   @Permissions('iot_devices:assign_room')
