@@ -1,0 +1,56 @@
+import {
+  Body,
+  Controller,
+  Post,
+  HttpCode,
+  Req,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
+  Param,
+  ParseUUIDPipe,
+} from '@nestjs/common';
+import { RecordingSessionService } from '../services/recording-session.service.js';
+import { StartVideoDto } from '../dto/start-video.dto.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+
+// Mock PermissionsGuard — nhất quán IOT/REC controller.
+const MockPermissionsGuard = class {
+  canActivate() {
+    return true;
+  }
+};
+const Permissions =
+  (...args: string[]) =>
+  (target: any, key?: any, descriptor?: any) => {};
+
+@Controller()
+export class RecordingSessionController {
+  constructor(
+    private readonly recordingSessionService: RecordingSessionService,
+  ) {}
+
+  // REC-002 (UC-111): bắt đầu ghi hình video từ IP camera.
+  @Post('live-meetings/:meetingId/recording/start-video')
+  @HttpCode(201)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.video.start')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async startVideo(
+    @Req() req: any,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() dto: StartVideoDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    const data = await this.recordingSessionService.startVideo(
+      meetingId,
+      dto,
+      userId,
+    );
+    return {
+      success: true,
+      message: 'Video recording started',
+      data,
+    };
+  }
+}

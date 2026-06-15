@@ -11,6 +11,7 @@ import { DataSource, Not, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
+import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import {
   IoTDeviceEntity,
   IoTDeviceType,
@@ -798,19 +799,34 @@ export class IotDevicesService {
     const rtsp_port = dto.rtsp_port !== undefined ? dto.rtsp_port : 554;
     const stream_profile = dto.stream_profile || 'main';
 
-    // SEC-01: never persist the RTSP password (no encryption util exists in the
-    // codebase). The connection URL is written to stream_url WITHOUT credentials;
-    // we only keep a boolean flag indicating whether a password was configured.
+    // IOT-015 (SEC-01): mật khẩu RTSP được mã hóa AES-256-GCM (secret-crypto.util)
+    // và lưu vào rtsp_password_encrypted. KHÔNG bao giờ lưu plaintext; stream_url
+    // KHÔNG kèm user:pass. Nếu không gửi password → carry-over encrypted + flag cũ.
     const passwordProvided =
       dto.rtsp_password !== undefined && dto.rtsp_password !== '';
-    const rtsp_password_configured =
-      passwordProvided || currentRtspConfig.rtsp_password_configured === true;
+
+    const prevCfg = currentRtspConfig as {
+      rtsp_password_encrypted?: string;
+      rtsp_password_configured?: boolean;
+    };
+    let rtspPasswordEncrypted: string | undefined;
+    let rtsp_password_configured: boolean;
+    if (passwordProvided) {
+      rtspPasswordEncrypted = encryptSecret(dto.rtsp_password as string);
+      rtsp_password_configured = true;
+    } else {
+      rtspPasswordEncrypted =
+        typeof prevCfg.rtsp_password_encrypted === 'string'
+          ? prevCfg.rtsp_password_encrypted
+          : undefined;
+      rtsp_password_configured = prevCfg.rtsp_password_configured === true;
+    }
 
     // RTSP connection string stored in the stream_url column (no user:pass@).
     const streamUrl = `${dto.rtsp_protocol}://${dto.rtsp_host}:${rtsp_port}${dto.rtsp_path}`;
     device.streamUrl = streamUrl;
 
-    const newRtspConfig = {
+    const newRtspConfig: Record<string, unknown> = {
       rtsp_enabled,
       rtsp_protocol: dto.rtsp_protocol,
       rtsp_host: dto.rtsp_host,
@@ -821,6 +837,9 @@ export class IotDevicesService {
       rtsp_password_configured,
       configured_at: new Date().toISOString(),
     };
+    if (rtspPasswordEncrypted) {
+      newRtspConfig.rtsp_password_encrypted = rtspPasswordEncrypted;
+    }
 
     const updatedMetadata = {
       ...currentMetadata,

@@ -144,6 +144,14 @@ export const envValidationSchema = Joi.object({
   DEVICE_OFFLINE_DETECT_ENABLED: Joi.boolean().default(true),
   RTSP_PROBE_TIMEOUT_MS: Joi.number().integer().min(100).default(3000),
 
+  // ─── Q. Recording Capture (IOT-015 / #23) ────────────────────────────────────
+  // Khóa mã hóa mật khẩu RTSP (AES-256-GCM, key=sha256(RTSP_CRED_KEY)).
+  // ĐỔI key này = KHÔNG giải mã được các password đã lưu trước đó.
+  RTSP_CRED_KEY: Joi.string().min(32).required(),
+  // REC-002: ffmpeg + nơi lưu file recording.
+  FFMPEG_PATH: Joi.string().default('ffmpeg'),
+  RECORDING_STORAGE_PATH: Joi.string().default('./storage/recordings'),
+
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),
   SYSTEM_CONFIG_CACHE_TTL_SECONDS: Joi.number().integer().default(300),

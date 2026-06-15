@@ -56,6 +56,7 @@ describe('IotDevicesService', () => {
       logAssignRoom: jest.fn(),
       logDeviceUpdate: jest.fn(),
       logDeviceStatusChange: jest.fn(),
+      logConfigureRtsp: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -645,6 +646,74 @@ describe('IotDevicesService', () => {
       expect(result.items).toEqual([]);
       expect(result.meta.total).toBe(0);
       expect(result.meta.totalPages).toBe(0);
+    });
+  });
+
+  describe('configureRtsp (IOT-015 credential encrypt)', () => {
+    const OLD_KEY = process.env.RTSP_CRED_KEY;
+    beforeAll(() => {
+      process.env.RTSP_CRED_KEY = 'test_rtsp_cred_key_0123456789_abcdefghij';
+    });
+    afterAll(() => {
+      process.env.RTSP_CRED_KEY = OLD_KEY;
+    });
+
+    const rtspDto = (over: any = {}) => ({
+      rtsp_protocol: 'rtsp',
+      rtsp_host: '10.0.0.5',
+      rtsp_port: 554,
+      rtsp_path: '/live',
+      ...over,
+    });
+
+    it('rtsp_password → lưu rtsp_password_encrypted (KHÔNG plaintext) + configured=true', async () => {
+      const device: any = {
+        id: 'dev-1',
+        deviceType: IoTDeviceType.IP_CAMERA,
+        roomId: 'room-1',
+        metadataJson: {},
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_e: unknown, obj: any) => obj,
+      );
+
+      await service.configureRtsp(
+        'user-1',
+        'dev-1',
+        rtspDto({ rtsp_password: 'super-secret' }) as any,
+      );
+
+      const cfg = device.metadataJson.rtsp_config;
+      expect(cfg.rtsp_password_configured).toBe(true);
+      expect(typeof cfg.rtsp_password_encrypted).toBe('string');
+      // KHÔNG lưu plaintext
+      expect(JSON.stringify(device.metadataJson)).not.toContain('super-secret');
+      expect(cfg.rtsp_password_encrypted).not.toContain('super-secret');
+    });
+
+    it('không gửi rtsp_password → carry-over encrypted + flag cũ', async () => {
+      const device: any = {
+        id: 'dev-1',
+        deviceType: IoTDeviceType.IP_CAMERA,
+        roomId: 'room-1',
+        metadataJson: {
+          rtsp_config: {
+            rtsp_password_encrypted: 'OLD_BLOB_BASE64',
+            rtsp_password_configured: true,
+          },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_e: unknown, obj: any) => obj,
+      );
+
+      await service.configureRtsp('user-1', 'dev-1', rtspDto() as any);
+
+      const cfg = device.metadataJson.rtsp_config;
+      expect(cfg.rtsp_password_encrypted).toBe('OLD_BLOB_BASE64');
+      expect(cfg.rtsp_password_configured).toBe(true);
     });
   });
 
