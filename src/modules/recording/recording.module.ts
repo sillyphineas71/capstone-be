@@ -14,6 +14,8 @@ import { RecordingSessionController } from './controllers/recording-session.cont
 import { RecordingSessionService } from './services/recording-session.service.js';
 import { RecordingProcessManager } from './services/recording-process-manager.js';
 import { RecordingReconcileService } from './services/recording-reconcile.service.js';
+import { MediaFilesController } from './controllers/media-files.controller.js';
+import { MediaFilesService } from './services/media-files.service.js';
 
 /**
  * RecordingModule quản lý các entity recording + CRUD recording-config (REC-001).
@@ -34,13 +36,18 @@ import { RecordingReconcileService } from './services/recording-reconcile.servic
     JwtModule.register({}),
     CacheModule.register(),
   ],
-  controllers: [RecordingConfigController, RecordingSessionController],
+  controllers: [
+    RecordingConfigController,
+    RecordingSessionController,
+    MediaFilesController,
+  ],
   providers: [
     RecordingConfigService,
     RecordingConfigAuditRepository,
     RecordingSessionService,
     RecordingProcessManager,
     RecordingReconcileService,
+    MediaFilesService,
   ],
   exports: [TypeOrmModule],
 })
