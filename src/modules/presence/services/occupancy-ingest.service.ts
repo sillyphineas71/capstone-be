@@ -158,6 +158,7 @@ export class OccupancyIngestService {
     const confidence = typeof rawConfidence === 'number' ? rawConfidence : null;
 
     // ── 4. TRANSACTION ────────────────────────────────────────────────────
+    let statusChangedToOccupied = false;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -210,13 +211,16 @@ export class OccupancyIngestService {
         );
       }
 
-      // c. status: count>0 → occupied (count==0 KHÔNG đổi — D-4)
+      // c. status: count>0 → occupied (count==0 KHÔNG đổi — D-4).
+      //    RETURNING id để biết status THẬT SỰ đổi (RMS-001 #30 patch) → emit room.status.updated chỉ khi đổi.
       if (occupancyCount > 0) {
-        await queryRunner.query(
+        const updatedRooms = (await queryRunner.query(
           `UPDATE rooms SET current_status = 'occupied'
-           WHERE id = $1 AND current_status <> 'occupied'`,
+           WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
+           RETURNING id`,
           [roomId],
-        );
+        )) as Array<{ id: string }>;
+        statusChangedToOccupied = (updatedRooms?.length ?? 0) > 0;
       }
 
       await queryRunner.commitTransaction();
@@ -239,6 +243,14 @@ export class OccupancyIngestService {
         'room.occupancy.updated',
         { roomId, occupancyCount, timestamp: eventTime.toISOString() },
       );
+      // RMS-001 #30: chỉ phát room.status.updated khi status THẬT SỰ đổi (→occupied).
+      if (statusChangedToOccupied) {
+        this.websocketService.emitToRoom(
+          `room:${roomId}`,
+          'room.status.updated',
+          { roomId, status: 'occupied', timestamp: eventTime.toISOString() },
+        );
+      }
     } catch (e) {
       this.logger.warn(
         `WS emit room.occupancy.updated failed: ${

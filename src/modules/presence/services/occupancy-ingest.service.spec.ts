@@ -21,6 +21,7 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
   let wsMock: any;
   let device: any;
   let bookingRows: any[];
+  let roomUpdateRows: any[]; // UPDATE rooms RETURNING id → status đổi nếu có row.
 
   const makeInput = (bodyOver: any = {}, headerOver: any = {}) => ({
     headers: {
@@ -57,6 +58,7 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
       },
     };
     bookingRows = [{ booking_id: 'bk-1', meeting_id: 'mt-1' }];
+    roomUpdateRows = [{ id: 'room-1' }]; // mặc định: status đổi → emit room.status.updated.
 
     qr = {
       connect: jest.fn().mockResolvedValue(undefined),
@@ -64,6 +66,8 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
       query: jest.fn().mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve(bookingRows);
+        if (sql.includes('UPDATE rooms'))
+          return Promise.resolve(roomUpdateRows);
         return Promise.resolve(undefined);
       }),
       commitTransaction: jest.fn().mockResolvedValue(undefined),
@@ -107,6 +111,32 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
       'room:room-1',
       'room.occupancy.updated',
       expect.objectContaining({ roomId: 'room-1', occupancyCount: 5 }),
+    );
+  });
+
+  it('RMS-001: status đổi (UPDATE trả row) → emit room.status.updated', async () => {
+    bookingRows = [];
+    await service.ingest(makeInput());
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'room:room-1',
+      'room.status.updated',
+      expect.objectContaining({ roomId: 'room-1', status: 'occupied' }),
+    );
+  });
+
+  it('RMS-001: đã occupied (UPDATE trả []) → KHÔNG emit room.status.updated', async () => {
+    bookingRows = [];
+    roomUpdateRows = []; // status không đổi.
+    await service.ingest(makeInput());
+    const statusEmits = wsMock.emitToRoom.mock.calls.filter(
+      (c: any[]) => c[1] === 'room.status.updated',
+    );
+    expect(statusEmits).toHaveLength(0);
+    // vẫn phát occupancy.updated.
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'room:room-1',
+      'room.occupancy.updated',
+      expect.anything(),
     );
   });
 

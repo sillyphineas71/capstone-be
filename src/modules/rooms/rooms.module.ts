@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { CacheModule } from '@nestjs/cache-manager';
 import { RoomEntity } from './entities/room.entity.js';
 import { RoomBookingEntity } from './entities/room-booking.entity.js';
 import { RoomBookingUsageEntity } from './entities/room-booking-usage.entity.js';
@@ -7,6 +9,9 @@ import { NoShowCaseEntity } from './entities/no-show-case.entity.js';
 import { RoomEventEntity } from './entities/room-event.entity.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
+import { AuthModule } from '../auth/auth.module.js';
+import { RoomsController } from './controllers/rooms.controller.js';
+import { RoomStatusService } from './services/room-status.service.js';
 
 /**
  * RoomsModule quản lý tất cả entities thuộc domain Room & Utilization:
@@ -20,6 +25,9 @@ import { MeetingsModule } from '../meetings/meetings.module.js';
   imports: [
     AccountsModule,
     MeetingsModule,
+    AuthModule,
+    JwtModule.register({}),
+    CacheModule.register(),
     TypeOrmModule.forFeature([
       RoomEntity,
       RoomBookingEntity,
@@ -28,6 +36,8 @@ import { MeetingsModule } from '../meetings/meetings.module.js';
       RoomEventEntity,
     ]),
   ],
+  controllers: [RoomsController],
+  providers: [RoomStatusService],
   exports: [TypeOrmModule],
 })
 export class RoomsModule {}
