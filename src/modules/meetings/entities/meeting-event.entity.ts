@@ -20,6 +20,7 @@ export enum MeetingEventType {
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   ROOM_CHANGED = 'room_changed',
   PARTICIPANT_REMOVED = 'participant_removed',
+  ATTENDANCE_CHECKIN_ALERT_SENT = 'attendance_checkin_alert_sent',
 }
 
 export enum MeetingEventSourceType {
@@ -76,4 +77,6 @@ export class MeetingEventEntity {
   @JoinColumn({ name: 'actor_user_id' })
   actorUser: UserEntity | null;
 }
+
+
 
