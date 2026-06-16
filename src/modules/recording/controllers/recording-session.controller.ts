@@ -73,7 +73,9 @@ export class RecordingSessionController {
     );
     return {
       success: true,
-      message: 'Video recording stopped',
+      message: data.captured
+        ? 'Video recording stopped'
+        : 'Đã dừng nhưng không ghi được video',
       data,
     };
   }

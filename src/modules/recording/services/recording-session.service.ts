@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  BadGatewayException,
   ConflictException,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -34,6 +35,9 @@ interface RtspConfig {
 @Injectable()
 export class RecordingSessionService {
   private readonly logger = new Logger(RecordingSessionService.name);
+  // REC-007: cửa sổ phát hiện no-data khi start (poll file>0).
+  private static readonly START_PROBE_MS = 5000;
+  private static readonly POLL_MS = 250;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -151,14 +155,34 @@ export class RecordingSessionService {
     });
     await this.dataSource.manager.save(RecordingSessionEntity, session);
 
-    // 9. Spawn ffmpeg + grace-window
+    // 9. Spawn ffmpeg + probe no-data (REC-007): exit→failed; file>0→recording; hết cửa sổ & file 0→no_data.
     this.processManager.start(sessionId, url, outPath);
-    const grace = await this.processManager.waitForGrace(sessionId, 2000);
-    if (grace === 'dead') {
-      // manager đã/đang markFailed; báo lỗi chung (không lộ url/password).
+    const probe = await this.probeStart(sessionId, outPath);
+    if (probe === 'exited') {
+      // manager exit-handler đã markFailed; báo lỗi chung (không lộ url/password).
       throw new InternalServerErrorException({
         code: 'RECORDING_START_FAILED',
         message: 'Failed to start recording (ffmpeg exited).',
+      });
+    }
+    if (probe === 'no_data') {
+      // Camera tắt/không tới được: ffmpeg sống nhưng 0 byte → kill + failed + 502.
+      await this.processManager.stop(sessionId);
+      await this.dataSource.manager.query(
+        `UPDATE recording_sessions
+         SET status = $1, error_message = $2, stopped_at = $3
+         WHERE id = $4`,
+        [
+          RecordingSessionStatus.FAILED,
+          'no video data received from camera',
+          new Date(),
+          sessionId,
+        ],
+      );
+      throw new BadGatewayException({
+        code: 'RECORDING_NO_VIDEO',
+        message:
+          'Camera không gửi dữ liệu video (kiểm tra camera đã bật và tới được).',
       });
     }
 
@@ -169,6 +193,38 @@ export class RecordingSessionService {
       startedAt,
       cameraDeviceId: device.id,
     };
+  }
+
+  /**
+   * REC-007 no-data probe: poll trong cửa sổ START_PROBE_MS.
+   * - process exit → 'exited'; file output > 0 → 'capturing'; hết cửa sổ → 'no_data'.
+   * Cửa sổ có giới hạn ⇒ request không treo.
+   */
+  private async probeStart(
+    sessionId: string,
+    outPath: string,
+  ): Promise<'capturing' | 'exited' | 'no_data'> {
+    const deadline = Date.now() + RecordingSessionService.START_PROBE_MS;
+    for (;;) {
+      const proc = this.processManager.get(sessionId);
+      if (
+        !this.processManager.has(sessionId) ||
+        (proc && proc.exitCode !== null)
+      ) {
+        return 'exited';
+      }
+      if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+        return 'capturing';
+      }
+      if (Date.now() >= deadline) {
+        return 'no_data';
+      }
+      await this.sleep(RecordingSessionService.POLL_MS);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async stopVideo(
@@ -182,6 +238,7 @@ export class RecordingSessionService {
     durationSeconds: number;
     fileSizeBytes: string;
     mediaFileId: string | null;
+    captured: boolean;
   }> {
     // 1. Load session
     const rows: Array<{
@@ -264,6 +321,7 @@ export class RecordingSessionService {
         durationSeconds,
         fileSizeBytes: '0',
         mediaFileId: null,
+        captured: false,
       };
     }
 
@@ -285,6 +343,7 @@ export class RecordingSessionService {
       durationSeconds: result.durationSeconds,
       fileSizeBytes: result.fileSizeBytes,
       mediaFileId: result.mediaFileId,
+      captured: true,
     };
   }
 
@@ -421,6 +480,8 @@ export class RecordingSessionService {
     durationSeconds: number | null;
     fileSizeBytes: string | null;
     hasProcessHandle: boolean;
+    errorMessage: string | null;
+    captured: boolean;
   }> {
     const rows: Array<{
       id: string;
@@ -433,9 +494,11 @@ export class RecordingSessionService {
       storage_path: string | null;
       file_size_bytes: string | null;
       duration_seconds: number | null;
+      error_message: string | null;
     }> = await this.dataSource.manager.query(
       `SELECT id, meeting_id, session_type, status, started_at, stopped_at,
-              paused_duration_seconds, storage_path, file_size_bytes, duration_seconds
+              paused_duration_seconds, storage_path, file_size_bytes, duration_seconds,
+              error_message
        FROM recording_sessions WHERE id = $1`,
       [sessionId],
     );
@@ -469,6 +532,9 @@ export class RecordingSessionService {
       fileSizeBytes = s.file_size_bytes ?? null;
     }
 
+    // REC-007: captured = đã ghi được byte? (live: file hiện>0; else: file_size_bytes>0).
+    const captured = Number(fileSizeBytes ?? 0) > 0;
+
     return {
       recordingSessionId: s.id,
       meetingId: s.meeting_id,
@@ -480,6 +546,8 @@ export class RecordingSessionService {
       durationSeconds,
       fileSizeBytes,
       hasProcessHandle: this.processManager.has(sessionId),
+      errorMessage: s.error_message ?? null,
+      captured,
     };
   }
 

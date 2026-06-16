@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   NotFoundException,
   BadRequestException,
+  BadGatewayException,
   ConflictException,
   InternalServerErrorException,
 } from '@nestjs/common';
@@ -75,8 +76,13 @@ describe('RecordingSessionService (REC-002)', () => {
     };
     managerMock = {
       start: jest.fn(),
-      waitForGrace: jest.fn().mockResolvedValue('alive'),
+      has: jest.fn().mockReturnValue(true),
+      get: jest.fn().mockReturnValue({ exitCode: null }),
+      stop: jest.fn().mockResolvedValue('exited'),
     };
+    // REC-007 probeStart: mặc định 'capturing' (file>0 ở vòng đầu).
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.statSync.mockReturnValue({ size: 1024 } as any);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -91,6 +97,8 @@ describe('RecordingSessionService (REC-002)', () => {
     }).compile();
     service = module.get(RecordingSessionService);
   });
+
+  afterEach(() => jest.clearAllMocks());
 
   it('happy: 201 → session recording, spawn gọi', async () => {
     dataSourceMock.manager.query.mockImplementation(makeQuery({}));
@@ -140,12 +148,31 @@ describe('RecordingSessionService (REC-002)', () => {
     ).rejects.toThrow(ConflictException);
   });
 
-  it('ffmpeg chết trong grace → 500 RECORDING_START_FAILED', async () => {
+  it('REC-007 exited: ffmpeg thoát trong probe → 500 RECORDING_START_FAILED', async () => {
     dataSourceMock.manager.query.mockImplementation(makeQuery({}));
-    managerMock.waitForGrace.mockResolvedValue('dead');
+    managerMock.has.mockReturnValue(false); // process rơi khỏi Map → 'exited'
     await expect(
       service.startVideo('m1', { cameraDeviceId: 'cam-1' }, 'u1'),
     ).rejects.toThrow(InternalServerErrorException);
+    expect(managerMock.stop).not.toHaveBeenCalled();
+  });
+
+  it('REC-007 no_data: camera tắt (file 0 hết cửa sổ) → 502 RECORDING_NO_VIDEO + failed', async () => {
+    dataSourceMock.manager.query.mockImplementation(makeQuery({}));
+    fsMock.existsSync.mockReturnValue(false); // không bao giờ capturing
+    jest.useFakeTimers();
+    const p = service
+      .startVideo('m1', { cameraDeviceId: 'cam-1' }, 'u1')
+      .catch((e: unknown) => e);
+    await jest.advanceTimersByTimeAsync(6000);
+    const err = (await p) as BadGatewayException;
+    jest.useRealTimers();
+
+    expect(err).toBeInstanceOf(BadGatewayException);
+    expect(err.getResponse()).toMatchObject({ code: 'RECORDING_NO_VIDEO' });
+    // SEC: message KHÔNG lộ url/cred.
+    expect(JSON.stringify(err.getResponse())).not.toContain('rtsp://');
+    expect(managerMock.stop).toHaveBeenCalledTimes(1);
   });
 
   it('SEC: URL/password KHÔNG xuất hiện trong session lưu', async () => {
@@ -305,6 +332,7 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
     expect(r.mediaFileId).toBe('media-1');
     expect(r.fileSizeBytes).toBe('1024');
     expect(r.durationSeconds).toBeGreaterThanOrEqual(0);
+    expect(r.captured).toBe(true); // REC-007
     expect(managerMock.stop).toHaveBeenCalledWith('sess-1');
     expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
     expect(qr.query).toHaveBeenCalledTimes(2);
@@ -372,6 +400,7 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
     expect(r.status).toBe('stopped');
     expect(r.mediaFileId).toBeNull();
     expect(r.fileSizeBytes).toBe('0');
+    expect(r.captured).toBe(false); // REC-007
     expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
     // UPDATE empty-file đi qua manager.query với error_message='empty file'
     const calls = dataSourceMock.manager.query.mock.calls;
@@ -487,6 +516,7 @@ describe('RecordingSessionService.getStatus (REC-004)', () => {
     storage_path: '/rec/sess-1.mp4',
     file_size_bytes: null,
     duration_seconds: null,
+    error_message: null,
     ...over,
   });
 
@@ -519,6 +549,23 @@ describe('RecordingSessionService.getStatus (REC-004)', () => {
     expect(r.durationSeconds).toBeGreaterThanOrEqual(0);
     expect(r.fileSizeBytes).toBe('2048');
     expect(r.hasProcessHandle).toBe(true);
+    expect(r.captured).toBe(true); // file hiện > 0
+    expect(r.errorMessage).toBeNull();
+  });
+
+  it('REC-007: failed surface errorMessage + captured=false', async () => {
+    managerMock.has.mockReturnValue(false);
+    dataSourceMock.manager.query.mockResolvedValue([
+      baseRow({
+        status: 'failed',
+        stopped_at: new Date().toISOString(),
+        file_size_bytes: '0',
+        error_message: 'no video data received from camera',
+      }),
+    ]);
+    const r = await service.getStatus('m1', 'sess-1');
+    expect(r.errorMessage).toBe('no video data received from camera');
+    expect(r.captured).toBe(false);
   });
 
   it('stopped: trả duration/size từ DB (không đọc fs)', async () => {
