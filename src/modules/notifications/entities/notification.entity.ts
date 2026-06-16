@@ -21,6 +21,8 @@ export enum NotificationType {
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   MEETING_ROOM_UPDATED = 'meeting_room_updated',
   MEETING_PARTICIPANT_REMOVED = 'meeting_participant_removed',
+  LATE_CHECKIN_ALERT = 'late_checkin_alert',
+  LATE_CHECKIN_HOST_SUMMARY = 'late_checkin_host_summary',
   ACCOUNT_WELCOME = 'account_welcome',
 }
 
@@ -150,4 +152,5 @@ export class NotificationEntity {
   @JoinColumn({ name: 'created_by' })
   createdByUser: UserEntity | null;
 }
+
 

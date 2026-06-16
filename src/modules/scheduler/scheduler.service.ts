@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
+import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -12,6 +13,7 @@ import { ConfigService } from '@nestjs/config';
  * - checkNoShow() → UtilizationService.detectNoShow()
  * - autoRelease() → UtilizationService.autoReleaseRooms()
  * - sendReminders() → NotificationsService.sendScheduledReminders()
+ * - checkCheckinAlerts() → CheckInAlertService.processMeetings()
  */
 @Injectable()
 export class SchedulerService {
@@ -22,7 +24,10 @@ export class SchedulerService {
   private readonly autoReleaseEnabled: boolean;
   private readonly reminderEnabled: boolean;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly checkInAlertService: CheckInAlertService,
+  ) {
     this.schedulerEnabled = this.configService.get<boolean>('SCHEDULER_ENABLED', true);
     this.noShowEnabled = this.configService.get<boolean>('SCHEDULER_NO_SHOW_CHECK_ENABLED', false);
     this.autoReleaseEnabled = this.configService.get<boolean>('SCHEDULER_AUTO_RELEASE_ENABLED', false);
@@ -73,5 +78,22 @@ export class SchedulerService {
 
     this.logger.log('[Scheduler] sendReminders() triggered — TODO: implement reminder notification logic.');
     // TODO: inject NotificationsService và gọi sendScheduledReminders()
+  }
+
+  /**
+   * Check-in alert job.
+   * Cron: every 1 minute (scan_interval_seconds default=60)
+   * Business logic checks config attendance.checkin_alert.enabled internally.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'checkin-alert' })
+  async checkCheckinAlerts(): Promise<void> {
+    if (!this.schedulerEnabled) return;
+
+    this.logger.debug('[Scheduler] checkCheckinAlerts() triggered');
+    try {
+      await this.checkInAlertService.processMeetings();
+    } catch (error) {
+      this.logger.error(`[Scheduler] checkCheckinAlerts() failed: ${(error as Error).message}`);
+    }
   }
 }

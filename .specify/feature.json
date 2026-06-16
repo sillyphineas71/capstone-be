@@ -1,5 +1,5 @@
 ﻿{
-  "feature_directory": "spec/features/scheduler/feat-auto-participant-schedule-conflict",
-  "feature_num": "012",
-  "branch_name": "012-participant-conflict-check"
+  "feature_directory": "spec/features/attendance/feat-send-checkin-alerts",
+  "feature_num": "014",
+  "branch_name": "014-send-checkin-alerts"
 }
