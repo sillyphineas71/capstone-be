@@ -10,8 +10,12 @@ import { RoomEventEntity } from './entities/room-event.entity.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomStatusService } from './services/room-status.service.js';
+import { NoShowController } from './controllers/no-show.controller.js';
+import { NoShowService } from './services/no-show.service.js';
+import { NoShowDetectionService } from './services/no-show-detection.service.js';
 
 /**
  * RoomsModule quản lý tất cả entities thuộc domain Room & Utilization:
@@ -26,6 +30,7 @@ import { RoomStatusService } from './services/room-status.service.js';
     AccountsModule,
     MeetingsModule,
     AuthModule,
+    WebsocketModule,
     JwtModule.register({}),
     CacheModule.register(),
     TypeOrmModule.forFeature([
@@ -36,8 +41,8 @@ import { RoomStatusService } from './services/room-status.service.js';
       RoomEventEntity,
     ]),
   ],
-  controllers: [RoomsController],
-  providers: [RoomStatusService],
-  exports: [TypeOrmModule],
+  controllers: [RoomsController, NoShowController],
+  providers: [RoomStatusService, NoShowService, NoShowDetectionService],
+  exports: [TypeOrmModule, NoShowDetectionService],
 })
 export class RoomsModule {}

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
+import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -27,6 +28,7 @@ export class SchedulerService {
   constructor(
     private readonly configService: ConfigService,
     private readonly iotDevicesService: IotDevicesService,
+    private readonly noShowDetectionService: NoShowDetectionService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>('SCHEDULER_ENABLED', true);
     this.noShowEnabled = this.configService.get<boolean>('SCHEDULER_NO_SHOW_CHECK_ENABLED', false);
@@ -63,8 +65,19 @@ export class SchedulerService {
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    this.logger.log('[Scheduler] checkNoShow() triggered — TODO: implement no-show detection logic.');
-    // TODO: inject UtilizationService và gọi detectNoShow()
+    // NSC-001 (#31): detect() KHÔNG được ném ra ngoài cron.
+    try {
+      const r = await this.noShowDetectionService.detect();
+      this.logger.log(
+        `[Scheduler] no-show-check: scanned=${r.scanned} created=${r.created}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] no-show-check failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
   }
 
   /**

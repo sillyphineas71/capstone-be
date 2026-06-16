@@ -153,6 +153,10 @@ export const envValidationSchema = Joi.object({
   RECORDING_STORAGE_PATH: Joi.string().default('./storage/recordings'),
   // REC-005: ffprobe trích metadata media (best-effort).
   FFPROBE_PATH: Joi.string().default('ffprobe'),
+  // NSC-001 (#31): token nội bộ cho POST /internal/no-show-cases (fail-closed nếu rỗng).
+  NOSHOW_INTERNAL_TOKEN: Joi.string().allow('').default(''),
+  // NSC-001: ngưỡng no-show (phút) — fallback khi system_configs chưa cấu hình (#35).
+  NO_SHOW_THRESHOLD_MINUTES: Joi.number().integer().min(1).default(15),
 
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),
