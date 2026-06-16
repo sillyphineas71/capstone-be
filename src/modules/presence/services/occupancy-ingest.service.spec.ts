@@ -58,7 +58,8 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
       },
     };
     bookingRows = [{ booking_id: 'bk-1', meeting_id: 'mt-1' }];
-    roomUpdateRows = [{ id: 'room-1' }]; // mặc định: status đổi → emit room.status.updated.
+    // Shape THẬT của UPDATE...RETURNING qua TypeORM: [rows, affectedCount].
+    roomUpdateRows = [[{ id: 'room-1' }], 1]; // status đổi → emit room.status.updated.
 
     qr = {
       connect: jest.fn().mockResolvedValue(undefined),
@@ -126,7 +127,7 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
 
   it('RMS-001: đã occupied (UPDATE trả []) → KHÔNG emit room.status.updated', async () => {
     bookingRows = [];
-    roomUpdateRows = []; // status không đổi.
+    roomUpdateRows = [[], 0]; // status KHÔNG đổi (0 row).
     await service.ingest(makeInput());
     const statusEmits = wsMock.emitToRoom.mock.calls.filter(
       (c: any[]) => c[1] === 'room.status.updated',

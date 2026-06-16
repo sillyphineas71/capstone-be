@@ -214,13 +214,19 @@ export class OccupancyIngestService {
       // c. status: count>0 → occupied (count==0 KHÔNG đổi — D-4).
       //    RETURNING id để biết status THẬT SỰ đổi (RMS-001 #30 patch) → emit room.status.updated chỉ khi đổi.
       if (occupancyCount > 0) {
-        const updatedRooms = (await queryRunner.query(
+        const updateResult: unknown = await queryRunner.query(
           `UPDATE rooms SET current_status = 'occupied'
            WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
            RETURNING id`,
           [roomId],
-        )) as Array<{ id: string }>;
-        statusChangedToOccupied = (updatedRooms?.length ?? 0) > 0;
+        );
+        // Postgres UPDATE...RETURNING qua TypeORM trả [rows, affectedCount] (đã verify DB thật);
+        // chuẩn hoá lấy rows để emit CHỈ khi thật sự có 1 row đổi.
+        const rows =
+          Array.isArray(updateResult) && Array.isArray(updateResult[0])
+            ? updateResult[0]
+            : updateResult;
+        statusChangedToOccupied = Array.isArray(rows) && rows.length > 0;
       }
 
       await queryRunner.commitTransaction();
