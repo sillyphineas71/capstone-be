@@ -17,11 +17,11 @@ export class OccupancyEventDto {
   @IsString()
   deviceCode?: string;
 
-  @IsUUID('4')
+  @IsUUID()
   roomId: string;
 
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   meetingId?: string;
 
   @IsOptional()

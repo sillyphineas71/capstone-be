@@ -2,13 +2,13 @@ import { IsUUID, IsOptional, IsIn, IsObject } from 'class-validator';
 
 /** Body tạo no-show case (UC-41 internal). detectionStatus chỉ {risk, confirmed} (NC-6). */
 export class CreateNoShowDto {
-  @IsUUID('4')
+  @IsUUID()
   bookingId: string;
 
-  @IsUUID('4')
+  @IsUUID()
   meetingId: string;
 
-  @IsUUID('4')
+  @IsUUID()
   roomId: string;
 
   @IsOptional()
