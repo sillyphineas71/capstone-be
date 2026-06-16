@@ -20,6 +20,7 @@ import {
 import { StartVideoDto } from '../dto/start-video.dto.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { decryptSecret } from '../../../common/utils/secret-crypto.util.js';
+import { probeMedia } from '../utils/ffprobe.util.js';
 
 interface RtspConfig {
   rtsp_protocol?: string;
@@ -311,15 +312,29 @@ export class RecordingSessionService {
     const { sessionId, meetingId, storagePath, startedAt, paused, userId } =
       params;
     const stoppedAt = new Date();
-    const durationSeconds = Math.max(
+    const wallClock = Math.max(
       0,
       Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
     );
     const fileSizeBytes = String(fs.statSync(storagePath).size);
     const checksum = await this.sha256Stream(storagePath);
-    const metadata = params.recovered
-      ? { ...params.baseMetadata, recovered: true }
-      : params.baseMetadata;
+
+    // REC-005: ffprobe best-effort → duration thật + metadata kỹ thuật; null → fallback wall-clock.
+    const probe = await probeMedia(storagePath);
+    const durationSeconds =
+      probe?.durationSeconds && probe.durationSeconds > 0
+        ? probe.durationSeconds
+        : wallClock;
+
+    // session metadata: giữ logic cũ (orphan_stop/recovered) — KHÔNG nhồi probe.
+    const metadata = {
+      ...params.baseMetadata,
+      ...(params.recovered ? { recovered: true } : {}),
+    };
+    // media_files metadata: thêm probe (kỹ thuật) nếu ffprobe OK.
+    const mediaMetadata = probe
+      ? { ...metadata, probe: { ...probe, source: 'ffprobe' } }
+      : metadata;
     const fileName = `${sessionId}.mp4`;
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -331,8 +346,8 @@ export class RecordingSessionService {
         `INSERT INTO media_files
            (file_name, file_type, mime_type, storage_provider, storage_key,
             recording_session_id, meeting_id, uploaded_by,
-            file_size_bytes, checksum, duration_seconds)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            file_size_bytes, checksum, duration_seconds, metadata_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          RETURNING id`,
         [
           fileName,
@@ -346,6 +361,7 @@ export class RecordingSessionService {
           fileSizeBytes,
           checksum,
           durationSeconds,
+          JSON.stringify(mediaMetadata),
         ],
       )) as Array<{ id: string }>;
       mediaFileId = insert[0].id;

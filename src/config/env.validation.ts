@@ -151,6 +151,8 @@ export const envValidationSchema = Joi.object({
   // REC-002: ffmpeg + nơi lưu file recording.
   FFMPEG_PATH: Joi.string().default('ffmpeg'),
   RECORDING_STORAGE_PATH: Joi.string().default('./storage/recordings'),
+  // REC-005: ffprobe trích metadata media (best-effort).
+  FFPROBE_PATH: Joi.string().default('ffprobe'),
 
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),

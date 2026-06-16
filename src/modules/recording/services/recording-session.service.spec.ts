@@ -18,6 +18,13 @@ import * as fs from 'fs';
 jest.mock('fs');
 const fsMock = fs as jest.Mocked<typeof fs>;
 
+// REC-005: mock ffprobe (default null → fallback wall-clock; tests đặt Once khi cần probe).
+jest.mock('../utils/ffprobe.util.js', () => ({
+  probeMedia: jest.fn().mockResolvedValue(null),
+}));
+import { probeMedia } from '../utils/ffprobe.util.js';
+const probeMock = probeMedia as jest.Mock;
+
 describe('RecordingSessionService (REC-002)', () => {
   let service: RecordingSessionService;
   let dataSourceMock: any;
@@ -386,6 +393,80 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
     );
     expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(qr.release).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── REC-005: ffprobe metadata ───
+  it('REC-005 probe OK → duration ffprobe + metadata_json.probe', async () => {
+    probeMock.mockResolvedValueOnce({
+      durationSeconds: 120,
+      width: 1920,
+      height: 1080,
+      videoCodec: 'h264',
+      fps: 25,
+      bitrate: 4000000,
+    });
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+
+    const r = await service.stopVideo('m1', 'sess-1', 'u1');
+
+    expect(r.durationSeconds).toBe(120); // ffprobe, không phải wall-clock
+    const insertParams = qr.query.mock.calls[0][1];
+    const mediaMeta = insertParams[insertParams.length - 1] as string; // metadata_json $12
+    expect(mediaMeta).toContain('probe');
+    expect(mediaMeta).toContain('h264');
+    expect(mediaMeta).toContain('ffprobe');
+  });
+
+  it('REC-005 probe null → fallback wall-clock + metadata_json KHÔNG có probe', async () => {
+    probeMock.mockResolvedValueOnce(null);
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+
+    await service.stopVideo('m1', 'sess-1', 'u1');
+
+    const insertParams = qr.query.mock.calls[0][1];
+    const mediaMeta = insertParams[insertParams.length - 1] as string;
+    expect(mediaMeta).not.toContain('probe');
+  });
+
+  it('REC-005 merge: orphan_stop + probe cùng tồn tại (không đè)', async () => {
+    managerMock.has.mockReturnValue(false); // orphan → metadata orphan_stop
+    probeMock.mockResolvedValueOnce({
+      durationSeconds: 90,
+      width: 1280,
+      height: 720,
+      videoCodec: 'h264',
+      fps: 30,
+      bitrate: 2000000,
+    });
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()]),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+
+    await service.stopVideo('m1', 'sess-1', 'u1');
+
+    const insertParams = qr.query.mock.calls[0][1];
+    const mediaMeta = insertParams[insertParams.length - 1] as string;
+    expect(mediaMeta).toContain('orphan_stop');
+    expect(mediaMeta).toContain('probe');
+    // session UPDATE ($7) giữ metadata cũ — KHÔNG có probe
+    const updateParams = qr.query.mock.calls[1][1];
+    const sessionMeta = updateParams.find(
+      (p: unknown) => typeof p === 'string' && p.includes('orphan_stop'),
+    ) as string;
+    expect(sessionMeta).not.toContain('probe');
   });
 });
 
