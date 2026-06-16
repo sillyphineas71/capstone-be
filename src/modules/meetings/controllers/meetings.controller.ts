@@ -16,6 +16,7 @@
   UsePipes,
   ValidationPipe,
   Delete,
+  Put,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -55,6 +56,10 @@ import { MyScheduleDetailDto } from '../dto/my-schedule-detail.dto.js';
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
 import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
 import { RemoveParticipantResponseDto } from '../dto/remove-participant-response.dto.js';
+import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
+import { AgendaListResponseDto, ReplaceAgendaResponseDto } from '../dto/agenda-response.dto.js';
+import { ClientContext } from '../services/meetings.service.js';
+
 
 @Controller()
 export class MeetingsController {
@@ -524,5 +529,75 @@ export class MeetingsController {
       data: result,
     };
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda endpoints (UC-MM-09)
+  // ────────────────────────────────────────────────────────────
+
+  @Get(':meetingId/agendas')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Xem danh sách agenda của cuộc họp' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Danh sách agenda', type: AgendaListResponseDto })
+  @ApiResponse({ status: 403, description: 'AGENDA_READ_FORBIDDEN' })
+  @ApiResponse({ status: 404, description: 'MEETING_NOT_FOUND' })
+  async getAgendas(
+    @Param('meetingId', new ParseUUIDPipe({ version: '4' })) meetingId: string,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{ success: boolean; message: string; data: AgendaListResponseDto }> {
+    const result = await this.meetingsService.getAgendas(
+      meetingId,
+      currentUser.userId,
+    );
+    return {
+      success: true,
+      message: 'Lấy danh sách agenda thành công',
+      data: result,
+    };
+  }
+
+  @Put(':meetingId/agendas')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Lưu toàn bộ chương trình họp (atomic replace)' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiBody({ type: ReplaceAgendaDto })
+  @ApiResponse({ status: 200, description: 'Lưu agenda thành công', type: ReplaceAgendaResponseDto })
+  @ApiResponse({ status: 400, description: 'AGENDA_ITEMS_REQUIRED / AGENDA_INVALID_PAYLOAD' })
+  @ApiResponse({ status: 403, description: 'AGENDA_WRITE_FORBIDDEN' })
+  @ApiResponse({ status: 404, description: 'MEETING_NOT_FOUND' })
+  @ApiResponse({ status: 409, description: 'AGENDA_MEETING_STATUS_BLOCKED / MEETING_TIME_INVALID_FOR_AGENDA' })
+  @ApiResponse({ status: 422, description: 'Validation errors' })
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async replaceAgendas(
+    @Param('meetingId', new ParseUUIDPipe({ version: '4' })) meetingId: string,
+    @Body() dto: ReplaceAgendaDto,
+    @CurrentUser() currentUser: { userId: string },
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent: string,
+  ): Promise<{ success: boolean; message: string; data: ReplaceAgendaResponseDto }> {
+    const clientContext: ClientContext = {
+      ipAddress,
+      userAgent: userAgent || undefined,
+    };
+    const result = await this.meetingsService.replaceAgendas(
+      meetingId,
+      dto,
+      currentUser.userId,
+      clientContext,
+    );
+    return {
+      success: true,
+      message: 'Lưu chương trình họp thành công',
+      data: result,
+    };
+  }
+
+
 }
 

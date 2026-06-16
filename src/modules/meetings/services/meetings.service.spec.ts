@@ -263,7 +263,7 @@ describe('MeetingsService', () => {
 
       expect(result.conflicts).toHaveLength(1);
       expect(result.conflicts[0].userId).toBe('user-1');
-      expect(result.conflicts[0].meetingTitle).toBe('Conflicting Meeting');
+      expect(result.conflicts[0].busyFrom).toBe('Conflicting Meeting');
     });
   });
 

@@ -42,7 +42,7 @@ import {
   MeetingEventType,
   MeetingEventSourceType,
 } from '../entities/meeting-event.entity.js';
-import { MeetingAgendaEntity } from '../entities/meeting-agenda.entity.js';
+import { MeetingAgendaEntity, AgendaStatus } from '../entities/meeting-agenda.entity.js';
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { RoomEventEntity } from '../../rooms/entities/room-event.entity.js';
 import {
@@ -114,7 +114,13 @@ import {
   DetailRecordingConfigDto,
 } from '../dto/my-schedule-detail.dto.js';
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
-
+import { AgendaItemDto } from '../dto/agenda-item.dto.js';
+import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
+import {
+  AgendaItemResponseDto,
+  AgendaListResponseDto,
+  ReplaceAgendaResponseDto,
+} from '../dto/agenda-response.dto.js';
 export interface AuthUser {
   userId: string;
   jti?: string;
@@ -147,11 +153,11 @@ interface ConflictResult {
 interface ParticipantConflictResult {
   conflicts: Array<{
     userId: string;
-    meetingTitle: string;
-    meetingId: string;
-    startTime: Date;
-    endTime: Date;
+    busyFrom: string;
+    busyTo: string;
   }>;
+  hasConflict: boolean;
+  conflictCount: number;
 }
 
 @Injectable()
@@ -234,43 +240,72 @@ export class MeetingsService {
     endTime: Date,
   ): Promise<ParticipantConflictResult> {
     if (!userIds.length) {
-      return { conflicts: [] };
+      return { conflicts: [], hasConflict: false, conflictCount: 0 };
     }
 
     const conflicts = await this.dataSource
       .getRepository(MeetingParticipantEntity)
       .createQueryBuilder('mp')
       .innerJoin('mp.meeting', 'm')
-      .select(['mp.userId', 'm.title', 'm.id', 'm.startTime', 'm.endTime'])
+      .select(['mp.userId', 'm.startTime', 'm.endTime'])
       .where('mp.userId IN (:...userIds)', { userIds })
       .andWhere('m.status NOT IN (:...excludedStatuses)', {
         excludedStatuses: [MeetingStatus.CANCELLED, MeetingStatus.COMPLETED],
       })
       .andWhere('m.startTime < :endTime', { endTime })
       .andWhere('m.endTime > :startTime', { startTime })
+      .andWhere('m.deletedAt IS NULL')
       .getMany();
 
     return {
-      conflicts: conflicts.map((mp) => {
-        const meeting = (
-          mp as unknown as {
-            meeting: {
-              title: string;
-              id: string;
-              startTime: Date;
-              endTime: Date;
-            };
-          }
-        ).meeting;
-        return {
-          userId: mp.userId,
-          meetingTitle: meeting.title,
-          meetingId: meeting.id,
-          startTime: meeting.startTime,
-          endTime: meeting.endTime,
-        };
-      }),
+      conflicts: this.groupAndMergeConflictsByUser(conflicts),
+      hasConflict: conflicts.length > 0,
+      conflictCount: new Set(conflicts.map((mp) => mp.userId)).size,
     };
+  }
+
+  private groupAndMergeConflictsByUser(
+    participants: Array<{ userId: string; meeting: { startTime: Date; endTime: Date } }>,
+  ): ParticipantConflictResult['conflicts'] {
+    const userMap = new Map<string, { busyFrom: Date; busyTo: Date }[]>();
+
+    for (const mp of participants) {
+      const meeting = (mp as unknown as { meeting: { startTime: Date; endTime: Date } }).meeting;
+      if (!userMap.has(mp.userId)) {
+        userMap.set(mp.userId, []);
+      }
+      userMap.get(mp.userId)!.push({ busyFrom: meeting.startTime, busyTo: meeting.endTime });
+    }
+
+    const result: ParticipantConflictResult['conflicts'] = [];
+
+    for (const [userId, slots] of userMap) {
+      slots.sort((a, b) => a.busyFrom.getTime() - b.busyFrom.getTime());
+
+      const merged: { busyFrom: Date; busyTo: Date }[] = [];
+      let current = { ...slots[0] };
+
+      for (let i = 1; i < slots.length; i++) {
+        const next = slots[i];
+        if (current.busyTo.getTime() >= next.busyFrom.getTime()) {
+          if (next.busyTo.getTime() > current.busyTo.getTime()) {
+            current.busyTo = next.busyTo;
+          }
+        } else {
+          merged.push(current);
+          current = { ...next };
+        }
+      }
+      merged.push(current);
+
+      result.push({
+        userId,
+        busyFrom: merged[0].busyFrom.toISOString(),
+        busyTo: merged[merged.length - 1].busyTo.toISOString(),
+      });
+    }
+
+    return result;
   }
 
   async getAvailableRooms(
@@ -967,7 +1002,7 @@ export class MeetingsService {
         .getRepository(MeetingParticipantEntity)
         .createQueryBuilder('mp')
         .innerJoin('mp.meeting', 'm')
-        .select(['mp.userId', 'm.title', 'm.id', 'm.startTime', 'm.endTime'])
+        .select(['mp.userId', 'm.startTime', 'm.endTime'])
         .where('mp.userId IN (:...userIds)', { userIds: internalUserIds })
         .andWhere('m.id != :meetingId', { meetingId })
         .andWhere('m.status NOT IN (:...excludedStatuses)', {
@@ -2310,7 +2345,7 @@ export class MeetingsService {
     for (const conflict of conflictResult.conflicts) {
       warnings.push({
         type: 'SCHEDULE_CONFLICT',
-        message: `Người dùng đang có cuộc họp trùng giờ: '${conflict.meetingTitle}' (${conflict.startTime.toISOString()}-${conflict.endTime.toISOString()}).`,
+        message: `Người dùng đang có lịch bận từ ${conflict.busyFrom} đến ${conflict.busyTo}.`,
       });
     }
 
@@ -3337,5 +3372,514 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
       return [];
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda feature (UC-MM-09)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Check if user has read permission for meeting agenda.
+   * User must be organizer, host, or internal participant.
+   */
+  private async checkAgendaReadPermission(
+    meetingId: string,
+    userId: string,
+  ): Promise<MeetingEntity> {
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException('MEETING_NOT_FOUND');
+    }
+    // Organizer or host always has read access
+    if (meeting.organizerId === userId || meeting.hostId === userId) {
+      return meeting;
+    }
+    // Internal participants have read access
+    const participant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({
+        where: { meetingId: meeting.id, userId },
+      });
+    if (!participant) {
+      throw new ForbiddenException('AGENDA_READ_FORBIDDEN');
+    }
+    return meeting;
+  }
+
+  /**
+   * Verify user has write permission for meeting agenda.
+   * Only organizer (meetings.organizer_id) or host (meetings.host_id).
+   * Does NOT use participant_role.
+   */
+  private checkAgendaWritePermission(
+    meeting: MeetingEntity,
+    userId: string,
+  ): void {
+    if (meeting.organizerId !== userId && meeting.hostId !== userId) {
+      throw new ForbiddenException('AGENDA_WRITE_FORBIDDEN');
+    }
+  }
+
+  /**
+   * Validate meeting time is valid for agenda operations.
+   */
+  private validateMeetingTimeForAgenda(meeting: MeetingEntity): void {
+    if (
+      !meeting.startTime ||
+      !meeting.endTime ||
+      meeting.endTime <= meeting.startTime
+    ) {
+      throw new ConflictException('MEETING_TIME_INVALID_FOR_AGENDA');
+    }
+  }
+
+  /**
+   * Validate meeting status allows agenda editing.
+   * Only 'scheduled' status permits write operations.
+   */
+  private validateMeetingStatusForAgendaWrite(meeting: MeetingEntity): void {
+    if (meeting.status !== MeetingStatus.SCHEDULED) {
+      throw new ConflictException('AGENDA_MEETING_STATUS_BLOCKED');
+    }
+  }
+
+  /**
+   * Calculate meeting duration in minutes from start/end time.
+   */
+  private getMeetingDurationMinutes(meeting: MeetingEntity): number {
+    const diffMs = meeting.endTime.getTime() - meeting.startTime.getTime();
+    return Math.floor(diffMs / 60000);
+  }
+
+  // ── T005: GET Agendas ──────────────────────────────────────
+
+  /**
+   * Get agenda list for a meeting.
+   * Returns sorted items with metadata (durationStatus, isLockedForEditing).
+   */
+  async getAgendas(
+    meetingId: string,
+    userId: string,
+  ): Promise<AgendaListResponseDto> {
+    // 1. Load meeting & check read permission
+    const meeting = await this.checkAgendaReadPermission(meetingId, userId);
+
+    // 2. Compute meeting duration
+    const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+
+    // 3. Query agenda items with owner name
+    const agendas = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .find({
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+        relations: { owner: true },
+      });
+
+    // 4. Map to response DTOs
+    const items = agendas.map(
+      (agenda) =>
+        new AgendaItemResponseDto({
+          id: agenda.id,
+          agendaOrder: agenda.agendaOrder,
+          title: agenda.title,
+          description: agenda.description,
+          ownerId: agenda.ownerId,
+          ownerName: agenda.owner?.fullName ?? null,
+          plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+          status: agenda.status,
+        }),
+    );
+
+    // 5. Calculate totals
+    const totalPlannedDurationMinutes = items.reduce(
+      (sum, item) => sum + item.plannedDurationMinutes,
+      0,
+    );
+    const remainingDurationMinutes = Math.max(
+      0,
+      meetingDurationMinutes - totalPlannedDurationMinutes,
+    );
+    const durationStatus =
+      totalPlannedDurationMinutes <= meetingDurationMinutes ? 'valid' : 'overflow';
+    const isLockedForEditing = meeting.status !== MeetingStatus.SCHEDULED;
+    let lockReason: string | null = null;
+    if (isLockedForEditing) {
+      lockReason = meeting.status === MeetingStatus.IN_PROGRESS
+        ? 'MEETING_NOT_SCHEDULED'
+        : 'MEETING_NOT_SCHEDULED';
+    }
+
+    return new AgendaListResponseDto({
+      meetingId: meeting.id,
+      meetingStatus: meeting.status,
+      meetingDurationMinutes,
+      totalPlannedDurationMinutes,
+      remainingDurationMinutes,
+      durationStatus,
+      isLockedForEditing,
+      lockReason,
+      items,
+    });
+  }
+
+  // ── T006: Validation Chain ─────────────────────────────────
+
+  /**
+   * Validate replace agenda request with priority chain.
+   * Stops at first validation error.
+   */
+  private async validateReplaceAgendaRequest(
+    meeting: MeetingEntity,
+    dto: ReplaceAgendaDto,
+  ): Promise<void> {
+    // 1. Meeting time invalid
+    this.validateMeetingTimeForAgenda(meeting);
+
+    // 2. Meeting status blocked
+    this.validateMeetingStatusForAgendaWrite(meeting);
+
+    // 3. Item limit exceeded
+    if (dto.items.length > 50) {
+      throw new UnprocessableEntityException('AGENDA_ITEM_LIMIT_EXCEEDED');
+    }
+
+    // 4. Duplicate item id
+    const requestIds = dto.items
+      .filter((item) => item.id)
+      .map((item) => item.id!);
+    const uniqueIds = new Set(requestIds);
+    if (uniqueIds.size !== requestIds.length) {
+      throw new UnprocessableEntityException('AGENDA_DUPLICATE_ITEM_ID');
+    }
+
+    // 5. Item id not in meeting
+    if (requestIds.length > 0) {
+      const existingItems = await this.dataSource
+        .getRepository(MeetingAgendaEntity)
+        .find({
+          where: { id: In(requestIds), meetingId: meeting.id },
+        });
+      const existingIdSet = new Set(existingItems.map((i) => i.id));
+      const notFoundIds = requestIds.filter((id) => !existingIdSet.has(id));
+      if (notFoundIds.length > 0) {
+        throw new UnprocessableEntityException('AGENDA_ITEM_NOT_IN_MEETING');
+      }
+    }
+
+    // 6. Field validation (per item)
+    const participantUserIds = await this.getParticipantUserIds(meeting.id);
+
+    for (const item of dto.items) {
+      // Title empty after trim
+      if (!item.title || item.title.trim().length === 0) {
+        throw new UnprocessableEntityException('AGENDA_TITLE_REQUIRED');
+      }
+      // Title > 255
+      if (item.title.trim().length > 255) {
+        throw new UnprocessableEntityException('AGENDA_TITLE_TOO_LONG');
+      }
+      // Description > 2000
+      if (item.description && item.description.length > 2000) {
+        throw new UnprocessableEntityException('AGENDA_DESCRIPTION_TOO_LONG');
+      }
+      // plannedDurationMinutes invalid
+      if (
+        item.plannedDurationMinutes == null ||
+        !Number.isInteger(item.plannedDurationMinutes) ||
+        item.plannedDurationMinutes <= 0
+      ) {
+        throw new UnprocessableEntityException('AGENDA_INVALID_DURATION');
+      }
+    }
+
+    // 7. Owner not participant
+    for (const item of dto.items) {
+      if (item.ownerId && !participantUserIds.has(item.ownerId)) {
+        throw new UnprocessableEntityException('AGENDA_OWNER_NOT_PARTICIPANT');
+      }
+    }
+
+    // 8. Duration overflow
+    const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+    const totalPlanned = dto.items.reduce(
+      (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+      0,
+    );
+    if (totalPlanned > meetingDurationMinutes) {
+      throw new UnprocessableEntityException('AGENDA_DURATION_OVERFLOW');
+    }
+  }
+
+  /**
+   * Get set of internal participant user IDs for a meeting.
+   */
+  private async getParticipantUserIds(
+    meetingId: string,
+  ): Promise<Set<string>> {
+    const participants = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .find({
+        where: { meetingId },
+        select: { userId: true },
+      });
+    return new Set(participants.map((p) => p.userId));
+  }
+
+  /**
+   * Compare two agenda item arrays for no-op detection.
+   * Compares: id, agendaOrder, title (trimmed), description, ownerId,
+   * plannedDurationMinutes, status.
+   */
+  private isAgendaPayloadSame(
+    existingItems: MeetingAgendaEntity[],
+    requestItems: AgendaItemDto[],
+  ): boolean {
+    if (existingItems.length !== requestItems.length) return false;
+
+    // Sort existing by agendaOrder
+    const sortedExisting = [...existingItems].sort(
+      (a, b) => a.agendaOrder - b.agendaOrder,
+    );
+    // Normalize request order by array index
+    const normalizedRequest = requestItems.map((item, index) => ({
+      id: item.id ?? null,
+      agendaOrder: index + 1,
+      title: item.title.trim(),
+      description: item.description ?? null,
+      ownerId: item.ownerId ?? null,
+      plannedDurationMinutes: item.plannedDurationMinutes,
+      status: 'planned' as const,
+    }));
+
+    for (let i = 0; i < sortedExisting.length; i++) {
+      const e = sortedExisting[i];
+      const r = normalizedRequest[i];
+      if (
+        e.id !== (r.id ?? undefined) ||
+        e.agendaOrder !== r.agendaOrder ||
+        e.title.trim() !== r.title ||
+        (e.description ?? null) !== r.description ||
+        (e.ownerId ?? null) !== r.ownerId ||
+        e.plannedDurationMinutes !== r.plannedDurationMinutes ||
+        e.status !== r.status
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // ── T007: Replace Agendas (Atomic Replace) ─────────────────
+
+  /**
+   * Atomic replace of entire agenda list.
+   * Normalizes agenda_order, populates created_by/updated_by,
+   * writes audit log.
+   */
+  async replaceAgendas(
+    meetingId: string,
+    dto: ReplaceAgendaDto,
+    userId: string,
+    clientContext?: ClientContext,
+  ): Promise<ReplaceAgendaResponseDto> {
+    // Load meeting
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException('MEETING_NOT_FOUND');
+    }
+
+    // Check write permission
+    this.checkAgendaWritePermission(meeting, userId);
+
+    // Validate request with priority chain
+    await this.validateReplaceAgendaRequest(meeting, dto);
+
+    // Load existing items for no-op detection
+    const existingItems = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .find({
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+      });
+
+    // No-op detection
+    if (this.isAgendaPayloadSame(existingItems, dto.items)) {
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const totalPlanned = existingItems.reduce(
+        (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+        0,
+      );
+      const items = existingItems.map(
+        (agenda) =>
+          new AgendaItemResponseDto({
+            id: agenda.id,
+            agendaOrder: agenda.agendaOrder,
+            title: agenda.title,
+            description: agenda.description,
+            ownerId: agenda.ownerId,
+            ownerName: null,
+            plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+            status: agenda.status,
+          }),
+      );
+      return new ReplaceAgendaResponseDto({
+        meetingId: meeting.id,
+        totalPlannedDurationMinutes: totalPlanned,
+        remainingDurationMinutes: Math.max(0, meetingDurationMinutes - totalPlanned),
+        items,
+      });
+    }
+
+    // Atomic replace transaction
+    const result = await this.dataSource.transaction(async (em) => {
+      // Lock meeting row to prevent race conditions
+      await em.findOne(MeetingEntity, {
+        where: { id: meeting.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      // Determine item IDs to keep (only those with valid IDs)
+      const keepIds = dto.items
+        .filter((item) => item.id)
+        .map((item) => item.id!)
+        .filter((id) => existingItems.some((e) => e.id === id));
+
+      // Delete items not in request
+      if (existingItems.length > 0) {
+        const idsToDelete = existingItems
+          .filter((e) => !keepIds.includes(e.id))
+          .map((e) => e.id);
+        if (idsToDelete.length > 0) {
+          await em.delete(MeetingAgendaEntity, idsToDelete);
+        }
+      }
+
+      // Normalize and save items
+      const normalizedItems = dto.items.map((item, index) => ({
+        agendaOrder: index + 1,
+        title: item.title.trim(),
+        description: item.description ?? null,
+        ownerId: item.ownerId ?? null,
+        plannedDurationMinutes: item.plannedDurationMinutes,
+        status: AgendaStatus.PLANNED as string,
+      }));
+
+      // Update existing items
+      const updatedItemIds: string[] = [];
+      for (let i = 0; i < dto.items.length; i++) {
+        const item = dto.items[i];
+        if (item.id && existingItems.some((e) => e.id === item.id)) {
+          await em.update(
+            MeetingAgendaEntity,
+            { id: item.id, meetingId: meeting.id },
+            {
+              agendaOrder: i + 1,
+              title: item.title.trim(),
+              description: item.description ?? null,
+              ownerId: item.ownerId ?? null,
+              plannedDurationMinutes: item.plannedDurationMinutes,
+              updatedBy: userId,
+            },
+          );
+          updatedItemIds.push(item.id);
+        }
+      }
+
+      // Insert new items
+      const newItems: MeetingAgendaEntity[] = [];
+      for (let i = 0; i < dto.items.length; i++) {
+        const item = dto.items[i];
+        if (!item.id) {
+          const newEntity = em.create(MeetingAgendaEntity, {
+            meetingId: meeting.id,
+            agendaOrder: i + 1,
+            title: item.title.trim(),
+            description: item.description ?? null,
+            ownerId: item.ownerId ?? null,
+            plannedDurationMinutes: item.plannedDurationMinutes,
+            status: AgendaStatus.PLANNED,
+            createdBy: userId,
+            updatedBy: userId,
+          });
+          await em.save(MeetingAgendaEntity, newEntity);
+          newItems.push(newEntity);
+        }
+      }
+
+      // Reload all items to return sorted result
+      const allItems = await em.find(MeetingAgendaEntity, {
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+        relations: { owner: true },
+      });
+
+      // Write audit log
+      const oldValueJson = existingItems.map((e) => ({
+        id: e.id,
+        agendaOrder: e.agendaOrder,
+        title: e.title,
+        description: e.description,
+        ownerId: e.ownerId,
+        plannedDurationMinutes: e.plannedDurationMinutes,
+        status: e.status,
+      }));
+      const newValueJson = allItems.map((e) => ({
+        id: e.id,
+        agendaOrder: e.agendaOrder,
+        title: e.title,
+        description: e.description,
+        ownerId: e.ownerId,
+        plannedDurationMinutes: e.plannedDurationMinutes,
+        status: e.status,
+      }));
+
+      const auditLog = em.create(AuditLogEntity, {
+        userId,
+        actionType: 'agenda_saved',
+        entityType: 'meeting',
+        entityId: meeting.id,
+        oldValueJson: { items: oldValueJson },
+        newValueJson: { items: newValueJson },
+        ipAddress: clientContext?.ipAddress ?? null,
+        userAgent: clientContext?.userAgent ?? null,
+        severity: AuditLogSeverity.INFO,
+      });
+      await em.save(AuditLogEntity, auditLog);
+
+      // Return response
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const totalPlanned = allItems.reduce(
+        (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+        0,
+      );
+      const items = allItems.map(
+        (agenda) =>
+          new AgendaItemResponseDto({
+            id: agenda.id,
+            agendaOrder: agenda.agendaOrder,
+            title: agenda.title,
+            description: agenda.description,
+            ownerId: agenda.ownerId,
+            ownerName: agenda.owner?.fullName ?? null,
+            plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+            status: agenda.status,
+          }),
+      );
+      return new ReplaceAgendaResponseDto({
+        meetingId: meeting.id,
+        totalPlannedDurationMinutes: totalPlanned,
+        remainingDurationMinutes: Math.max(0, meetingDurationMinutes - totalPlanned),
+        items,
+      });
+    });
+
+    return result;
+  }
+
+
 }
 
