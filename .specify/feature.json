@@ -1,1 +1,5 @@
-﻿{"feature_directory": "specs/008-feat-remove-internal-meeting-participant"}
+﻿{
+  "feature_directory": "spec/features/scheduler/feat-auto-participant-schedule-conflict",
+  "feature_num": "012",
+  "branch_name": "012-participant-conflict-check"
+}
