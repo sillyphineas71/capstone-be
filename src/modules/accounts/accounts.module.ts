@@ -9,7 +9,9 @@ import { RolePermissionEntity } from './entities/role-permission.entity.js';
 import { FaceProfileEntity } from './entities/face-profile.entity.js';
 import { UsersController } from './controllers/users.controller.js';
 import { DepartmentsController } from './controllers/departments.controller.js';
+import { FaceProfileController } from './controllers/face-profile.controller.js';
 import { UsersService } from './services/users.service.js';
+import { FaceProfileService } from './services/face-profile.service.js';
 import { DepartmentsService } from './services/departments.service.js';
 import { PasswordGeneratorService } from './services/password-generator.service.js';
 import { IsDepartmentCodeUniqueConstraint } from './validators/is-department-code-unique.validator.js';
@@ -28,7 +30,7 @@ import { AuthModule } from '../auth/auth.module.js';
  * - RolePermissionEntity (role_permissions)
  * - FaceProfileEntity (face_profiles)
  *
- * CÃ¡c module khÃ¡c cáº§n dÃ¹ng entities nÃ y pháº£i import AccountsModule.
+ * CÃ¡c module khÃ¡c cáº§n dÃ¹ng entities nÃ y pháº£i import AccountsModule.
  */
 @Module({
   imports: [
@@ -44,9 +46,10 @@ import { AuthModule } from '../auth/auth.module.js';
     AdministrationModule,
     AuthModule,
   ],
-  controllers: [UsersController, DepartmentsController],
+  controllers: [UsersController, DepartmentsController, FaceProfileController],
   providers: [
     UsersService,
+    FaceProfileService,
     PasswordGeneratorService,
     DepartmentsService,
     IsDepartmentCodeUniqueConstraint,
@@ -56,6 +59,7 @@ import { AuthModule } from '../auth/auth.module.js';
   exports: [
     TypeOrmModule,
     UsersService,
+    FaceProfileService,
     PasswordGeneratorService,
     DepartmentsService,
   ],

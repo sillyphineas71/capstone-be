@@ -1,0 +1,263 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+import { Test, TestingModule } from '@nestjs/testing';
+import { DataSource } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { FaceAttendanceService } from './face-attendance.service.js';
+
+const START = '2026-06-17T09:00:00.000Z';
+const END = '2026-06-17T10:00:00.000Z';
+// meeting mặc định: đang mở (in_progress), kết thúc 10:00, verify 09:00 → còn mở.
+const openMeeting = (over: any = {}) => ({
+  id: 'm1',
+  start_time: START,
+  end_time: END,
+  actual_end_time: null,
+  status: 'in_progress',
+  ...over,
+});
+const input = (over: any = {}) => ({
+  deviceId: 'dev1',
+  roomId: 'room1',
+  personId: '64',
+  personName: 'u1:m1',
+  verifyTime: new Date('2026-06-17T09:00:00.000Z'),
+  ...over,
+});
+
+const calls = (mock: jest.Mock, needle: string) =>
+  mock.mock.calls.filter((c: any[]) => String(c[0]).includes(needle));
+
+describe('FaceAttendanceService (FAT-001)', () => {
+  let service: FaceAttendanceService;
+  let dsMock: any;
+
+  // router mặc định: mapping khớp person_id, meeting tồn tại, chưa có record
+  const router =
+    (
+      over: {
+        mapping?: any[];
+        mappingByCode?: any[];
+        meeting?: any[];
+        existing?: any[];
+        grace?: string | null;
+      } = {},
+    ) =>
+    (sql: string) => {
+      if (sql.includes('device_person_id = $2'))
+        return Promise.resolve(
+          over.mapping ?? [
+            { user_id: 'u1', metadata_json: { bookingId: 'm1' } },
+          ],
+        );
+      if (sql.includes('device_person_code = $2'))
+        return Promise.resolve(over.mappingByCode ?? []);
+      if (sql.includes('FROM meetings'))
+        return Promise.resolve(over.meeting ?? [openMeeting()]);
+      if (sql.includes('FROM system_configs'))
+        return Promise.resolve([{ config_value: over.grace ?? null }]);
+      if (sql.includes('SELECT id FROM attendance_records'))
+        return Promise.resolve(over.existing ?? []);
+      if (sql.includes('INSERT INTO attendance_records'))
+        return Promise.resolve([{ id: 'rec1' }]);
+      return Promise.resolve(undefined);
+    };
+
+  beforeEach(async () => {
+    dsMock = { manager: { query: jest.fn() } };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        FaceAttendanceService,
+        { provide: DataSource, useValue: dsMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+      ],
+    }).compile();
+    service = module.get(FaceAttendanceService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('AC-001 happy đúng giờ: INSERT present + event check_in', async () => {
+    dsMock.manager.query.mockImplementation(router());
+    await service.onVerify(input());
+    const ins = calls(dsMock.manager.query, 'INSERT INTO attendance_records');
+    expect(ins.length).toBe(1);
+    // params: [meetingId,userId,verifyTime,isLate,lateMinutes,status]
+    expect(ins[0][1]).toEqual([
+      'm1',
+      'u1',
+      input().verifyTime,
+      false,
+      0,
+      'present',
+    ]);
+    const ev = calls(dsMock.manager.query, 'INSERT INTO attendance_events');
+    expect(ev.length).toBe(1);
+    expect(ev[0][1]).toEqual(
+      expect.arrayContaining(['m1', 'rec1', 'u1', 'room1', 'dev1', 'check_in']),
+    );
+  });
+
+  it('AC-002 trễ quá grace: record late, is_late=true, late_minutes>0', async () => {
+    dsMock.manager.query.mockImplementation(router({ grace: '5' }));
+    // verify lúc 09:20 → trễ 20 phút (>5 grace)
+    await service.onVerify(
+      input({ verifyTime: new Date('2026-06-17T09:20:00.000Z') }),
+    );
+    const ins = calls(dsMock.manager.query, 'INSERT INTO attendance_records');
+    expect(ins[0][1][3]).toBe(true); // isLate
+    expect(ins[0][1][4]).toBe(20); // lateMinutes
+    expect(ins[0][1][5]).toBe('late');
+  });
+
+  it('AC-002b trong grace: vẫn present (không late)', async () => {
+    dsMock.manager.query.mockImplementation(router({ grace: '10' }));
+    // verify 09:08 → trễ 8 phút < grace 10 → present
+    await service.onVerify(
+      input({ verifyTime: new Date('2026-06-17T09:08:00.000Z') }),
+    );
+    const ins = calls(dsMock.manager.query, 'INSERT INTO attendance_records');
+    expect(ins[0][1][3]).toBe(false);
+    expect(ins[0][1][5]).toBe('present');
+  });
+
+  it('AC-003 verify lặp: KHÔNG INSERT record, chỉ UPDATE last_detected + event face_detected', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ existing: [{ id: 'rec1' }] }),
+    );
+    await service.onVerify(input());
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+    const upd = calls(dsMock.manager.query, 'UPDATE attendance_records');
+    expect(upd.length).toBe(1);
+    expect(upd[0][1]).toEqual(['rec1', input().verifyTime]);
+    const ev = calls(dsMock.manager.query, 'INSERT INTO attendance_events');
+    expect(ev[0][1]).toEqual(expect.arrayContaining(['face_detected']));
+  });
+
+  it('AC-004 no-mapping: warn, 0 record, 0 event, không throw', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ mapping: [], mappingByCode: [] }),
+    );
+    await expect(service.onVerify(input())).resolves.toBeUndefined();
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('AC-004b mapping thiếu bookingId → unmatched', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ mapping: [{ user_id: 'u1', metadata_json: {} }] }),
+    );
+    await service.onVerify(input());
+    expect(calls(dsMock.manager.query, 'FROM meetings').length).toBe(0);
+  });
+
+  it('fallback theo person_name khi person_id không khớp', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({
+        mapping: [],
+        mappingByCode: [{ user_id: 'u9', metadata_json: { bookingId: 'm9' } }],
+        meeting: [openMeeting({ id: 'm9' })],
+      }),
+    );
+    await service.onVerify(input({ personId: null }));
+    const ins = calls(dsMock.manager.query, 'INSERT INTO attendance_records');
+    expect(ins[0][1][0]).toBe('m9');
+    expect(ins[0][1][1]).toBe('u9');
+  });
+
+  it('gate hiệu lực: query mapping kèm guard sync_status=synced + deleted_at IS NULL', async () => {
+    dsMock.manager.query.mockImplementation(router());
+    await service.onVerify(input());
+    const q = calls(dsMock.manager.query, 'device_person_id = $2');
+    expect(q.length).toBe(1);
+    expect(String(q[0][0])).toContain("sync_status = 'synced'");
+    expect(String(q[0][0])).toContain('deleted_at IS NULL');
+  });
+
+  it('mapping đã deleted (DB lọc còn rỗng) → unmatched → no record', async () => {
+    // sau deprovision, mapping sync_status='deleted' → guard lọc ra [] → không resolve.
+    dsMock.manager.query.mockImplementation(
+      router({ mapping: [], mappingByCode: [] }),
+    );
+    await service.onVerify(input());
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('AC-005 no-meeting: warn, 0 record, không throw', async () => {
+    dsMock.manager.query.mockImplementation(router({ meeting: [] }));
+    await expect(service.onVerify(input())).resolves.toBeUndefined();
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+  });
+
+  it('gate: verifyTime > end_time (họp đã hết giờ) → no record/update/event', async () => {
+    dsMock.manager.query.mockImplementation(router());
+    // verify 10:30 > end 10:00 → đóng.
+    await service.onVerify(
+      input({ verifyTime: new Date('2026-06-17T10:30:00.000Z') }),
+    );
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('gate: status=completed → skip (dù verify trong khung giờ)', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ meeting: [openMeeting({ status: 'completed' })] }),
+    );
+    await service.onVerify(input()); // verify 09:00 trong khung nhưng status completed
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('gate: actual_end_time sớm hơn → dùng actual_end để chặn', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({
+        meeting: [openMeeting({ actual_end_time: '2026-06-17T09:15:00.000Z' })],
+      }),
+    );
+    // verify 09:30 > actual_end 09:15 (dù end_time=10:00) → đóng.
+    await service.onVerify(
+      input({ verifyTime: new Date('2026-06-17T09:30:00.000Z') }),
+    );
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(0);
+  });
+
+  it('grace: system_configs lỗi → fallback env/default, không throw', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM system_configs'))
+        return Promise.reject(new Error('db down'));
+      return router()(sql);
+    });
+    await expect(service.onVerify(input())).resolves.toBeUndefined();
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
+    ).toBe(1);
+  });
+});

@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Inject,
+  Optional,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -9,8 +11,14 @@ import {
 } from '@nestjs/common';
 import { DataSource, Not, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { FACE_VERIFY_HOOK } from '../../../common/ports/face-verify-hook.js';
+import type { FaceVerifyHook } from '../../../common/ports/face-verify-hook.js';
 import * as crypto from 'crypto';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
+import {
+  parseVerifyPayload,
+  stripSanpPic,
+} from '../utils/face-verify-payload.util.js';
 import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import {
   IoTDeviceEntity,
@@ -67,6 +75,10 @@ export class IotDevicesService {
     private readonly iotAuditRepository: IotAuditRepository,
     private readonly iotDeviceEventsService: IotDeviceEventsService,
     private readonly configService: ConfigService,
+    // FAT-001 (NC-4): hook attendance, optional để verify callback không phụ thuộc.
+    @Optional()
+    @Inject(FACE_VERIFY_HOOK)
+    private readonly faceVerifyHook?: FaceVerifyHook,
   ) {}
 
   async create(
@@ -115,7 +127,10 @@ export class IotDevicesService {
         lastSeenAt: null,
       });
 
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, newDevice);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        newDevice,
+      );
 
       let createdByName: string | null = null;
       if (userId) {
@@ -338,8 +353,11 @@ export class IotDevicesService {
     });
 
     // Resolve địa chỉ probe; bỏ camera không có địa chỉ hợp lệ.
-    const targets: Array<{ device: IoTDeviceEntity; host: string; port: number }> =
-      [];
+    const targets: Array<{
+      device: IoTDeviceEntity;
+      host: string;
+      port: number;
+    }> = [];
     for (const device of cameras) {
       const addr = this.resolveProbeAddress(device);
       if (addr) targets.push({ device, host: addr.host, port: addr.port });
@@ -643,7 +661,10 @@ export class IotDevicesService {
       const oldRoomId = device.roomId;
 
       device.roomId = dto.roomId;
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logAssignRoom(queryRunner.manager, {
         userId,
@@ -734,7 +755,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logConfigureFaceServer(
         queryRunner.manager,
@@ -853,7 +877,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logConfigureRtsp(queryRunner.manager, {
         userId,
@@ -982,7 +1009,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       // No audit log for this UC
 
@@ -1264,19 +1294,23 @@ export class IotDevicesService {
     }
 
     // 8. Process payload tolerant ingestion
+    // Danh tính verify ở body.info.* (payload thật FaceGate VerifyPush), KHÔNG ở body.person_id.
     const now = new Date();
+    const { isValid: isValidVerify, personId, personName, info } =
+      parseVerifyPayload(body);
     const extractedFields: any = {
-      person_id: body?.person_id || null,
-      person_name: body?.person_name || null,
-      verify_time: body?.verify_time || null,
-      verify_result: body?.verify_result || null,
-      similarity: body?.similarity || null,
+      operator: body?.operator ?? null,
+      person_id: personId,
+      person_name: personName,
+      verify_time: info.CreateTime ?? null,
+      verify_status: info.VerifyStatus ?? null,
+      similarity: info.Similarity1 ?? null,
     };
 
     let payloadToMask: any = {};
     if (body) {
-      // Create a shallow copy to mask
-      payloadToMask = { ...body };
+      // Shallow copy + STRIP base64 ảnh (SanpPic) — TUYỆT ĐỐI không lưu/log base64.
+      payloadToMask = stripSanpPic({ ...body });
     } else {
       payloadToMask = {
         _unparseable: true,
@@ -1373,6 +1407,32 @@ export class IotDevicesService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+
+    // FAT-001 (NC-4): chuyển verify → attendance qua hook. Raw event đã lưu ở trên.
+    // Chỉ ghi khi verify hợp lệ (VerifyPush + VerifyStatus===1). CreateTime là giờ
+    // local thiết bị (không tz) → KHÔNG tin cho tính trễ; dùng `now`.
+    // Lỗi attendance KHÔNG được làm hỏng response 200 của callback.
+    if (this.faceVerifyHook && isValidVerify) {
+      try {
+        await this.faceVerifyHook.onVerify({
+          deviceId: device.id,
+          roomId: device.roomId,
+          personId,
+          personName,
+          verifyTime: now,
+        });
+      } catch (e) {
+        this.logger.error(
+          `face attendance hook failed (verify still 200): ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    } else if (this.faceVerifyHook) {
+      this.logger.warn(
+        `verify skip (no record): operator=${body?.operator ?? '∅'} VerifyStatus=${info.VerifyStatus ?? '∅'}`,
+      );
     }
 
     return {
