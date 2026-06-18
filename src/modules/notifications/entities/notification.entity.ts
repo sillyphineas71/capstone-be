@@ -152,5 +152,3 @@ export class NotificationEntity {
   @JoinColumn({ name: 'created_by' })
   createdByUser: UserEntity | null;
 }
-
-

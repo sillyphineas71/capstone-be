@@ -80,6 +80,3 @@ export class MeetingEventEntity {
   @JoinColumn({ name: 'actor_user_id' })
   actorUser: UserEntity | null;
 }
-
-
-

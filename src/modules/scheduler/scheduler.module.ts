@@ -3,6 +3,9 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service.js';
 import { AttendanceModule } from '../attendance/attendance.module.js';
+import { IotModule } from '../iot/iot.module.js';
+import { RoomsModule } from '../rooms/rooms.module.js';
+import { FaceAccessModule } from '../face-access/face-access.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -17,7 +20,14 @@ import { AttendanceModule } from '../attendance/attendance.module.js';
  * TODO: Implement business logic khi có yêu cầu cụ thể.
  */
 @Module({
-  imports: [ScheduleModule.forRoot(), ConfigModule, AttendanceModule],
+  imports: [
+    ScheduleModule.forRoot(),
+    ConfigModule,
+    AttendanceModule,
+    IotModule,
+    RoomsModule,
+    FaceAccessModule,
+  ],
   providers: [SchedulerService],
   exports: [SchedulerService],
 })

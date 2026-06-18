@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-04 | Tạo tài liệu ban đầu: ghi lại quyết định kiến trúc Hybrid TypeORM | Toàn bộ file |
+| 2026-06-15 | Thêm ADR-008: IoT Device dùng status-based disable thay soft delete (phục vụ spec IOT-011) | Cuối file |
 
 ---
 
@@ -200,3 +201,20 @@ passwordHash: string;
 Điều này đảm bảo `password_hash` **không bao giờ** được trả về trong default SELECT queries khi dùng TypeORM repository. Muốn lấy phải explicit: `repository.findOne({ select: ['id', 'passwordHash', ...] })`.
 
 Auth module không sử dụng UserEntity nên không bị ảnh hưởng.
+
+---
+
+## ADR-008: IoT Device Lifecycle — Status-based Disable (không dùng soft delete)
+
+### Trạng thái
+**Accepted** — 2026-06-15
+
+### Bối cảnh
+Spec IOT-011 (Cập nhật thông tin thiết bị IoT) cần xác định hành vi khi thiết bị "ngừng hoạt động". `IoTDeviceEntity` (bảng `iot_devices`) **không có** cột `deleted_at` và không nằm trong danh sách bảng áp dụng soft delete ở ADR-004.
+
+### Quyết định
+Vòng đời "vô hiệu hóa" của `iot_devices` được quản lý bằng cột **`status`** (`online` / `offline` / `disabled` / `maintenance`), **không** dùng soft delete (`deleted_at`). UC cập nhật (IOT-011) do đó không kiểm tra điều kiện soft-delete và không tạo cột `deleted_at` mới (giữ baseline DB v3.2 Compact theo DATA-01).
+
+### Hệ quả
+- IOT-011 không có FR liên quan soft-delete; thiết bị có thể được cập nhật ở mọi `status`.
+- Nếu sau này cần "xóa" thiết bị, dùng trạng thái `disabled` thay vì xóa bản ghi (giữ lịch sử `iot_device_events`).

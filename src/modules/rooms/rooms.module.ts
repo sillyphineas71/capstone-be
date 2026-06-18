@@ -1,5 +1,7 @@
 ﻿import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { CacheModule } from '@nestjs/cache-manager';
 import { RoomEntity } from './entities/room.entity.js';
 import { RoomBookingEntity } from './entities/room-booking.entity.js';
 import { RoomBookingUsageEntity } from './entities/room-booking-usage.entity.js';
@@ -8,11 +10,16 @@ import { RoomEventEntity } from './entities/room-event.entity.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomsService } from './services/rooms.service.js';
+import { RoomStatusService } from './services/room-status.service.js';
+import { NoShowController } from './controllers/no-show.controller.js';
+import { NoShowService } from './services/no-show.service.js';
+import { NoShowDetectionService } from './services/no-show-detection.service.js';
 
 /**
- * RoomsModule quan ly tat ca entities thuoc domain Room & Utilization:
+ * RoomsModule quản lý tất cả entities thuộc domain Room & Utilization:
  * - RoomEntity (rooms)
  * - RoomBookingEntity (room_bookings)
  * - RoomBookingUsageEntity (room_booking_usages)
@@ -24,6 +31,9 @@ import { RoomsService } from './services/rooms.service.js';
     AccountsModule,
     MeetingsModule,
     AuthModule,
+    WebsocketModule,
+    JwtModule.register({}),
+    CacheModule.register(),
     TypeOrmModule.forFeature([
       RoomEntity,
       RoomBookingEntity,
@@ -32,8 +42,8 @@ import { RoomsService } from './services/rooms.service.js';
       RoomEventEntity,
     ]),
   ],
-  controllers: [RoomsController],
-  providers: [RoomsService],
-  exports: [TypeOrmModule, RoomsService],
+  controllers: [RoomsController, NoShowController],
+  providers: [RoomsService, RoomStatusService, NoShowService, NoShowDetectionService],
+  exports: [TypeOrmModule, RoomsService, NoShowDetectionService],
 })
 export class RoomsModule {}

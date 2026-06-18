@@ -82,7 +82,7 @@ export class MeetingRequestReviewService {
       if (!request) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y yêu c?u cu?c h?p',
+          message: 'Không tìm thấy yêu cầu cuộc họp',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting_request', entityId: requestId },
@@ -93,7 +93,7 @@ export class MeetingRequestReviewService {
       if (request.requestType !== MeetingRequestType.CREATE_MEETING) {
         throw new UnprocessableEntityException({
           success: false,
-          message: 'Lo?i yêu c?u không du?c h? tr?',
+          message: 'Loại yêu cầu không được hỗ trợ',
           error: {
             code: 'UNSUPPORTED_REQUEST_TYPE',
             details: {
@@ -107,7 +107,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu c?u cu?c h?p không còn tr?ng thái ch? duy?t',
+          message: 'Yêu cầu cuộc họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -125,7 +125,7 @@ export class MeetingRequestReviewService {
       if (!meeting) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y cu?c h?p liên quan',
+          message: 'Không tìm thấy cuộc họp liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting', entityId: request.meetingId },
@@ -136,7 +136,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cu?c h?p không còn tr?ng thái ch? phê duy?t',
+          message: 'Cuộc họp không còn trạng thái chờ phê duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -154,7 +154,7 @@ export class MeetingRequestReviewService {
       if (!booking) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y booking phòng h?p liên quan',
+          message: 'Không tìm thấy booking phòng họp liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'room_booking', entityId: meeting.id },
@@ -165,7 +165,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng h?p không còn tr?ng thái ch? duy?t',
+          message: 'Booking phòng họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -182,7 +182,7 @@ export class MeetingRequestReviewService {
       ) {
         throw new ForbiddenException({
           success: false,
-          message: 'B?n không th? t? duy?t yêu c?u cu?c h?p do chính mình t?o',
+          message: 'Bạn không thể tự duyệt yêu cầu cuộc họp do chính mình tạo',
           error: { code: 'SELF_APPROVAL_NOT_ALLOWED' },
         });
       }
@@ -218,7 +218,7 @@ export class MeetingRequestReviewService {
 
         throw new ConflictException({
           success: false,
-          message: 'Phòng h?p ã có booking khác trong khung gi? này',
+          message: 'Phòng họp đã có booking khác trong khung giờ này',
           error: {
             code: 'ROOM_CONFLICT',
             details: {
@@ -256,7 +256,7 @@ export class MeetingRequestReviewService {
         eventType: MeetingEventType.MEETING_REQUEST_APPROVED,
         actorUserId: authUser.userId,
         sourceType: MeetingEventSourceType.MANUAL,
-        description: `Yêu c?u cu?c h?p "${meeting.title}" ã du?c phê duy?t`,
+        description: `Yêu cầu cuộc họp "${meeting.title}" đã được phê duyệt`,
         oldValueJson: {
           approvalStatus: ApprovalStatus.PENDING,
           meetingStatus: MeetingStatus.PENDING_APPROVAL,
@@ -353,8 +353,8 @@ export class MeetingRequestReviewService {
         await this.notificationsService.createNotification({
           notificationType: NotificationType.MEETING_INVITE,
           channel: NotificationChannel.IN_APP,
-          subject: `Thu m?i tham d? cu?c h?p: ${result.meetingTitle}`,
-          content: `B?n du?c m?i tham d? cu?c h?p "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          subject: `Thư mời tham dự cuộc họp: ${result.meetingTitle}`,
+          content: `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
           relatedEntityType: 'meeting',
           relatedEntityId: meetingId,
           recipientScope: 'user_list',
@@ -376,8 +376,8 @@ export class MeetingRequestReviewService {
         await this.notificationsService.enqueueEmailNotification({
           notificationType: NotificationType.MEETING_INVITE,
           channel: NotificationChannel.EMAIL,
-          subject: `Thu m?i tham d? cu?c h?p: ${result.meetingTitle}`,
-          content: `B?n du?c m?i tham d? cu?c h?p "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          subject: `Thư mời tham dự cuộc họp: ${result.meetingTitle}`,
+          content: `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
           toEmails: [email],
           relatedEntityType: 'meeting',
           relatedEntityId: meetingId,
@@ -403,8 +403,8 @@ export class MeetingRequestReviewService {
         await this.notificationsService.createNotification({
           notificationType: NotificationType.MEETING_REQUEST_APPROVED,
           channel: NotificationChannel.IN_APP,
-          subject: `Yêu c?u cu?c h?p "${result.meetingTitle}" ã du?c phê duy?t`,
-          content: `Yêu c?u cu?c h?p "${result.meetingTitle}" c?a b?n ã du?c phê duy?t`,
+          subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã được phê duyệt`,
+          content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã được phê duyệt`,
           relatedEntityType: 'meeting',
           relatedEntityId: meetingId,
           recipientScope: 'user_list',
@@ -460,7 +460,7 @@ export class MeetingRequestReviewService {
       if (!request) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y yêu c?u cu?c h?p',
+          message: 'Không tìm thấy yêu cầu cuộc họp',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting_request', entityId: requestId },
@@ -471,7 +471,7 @@ export class MeetingRequestReviewService {
       if (request.requestType !== MeetingRequestType.CREATE_MEETING) {
         throw new UnprocessableEntityException({
           success: false,
-          message: 'Lo?i yêu c?u không du?c h? tr?',
+          message: 'Loại yêu cầu không được hỗ trợ',
           error: {
             code: 'UNSUPPORTED_REQUEST_TYPE',
             details: {
@@ -485,7 +485,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu c?u cu?c h?p không còn tr?ng thái ch? duy?t',
+          message: 'Yêu cầu cuộc họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -503,7 +503,7 @@ export class MeetingRequestReviewService {
       if (!meeting) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y cu?c h?p liên quan',
+          message: 'Không tìm thấy cuộc họp liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'meeting', entityId: request.meetingId },
@@ -514,7 +514,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cu?c h?p không còn tr?ng thái ch? phê duy?t',
+          message: 'Cuộc họp không còn trạng thái chờ phê duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -532,7 +532,7 @@ export class MeetingRequestReviewService {
       if (!booking) {
         throw new NotFoundException({
           success: false,
-          message: 'Không tìm th?y booking phòng h?p liên quan',
+          message: 'Không tìm thấy booking phòng họp liên quan',
           error: {
             code: 'RESOURCE_NOT_FOUND',
             details: { entityType: 'room_booking', entityId: meeting.id },
@@ -543,7 +543,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng h?p không còn tr?ng thái ch? duy?t',
+          message: 'Booking phòng họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -560,7 +560,7 @@ export class MeetingRequestReviewService {
       ) {
         throw new ForbiddenException({
           success: false,
-          message: 'B?n không th? t? duy?t yêu c?u cu?c h?p do chính mình t?o',
+          message: 'Bạn không thể tự duyệt yêu cầu cuộc họp do chính mình tạo',
           error: { code: 'SELF_APPROVAL_NOT_ALLOWED' },
         });
       }
@@ -588,7 +588,7 @@ export class MeetingRequestReviewService {
         eventType: MeetingEventType.MEETING_REQUEST_REJECTED,
         actorUserId: authUser.userId,
         sourceType: MeetingEventSourceType.MANUAL,
-        description: `Yêu c?u cu?c h?p "${meeting.title}" ã b? t? ch?i. Lý do: ${dto.rejectionReason}`,
+        description: `Yêu cầu cuộc họp "${meeting.title}" đã bị từ chối. Lý do: ${dto.rejectionReason}`,
         oldValueJson: {
           approvalStatus: ApprovalStatus.PENDING,
           meetingStatus: MeetingStatus.PENDING_APPROVAL,
@@ -662,8 +662,8 @@ export class MeetingRequestReviewService {
         await this.notificationsService.createNotification({
           notificationType: NotificationType.MEETING_REQUEST_REJECTED,
           channel: NotificationChannel.IN_APP,
-          subject: `Yêu c?u cu?c h?p "${result.meetingTitle}" ã b? t? ch?i`,
-          content: `Yêu c?u cu?c h?p "${result.meetingTitle}" c?a b?n ã b? t? ch?i.`,
+          subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã bị từ chối`,
+          content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã bị từ chối.`,
           relatedEntityType: 'meeting',
           relatedEntityId: result.meetingId,
           recipientScope: 'user_list',

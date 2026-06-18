@@ -17,6 +17,8 @@ export enum IoTDeviceEventType {
   STREAM_STOPPED = 'stream_stopped',
   MQTT_MESSAGE = 'mqtt_message',
   FACE_DETECTED = 'face_detected',
+  FACE_VERIFY = 'face_verify',
+  FACE_STRANGER = 'face_stranger',
 }
 
 export enum IoTEventSourceProtocol {

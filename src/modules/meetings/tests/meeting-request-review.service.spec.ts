@@ -449,7 +449,7 @@ describe('MeetingRequestReviewService', () => {
 
   describe('reject', () => {
     const rejectDto: RejectMeetingRequestDto = {
-      rejectionReason: 'K ho?ch thay d?i',
+      rejectionReason: 'Kế hoạch thay đổi',
     };
 
     function setupSuccessMocks() {
@@ -477,21 +477,21 @@ describe('MeetingRequestReviewService', () => {
         MeetingRequestEntity,
         expect.objectContaining({
           approvalStatus: ApprovalStatus.REJECTED,
-          rejectionReason: 'K ho?ch thay d?i',
+          rejectionReason: 'Kế hoạch thay đổi',
         }),
       );
       expect(em.save).toHaveBeenCalledWith(
         MeetingEntity,
         expect.objectContaining({
           status: MeetingStatus.CANCELLED,
-          cancellationReason: 'K ho?ch thay d?i',
+          cancellationReason: 'Kế hoạch thay đổi',
         }),
       );
       expect(em.save).toHaveBeenCalledWith(
         RoomBookingEntity,
         expect.objectContaining({
           status: RoomBookingStatus.CANCELLED,
-          cancellationReason: 'K ho?ch thay d?i',
+          cancellationReason: 'Kế hoạch thay đổi',
         }),
       );
     });

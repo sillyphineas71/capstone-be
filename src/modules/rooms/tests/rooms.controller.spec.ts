@@ -1,10 +1,12 @@
 ﻿import { Test, TestingModule } from '@nestjs/testing';
 import { RoomsController } from '../controllers/rooms.controller.js';
 import { RoomsService } from '../services/rooms.service.js';
+import { RoomStatusService } from '../services/room-status.service.js';
 
 describe('RoomsController', () => {
   let controller: RoomsController;
   let roomsService: jest.Mocked<RoomsService>;
+  let roomStatusService: jest.Mocked<RoomStatusService>;
 
   const mockUserId = '550e8400-e29b-41d4-a716-446655440000';
   const mockRoomId = '660e8400-e29b-41d4-a716-446655440001';
@@ -30,9 +32,17 @@ describe('RoomsController', () => {
       create: jest.fn().mockResolvedValue(mockResponse),
     } as any;
 
+    roomStatusService = {
+      getRealtimeStatus: jest.fn(),
+      getRoomStatus: jest.fn(),
+    } as any;
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [RoomsController],
-      providers: [{ provide: RoomsService, useValue: roomsService }],
+      providers: [
+        { provide: RoomsService, useValue: roomsService },
+        { provide: RoomStatusService, useValue: roomStatusService },
+      ],
     })
       .overrideGuard(require('../../auth/guards/jwt-auth.guard.js').JwtAuthGuard)
       .useValue({ canActivate: () => true })

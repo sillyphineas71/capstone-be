@@ -60,7 +60,6 @@ import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
 import { AgendaListResponseDto, ReplaceAgendaResponseDto } from '../dto/agenda-response.dto.js';
 import { ClientContext } from '../services/meetings.service.js';
 
-
 @Controller()
 export class MeetingsController {
   constructor(
@@ -530,6 +529,7 @@ export class MeetingsController {
     };
   }
 
+
   // ────────────────────────────────────────────────────────────
   // Agenda endpoints (UC-MM-09)
   // ────────────────────────────────────────────────────────────
@@ -597,7 +597,5 @@ export class MeetingsController {
       data: result,
     };
   }
-
-
 }
 

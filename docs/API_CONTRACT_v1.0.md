@@ -15,6 +15,12 @@
 | Ngày | Tóm tắt | Ghi chú |
 |---|---|---|
 | 2026-06-03 | Tạo mới toàn bộ API Contract v1.0 từ UseCase_List_SMRMPTS.xlsx + Database v3.2 Compact | Tạo mới |
+| 2026-06-15 | Thêm IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera (PATCH /api/v1/iot-devices/{deviceId}), permission `iot.device.update`. Tránh trùng UC-73 (đã là "Lưu raw event"). | Section 8 (sau UC-69) |
+| 2026-06-15 | Sửa ví dụ request/response của IOT-011 sang **snake_case** cho khớp wire-format thật (`toIotDeviceResponse`). Ghi chú UC-67 đang camelCase chưa đồng bộ. | Section 8 (IOT-011) |
+| 2026-06-15 | Thêm IOT-012 (Feature #13) — Disable/Re-enable thiết bị IoT/Camera (POST /:id/disable, /:id/enable, @HttpCode(200), no body), permission `iot.device.disable`/`iot.device.enable`. | Section 8 (sau IOT-011) |
+| 2026-06-15 | Thêm IOT-013 (Feature #14) — List + Detail thiết bị IoT/Camera (GET /iot-devices, GET /:id), permission `iot.device.read`. Read-only; data snake_case, meta camelCase {page,limit,total,totalPages}. | Section 8 (sau IOT-012) |
+| 2026-06-15 | Thêm IOT-014 (Feature #15) — Phát hiện camera offline bằng active TCP probe (POST /iot-devices/probe-status + cron EVERY_MINUTE), permission `iot.device.probe`. Đổi status ip_camera, audit auto_online/auto_offline. | Section 8 (sau IOT-013) |
+| 2026-06-15 | Đánh dấu UC-30/108/109/110 (recording-config) = ✅ Đã implement (REC-001). | Section 5 (UC-30), Section 12 (UC-108/109/110) |
 
 ---
 
@@ -1293,6 +1299,8 @@
 ---
 
 ### UC-30 — Cấu hình tính năng ghi hình cho cuộc họp
+
+> ✅ **Đã implement (REC-001)** — `spec/features/recording/feat-configure-recording`.
 
 | Field | Value |
 |---|---|
@@ -2668,6 +2676,200 @@
 
 ---
 
+### IOT-011 (Feature #12) — Cập nhật thông tin thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `PATCH` |
+| Endpoint | `/api/v1/iot-devices/{deviceId}` |
+| Permission | `iot.device.update` |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-update-iot-device` (IOT-011). Chỉ cập nhật trường mô tả/kết nối tổng quát. Các field ngoài allowlist bị từ chối 400 (`forbidNonWhitelisted`). Không sửa `room_id` (dùng assign-room), `stream_url` (UC-69), Face Server config (UC-68), `status`/`health_status`/`last_seen_at` (hệ thống tự quản), `device_code`/`device_type` (bất biến), `metadata_json`/`equipment_id`/`agent_version`/`firmware_version`/`mqtt_topic` (ngoài phạm vi).
+
+> **Casing**: wire-format thực tế dùng **snake_case** (DTO input `@Expose` snake + presenter `toIotDeviceResponse()` xuất snake). Ví dụ dưới đây bám đúng code thật. (Lưu ý: ví dụ UC-67 ở trên đang minh hoạ camelCase nhưng response thật của create cũng là snake_case — UC-67 nên được đồng bộ riêng.)
+
+**Request Body (partial — chỉ 4 trường allowlist, snake_case):**
+```json
+{
+  "device_name": "Camera góc phòng họp A — tầng 3",
+  "ip_address": "192.168.1.51",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "network_identifier": "ipcam-a3-floor3"
+}
+```
+
+**Response 200 (full device, snake_case — theo `toIotDeviceResponse`):**
+```json
+{
+  "success": true,
+  "message": "IoT device updated successfully",
+  "data": {
+    "id": "uuid",
+    "device_name": "Camera góc phòng họp A — tầng 3",
+    "device_code": "IPCAM-A3-01",
+    "device_type": "ip_camera",
+    "room_id": "uuid|null",
+    "ip_address": "192.168.1.51",
+    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "status": "online",
+    "health_status": "healthy",
+    "last_seen_at": "2026-06-15T09:00:00+07:00",
+    "metadata_json": { "manufacturer": "Hikvision" },
+    "created_by_name": null,
+    "created_at": "2026-06-03T10:00:00+07:00",
+    "updated_at": "2026-06-15T09:05:00+07:00"
+  }
+}
+```
+
+- `409 MAC_ADDRESS_EXISTS` nếu `mac_address` mới trùng thiết bị khác.
+- `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`.
+- Ghi `audit_logs` (action_type: `update`, entity_type: `iot_devices`).
+
+---
+
+### IOT-012 (Feature #13) — Vô hiệu hóa / Kích hoạt lại thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `POST` |
+| Endpoint | `/api/v1/iot-devices/{deviceId}/disable` · `/api/v1/iot-devices/{deviceId}/enable` |
+| Permission | `iot.device.disable` (disable) · `iot.device.enable` (enable) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-disable-enable-iot-device` (IOT-012). 2 action endpoint **không body**, trả **200** (`@HttpCode(200)`). Soft theo **ADR-008**: chỉ đổi cột `status`, KHÔNG hard-delete/`deleted_at`, giữ `iot_device_events`. KHÔNG chạm `health_status`/`last_seen_at`/`room_id`/`metadata_json`. Idempotent: disable khi đã `disabled` (hoặc enable khi khác `disabled`) → 200 no-op, không ghi/audit.
+
+**Chuyển trạng thái:** disable: bất kỳ → `disabled`. enable: `disabled` → `offline` (chờ heartbeat cập nhật `online`).
+
+**Request Body:** (không) — `{deviceId}` qua path, `ParseUUIDPipe`.
+
+**Response 200 (full device, snake_case — theo `toIotDeviceResponse`):**
+```json
+{
+  "success": true,
+  "message": "IoT device disabled successfully",
+  "data": {
+    "id": "uuid",
+    "device_name": "Camera góc phòng họp A",
+    "device_code": "IPCAM-A3-01",
+    "device_type": "ip_camera",
+    "room_id": "uuid|null",
+    "ip_address": "192.168.1.51",
+    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "status": "disabled",
+    "health_status": "healthy",
+    "last_seen_at": "2026-06-15T09:00:00+07:00",
+    "metadata_json": { "manufacturer": "Hikvision" },
+    "created_by_name": null,
+    "created_at": "2026-06-03T10:00:00+07:00",
+    "updated_at": "2026-06-15T10:00:00+07:00"
+  }
+}
+```
+
+> Enable trả `"status": "offline"` và `"message": "IoT device enabled successfully"`. `health_status`/`last_seen_at`/`room_id`/`metadata_json` giữ nguyên giá trị cũ (chỉ `status` đổi).
+
+- `404 IOT_DEVICE_NOT_FOUND` nếu không tìm thấy `{deviceId}`; sai UUID → 400.
+- Ghi `audit_logs` (action_type: `disable` | `enable`, entity_type: `iot_devices`, `changed_fields.status` = { old, new }).
+
+---
+
+### IOT-013 (Feature #14) — Liệt kê & Xem chi tiết thiết bị IoT/Camera
+
+| Field | Value |
+|---|---|
+| Method | `GET` |
+| Endpoint | `/api/v1/iot-devices` (list) · `/api/v1/iot-devices/{deviceId}` (detail) |
+| Permission | `iot.device.read` (cả 2) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-list-iot-devices` (IOT-013). **Read-only** (không audit). List trả MỌI status (kể cả `disabled`); `status` filter để thu hẹp. Sort cố định `created_at DESC`. **`data[]` snake_case** (theo `toIotDeviceResponse`, mask `metadata_json`); **`meta` camelCase** (theo CLAUDE.md §8.4).
+
+**List query params:**
+
+| Param | Type | Default | Validation |
+|---|---|---|---|
+| `page` | int | 1 | min 1 |
+| `limit` | int | 20 | min 1, **max 100** (>100 → 400) |
+| `status` | enum | — | `online\|offline\|disabled\|maintenance` |
+| `device_type` | enum | — | `ip_camera\|door_camera\|room_camera\|face_server\|microphone\|capture_agent\|occupancy_sensor\|display` |
+| `room_id` | uuid | — | UUID v4 |
+| `search` | string | — | max 200, ILIKE trên `device_name`/`device_code` |
+
+**Response 200 (List):**
+```json
+{
+  "success": true,
+  "message": "IoT devices retrieved successfully",
+  "data": [
+    {
+      "id": "uuid",
+      "device_name": "Camera góc phòng họp A",
+      "device_code": "IPCAM-A3-01",
+      "device_type": "ip_camera",
+      "room_id": "uuid|null",
+      "ip_address": "192.168.1.51",
+      "mac_address": "AA:BB:CC:DD:EE:FF",
+      "status": "online",
+      "health_status": "healthy",
+      "last_seen_at": "2026-06-15T09:00:00+07:00",
+      "metadata_json": { "manufacturer": "Hikvision" },
+      "created_by_name": null,
+      "created_at": "2026-06-03T10:00:00+07:00",
+      "updated_at": "2026-06-15T09:05:00+07:00"
+    }
+  ],
+  "meta": { "page": 1, "limit": 20, "total": 42, "totalPages": 3 }
+}
+```
+
+**Response 200 (Detail):** `{ success, message: "IoT device retrieved successfully", data: <full device snake_case theo toIotDeviceResponse> }`.
+
+- `400 VALIDATION_ERROR` nếu page/limit/enum/uuid/search sai hoặc `limit > 100`; detail `{deviceId}` sai UUID → 400.
+- `404 IOT_DEVICE_NOT_FOUND` (detail) nếu không tìm thấy thiết bị. List rỗng → 200 `data: []`, `meta.total = 0`.
+
+---
+
+### IOT-014 (Feature #15) — Phát hiện camera offline bằng Active Probe
+
+| Field | Value |
+|---|---|
+| Method | `POST` |
+| Endpoint | `/api/v1/iot-devices/probe-status` |
+| Permission | `iot.device.probe` |
+| HTTP code | `200` (`@HttpCode(200)`) |
+| Body | (không) |
+| Async | No |
+
+> Spec: `spec/features/iot/feat-detect-offline-devices` (IOT-014). Backend **active TCP probe** tới `host:port` RTSP của từng `ip_camera` (parse `stream_url`, fallback `ip_address:554`, validate port 1–65535); mở được → `online`, timeout/refuse → `offline`. Chỉ maintain camera `status ∈ {online, offline}` (**bỏ** `disabled`/`maintenance`). Chỉ đổi cột `status`; transition mới ghi `audit_logs` (`auto_online`/`auto_offline`). Idempotent: trạng thái không đổi → không ghi.
+>
+> **Cron**: chạy mỗi phút (`CronExpression.EVERY_MINUTE`, name `device-offline-detect`) **cùng logic** `detectOfflineDevices`, gate `SCHEDULER_ENABLED && DEVICE_OFFLINE_DETECT_ENABLED` (actor = null). **Endpoint** dưới đây là bản chạy tay (admin), **không** gate ENV (actor = user JWT).
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Device status probe completed",
+  "data": {
+    "checked": 12,
+    "online_count": 9,
+    "offline_count": 3,
+    "transitions": [
+      { "id": "uuid", "from": "online", "to": "offline" },
+      { "id": "uuid", "from": "offline", "to": "online" }
+    ]
+  }
+}
+```
+
+- `checked` = số camera thực sự probe (đã trừ disabled/maintenance/không-địa-chỉ). `transitions` chỉ gồm camera đổi trạng thái.
+- `401 UNAUTHORIZED` nếu thiếu JWT; `403 FORBIDDEN` nếu thiếu `iot.device.probe`.
+- Ghi `audit_logs` (action_type: `auto_online` | `auto_offline`, entity_type: `iot_devices`, `changed_fields.status` = { old, new }).
+- **Config**: `DEVICE_OFFLINE_DETECT_ENABLED` (default true), `RTSP_PROBE_TIMEOUT_MS` (default 3000). v1 chỉ TCP-connect (không ffprobe/RTSP auth); probe song song cap 10.
+
+---
+
 ### UC-70 — Nhận heartbeat từ Face Server
 
 **Internal callback endpoint:**
@@ -3547,11 +3749,13 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 
 ### UC-108 — Tạo cấu hình ghi âm/ghi hình
 
-> Xem `POST /api/v1/meetings/{meetingId}/recording-config` tại [UC-30](#uc-30--cấu-hình-tính-năng-ghi-hình-cho-cuộc-họp).
+> ✅ **Đã implement (REC-001)**. Xem `POST /api/v1/meetings/{meetingId}/recording-config` tại [UC-30](#uc-30--cấu-hình-tính-năng-ghi-hình-cho-cuộc-họp).
 
 ---
 
 ### UC-109 — Xem cấu hình ghi âm/ghi hình
+
+> ✅ **Đã implement (REC-001)** — GET trả 404 `RECORDING_CONFIG_NOT_FOUND` nếu meeting chưa có config.
 
 | Field | Value |
 |---|---|
@@ -3584,6 +3788,8 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 ---
 
 ### UC-110 — Cập nhật cấu hình ghi âm/ghi hình
+
+> ✅ **Đã implement (REC-001)** — PATCH partial; 404 nếu chưa có; 409 `RECORDING_IN_PROGRESS` khi đang ghi.
 
 | Field | Value |
 |---|---|

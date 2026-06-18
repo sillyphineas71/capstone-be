@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
+import { IotDevicesService } from '../iot/services/iot-devices.service.js';
+import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
+import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -23,33 +26,98 @@ export class SchedulerService {
   private readonly noShowEnabled: boolean;
   private readonly autoReleaseEnabled: boolean;
   private readonly reminderEnabled: boolean;
+  private readonly deviceOfflineDetectEnabled: boolean;
+  private readonly faceSyncEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly checkInAlertService: CheckInAlertService,
+    private readonly iotDevicesService: IotDevicesService,
+    private readonly noShowDetectionService: NoShowDetectionService,
+    private readonly faceProvisioningService: FaceProvisioningService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>('SCHEDULER_ENABLED', true);
     this.noShowEnabled = this.configService.get<boolean>('SCHEDULER_NO_SHOW_CHECK_ENABLED', false);
     this.autoReleaseEnabled = this.configService.get<boolean>('SCHEDULER_AUTO_RELEASE_ENABLED', false);
     this.reminderEnabled = this.configService.get<boolean>('SCHEDULER_NOTIFICATION_REMINDER_ENABLED', false);
+    this.deviceOfflineDetectEnabled = this.configService.get<boolean>('DEVICE_OFFLINE_DETECT_ENABLED', true);
+    this.faceSyncEnabled = this.configService.get<boolean>('FACE_SYNC_ENABLED', false);
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled}`,
+    );
+  }
+
+  /**
+   * FMP-001 (#FaceB): provision/deprovision khuôn mặt theo cuộc họp.
+   * Gate SCHEDULER_ENABLED && FACE_SYNC_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'face-sync' })
+  async faceSync(): Promise<void> {
+    if (!this.schedulerEnabled || !this.faceSyncEnabled) return;
+    try {
+      const p = await this.faceProvisioningService.provisionUpcomingMeetings();
+      const d = await this.faceProvisioningService.deprovisionEndedMeetings();
+      this.logger.log(
+        `[Scheduler] face-sync: provisioned-scan=${p.scanned} deprovisioned-scan=${d.scanned}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] face-sync failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+    }
+  }
+
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'face-reconcile' })
+  async faceReconcile(): Promise<void> {
+    if (!this.schedulerEnabled || !this.faceSyncEnabled) return;
+    try {
+      const r = await this.faceProvisioningService.reconcile();
+      this.logger.log(
+        `[Scheduler] face-reconcile: stale=${r.stale} deduped=${r.deduped}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] face-reconcile failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+    }
+  }
+
+  /**
+   * IOT-014 — Active probe phát hiện camera offline.
+   * Cron cố định EVERY_MINUTE; gate SCHEDULER_ENABLED && DEVICE_OFFLINE_DETECT_ENABLED.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'device-offline-detect' })
+  async detectOfflineDevices(): Promise<void> {
+    if (!this.schedulerEnabled || !this.deviceOfflineDetectEnabled) return;
+
+    const r = await this.iotDevicesService.detectOfflineDevices(null);
+    this.logger.log(
+      `[Scheduler] device-offline-detect: checked=${r.checked} online=${r.online_count} offline=${r.offline_count} transitions=${r.transitions.length}`,
     );
   }
 
   /**
    * No-show detection job.
    * Cron: SCHEDULER_NO_SHOW_CHECK_CRON (default: every 5 minutes)
-   *
-   * TODO: Gọi UtilizationService.detectNoShow() khi implement.
    */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'no-show-check' })
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    this.logger.log('[Scheduler] checkNoShow() triggered — TODO: implement no-show detection logic.');
-    // TODO: inject UtilizationService và gọi detectNoShow()
+    // NSC-001 (#31): detect() KHÔNG được ném ra ngoài cron.
+    try {
+      const r = await this.noShowDetectionService.detect();
+      this.logger.log(
+        `[Scheduler] no-show-check: scanned=${r.scanned} created=${r.created}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] no-show-check failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
   }
 
   /**

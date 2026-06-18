@@ -3,6 +3,7 @@
 /node_modules
 /build
 /uploads
+/storage
 .gitnexus/
 .claude/
 
@@ -66,3 +67,6 @@ database_v3_2_compact_39_tables.md
 database_v3_2_compact_39_tables.sql
 UseCase_List_SMRMPTS.xlsx
 ~$UseCase_List_SMRMPTS.xlsx
+
+*.bak
+~$*
