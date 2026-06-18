@@ -1,5 +1,1 @@
-﻿{
-  "feature_directory": "spec/features/attendance/feat-send-checkin-alerts",
-  "feature_num": "014",
-  "branch_name": "014-send-checkin-alerts"
-}
+﻿{"feature_directory":"spec/features/live-meeting/feat-in-meeting-notes"}

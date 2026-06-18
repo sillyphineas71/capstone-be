@@ -1,0 +1,373 @@
+import {
+  BadRequestException,
+  Controller,
+  Post,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  Req,
+  Body,
+  Ip,
+  Headers,
+  Query,
+  ValidationPipe,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import type { Request } from 'express';
+
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+
+import { LiveMeetingService } from '../services/live-meeting.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { StartMeetingResponseDto } from '../dto/start-meeting-response.dto.js';
+import { MeetingAttendanceResponseDto } from '../dto/attendance-response.dto.js';
+import { AttendanceQueryDto } from '../dto/attendance-query.dto.js';
+
+import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
+import { PresentAttendeesResponseDto } from '../dto/present-attendees-response.dto.js';
+import { ExtensionRequestDto, ExtensionRequestResponseDto, DecideExtensionDto, DecideExtensionResponseDto } from '../dto/index.js';
+
+@ApiTags('live-meeting')
+@Controller()
+export class LiveMeetingController {
+  constructor(
+    private readonly liveMeetingService: LiveMeetingService,
+    private readonly authzRepo: AuthzReadRepository,
+  ) {}
+
+  @Post('live-meetings/:meetingId/start')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.session.start')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Bắt đầu phiên họp', description: 'Host/Organizer bắt đầu cuộc họp đã scheduled' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuộc họp' })
+  @ApiResponse({ status: 200, description: 'Phiên họp đã bắt đầu thành công' })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
+  @ApiResponse({ status: 403, description: 'Không có quyền' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy cuộc họp' })
+  @ApiResponse({ status: 409, description: 'Xung đột nghiệp vụ (trạng thái, time window, v.v.)' })
+  async startMeeting(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: StartMeetingResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.startMeeting(
+      meetingId,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+    );
+
+    const message = result.alreadyStarted
+      ? 'Phiên họp đã được bắt đầu trước đó'
+      : 'Phiên họp đã bắt đầu thành công';
+
+    return {
+      success: true,
+      message,
+      data: result,
+    };
+  }
+
+  // ───────────────────────────────────────────────────────────
+  //  UC-IMM-02: Request Meeting Extension
+  // ───────────────────────────────────────────────────────────
+
+  @Post('meetings/:meetingId/extension-requests')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.extension.request.own')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Yêu cầu gia hạn phiên họp', description: 'Host yêu cầu gia hạn phiên họp đang diễn ra' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuộc họp' })
+  @ApiResponse({ status: 200, description: 'Gia hạn thành công hoặc đã gửi yêu cầu đến Manager' })
+  @ApiResponse({ status: 400, description: 'Thời lượng gia hạn không hợp lệ' })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
+  @ApiResponse({ status: 403, description: 'Không có quyền hoặc không phải Host' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy cuộc họp' })
+  @ApiResponse({ status: 409, description: 'Xung đột nghiệp vụ' })
+  async requestExtension(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() extensionRequestDto: ExtensionRequestDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: ExtensionRequestResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.requestExtension(
+      meetingId,
+      extensionRequestDto,
+      { userId: user!.userId },
+    );
+
+    const message = result.status === 'applied'
+      ? 'Gia hạn phiên họp thành công'
+      : 'Phòng đã có lịch sau thời gian hiện tại. Yêu cầu gia hạn đã được gửi đến Manager để xử lý.';
+
+    return {
+      success: true,
+      message,
+      data: result,
+    };
+  }
+
+  // ───────────────────────────────────────────────────────────
+  //  UC-IMM-03: Decide Extension Request (Approve/Reject)
+  // ───────────────────────────────────────────────────────────
+
+  @Post('live-meetings/:meetingId/extension-requests/:requestId/decide')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions()
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Phê duyệt/từ chối yêu cầu gia hạn phiên họp', description: 'Manager/Admin phê duyệt hoặc từ chối yêu cầu gia hạn phiên họp đang pending' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuộc họp' })
+  @ApiParam({ name: 'requestId', type: String, format: 'uuid', description: 'ID yêu cầu gia hạn' })
+  @ApiResponse({ status: 200, description: 'Xử lý yêu cầu gia hạn thành công' })
+  @ApiResponse({ status: 400, description: 'UUID không hợp lệ' })
+  @ApiResponse({ status: 401, description: 'Chưa xác thực' })
+  @ApiResponse({ status: 403, description: 'Không có quyền' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy request/cuộc họp' })
+  @ApiResponse({ status: 409, description: 'Xung đột nghiệp vụ (request đã xử lý, conflict re-validation, ...)' })
+  @ApiResponse({ status: 422, description: 'Decision value không hợp lệ' })
+  async decideExtension(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('requestId', ParseUUIDPipe) requestId: string,
+    @Body() decideDto: DecideExtensionDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DecideExtensionResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    // Load user permissions to check decide/override
+    const { permissions } = await this.authzRepo.getEffectiveRolesAndPermissions(user!.userId);
+    const hasDecide = permissions.includes('meeting.session.extension.decide');
+    const hasOverride = permissions.includes('meeting.session.extension.override');
+
+    const result = await this.liveMeetingService.decideExtension(
+      meetingId,
+      requestId,
+      decideDto,
+      { userId: user!.userId },
+      { hasDecide, hasOverride },
+    );
+
+    return {
+      success: true,
+      message: 'Danh sach diem danh cuoc hop',
+      data: result,
+    };
+  }
+
+
+
+  // ───────────────────────────────────────────────────────────
+  //  UC-IMM-05: End Meeting Session
+  // ───────────────────────────────────────────────────────────
+
+  @Post('live-meetings/:meetingId/end')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.session.end')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Ket thuc phien hop', description: 'Host/Business Admin ket thuc cuoc hop dang dien ra' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuoc hop' })
+  @ApiResponse({ status: 200, description: 'Phien hop da ket thuc thanh cong' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({ status: 409, description: 'Xung dot nghiep vu (trang thai, da ket thuc, ...)' })
+  @ApiResponse({ status: 422, description: 'UUID khong hop le' })
+  async endMeeting(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EndMeetingResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.endMeeting(
+      meetingId,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+    );
+
+    return {
+      success: true,
+      message: 'Phien hop da ket thuc thanh cong',
+      data: result,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-07: View Live Meeting Participants
+  // ------------------------------------------------------------------
+
+  @Get('live-meetings/:meetingId/present-attendees')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.presence.read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Xem danh sach nguoi tham du dang co mat', description: 'Host/Business Admin xem danh sach nguoi dang co mat trong phien hop' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuoc hop' })
+  @ApiQuery({ name: 'search', type: String, required: false, description: 'Tim kiem theo ten/email' })
+  @ApiQuery({ name: 'departmentId', type: String, required: false, description: 'Loc theo phong ban' })
+  @ApiQuery({ name: 'page', type: Number, required: false, description: 'So trang' })
+  @ApiQuery({ name: 'limit', type: Number, required: false, description: 'So ban ghi moi trang' })
+  @ApiQuery({ name: 'sortBy', type: String, required: false, description: 'Truong sap xep (full_name, department_name, presence_status, joined_at)' })
+  @ApiQuery({ name: 'sortOrder', type: String, required: false, description: 'asc/desc' })
+  @ApiResponse({ status: 200, description: 'Danh sach nguoi tham du dang co mat' })
+  @ApiResponse({ status: 400, description: 'Tham so truy van khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({ status: 409, description: 'Cuoc hop chua dien ra hoac da ket thuc' })
+  async getPresentAttendees(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Query('search') search?: string,
+    @Query('departmentId') departmentId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: PresentAttendeesResponseDto;
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    // Validate and parse pagination params
+    const parsedPage = Math.max(1, parseInt(page || '1', 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
+    const allowedSortByFields = ['full_name', 'department_name', 'presence_status', 'joined_at', 'u.fullName'];
+    const safeSortBy = sortBy && allowedSortByFields.includes(sortBy) ? sortBy : 'u.fullName';
+    const safeSortOrder = sortOrder === 'desc' ? 'desc' : 'asc';
+
+    // Validate search length
+    if (search && search.length > 100) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Search query vuot qua 100 ky tu',
+        error: { code: 'INVALID_QUERY', details: { field: 'search', reason: 'max_length_100' } },
+      });
+    }
+
+    // Validate departmentId UUID format (optional)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (departmentId && !uuidRegex.test(departmentId)) {
+      throw new BadRequestException({
+        success: false,
+        message: 'departmentId khong dung dinh dang UUID',
+        error: { code: 'INVALID_QUERY', details: { field: 'departmentId', reason: 'invalid_uuid' } },
+      });
+    }
+
+    const result = await this.liveMeetingService.getPresentAttendees(
+      meetingId,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+      {
+        search: search?.trim(),
+        departmentId,
+        page: parsedPage,
+        limit: parsedLimit,
+        sortBy: safeSortBy,
+        sortOrder: safeSortOrder,
+      },
+    );
+
+    return {
+      success: true,
+      message: 'Danh sach nguoi tham du dang co mat',
+      data: result.data,
+      meta: result.meta,
+    };
+  }
+
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-08: View Participant Attendance Status
+  // ------------------------------------------------------------------
+
+  @Get('meetings/:meetingId/attendance')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('attendance.read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Xem trang thai diem danh nguoi tham du', description: 'Host/Business Admin xem trang thai diem danh cua nguoi tham du trong cuoc hop' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuoc hop' })
+  @ApiQuery({ name: 'q', type: String, required: false, description: 'Tim kiem theo ten/email' })
+  @ApiQuery({ name: 'status', type: String, required: false, description: 'Loc theo trang thai (checked_in, late, absent)' })
+  @ApiQuery({ name: 'page', type: Number, required: false, description: 'So trang (default 1)' })
+  @ApiQuery({ name: 'pageSize', type: Number, required: false, description: 'So ban ghi moi trang (default 20, max 100)' })
+  @ApiQuery({ name: 'sortBy', type: String, required: false, description: 'Truong sap xep (full_name, attendance_status, check_in_time)' })
+  @ApiQuery({ name: 'sortOrder', type: String, required: false, description: 'asc/desc' })
+  @ApiResponse({ status: 200, description: 'Danh sach diem danh cuoc hop' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({ status: 409, description: 'Cuoc hop khong o trang thai hoat dong hoac da ket thuc' })
+  @ApiResponse({ status: 422, description: 'Tham so truy van khong hop le' })
+  async getAttendance(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query?: AttendanceQueryDto,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: MeetingAttendanceResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.getMeetingAttendance(
+      meetingId,
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+      query || new AttendanceQueryDto(),
+    );
+
+    return {
+      success: true,
+      message: 'Danh sach diem danh cuoc hop',
+      data: result,
+    };
+  }
+
+
+}

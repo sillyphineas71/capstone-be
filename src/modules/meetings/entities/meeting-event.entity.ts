@@ -12,6 +12,8 @@ export enum MeetingEventType {
   MEETING_STARTED = 'meeting_started',
   MEETING_ENDED = 'meeting_ended',
   EXTENSION_REQUESTED = 'extension_requested',
+  EXTENSION_APPROVED = 'extension_approved',
+  EXTENSION_REJECTED = 'extension_rejected',
   WARNING_SENT = 'warning_sent',
   STATUS_CHANGED = 'status_changed',
   MEETING_REQUEST_CREATED = 'meeting_request_created',
@@ -29,6 +31,7 @@ export enum MeetingEventSourceType {
   WEBSOCKET = 'websocket',
   MQTT = 'mqtt',
   SCHEDULER = 'scheduler',
+  DEVICE = 'device',
 }
 
 @Entity('meeting_events')
