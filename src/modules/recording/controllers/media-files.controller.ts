@@ -1,0 +1,161 @@
+import {
+  Controller,
+  Get,
+  Patch,
+  Body,
+  Param,
+  Query,
+  Req,
+  Res,
+  HttpCode,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
+  ParseUUIDPipe,
+} from '@nestjs/common';
+import { createReadStream } from 'fs';
+import type { Request, Response } from 'express';
+import { MediaFilesService } from '../services/media-files.service.js';
+import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
+import { VisibilityDto } from '../dto/visibility.dto.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+
+// Mock PermissionsGuard — nhất quán IOT/REC controller.
+const MockPermissionsGuard = class {
+  canActivate() {
+    return true;
+  }
+};
+const Permissions =
+  (...args: string[]) =>
+  (target: any, key?: any, descriptor?: any) => {};
+
+@Controller()
+export class MediaFilesController {
+  constructor(private readonly mediaFilesService: MediaFilesService) {}
+
+  // REC-006 (UC-120): list media_files theo meeting.
+  @Get('meetings/:meetingId/media-files')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.files.read')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async list(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Query() query: ListMediaQueryDto,
+  ) {
+    const { items, meta } = await this.mediaFilesService.list(meetingId, query);
+    return {
+      success: true,
+      message: 'Media files retrieved',
+      data: items,
+      meta,
+    };
+  }
+
+  // REC-006 (UC-121): chi tiết media_file.
+  @Get('media-files/:fileId')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.files.read')
+  async detail(@Param('fileId', ParseUUIDPipe) fileId: string) {
+    const data = await this.mediaFilesService.detail(fileId);
+    return {
+      success: true,
+      message: 'Media file retrieved',
+      data,
+    };
+  }
+
+  // REC-006 (UC-122 v1 local): stream playback + HTTP Range.
+  @Get('media-files/:fileId/playback')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.files.play')
+  async playback(
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const m = await this.mediaFilesService.resolvePlayback(fileId);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', m.mimeType);
+
+    const onError = () => {
+      // KHÔNG lộ đường dẫn nội bộ.
+      if (!res.headersSent) res.status(500).end();
+      else res.end();
+    };
+
+    const range: string | undefined = req.headers?.range;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+      const range416 = () => {
+        res.writeHead(416, { 'Content-Range': `bytes */${m.size}` });
+        res.end();
+      };
+      if (!match || (match[1] === '' && match[2] === '')) {
+        range416();
+        return;
+      }
+      let start: number;
+      let end: number;
+      if (match[1] === '') {
+        // suffix 'bytes=-N' → N byte cuối.
+        const n = parseInt(match[2], 10);
+        if (Number.isNaN(n) || n === 0) {
+          range416();
+          return;
+        }
+        start = Math.max(0, m.size - n);
+        end = m.size - 1;
+      } else {
+        start = parseInt(match[1], 10);
+        if (Number.isNaN(start) || start >= m.size) {
+          range416();
+          return;
+        }
+        end = match[2] ? parseInt(match[2], 10) : m.size - 1;
+        if (Number.isNaN(end)) {
+          range416();
+          return;
+        }
+        end = Math.min(end, m.size - 1); // clamp thay vì 416.
+        if (end < start) {
+          range416();
+          return;
+        }
+      }
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${m.size}`,
+        'Content-Length': end - start + 1,
+      });
+      const stream = createReadStream(m.path, { start, end });
+      stream.on('error', onError);
+      stream.pipe(res);
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Length': m.size });
+    const stream = createReadStream(m.path);
+    stream.on('error', onError);
+    stream.pipe(res);
+  }
+
+  // REC-006 (UC-123): ẩn/xóa-mềm media_file.
+  @Patch('media-files/:fileId/visibility')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('recording.files.manage')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async setVisibility(
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+    @Body() dto: VisibilityDto,
+  ) {
+    const data = await this.mediaFilesService.setVisibility(fileId, dto);
+    return {
+      success: true,
+      message: 'Media file visibility updated',
+      data,
+    };
+  }
+}

@@ -59,7 +59,9 @@ describe('StorageService', () => {
   describe('getPublicUrl()', () => {
     it('should return correct public URL', () => {
       const url = service.getPublicUrl('recordings/test-file.mp4');
-      expect(url).toBe('http://localhost:3000/uploads/recordings/test-file.mp4');
+      expect(url).toBe(
+        'http://localhost:3000/uploads/recordings/test-file.mp4',
+      );
     });
 
     it('should handle base URL with trailing slash', async () => {
@@ -140,7 +142,9 @@ describe('StorageService', () => {
 
     it('should not throw if file does not exist', async () => {
       mockFs.existsSync.mockReturnValue(false);
-      await expect(service.deleteFile('missing/file.txt')).resolves.not.toThrow();
+      await expect(
+        service.deleteFile('missing/file.txt'),
+      ).resolves.not.toThrow();
     });
   });
 
@@ -166,6 +170,31 @@ describe('StorageService', () => {
   describe('getDriver()', () => {
     it('should return the current storage driver', () => {
       expect(service.getDriver()).toBe('local');
+    });
+  });
+
+  describe('getFile() (FPE-001)', () => {
+    it('đọc bytes ok khi storageKey hợp lệ', () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue(Buffer.from('JPEGDATA'));
+      const buf = service.getFile('face-profiles/abc.jpg');
+      expect(buf.toString()).toBe('JPEGDATA');
+    });
+
+    it('SEC-03: path traversal → ném, KHÔNG đọc', () => {
+      mockFs.readFileSync.mockClear();
+      mockFs.existsSync.mockReturnValue(true);
+      expect(() => service.getFile('../../../etc/passwd')).toThrow(
+        /traversal/i,
+      );
+      expect(mockFs.readFileSync).not.toHaveBeenCalled();
+    });
+
+    it('file không tồn tại → ném', () => {
+      mockFs.existsSync.mockReturnValue(false);
+      expect(() => service.getFile('face-profiles/missing.jpg')).toThrow(
+        /not found/i,
+      );
     });
   });
 });

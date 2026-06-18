@@ -1,0 +1,457 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+import { createHash } from 'crypto';
+import { Test, TestingModule } from '@nestjs/testing';
+import { DataSource } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { FaceProvisioningService } from './face-provisioning.service.js';
+import { FaceDeviceProviderFactory } from '../face-device-provider.factory.js';
+import { FaceProfileService } from '../../accounts/services/face-profile.service.js';
+
+// device uname = hash 32-hex deterministic của `${userId}:${meetingId}` (B đẩy lên cam).
+const deviceUname = (userId: string, meetingId: string) =>
+  createHash('sha256')
+    .update(`${userId}:${meetingId}`)
+    .digest('hex')
+    .slice(0, 32);
+const UNAME = deviceUname('u1', 'm1');
+
+const meeting = (over: any = {}) => ({
+  id: 'm1',
+  room_id: 'r1',
+  start_time: '2026-06-17T09:00:00Z',
+  end_time: '2026-06-17T10:00:00Z',
+  ...over,
+});
+const device = { id: 'dev1', ip_address: '192.168.1.222', metadata_json: {} };
+
+const calls = (mock: jest.Mock, needle: string) =>
+  mock.mock.calls.filter((c: any[]) => String(c[0]).includes(needle));
+
+describe('FaceProvisioningService (FMP-001)', () => {
+  let service: FaceProvisioningService;
+  let dsMock: any;
+  let factoryMock: any;
+  let profileMock: any;
+  let provider: any;
+
+  beforeEach(async () => {
+    provider = {
+      uploadFace: jest
+        .fn()
+        .mockResolvedValue({ dwfiletype: 0, dwfileindex: 1, dwfilepos: 5 }),
+      addPerson: jest.fn().mockResolvedValue({ ok: true }),
+      findUidByName: jest.fn().mockResolvedValue('70'),
+      deletePerson: jest.fn().mockResolvedValue({ ok: true }),
+    };
+    factoryMock = { create: jest.fn().mockReturnValue(provider) };
+    profileMock = {
+      getPortraitBytes: jest.fn().mockResolvedValue(Buffer.from('JPEG')),
+    };
+    dsMock = { manager: { query: jest.fn() } };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        FaceProvisioningService,
+        { provide: DataSource, useValue: dsMock },
+        { provide: FaceDeviceProviderFactory, useValue: factoryMock },
+        { provide: FaceProfileService, useValue: profileMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+      ],
+    }).compile();
+    service = module.get(FaceProvisioningService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  // default router: device found, 1 participant, no existing mapping
+  const defaultRouter =
+    (over: { participants?: any[]; idempotency?: any[] } = {}) =>
+    (sql: string) => {
+      if (sql.includes('FROM iot_devices') && sql.includes('face_server'))
+        return Promise.resolve([device]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(over.participants ?? [{ user_id: 'u1' }]);
+      if (sql.includes('SELECT sync_status FROM device_user_mappings'))
+        return Promise.resolve(over.idempotency ?? []);
+      if (sql.includes('SELECT id FROM device_user_mappings'))
+        return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    };
+
+  // ── PROVISION ──
+  it('happy: upload→add→find→upsert mapping synced (uname = hash 32-hex)', async () => {
+    dsMock.manager.query.mockImplementation(defaultRouter());
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).toHaveBeenCalledTimes(1);
+    expect(provider.addPerson).toHaveBeenCalledWith(
+      expect.objectContaining({ uname: UNAME }),
+    );
+    expect(provider.findUidByName).toHaveBeenCalledWith(UNAME);
+    const ins = calls(dsMock.manager.query, 'INSERT INTO device_user_mappings');
+    expect(ins.length).toBe(1);
+    // device_person_code/name = UNAME (hash), kèm uid thật + synced.
+    expect(ins[0][1]).toEqual(expect.arrayContaining(['synced', '70', UNAME]));
+  });
+
+  it('device uname: hash 32-hex (≤47, vừa giới hạn cam) + deterministic', () => {
+    expect(UNAME).toMatch(/^[0-9a-f]{32}$/);
+    expect(UNAME.length).toBeLessThanOrEqual(47);
+    // deterministic: tính lại từ cùng (userId, meetingId) → trùng (re-provision idempotent).
+    expect(deviceUname('u1', 'm1')).toBe(UNAME);
+    expect(deviceUname('u1', 'm2')).not.toBe(UNAME);
+  });
+
+  it('idempotency: đã synced → SKIP (KHÔNG upload/add)', async () => {
+    dsMock.manager.query.mockImplementation(
+      defaultRouter({ idempotency: [{ sync_status: 'synced' }] }),
+    );
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).not.toHaveBeenCalled();
+    expect(provider.addPerson).not.toHaveBeenCalled();
+  });
+
+  it('isolation: 1 participant lỗi → failed, người khác vẫn synced', async () => {
+    dsMock.manager.query.mockImplementation(
+      defaultRouter({ participants: [{ user_id: 'u1' }, { user_id: 'u2' }] }),
+    );
+    provider.addPerson
+      .mockRejectedValueOnce(new Error('device boom'))
+      .mockResolvedValueOnce({ ok: true });
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).toHaveBeenCalledTimes(2);
+    const writes = calls(dsMock.manager.query, 'device_user_mappings').filter(
+      (c: any[]) =>
+        String(c[0]).includes('INSERT') || String(c[0]).includes('UPDATE'),
+    );
+    const statuses = writes.map((c: any[]) =>
+      (c[1] as any[]).find((p) => p === 'failed' || p === 'synced'),
+    );
+    expect(statuses).toContain('failed');
+    expect(statuses).toContain('synced');
+  });
+
+  it('portrait null → skip (KHÔNG enroll)', async () => {
+    dsMock.manager.query.mockImplementation(defaultRouter());
+    profileMock.getPortraitBytes.mockResolvedValue(null);
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).not.toHaveBeenCalled();
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO device_user_mappings').length,
+    ).toBe(0);
+  });
+
+  it('no device trong room → bỏ qua', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM iot_devices')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).not.toHaveBeenCalled();
+    expect(
+      calls(dsMock.manager.query, 'FROM meeting_participants').length,
+    ).toBe(0);
+  });
+
+  it('provisionUpcomingMeetings: quét meetings + cô lập lỗi từng meeting', async () => {
+    const meetings = [meeting({ id: 'm1' }), meeting({ id: 'm2' })];
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM meetings')) return Promise.resolve(meetings);
+      return defaultRouter()(sql);
+    });
+    // meeting m1 ném lỗi (vd device throw) nhưng KHÔNG chặn m2
+    const spy = jest
+      .spyOn(service, 'provisionMeeting')
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce();
+    const r = await service.provisionUpcomingMeetings();
+    expect(r.scanned).toBe(2);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  // ── DEPROVISION (mapping-driven) ──
+  it('deprovisionEndedMeetings: họp kết thúc ≥ grace + synced → gỡ (deletePerson + deleted)', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me'))
+        return Promise.resolve([
+          { id: 'map1', device_id: 'dev1', device_person_id: '64' },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.deprovisionEndedMeetings();
+    expect(r.scanned).toBe(1);
+    expect(provider.deletePerson).toHaveBeenCalledWith('64');
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+  });
+
+  it('deprovisionEndedMeetings: còn trong grace (DB lọc rỗng) → CHƯA gỡ', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.deprovisionEndedMeetings();
+    expect(r.scanned).toBe(0);
+    expect(provider.deletePerson).not.toHaveBeenCalled();
+  });
+
+  it('deprovisionEndedMeetings: họp kết thúc rất lâu + vẫn synced → vẫn gỡ (hết miss-window)', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me'))
+        return Promise.resolve([
+          { id: 'old1', device_id: 'dev1', device_person_id: '99' },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.deprovisionEndedMeetings();
+    expect(r.scanned).toBe(1);
+    expect(provider.deletePerson).toHaveBeenCalledWith('99');
+  });
+
+  it('deprovisionEndedMeetings: query có guard synced + deleted_at IS NULL + grace', async () => {
+    let captured = '';
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) {
+        captured = sql;
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(undefined);
+    });
+    await service.deprovisionEndedMeetings();
+    expect(captured).toContain("mp.sync_status = 'synced'");
+    expect(captured).toContain('mp.deleted_at IS NULL');
+    expect(captured).toContain(
+      "end_time <= now() - ($1 * interval '1 minute')",
+    );
+  });
+
+  it('deprovision: deletePerson(uid) → mapping removed', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes("metadata_json->>'bookingId' = $1 AND sync_status"))
+        return Promise.resolve([
+          { id: 'map1', device_id: 'dev1', device_person_id: '64' },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    await service.deprovisionMeeting(meeting());
+    expect(provider.deletePerson).toHaveBeenCalledWith('64');
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+  });
+
+  // ── RECONCILE ──
+  it('reconcile stale: synced + meeting ended ≥ grace → deprovision (query có grace)', async () => {
+    let staleSql = '';
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) {
+        staleSql = sql;
+        return Promise.resolve([
+          { id: 'map1', device_id: 'dev1', device_person_id: '64' },
+        ]);
+      }
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([]); // no dedup
+      return Promise.resolve(undefined);
+    });
+    const r = await service.reconcile();
+    expect(r.stale).toBe(1);
+    expect(provider.deletePerson).toHaveBeenCalledWith('64');
+    // grace: không gỡ sớm trong cửa sổ grace.
+    expect(staleSql).toContain(
+      "end_time <= now() - ($1 * interval '1 minute')",
+    );
+  });
+
+  it('upsertMapping UPDATE: mapping đã tồn tại (user,device,bookingId) → UPDATE thay vì INSERT', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM iot_devices') && sql.includes('face_server'))
+        return Promise.resolve([device]);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve([{ user_id: 'u1' }]);
+      if (sql.includes('SELECT sync_status FROM device_user_mappings'))
+        return Promise.resolve([]); // chưa synced → tiếp tục enroll
+      if (sql.includes('SELECT id FROM device_user_mappings'))
+        return Promise.resolve([{ id: 'existing-map' }]); // upsert → UPDATE
+      return Promise.resolve(undefined);
+    });
+    await service.provisionMeeting(meeting());
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(upd.length).toBe(1);
+    expect(upd[0][1]).toEqual(
+      expect.arrayContaining(['existing-map', 'synced']),
+    );
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO device_user_mappings').length,
+    ).toBe(0);
+  });
+
+  it('uid null sau addPerson → vẫn upsert (warn), KHÔNG crash', async () => {
+    dsMock.manager.query.mockImplementation(defaultRouter());
+    provider.findUidByName.mockResolvedValue(null);
+    await service.provisionMeeting(meeting());
+    const ins = calls(dsMock.manager.query, 'INSERT INTO device_user_mappings');
+    expect(ins.length).toBe(1);
+    expect((ins[0][1] as any[])[2]).toBeNull(); // device_person_id = null
+  });
+
+  it('removeMapping: device_person_id null → chỉ UPDATE removed, KHÔNG deletePerson', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes("metadata_json->>'bookingId' = $1 AND sync_status"))
+        return Promise.resolve([
+          { id: 'map1', device_id: 'dev1', device_person_id: null },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    await service.deprovisionMeeting(meeting());
+    expect(provider.deletePerson).not.toHaveBeenCalled();
+    expect(
+      calls(dsMock.manager.query, 'FROM iot_devices WHERE id').length,
+    ).toBe(0);
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+  });
+
+  it('deprovision: findDeviceById null → skip deletePerson nhưng vẫn UPDATE removed', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes("metadata_json->>'bookingId' = $1 AND sync_status"))
+        return Promise.resolve([
+          { id: 'map1', device_id: 'dev1', device_person_id: '64' },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id')) return Promise.resolve([]); // device đã bị xoá
+      return Promise.resolve(undefined);
+    });
+    await service.deprovisionMeeting(meeting());
+    expect(provider.deletePerson).not.toHaveBeenCalled();
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+  });
+
+  it('reconcile dedup: findUidByName trả ĐÚNG uid đang lưu → KHÔNG xoá', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]);
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([
+          {
+            device_id: 'dev1',
+            device_person_id: '50',
+            device_person_code: 'u1:m1',
+            metadata_json: {},
+          },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    provider.findUidByName.mockResolvedValue('50'); // trùng uid đang lưu
+    const r = await service.reconcile();
+    expect(r.deduped).toBe(0);
+    expect(provider.deletePerson).not.toHaveBeenCalled();
+  });
+
+  it('reconcile dedup: findUidByName trả null → KHÔNG xoá', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]);
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([
+          {
+            device_id: 'dev1',
+            device_person_id: '50',
+            device_person_code: 'u1:m1',
+            metadata_json: {},
+          },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    provider.findUidByName.mockResolvedValue(null);
+    const r = await service.reconcile();
+    expect(r.deduped).toBe(0);
+    expect(provider.deletePerson).not.toHaveBeenCalled();
+  });
+
+  it('reconcile dedup: findDeviceById null → skip (continue)', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]);
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([
+          {
+            device_id: 'dev1',
+            device_person_id: '50',
+            device_person_code: 'u1:m1',
+            metadata_json: {},
+          },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.reconcile();
+    expect(r.deduped).toBe(0);
+    expect(provider.findUidByName).not.toHaveBeenCalled();
+  });
+
+  it('reconcile dedup: mapping thiếu uname/uid → continue', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]);
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([
+          {
+            device_id: 'dev1',
+            device_person_id: null,
+            device_person_code: null,
+            metadata_json: {},
+          },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.reconcile();
+    expect(r.deduped).toBe(0);
+    expect(factoryMock.create).not.toHaveBeenCalled();
+  });
+
+  it('reconcile dedup: findUidByName trả uid khác → xoá uid cũ', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me')) return Promise.resolve([]); // no stale
+      if (
+        sql.includes('SELECT device_id, device_person_id, device_person_code')
+      )
+        return Promise.resolve([
+          {
+            device_id: 'dev1',
+            device_person_id: '50',
+            device_person_code: 'u1:m1',
+            metadata_json: {},
+          },
+        ]);
+      if (sql.includes('FROM iot_devices WHERE id'))
+        return Promise.resolve([device]);
+      return Promise.resolve(undefined);
+    });
+    provider.findUidByName.mockResolvedValue('70'); // mới hơn 50
+    const r = await service.reconcile();
+    expect(r.deduped).toBe(1);
+    expect(provider.deletePerson).toHaveBeenCalledWith('50');
+  });
+});

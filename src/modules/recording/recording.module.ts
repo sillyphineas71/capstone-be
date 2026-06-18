@@ -10,6 +10,12 @@ import { AuthModule } from '../auth/auth.module.js';
 import { RecordingConfigController } from './controllers/recording-config.controller.js';
 import { RecordingConfigService } from './services/recording-config.service.js';
 import { RecordingConfigAuditRepository } from './repositories/recording-config-audit.repository.js';
+import { RecordingSessionController } from './controllers/recording-session.controller.js';
+import { RecordingSessionService } from './services/recording-session.service.js';
+import { RecordingProcessManager } from './services/recording-process-manager.js';
+import { RecordingReconcileService } from './services/recording-reconcile.service.js';
+import { MediaFilesController } from './controllers/media-files.controller.js';
+import { MediaFilesService } from './services/media-files.service.js';
 
 /**
  * RecordingModule quản lý các entity recording + CRUD recording-config (REC-001).
@@ -30,8 +36,19 @@ import { RecordingConfigAuditRepository } from './repositories/recording-config-
     JwtModule.register({}),
     CacheModule.register(),
   ],
-  controllers: [RecordingConfigController],
-  providers: [RecordingConfigService, RecordingConfigAuditRepository],
+  controllers: [
+    RecordingConfigController,
+    RecordingSessionController,
+    MediaFilesController,
+  ],
+  providers: [
+    RecordingConfigService,
+    RecordingConfigAuditRepository,
+    RecordingSessionService,
+    RecordingProcessManager,
+    RecordingReconcileService,
+    MediaFilesService,
+  ],
   exports: [TypeOrmModule],
 })
 export class RecordingModule {}

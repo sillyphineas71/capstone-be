@@ -1,5 +1,7 @@
 import {
   Injectable,
+  Inject,
+  Optional,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -9,8 +11,15 @@ import {
 } from '@nestjs/common';
 import { DataSource, Not, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { FACE_VERIFY_HOOK } from '../../../common/ports/face-verify-hook.js';
+import type { FaceVerifyHook } from '../../../common/ports/face-verify-hook.js';
 import * as crypto from 'crypto';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
+import {
+  parseVerifyPayload,
+  stripSanpPic,
+} from '../utils/face-verify-payload.util.js';
+import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import {
   IoTDeviceEntity,
   IoTDeviceType,
@@ -66,6 +75,10 @@ export class IotDevicesService {
     private readonly iotAuditRepository: IotAuditRepository,
     private readonly iotDeviceEventsService: IotDeviceEventsService,
     private readonly configService: ConfigService,
+    // FAT-001 (NC-4): hook attendance, optional để verify callback không phụ thuộc.
+    @Optional()
+    @Inject(FACE_VERIFY_HOOK)
+    private readonly faceVerifyHook?: FaceVerifyHook,
   ) {}
 
   async create(
@@ -114,7 +127,10 @@ export class IotDevicesService {
         lastSeenAt: null,
       });
 
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, newDevice);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        newDevice,
+      );
 
       let createdByName: string | null = null;
       if (userId) {
@@ -337,8 +353,11 @@ export class IotDevicesService {
     });
 
     // Resolve địa chỉ probe; bỏ camera không có địa chỉ hợp lệ.
-    const targets: Array<{ device: IoTDeviceEntity; host: string; port: number }> =
-      [];
+    const targets: Array<{
+      device: IoTDeviceEntity;
+      host: string;
+      port: number;
+    }> = [];
     for (const device of cameras) {
       const addr = this.resolveProbeAddress(device);
       if (addr) targets.push({ device, host: addr.host, port: addr.port });
@@ -642,7 +661,10 @@ export class IotDevicesService {
       const oldRoomId = device.roomId;
 
       device.roomId = dto.roomId;
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logAssignRoom(queryRunner.manager, {
         userId,
@@ -733,7 +755,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logConfigureFaceServer(
         queryRunner.manager,
@@ -798,19 +823,34 @@ export class IotDevicesService {
     const rtsp_port = dto.rtsp_port !== undefined ? dto.rtsp_port : 554;
     const stream_profile = dto.stream_profile || 'main';
 
-    // SEC-01: never persist the RTSP password (no encryption util exists in the
-    // codebase). The connection URL is written to stream_url WITHOUT credentials;
-    // we only keep a boolean flag indicating whether a password was configured.
+    // IOT-015 (SEC-01): mật khẩu RTSP được mã hóa AES-256-GCM (secret-crypto.util)
+    // và lưu vào rtsp_password_encrypted. KHÔNG bao giờ lưu plaintext; stream_url
+    // KHÔNG kèm user:pass. Nếu không gửi password → carry-over encrypted + flag cũ.
     const passwordProvided =
       dto.rtsp_password !== undefined && dto.rtsp_password !== '';
-    const rtsp_password_configured =
-      passwordProvided || currentRtspConfig.rtsp_password_configured === true;
+
+    const prevCfg = currentRtspConfig as {
+      rtsp_password_encrypted?: string;
+      rtsp_password_configured?: boolean;
+    };
+    let rtspPasswordEncrypted: string | undefined;
+    let rtsp_password_configured: boolean;
+    if (passwordProvided) {
+      rtspPasswordEncrypted = encryptSecret(dto.rtsp_password as string);
+      rtsp_password_configured = true;
+    } else {
+      rtspPasswordEncrypted =
+        typeof prevCfg.rtsp_password_encrypted === 'string'
+          ? prevCfg.rtsp_password_encrypted
+          : undefined;
+      rtsp_password_configured = prevCfg.rtsp_password_configured === true;
+    }
 
     // RTSP connection string stored in the stream_url column (no user:pass@).
     const streamUrl = `${dto.rtsp_protocol}://${dto.rtsp_host}:${rtsp_port}${dto.rtsp_path}`;
     device.streamUrl = streamUrl;
 
-    const newRtspConfig = {
+    const newRtspConfig: Record<string, unknown> = {
       rtsp_enabled,
       rtsp_protocol: dto.rtsp_protocol,
       rtsp_host: dto.rtsp_host,
@@ -821,6 +861,9 @@ export class IotDevicesService {
       rtsp_password_configured,
       configured_at: new Date().toISOString(),
     };
+    if (rtspPasswordEncrypted) {
+      newRtspConfig.rtsp_password_encrypted = rtspPasswordEncrypted;
+    }
 
     const updatedMetadata = {
       ...currentMetadata,
@@ -834,7 +877,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       await this.iotAuditRepository.logConfigureRtsp(queryRunner.manager, {
         userId,
@@ -963,7 +1009,10 @@ export class IotDevicesService {
     await queryRunner.startTransaction();
 
     try {
-      const savedDevice = await queryRunner.manager.save(IoTDeviceEntity, device);
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
 
       // No audit log for this UC
 
@@ -1245,19 +1294,23 @@ export class IotDevicesService {
     }
 
     // 8. Process payload tolerant ingestion
+    // Danh tính verify ở body.info.* (payload thật FaceGate VerifyPush), KHÔNG ở body.person_id.
     const now = new Date();
+    const { isValid: isValidVerify, personId, personName, info } =
+      parseVerifyPayload(body);
     const extractedFields: any = {
-      person_id: body?.person_id || null,
-      person_name: body?.person_name || null,
-      verify_time: body?.verify_time || null,
-      verify_result: body?.verify_result || null,
-      similarity: body?.similarity || null,
+      operator: body?.operator ?? null,
+      person_id: personId,
+      person_name: personName,
+      verify_time: info.CreateTime ?? null,
+      verify_status: info.VerifyStatus ?? null,
+      similarity: info.Similarity1 ?? null,
     };
 
     let payloadToMask: any = {};
     if (body) {
-      // Create a shallow copy to mask
-      payloadToMask = { ...body };
+      // Shallow copy + STRIP base64 ảnh (SanpPic) — TUYỆT ĐỐI không lưu/log base64.
+      payloadToMask = stripSanpPic({ ...body });
     } else {
       payloadToMask = {
         _unparseable: true,
@@ -1354,6 +1407,32 @@ export class IotDevicesService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+
+    // FAT-001 (NC-4): chuyển verify → attendance qua hook. Raw event đã lưu ở trên.
+    // Chỉ ghi khi verify hợp lệ (VerifyPush + VerifyStatus===1). CreateTime là giờ
+    // local thiết bị (không tz) → KHÔNG tin cho tính trễ; dùng `now`.
+    // Lỗi attendance KHÔNG được làm hỏng response 200 của callback.
+    if (this.faceVerifyHook && isValidVerify) {
+      try {
+        await this.faceVerifyHook.onVerify({
+          deviceId: device.id,
+          roomId: device.roomId,
+          personId,
+          personName,
+          verifyTime: now,
+        });
+      } catch (e) {
+        this.logger.error(
+          `face attendance hook failed (verify still 200): ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    } else if (this.faceVerifyHook) {
+      this.logger.warn(
+        `verify skip (no record): operator=${body?.operator ?? '∅'} VerifyStatus=${info.VerifyStatus ?? '∅'}`,
+      );
     }
 
     return {

@@ -37,8 +37,14 @@ export class StorageService implements OnModuleInit {
   private readonly publicBaseUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.storageDriver = this.configService.get<string>('STORAGE_DRIVER', 'local');
-    this.localPath = this.configService.get<string>('STORAGE_LOCAL_PATH', './uploads');
+    this.storageDriver = this.configService.get<string>(
+      'STORAGE_DRIVER',
+      'local',
+    );
+    this.localPath = this.configService.get<string>(
+      'STORAGE_LOCAL_PATH',
+      './uploads',
+    );
     this.publicBaseUrl = this.configService.get<string>(
       'STORAGE_PUBLIC_BASE_URL',
       'http://localhost:3000/uploads',
@@ -49,7 +55,9 @@ export class StorageService implements OnModuleInit {
     if (this.storageDriver === 'local') {
       this.ensureLocalDirExists();
     }
-    this.logger.log(`StorageService initialized — driver: ${this.storageDriver}`);
+    this.logger.log(
+      `StorageService initialized — driver: ${this.storageDriver}`,
+    );
   }
 
   /**
@@ -82,10 +90,14 @@ export class StorageService implements OnModuleInit {
   async saveFile(options: SaveFileOptions): Promise<SaveFileResult> {
     if (this.storageDriver !== 'local') {
       // TODO: implement S3 adapter
-      throw new Error(`Storage driver "${this.storageDriver}" is not yet implemented.`);
+      throw new Error(
+        `Storage driver "${this.storageDriver}" is not yet implemented.`,
+      );
     }
 
-    const storageKey = options.storageKey ?? this.getStorageKey(options.originalName, options.folder);
+    const storageKey =
+      options.storageKey ??
+      this.getStorageKey(options.originalName, options.folder);
     const resolvedPath = path.resolve(this.localPath, storageKey);
     const dir = path.dirname(resolvedPath);
 
@@ -108,7 +120,9 @@ export class StorageService implements OnModuleInit {
   async deleteFile(storageKey: string): Promise<void> {
     if (this.storageDriver !== 'local') {
       // TODO: implement S3 adapter
-      throw new Error(`Storage driver "${this.storageDriver}" is not yet implemented.`);
+      throw new Error(
+        `Storage driver "${this.storageDriver}" is not yet implemented.`,
+      );
     }
 
     const resolvedPath = path.resolve(this.localPath, storageKey);
@@ -118,6 +132,27 @@ export class StorageService implements OnModuleInit {
     } else {
       this.logger.warn(`File not found for deletion: ${storageKey}`);
     }
+  }
+
+  /**
+   * Đọc bytes file local (FPE-001). SEC-03: chống path-traversal — resolved phải nằm
+   * trong localPath; file thiếu → ném lỗi rõ.
+   */
+  getFile(storageKey: string): Buffer {
+    if (this.storageDriver !== 'local') {
+      throw new Error(
+        `Storage driver "${this.storageDriver}" is not yet implemented.`,
+      );
+    }
+    const base = path.resolve(this.localPath);
+    const resolved = path.resolve(this.localPath, storageKey);
+    if (!(resolved === base || resolved.startsWith(base + path.sep))) {
+      throw new Error('Invalid storage key (path traversal).');
+    }
+    if (!fs.existsSync(resolved)) {
+      throw new Error('File not found.');
+    }
+    return fs.readFileSync(resolved);
   }
 
   /**
@@ -132,7 +167,11 @@ export class StorageService implements OnModuleInit {
    * Kiểm tra thư mục local storage có tồn tại và có thể ghi không.
    * Dùng cho health check.
    */
-  checkLocalStorageAccess(): { accessible: boolean; path: string; error?: string } {
+  checkLocalStorageAccess(): {
+    accessible: boolean;
+    path: string;
+    error?: string;
+  } {
     if (this.storageDriver !== 'local') {
       return { accessible: true, path: 'remote', error: undefined };
     }
@@ -140,7 +179,11 @@ export class StorageService implements OnModuleInit {
     const resolvedPath = path.resolve(this.localPath);
     try {
       if (!fs.existsSync(resolvedPath)) {
-        return { accessible: false, path: resolvedPath, error: 'Directory does not exist' };
+        return {
+          accessible: false,
+          path: resolvedPath,
+          error: 'Directory does not exist',
+        };
       }
       fs.accessSync(resolvedPath, fs.constants.W_OK);
       return { accessible: true, path: resolvedPath };

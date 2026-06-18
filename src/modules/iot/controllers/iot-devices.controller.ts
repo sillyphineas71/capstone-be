@@ -18,6 +18,7 @@ import { CreateIotDeviceDto } from '../dto/create-iot-device.dto.js';
 import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
 import { ListIotDevicesQueryDto } from '../dto/list-iot-devices-query.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
+import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -160,6 +161,35 @@ export class IotDevicesController {
     return {
       success: true,
       message: 'IoT device updated successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  // IOT-005: cấu hình RTSP cho IP/room camera. Password mã hóa AES-256-GCM (IOT-015);
+  // response mask rtsp_password_encrypted. Route 2-segment ':id/rtsp-config' không
+  // đụng ':id'. Pipe forbidNonWhitelisted=false để bỏ qua field thừa (giống assign-room).
+  @Patch(':id/rtsp-config')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:configure_rtsp')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async configureRtsp(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfigureRtspDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.configureRtsp(userId, id, dto);
+
+    return {
+      success: true,
+      message: 'RTSP configuration updated successfully',
       data: toIotDeviceResponse(device),
     };
   }

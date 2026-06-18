@@ -144,6 +144,34 @@ export const envValidationSchema = Joi.object({
   DEVICE_OFFLINE_DETECT_ENABLED: Joi.boolean().default(true),
   RTSP_PROBE_TIMEOUT_MS: Joi.number().integer().min(100).default(3000),
 
+  // ─── Q. Recording Capture (IOT-015 / #23) ────────────────────────────────────
+  // Khóa mã hóa mật khẩu RTSP (AES-256-GCM, key=sha256(RTSP_CRED_KEY)).
+  // ĐỔI key này = KHÔNG giải mã được các password đã lưu trước đó.
+  RTSP_CRED_KEY: Joi.string().min(32).required(),
+  // REC-002: ffmpeg + nơi lưu file recording.
+  FFMPEG_PATH: Joi.string().default('ffmpeg'),
+  RECORDING_STORAGE_PATH: Joi.string().default('./storage/recordings'),
+  // REC-005: ffprobe trích metadata media (best-effort).
+  FFPROBE_PATH: Joi.string().default('ffprobe'),
+  // NSC-001 (#31): token nội bộ cho POST /internal/no-show-cases (fail-closed nếu rỗng).
+  NOSHOW_INTERNAL_TOKEN: Joi.string().allow('').default(''),
+  // NSC-001: ngưỡng no-show (phút) — fallback khi system_configs chưa cấu hình (#35).
+  NO_SHOW_THRESHOLD_MINUTES: Joi.number().integer().min(1).default(15),
+  // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
+  FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
+  FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),
+  FACEGATE_UPLOAD_FIELD: Joi.string().default('vfileselector'),
+  // FPE-001 (Face-access D): giới hạn kích thước ảnh chân dung enroll.
+  FACE_PORTRAIT_MAX_BYTES: Joi.number().integer().min(1).default(5242880),
+  // FMP-001 (Face-access B): per-meeting provisioning (cron gated OFF mặc định).
+  FACE_SYNC_ENABLED: Joi.boolean().default(false),
+  FACE_SYNC_LEAD_MINUTES: Joi.number().integer().min(1).default(5),
+  FACE_SYNC_GRACE_MINUTES: Joi.number().integer().min(1).default(5),
+  // FAT-001 (Face-access C): grace (phút) phân loại late khi điểm danh bằng khuôn mặt.
+  ATTENDANCE_LATE_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
+  // FAT-001: bật debug log payload verify callback (đã strip SanpPic).
+  FACE_VERIFY_DEBUG: Joi.boolean().default(false),
+
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),
   SYSTEM_CONFIG_CACHE_TTL_SECONDS: Joi.number().integer().default(300),
