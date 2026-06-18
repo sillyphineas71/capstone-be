@@ -66,9 +66,11 @@ describe('FaceProvisioningService (FMP-001)', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  // default router: device found, 1 participant, no existing mapping
+  // default router: device found, 1 participant, slot trống, upsert chưa có row
   const defaultRouter =
-    (over: { participants?: any[]; idempotency?: any[] } = {}) =>
+    (
+      over: { participants?: any[]; slot?: any[]; upsertExisting?: any[] } = {},
+    ) =>
     (sql: string) => {
       if (sql.includes('FROM iot_devices') && sql.includes('face_server'))
         return Promise.resolve([device]);
@@ -76,10 +78,12 @@ describe('FaceProvisioningService (FMP-001)', () => {
         return Promise.resolve([device]);
       if (sql.includes('FROM meeting_participants'))
         return Promise.resolve(over.participants ?? [{ user_id: 'u1' }]);
-      if (sql.includes('SELECT sync_status FROM device_user_mappings'))
-        return Promise.resolve(over.idempotency ?? []);
+      // MCS #2 slot-check (device,user, deleted_at IS NULL) — có alias booking_id.
+      if (sql.includes('AS booking_id'))
+        return Promise.resolve(over.slot ?? []);
+      // upsertMapping existing-check (user,device,bookingId).
       if (sql.includes('SELECT id FROM device_user_mappings'))
-        return Promise.resolve([]);
+        return Promise.resolve(over.upsertExisting ?? []);
       return Promise.resolve(undefined);
     };
 
@@ -106,13 +110,56 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(deviceUname('u1', 'm2')).not.toBe(UNAME);
   });
 
-  it('idempotency: đã synced → SKIP (KHÔNG upload/add)', async () => {
+  it('MCS #2 idempotency-merged: slot synced cùng booking → noop (KHÔNG upload/add)', async () => {
     dsMock.manager.query.mockImplementation(
-      defaultRouter({ idempotency: [{ sync_status: 'synced' }] }),
+      defaultRouter({
+        slot: [{ id: 'x', sync_status: 'synced', booking_id: 'm1' }],
+      }),
     );
     await service.provisionMeeting(meeting());
     expect(provider.uploadFace).not.toHaveBeenCalled();
     expect(provider.addPerson).not.toHaveBeenCalled();
+    // KHÔNG còn query 'SELECT sync_status FROM device_user_mappings' (đã gỡ check cũ).
+    expect(
+      calls(
+        dsMock.manager.query,
+        'SELECT sync_status FROM device_user_mappings',
+      ).length,
+    ).toBe(0);
+  });
+
+  it('MCS #2 busy: slot bận bởi meeting KHÁC → SKIP (factory KHÔNG gọi, 0 INSERT/UPDATE)', async () => {
+    dsMock.manager.query.mockImplementation(
+      defaultRouter({
+        slot: [{ id: 'x', sync_status: 'synced', booking_id: 'm2' }],
+      }),
+    );
+    const r = await service.provisionMeeting(meeting({ id: 'm1' }));
+    expect(r).toEqual({ skipped: 1 });
+    expect(factoryMock.create).not.toHaveBeenCalled();
+    expect(provider.uploadFace).not.toHaveBeenCalled();
+    const writes = calls(dsMock.manager.query, 'device_user_mappings').filter(
+      (c: any[]) =>
+        String(c[0]).includes('INSERT') || String(c[0]).includes('UPDATE'),
+    );
+    expect(writes.length).toBe(0);
+  });
+
+  it('MCS #2 revive: slot cùng booking chưa synced → upload + UPDATE (deleted_at=NULL)', async () => {
+    dsMock.manager.query.mockImplementation(
+      defaultRouter({
+        slot: [{ id: 'x', sync_status: 'failed', booking_id: 'm1' }],
+        upsertExisting: [{ id: 'x' }],
+      }),
+    );
+    await service.provisionMeeting(meeting({ id: 'm1' }));
+    expect(provider.uploadFace).toHaveBeenCalledTimes(1);
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(upd.length).toBe(1);
+    expect(String(upd[0][0])).toContain('deleted_at = NULL');
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO device_user_mappings').length,
+    ).toBe(0);
   });
 
   it('isolation: 1 participant lỗi → failed, người khác vẫn synced', async () => {
@@ -157,19 +204,20 @@ describe('FaceProvisioningService (FMP-001)', () => {
     ).toBe(0);
   });
 
-  it('provisionUpcomingMeetings: quét meetings + cô lập lỗi từng meeting', async () => {
+  it('provisionUpcomingMeetings: quét meetings + cô lập lỗi + cộng dồn skipped', async () => {
     const meetings = [meeting({ id: 'm1' }), meeting({ id: 'm2' })];
     dsMock.manager.query.mockImplementation((sql: string) => {
       if (sql.includes('FROM meetings')) return Promise.resolve(meetings);
       return defaultRouter()(sql);
     });
-    // meeting m1 ném lỗi (vd device throw) nhưng KHÔNG chặn m2
+    // m1 ném lỗi (KHÔNG chặn m2); m2 trả {skipped:1} → counter cộng dồn.
     const spy = jest
       .spyOn(service, 'provisionMeeting')
       .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce();
+      .mockResolvedValueOnce({ skipped: 1 });
     const r = await service.provisionUpcomingMeetings();
     expect(r.scanned).toBe(2);
+    expect(r.skipped).toBe(1);
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
@@ -189,6 +237,8 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(provider.deletePerson).toHaveBeenCalledWith('64');
     const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
     expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+    // MCS #1: soft-delete thật → set deleted_at.
+    expect(String(upd[0][0])).toContain('deleted_at = now()');
   });
 
   it('deprovisionEndedMeetings: còn trong grace (DB lọc rỗng) → CHƯA gỡ', async () => {
@@ -216,7 +266,7 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(provider.deletePerson).toHaveBeenCalledWith('99');
   });
 
-  it('deprovisionEndedMeetings: query có guard synced + deleted_at IS NULL + grace', async () => {
+  it('deprovisionEndedMeetings: query lấy MỌI sync_status (chỉ deleted_at IS NULL) + grace (MCS #1)', async () => {
     let captured = '';
     dsMock.manager.query.mockImplementation((sql: string) => {
       if (sql.includes('JOIN meetings me')) {
@@ -226,11 +276,27 @@ describe('FaceProvisioningService (FMP-001)', () => {
       return Promise.resolve(undefined);
     });
     await service.deprovisionEndedMeetings();
-    expect(captured).toContain("mp.sync_status = 'synced'");
+    // MCS #1 cleanup: KHÔNG còn lọc sync_status='synced' (cleanup cả failed/pending).
+    expect(captured).not.toContain("mp.sync_status = 'synced'");
     expect(captured).toContain('mp.deleted_at IS NULL');
     expect(captured).toContain(
       "end_time <= now() - ($1 * interval '1 minute')",
     );
+  });
+
+  it('MCS #1 cleanup: row failed (uid NULL) họp đã kết thúc → freed (deleted_at set, KHÔNG deletePerson)', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN meetings me'))
+        return Promise.resolve([
+          { id: 'fail1', device_id: 'dev1', device_person_id: null },
+        ]);
+      return Promise.resolve(undefined);
+    });
+    const r = await service.deprovisionEndedMeetings();
+    expect(r.scanned).toBe(1);
+    expect(provider.deletePerson).not.toHaveBeenCalled(); // uid null → bỏ qua
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(String(upd[0][0])).toContain('deleted_at = now()'); // vẫn freed slot
   });
 
   it('deprovision: deletePerson(uid) → mapping removed', async () => {

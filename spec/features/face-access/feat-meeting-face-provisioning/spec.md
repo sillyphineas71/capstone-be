@@ -24,6 +24,7 @@ category: face-access
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí / Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-17 | Khởi tạo spec FMP-001 (Ticket B): FaceProvisioningService (provision/deprovision/reconcile) qua factory+getPortraitBytes; idempotent per (user,device,bookingId); cron gated FACE_SYNC_ENABLED OFF. KHÔNG migration. | Toàn bộ file (bản đầu) |
+| 2026-06-18 | Gộp constraint-safety hardening (nguyên MCS-001) vào FMP-001 — hardening #46/#47, không phải UC mới. | Mục "Constraint-safety hardening" (cuối file) |
 
 ---
 
@@ -177,3 +178,105 @@ scheduler: gate OFF → service không gọi ; ON → gọi (mock).
 ---
 
 > Trạng thái: **CHỜ REVIEW** sau code (STOP code-review gate). Chưa commit.
+
+## Constraint-safety hardening (rev 2026-06-18, nguyên MCS-001)
+
+### 1. Mục tiêu
+Provisioning B (`FaceProvisioningService`) hiện có thể **vi phạm 2 partial-unique index** của `device_user_mappings` khi 2 cuộc họp back-to-back cùng phòng + cùng người (collision trên `(device_id, user_id)`). MCS-001 vá B để **bất biến: KHÔNG bao giờ tạo/ghi mapping vi phạm 2 index**, bằng 3 thay đổi nhỏ (KHÔNG migration — `deleted_at` đã có cột; KHÔNG repoint để tránh orphan + tránh phá meeting đang chạy).
+
+**KHÔNG đụng FAT-001/DCO-001/UMR-001** — chúng match theo `device_person_id` (uid) + guard `synced AND deleted_at IS NULL`, giữ nguyên.
+
+### 2. RECON (đã kiểm chứng — nền tảng spec)
+- **2 partial-unique index** trên `device_user_mappings`:
+  - `ux_device_user_mappings_device_user` UNIQUE **`(device_id, user_id)` WHERE `deleted_at IS NULL`**.
+  - `ux_device_user_mappings_person_id` UNIQUE **`(device_id, device_person_id)` WHERE `device_person_id IS NOT NULL AND deleted_at IS NULL`**.
+- **`removeMapping`** ([face-provisioning.service.ts:297](../../../../src/modules/face-access/services/face-provisioning.service.ts)) hiện `UPDATE ... SET sync_status='deleted', last_synced_at=now()` — **KHÔNG set `deleted_at`** → row "deleted" vẫn `deleted_at IS NULL` → **vẫn chiếm slot partial-unique**. Xoá face cam bằng `provider.deletePerson(mp.device_person_id)` (theo **uid**).
+- **`upsertMapping`** existing-check theo `(user_id, device_id, metadata_json->>'bookingId')` (KHÔNG lọc deleted_at); UPDATE **không** set `deleted_at`. `uploadFace`/`addPerson` chạy **TRƯỚC** `upsertMapping` trong `provisionParticipant` (uid = `findUidByName(uname)` sau addPerson).
+- **Cron**: `faceSync` `@Cron(EVERY_MINUTE)` gọi `provisionUpcomingMeetings()` **TRƯỚC** `deprovisionEndedMeetings()`. Provision quét `start_time ≤ now()+LEAD AND end_time > now()`; deprovision quét `end_time ≤ now()-GRACE`.
+- **Back-to-back** M1(…–10:00) → M2(10:00–…) cùng phòng+user: cửa sổ M2-đã-provision & M1-chưa-deprovision = **[now+LEAD …, now-GRACE …] ≈ LEAD+GRACE phút** → 2 row sống cùng `(device,user)` → **collision** (INSERT row M2 ném unique violation). Đổi thứ tự cron KHÔNG cứu (hở eligibility = LEAD+GRACE).
+
+#### 2.1. Giả định bất biến `(device, device_person_id)`
+Bất biến trên `ux_..._person_id` dựa vào: **cam cấp `uid` MỚI mỗi `addPerson`** (uname = hash per (user,meeting) → device-person khác nhau) **+ #1 freed `uid` cũ** (deprovision set `deleted_at` → giải phóng slot uid). ⚠ **Nếu thiết bị TÁI DÙNG một `uid` đang sống** (cấp lại uid trùng cho người khác khi chưa freed) → có thể đụng `ux_..._person_id`. Ca này **hiếm** (FaceGate cấp uid tăng dần, deprovision xoá face theo uid) → **OUT-OF-SCOPE** MCS-001; ghi nhận làm rủi ro tồn dư.
+
+### 3. Functional Requirements (EARS)
+
+#### 3.1. #1 — Deprovision soft-delete thật (giải phóng slot)
+- **FR-MCS-001-001**: `removeMapping` UPDATE bổ sung **`deleted_at = now()`**:
+  ```sql
+  UPDATE device_user_mappings
+     SET sync_status = 'deleted', deleted_at = now(), last_synced_at = now()
+   WHERE id = $1
+  ```
+  → giải phóng cả `ux_device_user_mappings_device_user` lẫn `ux_..._person_id` (cả 2 đều `WHERE deleted_at IS NULL`).
+- **FR-MCS-001-002** (an toàn với mọi reader): set `deleted_at` KHÔNG phá reader nào vì **không reader nào dựa vào `sync_status='deleted' AND deleted_at IS NULL`**; các query đều tự loại row deprovision (xem §4 bảng).
+- **FR-MCS-001-002b** (cleanup MỌI row non-synced của họp đã kết thúc): `deprovisionEndedMeetings` (query chọn mapping) phải lấy **mọi mapping còn sống** (`deleted_at IS NULL`, **mọi `sync_status`** gồm `failed`/`pending`/`synced`) của họp `end_time ≤ now()-GRACE AND status<>'cancelled'` → `removeMapping`. (Hiện query lọc `sync_status='synced'` → bỏ sót row `failed`/`pending` chiếm slot vĩnh viễn.) → đổi điều kiện thành `mp.deleted_at IS NULL` (bỏ `mp.sync_status='synced'`).
+- **FR-MCS-001-002c** (`removeMapping` null-uid-safe): chỉ gọi `provider.deletePerson(device_person_id)` khi `device_person_id` **NOT NULL**; nếu NULL (vd row `failed` chưa kịp lấy uid) → **bỏ qua deletePerson**, vẫn `UPDATE ... deleted_at=now()` (freed slot). (removeMapping hiện đã guard `if (mp.device_person_id)` — giữ + xác nhận hành vi này.)
+
+#### 3.2. #3 — Revive clear deleted_at
+- **FR-MCS-001-003**: nhánh **UPDATE** của `upsertMapping` (reuse row cùng `(user,device,bookingId)`) phải set **`deleted_at = NULL`**. Lý do: sau #1 row cũ có `deleted_at=now()`; nếu revive mà không clear → ra row `sync_status='synced'` NHƯNG `deleted_at` cũ → `resolveMapping` (`deleted_at IS NULL`) **trượt** → điểm danh hỏng. (Áp cho mọi UPDATE revive, kể cả ghi `failed` để row "sống" và tick sau retry.)
+
+#### 3.3. #2 — Slot-check TRƯỚC upload (skip khi bận)
+- **FR-MCS-001-004**: trong `provisionParticipant`, **trước** `uploadFace`/`addPerson`, SELECT mapping **còn sống** theo slot `(device_id, user_id)`. **Slot-check này THAY THẾ idempotency-check cũ** ([:123-131](../../../../src/modules/face-access/services/face-provisioning.service.ts) — `SELECT sync_status WHERE (user,device,bookingId); if synced → return`): **GỠ** check cũ, hợp nhất vào nhánh "cùng booking + synced → noop" của slot-check. KHÔNG để 2 chỗ cùng quyết "đã synced thì skip".
+  ```sql
+  SELECT id, sync_status, metadata_json->>'bookingId' AS booking_id
+    FROM device_user_mappings
+   WHERE device_id = $1 AND user_id = $2 AND deleted_at IS NULL
+   LIMIT 1
+  ```
+- **FR-MCS-001-005**: rẽ nhánh theo kết quả:
+  - **Không có row sống** → slot trống → `uploadFace`+`addPerson`+`findUidByName`+`upsertMapping(synced)` (luồng bình thường). Kết quả: `provisioned`.
+  - **Có, cùng `bookingId`**:
+    - `sync_status='synced'` → **idempotent skip** (không upload, không ghi). Kết quả: `noop`.
+    - khác (pending/failed) → **revive**: `uploadFace`+`addPerson`+`findUidByName` rồi `upsertMapping` UPDATE refresh `device_person_id` + `deleted_at=NULL` (cùng row). Kết quả: `revived`.
+  - **Có, khác `bookingId`** (meeting khác đang giữ slot — sau #1, row sống = chắc chắn đang active, không phải deleted) → **SKIP + `logger.warn`**, **KHÔNG upload**, **KHÔNG ghi mapping**. Kết quả: `skipped` (defer — tick sau tự thử lại sau khi M1 deprovision).
+- **FR-MCS-001-006** (counter): `provisionUpcomingMeetings` đếm riêng `skipped` (không phải lỗi): trả `{ scanned, skipped }` (hoặc `{ scanned, provisioned, skipped }`). `provisionMeeting` tổng hợp kết quả từng participant.
+
+#### 3.4. Bất biến
+- **FR-MCS-001-007**: **KHÔNG BAO GIỜ** INSERT/UPDATE tạo ra >1 row sống (`deleted_at IS NULL`) trên `(device_id, user_id)`, hay >1 trên `(device_id, device_person_id)`.
+- **FR-MCS-001-008**: **KHÔNG repoint** slot sang meeting khác (tránh orphan face trên cam + tránh phá meeting đang chạy). Slot bận → skip, KHÔNG ghi đè.
+
+### 4. #1 an toàn với mọi reader (bảng xác nhận)
+| Reader | Lọc | Set `deleted_at=now()` lúc deprovision |
+| :--- | :--- | :--- |
+| C `resolveMapping` ×2 | `synced AND deleted_at IS NULL` | ✅ tự loại |
+| UMR list NOT EXISTS | `synced AND deleted_at IS NULL` | ✅ tự loại |
+| UMR map byPerson/byUser | `deleted_at IS NULL` | ✅ tự loại (row deprovision freed) |
+| B `deprovisionEndedMeetings` (sau #2b) | `deleted_at IS NULL` (mọi sync_status) | ✅ tự loại (deleted_at set → khỏi quét lại) |
+| B `deprovisionMeeting` | `sync_status='synced'` | ✅ (sync_status đã loại) |
+| B reconcile stale | `sync_status='synced'` | ✅ |
+| B reconcile dedup | `sync_status='synced'` | ✅ |
+| B idempotency-check | đọc `sync_status` (no deleted_at) | ✅ không đọc deleted_at |
+→ KHÔNG reader nào dựa vào `sync_status='deleted' AND deleted_at IS NULL` → set `deleted_at` an toàn 100%.
+
+### 5. Non-Functional / Constraints
+- **NFR-DATA-01**: KHÔNG migration (cột `deleted_at` đã có).
+- **NFR-SEC-03**: SQL parameterized, raw qua `DataSource`.
+- **NFR-ARCH**: KHÔNG đụng FAT/DCO/UMR; KHÔNG module mới; import `.js`.
+- **NFR-ENG-01**: unit test ≥ 80% branch (face-provisioning).
+
+### 6. Acceptance Criteria
+- **AC-001** (#1): `removeMapping` UPDATE chứa `deleted_at = now()`; sau deprovision row có `deleted_at` ≠ NULL.
+- **AC-002** (#1 safety): sau deprovision, `resolveMapping`/list/reconcile KHÔNG còn thấy row (hành vi không đổi).
+- **AC-003** (#3): revive UPDATE set `deleted_at = NULL` → row `synced` + `deleted_at NULL` → `resolveMapping` match lại.
+- **AC-004** (#2 free): không có row sống `(device,user)` → upload + INSERT (`provisioned`).
+- **AC-005** (#2 same booking synced): row sống cùng booking + synced → **idempotent skip**, KHÔNG upload (`noop`).
+- **AC-006** (#2 same booking re-provision): row cùng booking pending/failed → revive (UPDATE refresh uid + `deleted_at=NULL`), KHÔNG INSERT mới (`revived`).
+- **AC-007** (#2 busy): row sống `(device,user)` **khác bookingId** → **SKIP** + warn, **factory KHÔNG được gọi**, KHÔNG INSERT/UPDATE mapping (`skipped`).
+- **AC-008** (counter): `provisionUpcomingMeetings` trả `skipped` đếm riêng.
+- **AC-009** (invariant): không kịch bản nào tạo 2 row sống cùng `(device,user)`.
+- **AC-010** (#2b cleanup non-synced): row `failed` (`deleted_at NULL`, `device_person_id NULL`) của họp đã kết thúc (`end_time ≤ now()-GRACE`) → được `removeMapping` (`deleted_at` set, **KHÔNG** gọi `deletePerson`) → freed slot.
+- **AC-011** (#2b hệ quả): sau khi freed (AC-010), provision tiếp theo của cùng `(device,user)` (meeting mới) → slot-check thấy trống → **KHÔNG bị skip** → provision bình thường.
+
+### 7. Edge cases (phải có test)
+- **sequential** (M1 đã deprovision, deleted_at set → slot free): provision M2 cùng user → INSERT bình thường.
+- **re-provision cùng bookingId** (row M1 vừa deleted_at=now(), M1 vẫn trong provision window): slot-check (deleted_at IS NULL) → none → upsert reuse row M1 (cùng booking) → UPDATE set `deleted_at=NULL`+synced → resolveMapping match lại.
+- **back-to-back** (M1 active giữ slot, provision M2): slot-check thấy row M1 sống khác bookingId → **skip**, KHÔNG upload, KHÔNG orphan, `skipped++`.
+- **deprovision rồi resolveMapping**: sau #1, verify cho mapping đã deprovision → `resolveMapping` loại đúng (deleted_at set).
+- **counter**: 1 meeting có participant free + participant bị skip → `{ scanned, skipped }` đúng.
+- **cleanup non-synced** (#2b): họp đã kết thúc còn row `failed`/`pending` (`deleted_at NULL`) → deprovision freed (set `deleted_at`); row `failed` uid NULL → KHÔNG `deletePerson`. Sau đó provision cùng `(device,user)` meeting mới → không skip.
+
+### 8. Out of scope
+- **Repoint slot** sang meeting khác (orphan face + phá meeting đang chạy) — loại bỏ có chủ đích (FR-008).
+- Đổi `uname=hash(userId)` (1 device-person/user) — redesign lớn, defer.
+- Rút ngắn cửa sổ chồng bằng LEAD/GRACE — không giải quyết gốc; skip + retry là đủ.
+- Hồi tố điểm danh cho participant bị skip trong lúc chờ (verify sau khi provision thành công ở tick sau sẽ ghi bình thường).
