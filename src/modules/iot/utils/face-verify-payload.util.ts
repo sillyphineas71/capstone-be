@@ -20,6 +20,9 @@ export interface VerifyInfo {
   CreateTime?: string;
   VerifyStatus?: number;
   Similarity1?: number;
+  /** Hướng qua cửa (DCO-001): giá trị thô, map IN/OUT làm ở service. */
+  Direction?: number | string;
+  OpendoorWay?: number | string;
 }
 
 export interface ParsedVerify {
@@ -27,6 +30,10 @@ export interface ParsedVerify {
   isValid: boolean;
   personId: string | null;
   personName: string | null;
+  /** DCO-001: giá trị thô info.Direction (PURE — KHÔNG suy 'in'/'out' ở đây). */
+  directionRaw: string | null;
+  /** DCO-001: info.OpendoorWay thô (debug/đối chiếu). */
+  opendoorWay: string | null;
   info: VerifyInfo;
 }
 
@@ -38,7 +45,10 @@ export function parseVerifyPayload(body: any): ParsedVerify {
       : null;
   const personName = info.Name ?? null;
   const isValid = body?.operator === 'VerifyPush' && info.VerifyStatus === 1;
-  return { isValid, personId, personName, info };
+  const directionRaw = info.Direction != null ? String(info.Direction) : null;
+  const opendoorWay =
+    info.OpendoorWay != null ? String(info.OpendoorWay) : null;
+  return { isValid, personId, personName, directionRaw, opendoorWay, info };
 }
 
 /**

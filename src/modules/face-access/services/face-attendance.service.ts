@@ -40,7 +40,8 @@ export class FaceAttendanceService implements FaceVerifyHook {
   ) {}
 
   async onVerify(input: FaceVerifyInput): Promise<void> {
-    const { deviceId, roomId, personId, personName, verifyTime } = input;
+    const { deviceId, roomId, personId, personName, verifyTime, direction } =
+      input;
 
     // NC-5: resolve (user, meeting) từ mapping.
     const resolved = await this.resolveMapping(deviceId, personId, personName);
@@ -63,6 +64,12 @@ export class FaceAttendanceService implements FaceVerifyHook {
       this.logger.warn(
         `verify no-meeting: meetingId=${meetingId} (user=${userId}) không tồn tại — no record.`,
       );
+      return;
+    }
+
+    // DCO-001: chiều RA → check-out (nhánh riêng). Chiều VÀO giữ NGUYÊN logic FAT-001.
+    if (direction === 'out') {
+      await this.checkOut(meeting, userId, verifyTime, deviceId, roomId);
       return;
     }
 
@@ -133,6 +140,82 @@ export class FaceAttendanceService implements FaceVerifyHook {
 
     this.logger.log(
       `attendance ${eventType}: user=${userId} meeting=${meetingId} late=${isLate} (+${lateMinutes}m).`,
+    );
+  }
+
+  /**
+   * DCO-001: ghi check-out khi quét RA. Yêu cầu đã check-in; idempotent (giữ lần ra
+   * MUỘN nhất); `left_early` nếu ra trước giờ kết thúc. Event `check_out` (source_type
+   * 'camera', khớp check_in) CHỈ ghi khi `check_out_time` thực sự đổi.
+   *
+   * Gate: `cancelled` → skip; quá `effectiveEnd + grace` → skip. `grace =
+   * FACE_SYNC_GRACE_MINUTES` — CÙNG nguồn `deprovisionEndedMeetings`/`reconcile` để cửa
+   * sổ OUT khớp đúng lúc mapping bị gỡ (xem spec §8.1).
+   */
+  private async checkOut(
+    meeting: MeetingRow,
+    userId: string,
+    verifyTime: Date,
+    deviceId: string,
+    roomId: string | null,
+  ): Promise<void> {
+    if (meeting.status === 'cancelled') {
+      this.logger.warn(
+        `check-out skip (cancelled): meeting=${meeting.id} user=${userId}.`,
+      );
+      return;
+    }
+
+    const effectiveEnd = new Date(meeting.actual_end_time ?? meeting.end_time);
+    const grace = this.configService.get<number>('FACE_SYNC_GRACE_MINUTES', 5);
+    if (verifyTime.getTime() > effectiveEnd.getTime() + grace * 60_000) {
+      this.logger.warn(
+        `check-out skip (quá grace sau end): meeting=${meeting.id} user=${userId} verifyTime=${verifyTime.toISOString()} end=${effectiveEnd.toISOString()}.`,
+      );
+      return;
+    }
+
+    // Yêu cầu đã check-in.
+    const rows: Array<{
+      id: string;
+      check_in_time: Date | string | null;
+      check_out_time: Date | string | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, check_in_time, check_out_time
+         FROM attendance_records WHERE meeting_id = $1 AND user_id = $2 LIMIT 1`,
+      [meeting.id, userId],
+    );
+    const rec = rows[0];
+    if (!rec || rec.check_in_time == null) {
+      this.logger.warn(
+        `check-out skip (chưa từng check-in): meeting=${meeting.id} user=${userId}.`,
+      );
+      return;
+    }
+
+    // Idempotent: chỉ ghi khi check_out_time NULL hoặc verifyTime muộn hơn lần đã lưu.
+    if (
+      rec.check_out_time != null &&
+      verifyTime.getTime() <= new Date(rec.check_out_time).getTime()
+    ) {
+      return; // KHÔNG update, KHÔNG event.
+    }
+
+    const leftEarly = verifyTime.getTime() < effectiveEnd.getTime();
+    await this.dataSource.manager.query(
+      `UPDATE attendance_records SET check_out_time = $2, left_early = $3, updated_at = now() WHERE id = $1`,
+      [rec.id, verifyTime, leftEarly],
+    );
+    // Event check_out CHỈ khi thực ghi/đổi (source_type='camera' khớp event check_in).
+    await this.dataSource.manager.query(
+      `INSERT INTO attendance_events
+         (meeting_id, attendance_record_id, user_id, room_id, device_id,
+          event_type, event_time, source_type)
+       VALUES ($1,$2,$3,$4,$5,'check_out',$6,'camera')`,
+      [meeting.id, rec.id, userId, roomId, deviceId, verifyTime],
+    );
+    this.logger.log(
+      `attendance check_out: user=${userId} meeting=${meeting.id} left_early=${leftEarly}.`,
     );
   }
 

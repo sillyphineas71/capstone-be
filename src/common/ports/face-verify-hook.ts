@@ -16,6 +16,12 @@ export interface FaceVerifyInput {
   personName: string | null;
   /** Thời điểm verify (đã parse sang Date). */
   verifyTime: Date;
+  /** DCO-001: hướng qua cửa đã suy ở service. 'out' → check-out; 'in' → check-in. */
+  direction: 'in' | 'out';
+  /** DCO-001: giá trị thô info.Direction (audit). */
+  directionRaw?: string | null;
+  /** DCO-001: giá trị thô info.OpendoorWay (audit). */
+  opendoorWay?: string | null;
 }
 
 export interface FaceVerifyHook {

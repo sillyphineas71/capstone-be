@@ -1296,8 +1296,22 @@ export class IotDevicesService {
     // 8. Process payload tolerant ingestion
     // Danh tính verify ở body.info.* (payload thật FaceGate VerifyPush), KHÔNG ở body.person_id.
     const now = new Date();
-    const { isValid: isValidVerify, personId, personName, info } =
-      parseVerifyPayload(body);
+    const {
+      isValid: isValidVerify,
+      personId,
+      personName,
+      directionRaw,
+      opendoorWay,
+      info,
+    } = parseVerifyPayload(body);
+    // DCO-001: suy hướng qua cửa ở service (util giữ pure). Giả định 2=out / 1=in
+    // — CẦN xác nhận live (quét RA/VÀO + FACE_VERIFY_DEBUG). Thiếu/khác → 'in' (an toàn).
+    const directionOutValue = this.configService.get<string>(
+      'FACE_DIRECTION_OUT_VALUE',
+      '2',
+    );
+    const direction: 'in' | 'out' =
+      String(directionRaw ?? '') === directionOutValue ? 'out' : 'in';
     const extractedFields: any = {
       operator: body?.operator ?? null,
       person_id: personId,
@@ -1305,6 +1319,9 @@ export class IotDevicesService {
       verify_time: info.CreateTime ?? null,
       verify_status: info.VerifyStatus ?? null,
       similarity: info.Similarity1 ?? null,
+      direction,
+      direction_raw: directionRaw,
+      opendoor_way: opendoorWay,
     };
 
     let payloadToMask: any = {};
@@ -1421,6 +1438,9 @@ export class IotDevicesService {
           personId,
           personName,
           verifyTime: now,
+          direction,
+          directionRaw,
+          opendoorWay,
         });
       } catch (e) {
         this.logger.error(

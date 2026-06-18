@@ -21,6 +21,7 @@ const input = (over: any = {}) => ({
   personId: '64',
   personName: 'u1:m1',
   verifyTime: new Date('2026-06-17T09:00:00.000Z'),
+  direction: 'in',
   ...over,
 });
 
@@ -39,6 +40,7 @@ describe('FaceAttendanceService (FAT-001)', () => {
         mappingByCode?: any[];
         meeting?: any[];
         existing?: any[];
+        checkoutRec?: any[];
         grace?: string | null;
       } = {},
     ) =>
@@ -55,6 +57,9 @@ describe('FaceAttendanceService (FAT-001)', () => {
         return Promise.resolve(over.meeting ?? [openMeeting()]);
       if (sql.includes('FROM system_configs'))
         return Promise.resolve([{ config_value: over.grace ?? null }]);
+      // DCO-001 checkOut SELECT (id, check_in_time, check_out_time).
+      if (sql.includes('check_in_time, check_out_time'))
+        return Promise.resolve(over.checkoutRec ?? []);
       if (sql.includes('SELECT id FROM attendance_records'))
         return Promise.resolve(over.existing ?? []);
       if (sql.includes('INSERT INTO attendance_records'))
@@ -259,5 +264,135 @@ describe('FaceAttendanceService (FAT-001)', () => {
     expect(
       calls(dsMock.manager.query, 'INSERT INTO attendance_records').length,
     ).toBe(1);
+  });
+
+  // ── DCO-001: nhánh OUT (check-out) ──
+  const outRec = (over: any = {}) => [
+    { id: 'rec1', check_in_time: START, check_out_time: null, ...over },
+  ];
+  const out = (over: any = {}) => input({ direction: 'out', ...over });
+
+  it('OUT + đã check-in, ra trước end → check_out_time + left_early=true + event check_out', async () => {
+    dsMock.manager.query.mockImplementation(router({ checkoutRec: outRec() }));
+    await service.onVerify(
+      out({ verifyTime: new Date('2026-06-17T09:30:00.000Z') }),
+    );
+    const upd = calls(dsMock.manager.query, 'UPDATE attendance_records');
+    expect(upd.length).toBe(1);
+    expect(upd[0][1][0]).toBe('rec1');
+    expect(upd[0][1][2]).toBe(true); // left_early (09:30 < end 10:00)
+    const ev = calls(dsMock.manager.query, 'INSERT INTO attendance_events');
+    expect(ev.length).toBe(1);
+    expect(String(ev[0][0])).toContain("'check_out'");
+    expect(String(ev[0][0])).toContain("'camera'");
+  });
+
+  it('OUT ra ≥ end trong grace → left_early=false', async () => {
+    dsMock.manager.query.mockImplementation(router({ checkoutRec: outRec() }));
+    // end 10:00, grace 5 → 10:03 hợp lệ; left_early=false.
+    await service.onVerify(
+      out({ verifyTime: new Date('2026-06-17T10:03:00.000Z') }),
+    );
+    const upd = calls(dsMock.manager.query, 'UPDATE attendance_records');
+    expect(upd.length).toBe(1);
+    expect(upd[0][1][2]).toBe(false);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(1);
+  });
+
+  it('OUT idempotent: ra MUỘN hơn check_out_time đã lưu → UPDATE + event mới', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({
+        checkoutRec: outRec({ check_out_time: '2026-06-17T09:30:00.000Z' }),
+      }),
+    );
+    await service.onVerify(
+      out({ verifyTime: new Date('2026-06-17T09:45:00.000Z') }),
+    );
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(1);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(1);
+  });
+
+  it('OUT idempotent-skip: ra SỚM hơn check_out_time đã lưu → KHÔNG update, KHÔNG event', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({
+        checkoutRec: outRec({ check_out_time: '2026-06-17T09:45:00.000Z' }),
+      }),
+    );
+    await service.onVerify(
+      out({ verifyTime: new Date('2026-06-17T09:30:00.000Z') }),
+    );
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('OUT chưa từng check-in (no record) → warn, 0 update/event', async () => {
+    dsMock.manager.query.mockImplementation(router({ checkoutRec: [] }));
+    await service.onVerify(out());
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'INSERT INTO attendance_events').length,
+    ).toBe(0);
+  });
+
+  it('OUT record có check_in_time NULL → warn, 0 ghi', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ checkoutRec: outRec({ check_in_time: null }) }),
+    );
+    await service.onVerify(out());
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+  });
+
+  it('OUT status=cancelled → bỏ qua (không tra record)', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({
+        meeting: [openMeeting({ status: 'cancelled' })],
+        checkoutRec: outRec(),
+      }),
+    );
+    await service.onVerify(out());
+    expect(
+      calls(dsMock.manager.query, 'check_in_time, check_out_time').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+  });
+
+  it('OUT verifyTime > end + grace → warn/skip', async () => {
+    dsMock.manager.query.mockImplementation(router({ checkoutRec: outRec() }));
+    // end 10:00 + grace 5 = 10:05; verify 10:30 > 10:05 → skip.
+    await service.onVerify(
+      out({ verifyTime: new Date('2026-06-17T10:30:00.000Z') }),
+    );
+    expect(
+      calls(dsMock.manager.query, 'check_in_time, check_out_time').length,
+    ).toBe(0);
+    expect(
+      calls(dsMock.manager.query, 'UPDATE attendance_records').length,
+    ).toBe(0);
+  });
+
+  it('OUT mapping unmatched → no record', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ mapping: [], mappingByCode: [] }),
+    );
+    await service.onVerify(out());
+    expect(
+      calls(dsMock.manager.query, 'check_in_time, check_out_time').length,
+    ).toBe(0);
   });
 });
