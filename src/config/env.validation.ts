@@ -173,6 +173,8 @@ export const envValidationSchema = Joi.object({
   FACE_VERIFY_DEBUG: Joi.boolean().default(false),
   // DCO-001: giá trị info.Direction = RA (check-out). Giả định 2=out/1=in, xác nhận live.
   FACE_DIRECTION_OUT_VALUE: Joi.string().default('2'),
+  // UMR-001: cửa sổ (phút) lấy verify gần đây cho danh sách unmapped (mặc định 24h).
+  FACE_UNMAPPED_WINDOW_MINUTES: Joi.number().integer().min(1).default(1440),
 
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),

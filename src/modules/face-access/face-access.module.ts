@@ -1,8 +1,12 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
+import { AuthModule } from '../auth/auth.module.js';
 import { FaceDeviceProviderFactory } from './face-device-provider.factory.js';
 import { FaceProvisioningService } from './services/face-provisioning.service.js';
 import { FaceAttendanceService } from './services/face-attendance.service.js';
+import { UnmappedReviewService } from './services/unmapped-review.service.js';
+import { UnmappedReviewController } from './controllers/unmapped-review.controller.js';
 import { FACE_VERIFY_HOOK } from '../../common/ports/face-verify-hook.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 
@@ -18,11 +22,13 @@ import { AccountsModule } from '../accounts/accounts.module.js';
  */
 @Global()
 @Module({
-  imports: [ConfigModule, AccountsModule],
+  imports: [ConfigModule, AccountsModule, AuthModule, JwtModule.register({})],
+  controllers: [UnmappedReviewController],
   providers: [
     FaceDeviceProviderFactory,
     FaceProvisioningService,
     FaceAttendanceService,
+    UnmappedReviewService,
     { provide: FACE_VERIFY_HOOK, useExisting: FaceAttendanceService },
   ],
   exports: [
