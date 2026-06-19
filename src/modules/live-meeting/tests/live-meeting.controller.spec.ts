@@ -197,4 +197,67 @@ describe('LiveMeetingController - endMeeting', () => {
   });
 
 });
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: Create / List Meeting Notes
+  // ------------------------------------------------------------------
+
+  describe('createNote', () => {
+    it('should respond with 201 for valid request', async () => {
+      const mockResult = {
+        id: 'note-1',
+        meetingId: 'm-001',
+        noteType: 'in_meeting',
+        content: 'Test',
+        pinned: false,
+        visibilityLevel: 'participants',
+        author: { id: 'user-1', fullName: 'User' },
+        createdAt: new Date().toISOString(),
+      };
+      jest.spyOn(service, 'createMeetingNote').mockResolvedValue(mockResult);
+
+      const response = await controller.createNote(
+        'm-001',
+        { noteType: 'in_meeting', content: 'Test', pinned: false, visibilityLevel: 'participants' },
+        { user: { userId: 'user-1' } } as any,
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.data).toBeDefined();
+      expect(response.data.noteType).toBe('in_meeting');
+    });
+  });
+
+  describe('listNotes', () => {
+    it('should respond with 200 and meta for valid request', async () => {
+      const mockResult = {
+        data: [{
+          id: 'note-1',
+          meetingId: 'm-001',
+          noteType: 'in_meeting',
+          content: 'Test',
+          pinned: false,
+          visibilityLevel: 'participants',
+          author: { id: 'user-1', fullName: 'User' },
+          sourceEventId: null,
+          noteTimestamp: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+        meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+        message: 'Lay danh sach ghi chu thanh cong',
+      };
+      jest.spyOn(service, 'viewMeetingNotes').mockResolvedValue(mockResult);
+
+      const response = await controller.listNotes(
+        'm-001',
+        { page: 1, limit: 20 },
+        { user: { userId: 'user-1' } } as any,
+      );
+
+      expect(response.success).toBe(true);
+      expect(response.data).toHaveLength(1);
+      expect(response.meta).toBeDefined();
+      expect(response.meta.total).toBe(1);
+    });
+  });
+});
 });

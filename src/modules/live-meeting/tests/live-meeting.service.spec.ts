@@ -631,4 +631,145 @@ describe('LiveMeetingService - endMeeting', () => {
   });
 
 });
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: Create Meeting Note
+  // ------------------------------------------------------------------
+
+  describe('createMeetingNote', () => {
+    const meetingId = 'm-001';
+    const currentUserId = 'user-1';
+    const baseNoteDto = {
+      noteType: 'in_meeting',
+      content: 'Test note content',
+      pinned: false,
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('should create in_meeting note successfully (AC-001/004)', async () => {
+      const mockQueryBuilder = {
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: meetingId,
+          status: 'in_progress',
+          deletedAt: null,
+        }),
+      };
+      const mockEm = {
+        createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+        create: jest.fn().mockReturnValue({ id: 'note-1' }),
+        save: jest.fn().mockResolvedValue({ id: 'note-1', meetingId, authorId: currentUserId, noteType: 'in_meeting', content: 'Test note content', pinned: false, visibilityLevel: 'participants', createdAt: new Date() }),
+        getCount: jest.fn().mockResolvedValue(0),
+      };
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb) => cb(mockEm));
+
+      const mockNoteRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'note-1',
+          meetingId,
+          authorId: currentUserId,
+          noteType: 'in_meeting',
+          content: 'Test note content',
+          pinned: false,
+          visibilityLevel: 'participants',
+          createdAt: new Date(),
+          author: { id: currentUserId, fullName: 'Test User' },
+        }),
+      };
+      jest.spyOn(dataSource, 'getRepository').mockReturnValue(mockNoteRepo);
+
+      const result = await service.createMeetingNote(meetingId, baseNoteDto, { userId: currentUserId });
+
+      expect(result).toBeDefined();
+      expect(result.noteType).toBe('in_meeting');
+      expect(result.visibilityLevel).toBe('participants');
+      expect(result.author.id).toBe(currentUserId);
+    });
+
+    it('should create host_note with default private visibility (AC-003)', async () => {
+      const mockQueryBuilder = {
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: meetingId,
+          status: 'in_progress',
+          deletedAt: null,
+        }),
+      };
+      const mockEm = {
+        createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+        create: jest.fn().mockReturnValue({ id: 'note-1' }),
+        save: jest.fn().mockResolvedValue({ id: 'note-1', meetingId, authorId: currentUserId, noteType: 'host_note', content: 'Host note', pinned: false, visibilityLevel: 'private', createdAt: new Date() }),
+        getCount: jest.fn().mockResolvedValue(1),
+      };
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb) => cb(mockEm));
+
+      const mockNoteRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'note-1',
+          meetingId,
+          authorId: currentUserId,
+          noteType: 'host_note',
+          content: 'Host note',
+          pinned: false,
+          visibilityLevel: 'private',
+          createdAt: new Date(),
+          author: { id: currentUserId, fullName: 'Host' },
+        }),
+      };
+      jest.spyOn(dataSource, 'getRepository').mockReturnValue(mockNoteRepo);
+
+      const result = await service.createMeetingNote(meetingId, { noteType: 'host_note', content: 'Host note' }, { userId: currentUserId });
+      expect(result.visibilityLevel).toBe('private');
+    });
+
+    it('should throw NOTE_HOST_ONLY when non-host sends host_note (AC-007)', async () => {
+      const mockQueryBuilder = {
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: meetingId,
+          status: 'in_progress',
+          deletedAt: null,
+        }),
+      };
+      const mockEm = {
+        createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+        getCount: jest.fn().mockResolvedValue(0),
+      };
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb) => cb(mockEm));
+
+      await expect(
+        service.createMeetingNote(meetingId, { noteType: 'host_note', content: 'Test' }, { userId: 'non-host' }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw MEETING_NOT_IN_PROGRESS when meeting is completed (AC-009)', async () => {
+      const mockQueryBuilder = {
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: meetingId,
+          status: 'completed',
+          deletedAt: null,
+        }),
+      };
+      const mockEm = {
+        createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+      };
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb) => cb(mockEm));
+
+      await expect(
+        service.createMeetingNote(meetingId, baseNoteDto, { userId: currentUserId }),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+});
 });
