@@ -7,8 +7,13 @@ import { FaceProvisioningService } from './services/face-provisioning.service.js
 import { FaceAttendanceService } from './services/face-attendance.service.js';
 import { UnmappedReviewService } from './services/unmapped-review.service.js';
 import { UnmappedReviewController } from './controllers/unmapped-review.controller.js';
+import { StrangerAlertService } from './services/stranger-alert.service.js';
+import { StrangerAlertController } from './controllers/stranger-alert.controller.js';
 import { FACE_VERIFY_HOOK } from '../../common/ports/face-verify-hook.js';
+import { STRANGER_ALERT_HOOK } from '../../common/ports/stranger-alert-hook.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 
 /**
  * FaceAccessModule — adapter thiết bị face (FGC-001/A) + per-meeting provisioning
@@ -22,20 +27,30 @@ import { AccountsModule } from '../accounts/accounts.module.js';
  */
 @Global()
 @Module({
-  imports: [ConfigModule, AccountsModule, AuthModule, JwtModule.register({})],
-  controllers: [UnmappedReviewController],
+  imports: [
+    ConfigModule,
+    AccountsModule,
+    AuthModule,
+    JwtModule.register({}),
+    WebsocketModule,
+    NotificationsModule,
+  ],
+  controllers: [UnmappedReviewController, StrangerAlertController],
   providers: [
     FaceDeviceProviderFactory,
     FaceProvisioningService,
     FaceAttendanceService,
     UnmappedReviewService,
+    StrangerAlertService,
     { provide: FACE_VERIFY_HOOK, useExisting: FaceAttendanceService },
+    { provide: STRANGER_ALERT_HOOK, useExisting: StrangerAlertService },
   ],
   exports: [
     FaceDeviceProviderFactory,
     FaceProvisioningService,
     FaceAttendanceService,
     FACE_VERIFY_HOOK,
+    STRANGER_ALERT_HOOK,
   ],
 })
 export class FaceAccessModule {}

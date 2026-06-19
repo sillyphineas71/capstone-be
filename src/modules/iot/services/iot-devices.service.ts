@@ -13,6 +13,8 @@ import { DataSource, Not, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FACE_VERIFY_HOOK } from '../../../common/ports/face-verify-hook.js';
 import type { FaceVerifyHook } from '../../../common/ports/face-verify-hook.js';
+import { STRANGER_ALERT_HOOK } from '../../../common/ports/stranger-alert-hook.js';
+import type { StrangerAlertHook } from '../../../common/ports/stranger-alert-hook.js';
 import * as crypto from 'crypto';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
 import {
@@ -35,6 +37,7 @@ import {
   IotDeviceResponseDto,
 } from '../dto/iot-device-response.dto.js';
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
+import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
@@ -79,6 +82,10 @@ export class IotDevicesService {
     @Optional()
     @Inject(FACE_VERIFY_HOOK)
     private readonly faceVerifyHook?: FaceVerifyHook,
+    // SAL-001 (#20): hook cảnh báo stranger, optional (không phụ thuộc face-access).
+    @Optional()
+    @Inject(STRANGER_ALERT_HOOK)
+    private readonly strangerAlertHook?: StrangerAlertHook,
   ) {}
 
   async create(
@@ -782,6 +789,207 @@ export class IotDevicesService {
       await queryRunner.release();
     }
   }
+
+  /**
+   * TKR-001 (#11) — gom 3 bước verify callback token (dùng chung heartbeat/verify/stranger):
+   *  1. chưa config token → 409 CALLBACK_TOKEN_NOT_CONFIGURED
+   *  2. token đã thu hồi (revoked_at) → 403 CALLBACK_TOKEN_REVOKED (đặt TRƯỚC compare)
+   *  3. sha256 + buffer-length + timingSafeEqual → sai → 401 INVALID_CALLBACK_TOKEN
+   * KHÔNG log plaintext/hash.
+   */
+  private assertCallbackToken(faceConfig: any, incomingToken: string): void {
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
+        message: 'Callback token has not been configured for this device.',
+      });
+    }
+
+    if (faceConfig.revoked_at) {
+      throw new ForbiddenException({
+        code: 'CALLBACK_TOKEN_REVOKED',
+        message: 'Callback token has been revoked for this device.',
+      });
+    }
+
+    const incomingHash = crypto
+      .createHash('sha256')
+      .update(incomingToken)
+      .digest('hex');
+
+    const storedHash = faceConfig.callback_token_hash;
+    const incomingBuf = Buffer.from(incomingHash, 'hex');
+    const storedBuf = Buffer.from(storedHash, 'hex');
+
+    if (
+      incomingBuf.length !== storedBuf.length ||
+      !crypto.timingSafeEqual(incomingBuf, storedBuf)
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_CALLBACK_TOKEN',
+        message: 'Invalid callback token.',
+      });
+    }
+  }
+
+  /**
+   * TKR-001 (#11) — load device + validate là face_server (dùng chung revoke/rotate).
+   * Mirror validation của configureFaceServer (cùng mã lỗi).
+   */
+  private async loadFaceServerDevice(
+    deviceId: string,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+    if (device.deviceType !== IoTDeviceType.FACE_SERVER) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_FACE_SERVER',
+        message:
+          'Only door face terminal devices can be configured as a face server.',
+      });
+    }
+    return device;
+  }
+
+  /**
+   * TKR-001 (#11) T2 — thu hồi callback token: set revoked_at trong face_server_config.
+   * - chưa config → 409 FACE_SERVER_NOT_CONFIGURED
+   * - idempotent: đã revoked → return device, KHÔNG đổi revoked_at, KHÔNG audit lại
+   * - persist: build NEW metadataJson reference (TypeORM detect change) + save trong txn
+   * - audit face.token.revoke (KHÔNG token/hash)
+   */
+  async revokeFaceServerToken(
+    userId: string | null,
+    deviceId: string,
+    dto: RevokeFaceServerTokenDto,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.loadFaceServerDevice(deviceId);
+
+    const faceConfig = (device.metadataJson?.face_server_config ?? {}) as any;
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'FACE_SERVER_NOT_CONFIGURED',
+        message:
+          'Face server callback token has not been configured for this device.',
+      });
+    }
+
+    // Idempotent: token đã thu hồi → giữ nguyên revoked_at gốc.
+    if (faceConfig.revoked_at) {
+      return device;
+    }
+
+    const updatedFaceConfig = {
+      ...faceConfig,
+      revoked_at: new Date().toISOString(),
+      ...(dto.reason ? { revoked_reason: dto.reason } : {}),
+    };
+    // NEW reference để TypeORM phát hiện thay đổi jsonb (mirror configureFaceServer).
+    device.metadataJson = {
+      ...(device.metadataJson || {}),
+      face_server_config: updatedFaceConfig,
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+      await this.iotAuditRepository.logRevokeFaceServerToken(
+        queryRunner.manager,
+        {
+          userId,
+          deviceId: savedDevice.id,
+          reason: dto.reason ?? null,
+        },
+      );
+      await queryRunner.commitTransaction();
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * TKR-001 (#11) T3 — xoay token: sinh token mới + clear revoked_at.
+   * - chưa config → 409 FACE_SERVER_NOT_CONFIGURED (tạo mới dùng configureFaceServer)
+   * - hash+last4 mới, configured_at mới, clear revoked_at/revoked_reason; giữ field config khác
+   * - trả oneTimeCallbackToken (plaintext 1 lần); audit face.token.rotate (KHÔNG token/hash)
+   */
+  async rotateFaceServerToken(
+    userId: string | null,
+    deviceId: string,
+  ): Promise<{ device: IoTDeviceEntity; oneTimeCallbackToken: string }> {
+    const device = await this.loadFaceServerDevice(deviceId);
+
+    const faceConfig = (device.metadataJson?.face_server_config ?? {}) as any;
+    if (!faceConfig.callback_token_hash) {
+      throw new ConflictException({
+        code: 'FACE_SERVER_NOT_CONFIGURED',
+        message:
+          'Face server callback token has not been configured for this device.',
+      });
+    }
+
+    // Sinh token mới (tái dùng token-gen của configureFaceServer).
+    const plainToken = crypto.randomBytes(16).toString('base64url');
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(plainToken)
+      .digest('hex');
+    const tokenLast4 = plainToken.slice(-4);
+
+    const updatedFaceConfig = { ...faceConfig };
+    updatedFaceConfig.callback_token_hash = tokenHash;
+    updatedFaceConfig.callback_token_last4 = tokenLast4;
+    updatedFaceConfig.configured_at = new Date().toISOString();
+    // Xoay = token mới còn sống → clear revoked.
+    delete updatedFaceConfig.revoked_at;
+    delete updatedFaceConfig.revoked_reason;
+
+    device.metadataJson = {
+      ...(device.metadataJson || {}),
+      face_server_config: updatedFaceConfig,
+    };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+      await this.iotAuditRepository.logRotateFaceServerToken(
+        queryRunner.manager,
+        {
+          userId,
+          deviceId: savedDevice.id,
+        },
+      );
+      await queryRunner.commitTransaction();
+      return { device: savedDevice, oneTimeCallbackToken: plainToken };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async configureRtsp(
     userId: string | null,
     deviceId: string,
@@ -1092,32 +1300,8 @@ export class IotDevicesService {
       });
     }
 
-    // 6. Verify callback token via SHA-256 hash
-    if (!faceConfig.callback_token_hash) {
-      throw new ConflictException({
-        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
-        message: 'Callback token has not been configured for this device.',
-      });
-    }
-
-    const incomingHash = crypto
-      .createHash('sha256')
-      .update(callbackToken)
-      .digest('hex');
-
-    const storedHash = faceConfig.callback_token_hash;
-    const incomingBuf = Buffer.from(incomingHash, 'hex');
-    const storedBuf = Buffer.from(storedHash, 'hex');
-
-    if (
-      incomingBuf.length !== storedBuf.length ||
-      !crypto.timingSafeEqual(incomingBuf, storedBuf)
-    ) {
-      throw new UnauthorizedException({
-        code: 'INVALID_CALLBACK_TOKEN',
-        message: 'Invalid callback token.',
-      });
-    }
+    // 6. Verify callback token (TKR-001: gom vào assertCallbackToken — not-configured/revoked/invalid)
+    this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
     if (faceConfig.allowed_source_ip) {
@@ -1245,32 +1429,8 @@ export class IotDevicesService {
       });
     }
 
-    // 6. Verify callback token via SHA-256 hash
-    if (!faceConfig.callback_token_hash) {
-      throw new ConflictException({
-        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
-        message: 'Callback token has not been configured for this device.',
-      });
-    }
-
-    const incomingHash = crypto
-      .createHash('sha256')
-      .update(callbackToken)
-      .digest('hex');
-
-    const storedHash = faceConfig.callback_token_hash;
-    const incomingBuf = Buffer.from(incomingHash, 'hex');
-    const storedBuf = Buffer.from(storedHash, 'hex');
-
-    if (
-      incomingBuf.length !== storedBuf.length ||
-      !crypto.timingSafeEqual(incomingBuf, storedBuf)
-    ) {
-      throw new UnauthorizedException({
-        code: 'INVALID_CALLBACK_TOKEN',
-        message: 'Invalid callback token.',
-      });
-    }
+    // 6. Verify callback token (TKR-001: gom vào assertCallbackToken — not-configured/revoked/invalid)
+    this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
     const normalizedClientIp = this.normalizeIp(clientIp);
@@ -1523,32 +1683,8 @@ export class IotDevicesService {
       });
     }
 
-    // 6. Verify callback token via SHA-256 hash
-    if (!faceConfig.callback_token_hash) {
-      throw new ConflictException({
-        code: 'CALLBACK_TOKEN_NOT_CONFIGURED',
-        message: 'Callback token has not been configured for this device.',
-      });
-    }
-
-    const incomingHash = crypto
-      .createHash('sha256')
-      .update(callbackToken)
-      .digest('hex');
-
-    const storedHash = faceConfig.callback_token_hash;
-    const incomingBuf = Buffer.from(incomingHash, 'hex');
-    const storedBuf = Buffer.from(storedHash, 'hex');
-
-    if (
-      incomingBuf.length !== storedBuf.length ||
-      !crypto.timingSafeEqual(incomingBuf, storedBuf)
-    ) {
-      throw new UnauthorizedException({
-        code: 'INVALID_CALLBACK_TOKEN',
-        message: 'Invalid callback token.',
-      });
-    }
+    // 6. Verify callback token (TKR-001: gom vào assertCallbackToken — not-configured/revoked/invalid)
+    this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
     const normalizedClientIp = this.normalizeIp(clientIp);
@@ -1583,8 +1719,9 @@ export class IotDevicesService {
 
     let payloadToMask: any = {};
     if (body && Object.keys(body).length > 0) {
-      // Create a shallow copy to mask
-      payloadToMask = { ...body };
+      // SAL-001 FR-008: STRIP base64 ảnh (SanpPic) tại nguồn — phủ CẢ payload_json
+      // LẪN device.metadataJson.recent_stranger_event_samples (cùng newSample).
+      payloadToMask = stripSanpPic({ ...body });
     } else {
       payloadToMask = {
         _unparseable: true,
@@ -1685,6 +1822,31 @@ export class IotDevicesService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+
+    // SAL-001 (#20): cảnh báo stranger qua hook. Raw event đã lưu ở trên (raw có dù
+    // alert lỗi). Lỗi cảnh báo KHÔNG được làm hỏng response 200 của callback.
+    if (this.strangerAlertHook) {
+      try {
+        const sf = extractedFields as {
+          stranger_id: string | null;
+          similarity: string | null;
+        };
+        await this.strangerAlertHook.onStranger({
+          deviceId: device.id,
+          deviceCode: device.deviceCode,
+          roomId: device.roomId,
+          strangerId: sf.stranger_id,
+          similarity: sf.similarity != null ? String(sf.similarity) : null,
+          capturedAt: now,
+        });
+      } catch (e) {
+        this.logger.error(
+          `stranger alert hook failed (stranger still 200): ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
     }
 
     return {

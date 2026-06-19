@@ -175,6 +175,10 @@ export const envValidationSchema = Joi.object({
   FACE_DIRECTION_OUT_VALUE: Joi.string().default('2'),
   // UMR-001: cửa sổ (phút) lấy verify gần đây cho danh sách unmapped (mặc định 24h).
   FACE_UNMAPPED_WINDOW_MINUTES: Joi.number().integer().min(1).default(1440),
+  // SAL-001 (#20): throttle cảnh báo stranger (giây/device), window list (phút), email opt-in.
+  STRANGER_ALERT_THROTTLE_SECONDS: Joi.number().integer().min(1).default(300),
+  STRANGER_ALERT_WINDOW_MINUTES: Joi.number().integer().min(1).default(1440),
+  STRANGER_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
 
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),
