@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   Controller,
   Post,
@@ -34,6 +34,7 @@ import { AuthzReadRepository } from '../../auth/repositories/authz-read.reposito
 import { StartMeetingResponseDto } from '../dto/start-meeting-response.dto.js';
 import { MeetingAttendanceResponseDto } from '../dto/attendance-response.dto.js';
 import { AttendanceQueryDto } from '../dto/attendance-query.dto.js';
+import { CreateNoteDto, ListNotesQueryDto, NoteResponseDto, ViewNotesQueryDto, ViewNoteResponseDto } from '../dto/index.js';
 
 import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
 import { PresentAttendeesResponseDto } from '../dto/present-attendees-response.dto.js';
@@ -369,5 +370,99 @@ export class LiveMeetingController {
     };
   }
 
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: Create Meeting Note (UC-102)
+  // ------------------------------------------------------------------
+
+  @Post('meetings/:meetingId/notes')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.note.create')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Tao ghi chu trong cuoc hop', description: 'Host/Internal Participant tao ghi chu khi meeting in_progress' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuoc hop' })
+  @ApiResponse({ status: 201, description: 'Tao ghi chu thanh cong' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen hoac NOTE_HOST_ONLY' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({ status: 409, description: 'Cuoc hop khong o trang thai in_progress' })
+  @ApiResponse({ status: 422, description: 'Loai ghi chu system_note khong duoc phep' })
+  async createNote(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() createNoteDto: CreateNoteDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: NoteResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.createMeetingNote(
+      meetingId,
+      createNoteDto,
+      { userId: user!.userId },
+    );
+
+    return {
+      success: true,
+      message: 'Tao ghi chu thanh cong',
+      data: result,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: List Meeting Notes (UC-103/104)
+  // ------------------------------------------------------------------
+
+  @Get('meetings/:meetingId/notes')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.note.read')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Xem danh sach ghi chu cuoc hop (UC-IMM-10)', description: 'Xem danh sach ghi chu cuoc hop voi filter, sort, pagination, va opt-in enrichment' })
+  @ApiParam({ name: 'meetingId', type: String, format: 'uuid', description: 'ID cuoc hop' })
+  @ApiQuery({ name: 'noteType', type: String, required: false, description: 'Loc theo loai ghi chu (in_meeting, private, host_note, system_note)' })
+  @ApiQuery({ name: 'visibility', type: String, required: false, description: 'Loc theo muc do chia se (private, participants, public_internal, department)' })
+  @ApiQuery({ name: 'pinned', type: Boolean, required: false, description: 'Loc ghi chu da ghim' })
+  @ApiQuery({ name: 'from', type: String, required: false, description: 'Filter created_at >= from (ISO 8601)' })
+  @ApiQuery({ name: 'to', type: String, required: false, description: 'Filter created_at <= to (ISO 8601)' })
+  @ApiQuery({ name: 'includeSourceEvent', type: Boolean, required: false, description: 'Opt-in enrich voi sourceEventTime/sourceEventType' })
+  @ApiQuery({ name: 'page', type: Number, required: false, description: 'So trang (default 1)' })
+  @ApiQuery({ name: 'limit', type: Number, required: false, description: 'So ban ghi moi trang (default 20, max 100)' })
+  @ApiQuery({ name: 'sort', type: String, required: false, description: 'Sap xep (timeline_asc, timeline_desc)' })
+  @ApiResponse({ status: 200, description: 'Danh sach ghi chu' })
+  @ApiResponse({ status: 400, description: 'Validation error hoac INVALID_DATE_RANGE' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen hoac NOT_A_MEETING_PARTICIPANT' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({ status: 422, description: 'Meeting status khong cho phep xem ghi chu' })
+  async listNotes(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Query(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) query: ViewNotesQueryDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: ViewNoteResponseDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.liveMeetingService.viewMeetingNotes(
+      meetingId,
+      query,
+      { userId: user!.userId },
+    );
+
+    return {
+      success: true,
+      message: result.message,
+      data: result.data,
+      meta: result.meta,
+    };
+  }
 
 }

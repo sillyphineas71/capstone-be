@@ -1,4 +1,4 @@
-export * from './start-meeting-response.dto.js';
+﻿export * from './start-meeting-response.dto.js';
 export * from './extension-request.dto.js';
 export * from './extension-request-response.dto.js';
 export * from './decide-extension.dto.js';
@@ -7,3 +7,8 @@ export * from './end-meeting-response.dto.js';
 export * from './present-attendees-response.dto.js';
 export * from './attendance-query.dto.js';
 export * from './attendance-response.dto.js';
+export * from './create-note.dto.js';
+export * from './list-notes-query.dto.js';
+export * from './note-response.dto.js';
+export * from './view-notes-query.dto.js';
+export * from './view-note-response.dto.js';

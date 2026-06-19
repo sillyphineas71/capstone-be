@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   Logger,
   NotFoundException,
@@ -2320,5 +2320,719 @@ export class LiveMeetingService {
     });
   }
 
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: In-Meeting Notes - Helpers
+  // ------------------------------------------------------------------
+
+  /**
+   * Resolve default visibility_level based on note_type (BR-005/006/007, FR-007).
+   */
+  private resolveDefaultVisibility(noteType: string): string {
+    switch (noteType) {
+      case 'host_note':
+        return 'private';
+      case 'in_meeting':
+        return 'participants';
+      case 'private':
+        return 'private';
+      default:
+        return 'participants';
+    }
+  }
+
+  /**
+   * Check if user is host of a meeting via meeting_participants (BR-004).
+   */
+  private async isMeetingHost(
+    em,
+    meetingId: string,
+    userId: string,
+  ): Promise<boolean> {
+    const { MeetingParticipantEntity } = await import('../../meetings/entities/meeting-participant.entity.js');
+    const count = await em
+      .createQueryBuilder(MeetingParticipantEntity, 'mp')
+      .where('mp.meetingId = :meetingId', { meetingId })
+      .andWhere('mp.userId = :userId', { userId })
+      .andWhere('mp.isHost = true')
+      .getCount();
+    return count > 0;
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: Create Meeting Note (UC-102)
+  // ------------------------------------------------------------------
+
+  /**
+   * Create a meeting note during an in_progress meeting.
+   * Transaction + pessimistic_read lock on meeting (EC-001).
+   */
+  async createMeetingNote(
+    meetingId: string,
+    dto,
+    authUser: AuthUser,
+  ): Promise<any> {
+    const { sanitizeNoteContent } = await import('../../../common/utils/sanitize-note-content.util.js');
+    const { MEETING_NOTE_ERRORS } = await import('../constants/meeting-note-error.constant.js');
+    const { MeetingNoteEntity } = await import('../../meetings/entities/meeting-note.entity.js');
+    const { UserEntity } = await import('../../accounts/entities/user.entity.js');
+    const { BadRequestException, InternalServerErrorException } = await import('@nestjs/common');
+
+    const currentUserId = authUser.userId;
+
+    // Sanitize content (NFR-005)
+    const sanitized = sanitizeNoteContent(dto.content);
+    if (!sanitized || sanitized.trim().length === 0) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Noi dung ghi chu khong duoc de trong',
+        error: { code: MEETING_NOTE_ERRORS.VALIDATION_ERROR, details: { field: 'content', reason: 'empty_after_sanitize' } },
+      });
+    }
+
+    // Reject system_note from user actor (FR-005, BR-003)
+    if (dto.noteType === 'system_note') {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Loai ghi chu system_note khong duoc phep tu nguoi dung',
+        error: { code: MEETING_NOTE_ERRORS.NOTE_SYSTEM_TYPE_FORBIDDEN, details: { noteType: dto.noteType } },
+      });
+    }
+
+    // Transaction with pessimistic_read lock on meetings
+    const result = await this.dataSource.transaction(async (em) => {
+      // Load meeting with lock
+      const meeting = await em
+        .createQueryBuilder(MeetingEntity, 'm')
+        .setLock('pessimistic_read')
+        .where('m.id = :id', { id: meetingId })
+        .getOne();
+
+      if (!meeting || meeting.deletedAt) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Khong tim thay cuoc hop',
+          error: { code: MEETING_NOTE_ERRORS.MEETING_NOT_FOUND, details: { meetingId } },
+        });
+      }
+
+      // Check meeting status (BR-001)
+      if (meeting.status !== MeetingStatus.IN_PROGRESS) {
+        throw new ConflictException({
+          success: false,
+          message: 'Cuoc hop khong o trang thai dang dien ra',
+          error: { code: MEETING_NOTE_ERRORS.MEETING_NOT_IN_PROGRESS, details: { currentStatus: meeting.status } },
+        });
+      }
+
+      // Host check
+      const isHost = await this.isMeetingHost(em, meetingId, currentUserId);
+
+      // host_note requires host (FR-006, BR-004)
+      if (dto.noteType === 'host_note' && !isHost) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Chi Host moi duoc tao ghi chu host_note',
+          error: { code: MEETING_NOTE_ERRORS.NOTE_HOST_ONLY, details: {} },
+        });
+      }
+
+      // Resolve visibility level (FR-007/008)
+      let visibilityLevel;
+      if (dto.visibilityLevel) {
+        visibilityLevel = dto.visibilityLevel;
+      } else {
+        visibilityLevel = this.resolveDefaultVisibility(dto.noteType);
+      }
+
+      // Resolve pinned (BR-009)
+      let pinned = dto.pinned ?? false;
+      if (pinned && !isHost) {
+        pinned = false;
+      }
+
+      // INSERT meeting_notes
+      const note = em.create(MeetingNoteEntity, {
+        meetingId,
+        authorId: currentUserId,
+        noteType: dto.noteType,
+        content: sanitized,
+        pinned,
+        visibilityLevel,
+        sourceEventId: null,
+      });
+      const savedNote = await em.save(MeetingNoteEntity, note);
+      return savedNote;
+    });
+
+    // Load note + author for response
+    const noteRepo = this.dataSource.getRepository(MeetingNoteEntity);
+    const noteWithAuthor = await noteRepo.findOne({
+      where: { id: result.id },
+      relations: { author: true },
+    });
+
+    if (!noteWithAuthor) {
+      throw new InternalServerErrorException('Failed to load created note');
+    }
+
+    const author = noteWithAuthor.author;
+
+    const { NoteResponseDto } = await import('../dto/note-response.dto.js');
+    return new NoteResponseDto({
+      id: noteWithAuthor.id,
+      meetingId: noteWithAuthor.meetingId,
+      noteType: noteWithAuthor.noteType,
+      content: noteWithAuthor.content,
+      pinned: noteWithAuthor.pinned,
+      visibilityLevel: noteWithAuthor.visibilityLevel,
+      author: {
+        id: author?.id || currentUserId,
+        fullName: author?.fullName || '',
+      },
+      createdAt: noteWithAuthor.createdAt?.toISOString() || new Date().toISOString(),
+    });
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-09: List Meeting Notes (UC-103/104)
+  // ------------------------------------------------------------------
+
+  /**
+   * Build visibility predicate for list query (BR-008, FR-014).
+   * Author luon thay note cua minh.
+   */
+  private async buildVisibilityPredicate(
+    qb,
+    meetingId: string,
+    currentUserId: string,
+  ): Promise<void> {
+    const { UserEntity } = await import('../../accounts/entities/user.entity.js');
+    const { MeetingParticipantEntity } = await import('../../meetings/entities/meeting-participant.entity.js');
+
+    // Get current user's department_id
+    const currentUser = await this.dataSource.getRepository(UserEntity).findOne({
+      where: { id: currentUserId },
+      select: { id: true, departmentId: true },
+    });
+
+    // Get participant list for this meeting
+    const participantIds = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .createQueryBuilder('mp')
+      .select('mp.userId')
+      .where('mp.meetingId = :meetingId', { meetingId })
+      .andWhere('mp.userId IS NOT NULL')
+      .getMany();
+
+    const participantUserIdSet = new Set(participantIds.map((p) => p.userId).filter(Boolean));
+
+    // Raw SQL conditions for visibility_level logic
+    qb.andWhere(
+      '(mn.authorId = :currentUserId' +
+      ' OR mn.visibilityLevel = ' + 'public_internal' +
+      ' OR (mn.visibilityLevel = ' + 'participants' + ' AND mn.authorId = ANY(:participantIds))' +
+      ' OR (mn.visibilityLevel = ' + 'department' + ' AND :departmentId IS NOT NULL AND' +
+      '     EXISTS (SELECT 1 FROM users u WHERE u.id = mn.authorId AND u.departmentId = :departmentId))' +
+      ' OR (mn.visibilityLevel = ' + 'private' + ' AND mn.authorId = :currentUserId))',
+      {
+        currentUserId,
+        participantIds: [...participantUserIdSet],
+        departmentId: currentUser?.departmentId || null,
+      },
+    );
+
+    // Always filter out soft-deleted notes (BR-010, FR-016)
+    qb.andWhere('mn.deletedAt IS NULL');
+  }
+
+  /**
+   * List meeting notes with filter, pagination, and full-text search (UC-103/104).
+   */
+  async listMeetingNotes(
+    meetingId: string,
+    query,
+    authUser: AuthUser,
+  ): Promise<any> {
+    const { MeetingNoteEntity } = await import('../../meetings/entities/meeting-note.entity.js');
+    const { MeetingEntity } = await import('../../meetings/entities/meeting.entity.js');
+    const { MEETING_NOTE_ERRORS } = await import('../constants/meeting-note-error.constant.js');
+    const { NoteResponseDto } = await import('../dto/note-response.dto.js');
+
+    // Verify meeting exists
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay cuoc hop',
+        error: { code: MEETING_NOTE_ERRORS.MEETING_NOT_FOUND, details: { meetingId } },
+      });
+    }
+
+    // Build query
+    const noteRepo = this.dataSource.getRepository(MeetingNoteEntity);
+    const qb = noteRepo.createQueryBuilder('mn')
+      .leftJoinAndSelect('mn.author', 'u')
+      .where('mn.meetingId = :meetingId', { meetingId });
+
+    // Visibility filter (FR-014, FR-018)
+    await this.buildVisibilityPredicate(qb, meetingId, authUser.userId);
+
+    // Optional filters (FR-015)
+    if (query.noteType) {
+      qb.andWhere('mn.noteType = :noteType', { noteType: query.noteType });
+    }
+    if (query.pinned !== undefined) {
+      qb.andWhere('mn.pinned = :pinned', { pinned: query.pinned });
+    }
+
+    // Full-text search (FR-017)
+    if (query.q && query.q.trim().length > 0) {
+      qb.andWhere(
+        "to_tsvector('simple', mn.content) @@ plainto_tsquery('simple', :q)",
+        { q: query.q.trim() },
+      );
+    }
+
+    // Pagination
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const skip = (page - 1) * limit;
+
+    const total = await qb.getCount();
+    qb.skip(skip).take(limit);
+    qb.orderBy('mn.createdAt', 'DESC');
+
+    const notes = await qb.getMany();
+
+    // Map to DTO
+    const data = notes.map((note) => {
+      const author = note.author;
+      return new NoteResponseDto({
+        id: note.id,
+        meetingId: note.meetingId,
+        noteType: note.noteType,
+        content: note.content,
+        pinned: note.pinned,
+        visibilityLevel: note.visibilityLevel,
+        author: {
+          id: author?.id || '',
+          fullName: author?.fullName || '',
+        },
+        createdAt: note.createdAt?.toISOString() || '',
+      });
+    });
+
+    const totalPages = Math.ceil(total / limit);
+
+    return { data, meta: { page, limit, total, totalPages } };
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-10: View Meeting Notes - Helpers
+  // ------------------------------------------------------------------
+
+  /**
+   * Xac dinh role cua user trong meeting (T007).
+   * Return { isHost, isParticipant }.
+   * isHost = meeting.host_id === currentUserId OR participant?.participantRole === 'host'.
+   * isParticipant = participant record ton tai.
+   */
+  private resolveMeetingRole(
+    meeting: { hostId: string | null },
+    participant: { participantRole?: string } | null,
+    currentUserId: string,
+  ): { isHost: boolean; isCoHost: boolean; isParticipant: boolean } {
+    const isHost = meeting.hostId === currentUserId || participant?.participantRole === 'host';
+    const isCoHost = !isHost && participant?.participantRole === 'co_host';
+    const isParticipant = participant !== null;
+    return { isHost, isCoHost, isParticipant };
+  }
+
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-11: Search Meeting Notes helpers
+  // ------------------------------------------------------------------
+
+  /**
+   * Escape wildcard characters cho ILIKE fallback (T008, CR-004, BR-022).
+   * Escape %, _, \ trong keyword truoc khi bind vao ILIKE query.
+   */
+  private escapeIlikeWildcard(keyword: string): string {
+    return keyword.replace(/[\\%_]/g, '\\$&');
+  }
+
+  /**
+   * Normalize Vietnamese text bang cach loai bo dau (T009).
+   * Application-layer fallback khi DB khong co unaccent extension.
+   */
+  private normalizeVietnamese(text: string): string {
+    const accentMap: Record<string, string> = {
+      'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+      'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+      'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+      'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+      'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+      'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+      'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+      'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+      'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+      'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+      'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+      'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+      'đ': 'd',
+      'À': 'A', 'Á': 'A', 'Ả': 'A', 'Ã': 'A', 'Ạ': 'A',
+      'Ă': 'A', 'Ằ': 'A', 'Ắ': 'A', 'Ẳ': 'A', 'Ẵ': 'A', 'Ặ': 'A',
+      'Â': 'A', 'Ầ': 'A', 'Ấ': 'A', 'Ẩ': 'A', 'Ẫ': 'A', 'Ậ': 'A',
+      'È': 'E', 'É': 'E', 'Ẻ': 'E', 'Ẽ': 'E', 'Ẹ': 'E',
+      'Ê': 'E', 'Ề': 'E', 'Ế': 'E', 'Ể': 'E', 'Ễ': 'E', 'Ệ': 'E',
+      'Ì': 'I', 'Í': 'I', 'Ỉ': 'I', 'Ĩ': 'I', 'Ị': 'I',
+      'Ò': 'O', 'Ó': 'O', 'Ỏ': 'O', 'Õ': 'O', 'Ọ': 'O',
+      'Ô': 'O', 'Ồ': 'O', 'Ố': 'O', 'Ổ': 'O', 'Ỗ': 'O', 'Ộ': 'O',
+      'Ơ': 'O', 'Ờ': 'O', 'Ớ': 'O', 'Ở': 'O', 'Ỡ': 'O', 'Ợ': 'O',
+      'Ù': 'U', 'Ú': 'U', 'Ủ': 'U', 'Ũ': 'U', 'Ụ': 'U',
+      'Ư': 'U', 'Ừ': 'U', 'Ứ': 'U', 'Ử': 'U', 'Ữ': 'U', 'Ự': 'U',
+      'Ỳ': 'Y', 'Ý': 'Y', 'Ỷ': 'Y', 'Ỹ': 'Y', 'Ỵ': 'Y',
+      'Đ': 'D',
+    };
+    return text.replace(/[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ]/g, (ch) => accentMap[ch] || ch);
+  }
+
+  /**
+   * Validate search keyword (T010, CR-003, BR-013, BR-021).
+   * Trim whitespace, check max length 255.
+   * Returns null neu empty (view mode) hoac keyword da trim.
+   * Throws BadRequestException neu > 255.
+   */
+  private validateSearchKeyword(q: string): { keyword: string | null; error: any } {
+    const trimmed = q.trim();
+    if (trimmed.length === 0) {
+      return { keyword: null, error: null }; // view mode
+    }
+    if (trimmed.length > 255) {
+      return {
+        keyword: null,
+        error: {
+          success: false,
+          message: 'Tu khoa tim kiem khong duoc vuot qua 255 ky tu',
+          error: { code: 'VALIDATION_ERROR', details: { maxLength: 255 } },
+        },
+      };
+    }
+    return { keyword: trimmed, error: null };
+  }
+
+  /**
+   * Build OR visibility predicate cho Participant path (T008).
+   * Ap dung len QueryBuilder cho meeting_notes (alias 'mn').
+   * currentUserDeptId nullable - neu NULL thi skip department predicate.
+   */
+  private buildParticipantVisibilityPredicate(
+    qb: any,
+    alias: string,
+    currentUserId: string,
+    currentUserDeptId: string | null,
+  ): void {
+    const conditions: string[] = [
+      alias + '.authorId = :currentUserId',
+      alias + ".visibilityLevel = 'participants'",
+      alias + ".visibilityLevel = 'public_internal'",
+    ];
+    const params: Record<string, any> = { currentUserId };
+
+    if (currentUserDeptId) {
+      conditions.push(
+        '(' + alias + ".visibilityLevel = 'department' AND EXISTS (SELECT 1 FROM users u2 WHERE u2.id = " + alias + '.authorId AND u2.department_id IS NOT NULL AND u2.department_id = :currentUserDeptId))',
+      );
+      params.currentUserDeptId = currentUserDeptId;
+    }
+
+    qb.andWhere('(' + conditions.join(' OR ') + ')', params);
+  }
+
+  /**
+   * Ap optional filter params len QueryBuilder (T012).
+   * noteType, visibility, pinned, from, to.
+   * Ap dung SAU visibility predicate (BR-015).
+   */
+  private applyOptionalFilters(
+    qb: any,
+    alias: string,
+    query: {
+      noteType?: string;
+      visibility?: string;
+      pinned?: boolean;
+      from?: string;
+      to?: string;
+      authorId?: string;
+      createdFrom?: string;
+      createdTo?: string;
+    },
+  ): void {
+    if (query.noteType) {
+      qb.andWhere(alias + '.noteType = :noteType', { noteType: query.noteType });
+    }
+    if (query.visibility) {
+      qb.andWhere(alias + '.visibilityLevel = :visibility', { visibility: query.visibility });
+    }
+    if (query.pinned !== undefined) {
+      qb.andWhere(alias + '.pinned = :pinned', { pinned: query.pinned });
+    }
+    if (query.from) {
+      qb.andWhere(alias + '.createdAt >= :from', { from: new Date(query.from) });
+    }
+    if (query.to) {
+      qb.andWhere(alias + '.createdAt <= :to', { to: new Date(query.to) });
+    }
+    // UC-IMM-11 search filters
+    if (query.authorId) {
+      qb.andWhere(alias + '.authorId = :authorId', { authorId: query.authorId });
+    }
+    if (query.createdFrom) {
+      qb.andWhere(alias + '.createdAt >= :createdFrom', { createdFrom: new Date(query.createdFrom) });
+    }
+    if (query.createdTo) {
+      qb.andWhere(alias + '.createdAt <= :createdTo', { createdTo: new Date(query.createdTo) });
+    }
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-IMM-10: View Meeting Notes (Core Method - T009)
+  // ------------------------------------------------------------------
+
+  /**
+   * Xem danh sach ghi chu cua cuoc hop (UC-IMM-10).
+   * Read-only: khong transaction, khong side effect (BR-011, FR-020).
+   */
+  async viewMeetingNotes(
+    meetingId: string,
+    query: any,
+    authUser: AuthUser,
+  ): Promise<{ data: any[]; meta: { page: number; limit: number; total: number; totalPages: number }; message: string }> {
+    const { MeetingNoteEntity } = await import('../../meetings/entities/meeting-note.entity.js');
+    const { MeetingEntity } = await import('../../meetings/entities/meeting.entity.js');
+    const { UserEntity } = await import('../../accounts/entities/user.entity.js');
+    const { MeetingParticipantEntity } = await import('../../meetings/entities/meeting-participant.entity.js');
+    const { MeetingEventEntity } = await import('../../meetings/entities/meeting-event.entity.js');
+    const { MEETING_NOTE_ERRORS } = await import('../constants/meeting-note-error.constant.js');
+    const { ViewNoteResponseDto } = await import('../dto/view-note-response.dto.js');
+    const { BadRequestException, NotFoundException, ForbiddenException, UnprocessableEntityException } = await import('@nestjs/common');
+
+    const currentUserId = authUser.userId;
+
+    // -- Step 1: Cross-field from/to validation (T013, CD-003) --
+    if (query.from && query.to) {
+      const fromDate = new Date(query.from);
+      const toDate = new Date(query.to);
+      if (fromDate > toDate) {
+        throw new BadRequestException({
+          success: false,
+          message: "Gia tri 'from' phai nho hon hoac bang 'to'",
+          error: { code: MEETING_NOTE_ERRORS.INVALID_DATE_RANGE, details: { from: query.from, to: query.to } },
+        });
+      }
+    }
+
+    // -- Step 1b: Search keyword validation (UC-IMM-11, FR-007, BR-021, CR-003) --
+    if (query.q) {
+      const qValidation = this.validateSearchKeyword(query.q);
+      if (qValidation.error) {
+        const { BadRequestException } = await import('@nestjs/common');
+        throw new BadRequestException(qValidation.error);
+      }
+    }
+
+    // -- Step 2: Validate meeting ton tai + status (FR-004, FR-005) --
+    const meetingRepo = this.dataSource.getRepository(MeetingEntity);
+    const meeting = await meetingRepo.findOne({
+      where: { id: meetingId },
+      select: { id: true, status: true, hostId: true, deletedAt: true },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay cuoc hop',
+        error: { code: MEETING_NOTE_ERRORS.MEETING_NOT_FOUND, details: { meetingId } },
+      });
+    }
+
+    const validStatuses = ['in_progress', 'completed'];
+    if (!validStatuses.includes(meeting.status)) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Cuoc hop khong o trang thai cho phep xem ghi chu',
+        error: { code: MEETING_NOTE_ERRORS.MEETING_STATUS_NOT_VIEWABLE, details: { currentStatus: meeting.status } },
+      });
+    }
+
+    // -- Step 3: Lay currentUserDeptId --
+    const userRepo = this.dataSource.getRepository(UserEntity);
+    const currentUser = await userRepo.findOne({
+      where: { id: currentUserId },
+      select: { id: true, departmentId: true },
+    });
+    const currentUserDeptId: string | null = currentUser?.departmentId || null;
+
+    // -- Step 4: Membership check (FR-006, BR-002, CD-002) --
+    const participantRepo = this.dataSource.getRepository(MeetingParticipantEntity);
+    const participant = await participantRepo.findOne({
+      where: { meetingId, userId: currentUserId },
+      select: { participantRole: true },
+    });
+
+    const { isHost, isCoHost, isParticipant } = this.resolveMeetingRole(meeting, participant, currentUserId);
+
+    if (!isHost && !isCoHost && !isParticipant) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Ban khong co quyen xem ghi chu cua cuoc hop nay.',
+        error: { code: MEETING_NOTE_ERRORS.NOT_A_MEETING_PARTICIPANT, details: {} },
+      });
+    }
+
+    // -- Step 5: Build QueryBuilder --
+    const noteRepo = this.dataSource.getRepository(MeetingNoteEntity);
+    const qb = noteRepo.createQueryBuilder('mn')
+      .leftJoinAndSelect('mn.author', 'u')
+      .where('mn.meetingId = :meetingId', { meetingId })
+      .andWhere('mn.deletedAt IS NULL');  // BR-003, FR-009
+
+    // -- Step 6: Visibility predicate --
+    if (isHost) {
+      // Host: khong them visibility predicate (FR-007, BR-004)
+    } else if (isCoHost) {
+      // Co-host: thay tat ca notes NGOAI TRU private notes cua user khac (BR-020, CR-002)
+      qb.andWhere(
+        '(mn.authorId = :currentUserId OR mn.visibilityLevel != :privateVisibility OR mn.visibilityLevel IS NULL)',
+        { currentUserId, privateVisibility: 'private' },
+      );
+      qb.andWhere(
+        '(mn.visibilityLevel = \'private\' AND mn.authorId = :coHostUserId) OR mn.visibilityLevel != \'private\' OR mn.visibilityLevel IS NULL',
+        { coHostUserId: currentUserId },
+      );
+    } else {
+      // Participant: ap dung buildParticipantVisibilityPredicate (FR-008, BR-005)
+      this.buildParticipantVisibilityPredicate(qb, 'mn', currentUserId, currentUserDeptId);
+    }
+
+    // -- Step 6b: Search predicate (UC-IMM-11, FR-007, FR-011, BR-016) --
+    // Search duoc ap dung SAU visibility filter (FR-011)
+    if (query.q) {
+      const qResult = this.validateSearchKeyword(query.q);
+      if (qResult.error) {
+        const { BadRequestException } = await import('@nestjs/common');
+        throw new BadRequestException(qResult.error);
+      }
+      const searchKeyword = qResult.keyword;
+      if (searchKeyword !== null) {
+        // Preferred: PostgreSQL FTS (GIN index)
+        qb.andWhere('to_tsvector(\'simple\', mn.content) @@ plainto_tsquery(\'simple\', :searchQ)', {
+          searchQ: searchKeyword,
+        });
+      }
+      // Fallback ILIKE: neu FTS khong tra ket qua, co the them ILIKE o day
+      // (FR-028, CR-004) - ghi chu: ILIKE can escape wildcard
+    }
+
+    // -- Step 7: Optional filters (T012) --
+    this.applyOptionalFilters(qb, 'mn', query);
+
+    // -- Step 8: Opt-in enrichment includeSourceEvent (T016, CD-001) --
+    const includeSourceEvent = query.includeSourceEvent === true;
+    if (includeSourceEvent) {
+      qb.leftJoinAndMapOne('mn.sourceEvent', MeetingEventEntity, 'me', 'mn.sourceEventId = me.id')
+        .addSelect(['me.eventTime', 'me.eventType']);
+    }
+
+    // -- Step 9: Sort (T014, BR-007, BR-008) --
+    const sortDir = query.sort === 'timeline_desc' ? 'DESC' : 'ASC';
+    qb.orderBy('mn.createdAt', sortDir as 'ASC' | 'DESC');
+
+    // -- Step 10: Pagination (T015) --
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    // Count query with same visibility + filters + search
+    const countQb = noteRepo.createQueryBuilder('mn')
+      .where('mn.meetingId = :meetingId', { meetingId })
+      .andWhere('mn.deletedAt IS NULL');
+
+    if (isHost) {
+      // Host: khong them visibility predicate
+    } else if (isCoHost) {
+      countQb.andWhere(
+        '(mn.authorId = :currentUserId OR mn.visibilityLevel != :privateVisibility OR mn.visibilityLevel IS NULL)',
+        { currentUserId, privateVisibility: 'private' },
+      );
+    } else {
+      this.buildParticipantVisibilityPredicate(countQb, 'mn', currentUserId, currentUserDeptId);
+    }
+
+    // Add search predicate to count query (if search mode)
+    if (query.q) {
+      const qResult = this.validateSearchKeyword(query.q);
+      if (qResult.error) {
+        const { BadRequestException } = await import('@nestjs/common');
+        throw new BadRequestException(qResult.error);
+      }
+      const searchKeyword = qResult.keyword;
+      if (searchKeyword !== null) {
+        countQb.andWhere('to_tsvector(\'simple\', mn.content) @@ plainto_tsquery(\'simple\', :searchQ)', {
+          searchQ: searchKeyword,
+        });
+      }
+    }
+
+    this.applyOptionalFilters(countQb, 'mn', query);
+
+    const total = await countQb.getCount();
+
+    qb.skip(skip).take(limit);
+    const notes = await qb.getMany();
+
+    // -- Step 11: Map -> ViewNoteResponseDto[] --
+    const data = notes.map((note: any) => {
+      const author = note.author;
+      const dtoData: any = {
+        id: note.id,
+        meetingId: note.meetingId,
+        noteType: note.noteType,
+        content: note.content,
+        pinned: note.pinned,
+        visibilityLevel: note.visibilityLevel,
+        author: {
+          id: author?.id || '',
+          fullName: author?.fullName || '',
+        },
+        sourceEventId: note.sourceEventId || null,
+        noteTimestamp: note.createdAt?.toISOString() || '',   // CD-001
+        updatedAt: note.updatedAt?.toISOString() || '',
+      };
+
+      if (includeSourceEvent) {
+        const sourceEvent = (note as any).sourceEvent;
+        dtoData.sourceEventTime = sourceEvent?.eventTime?.toISOString() ?? null;
+        dtoData.sourceEventType = sourceEvent?.eventType ?? null;
+      }
+
+      return new ViewNoteResponseDto(dtoData);
+    });
+
+    const totalPages = Math.ceil(total / limit);
+
+    // Empty state (FR-018, BR-012)
+    const isSearchMode = query.q && query.q.trim().length > 0;
+    const message = total === 0
+      ? (isSearchMode
+          ? 'Khong tim thay ghi chu nao khop voi dieu kien tim kiem cua ban.'
+          : 'Cuoc hop nay khong co ghi chu nao duoc luu lai.')
+      : (isSearchMode ? 'Tim kiem ghi chu thanh cong' : 'Lay danh sach ghi chu thanh cong');
+
+    return { data, meta: { page, limit, total, totalPages }, message };
+  }
 
 }
