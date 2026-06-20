@@ -137,6 +137,8 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_NO_SHOW_CHECK_CRON: Joi.string().default('*/5 * * * *'),
   SCHEDULER_AUTO_RELEASE_ENABLED: Joi.boolean().default(false),
   SCHEDULER_AUTO_RELEASE_CRON: Joi.string().default('*/5 * * * *'),
+  // EVD-001 (#34): cron phát hiện phòng trống sớm (gated default OFF).
+  SCHEDULER_EARLY_VACANCY_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_CRON: Joi.string().default('0 * * * *'),
 
@@ -161,6 +163,14 @@ export const envValidationSchema = Joi.object({
   NO_SHOW_WARNING_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
   NO_SHOW_AUTO_RELEASE_GRACE_MINUTES: Joi.number().integer().min(1).default(5),
   NO_SHOW_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
+  // EVD-001 (#34/#48): ngưỡng early-vacancy (phút) + bật email cảnh báo trống sớm.
+  EARLY_VACANCY_EMPTY_MINUTES: Joi.number().integer().min(1).default(10),
+  EARLY_VACANCY_MIN_REMAINING_MINUTES: Joi.number()
+    .integer()
+    .min(0)
+    .default(15),
+  EARLY_VACANCY_MIN_ELAPSED_MINUTES: Joi.number().integer().min(0).default(10),
+  EARLY_VACANCY_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),

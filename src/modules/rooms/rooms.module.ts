@@ -17,10 +17,13 @@ import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomStatusService } from './services/room-status.service.js';
 import { NoShowController } from './controllers/no-show.controller.js';
 import { NoShowConfigController } from './controllers/no-show-config.controller.js';
+import { EarlyVacancyConfigController } from './controllers/early-vacancy-config.controller.js';
 import { NoShowService } from './services/no-show.service.js';
 import { NoShowDetectionService } from './services/no-show-detection.service.js';
 import { NoShowConfigService } from './services/no-show-config.service.js';
 import { NoShowLifecycleService } from './services/no-show-lifecycle.service.js';
+import { EarlyVacancyService } from './services/early-vacancy.service.js';
+import { EarlyVacancyConfigService } from './services/early-vacancy-config.service.js';
 
 /**
  * RoomsModule quản lý tất cả entities thuộc domain Room & Utilization:
@@ -48,14 +51,26 @@ import { NoShowLifecycleService } from './services/no-show-lifecycle.service.js'
       RoomEventEntity,
     ]),
   ],
-  controllers: [RoomsController, NoShowController, NoShowConfigController],
+  controllers: [
+    RoomsController,
+    NoShowController,
+    NoShowConfigController,
+    EarlyVacancyConfigController,
+  ],
   providers: [
     RoomStatusService,
     NoShowService,
     NoShowDetectionService,
     NoShowConfigService,
     NoShowLifecycleService,
+    EarlyVacancyService,
+    EarlyVacancyConfigService,
   ],
-  exports: [TypeOrmModule, NoShowDetectionService, NoShowLifecycleService],
+  exports: [
+    TypeOrmModule,
+    NoShowDetectionService,
+    NoShowLifecycleService,
+    EarlyVacancyService,
+  ],
 })
 export class RoomsModule {}

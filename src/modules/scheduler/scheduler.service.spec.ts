@@ -5,11 +5,13 @@ import { SchedulerService } from './scheduler.service.js';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
+import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 
-describe('SchedulerService (NSL-001 cron wiring)', () => {
+describe('SchedulerService (NSL-001 + EVD-001 cron wiring)', () => {
   let detectMock: any;
   let lifecycleMock: any;
+  let earlyVacancyMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -36,6 +38,9 @@ describe('SchedulerService (NSL-001 cron wiring)', () => {
         skipped: 0,
       })),
     };
+    earlyVacancyMock = {
+      detect: jest.fn(async () => ({ scanned: 0, flagged: 0 })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -46,6 +51,7 @@ describe('SchedulerService (NSL-001 cron wiring)', () => {
         { provide: IotDevicesService, useValue: {} },
         { provide: NoShowDetectionService, useValue: detectMock },
         { provide: NoShowLifecycleService, useValue: lifecycleMock },
+        { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
       ],
     }).compile();
@@ -79,5 +85,27 @@ describe('SchedulerService (NSL-001 cron wiring)', () => {
     const s = await build();
     await s.autoRelease();
     expect(lifecycleMock.autoReleaseBatch).toHaveBeenCalledTimes(1);
+  });
+
+  // ── EVD-001 earlyVacancy cron ──
+  it('earlyVacancy gate OFF (default) → KHÔNG gọi detect', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.earlyVacancy();
+    expect(earlyVacancyMock.detect).not.toHaveBeenCalled();
+  });
+
+  it('earlyVacancy ON → gọi detect 1 lần', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_EARLY_VACANCY_ENABLED: true };
+    const s = await build();
+    await s.earlyVacancy();
+    expect(earlyVacancyMock.detect).toHaveBeenCalledTimes(1);
+  });
+
+  it('earlyVacancy: detect throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_EARLY_VACANCY_ENABLED: true };
+    const s = await build();
+    earlyVacancyMock.detect.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.earlyVacancy()).resolves.toBeUndefined();
   });
 });

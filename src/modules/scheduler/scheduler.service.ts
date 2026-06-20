@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
+import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 
 /**
@@ -27,12 +28,14 @@ export class SchedulerService {
   private readonly reminderEnabled: boolean;
   private readonly deviceOfflineDetectEnabled: boolean;
   private readonly faceSyncEnabled: boolean;
+  private readonly earlyVacancyEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly iotDevicesService: IotDevicesService,
     private readonly noShowDetectionService: NoShowDetectionService,
     private readonly noShowLifecycleService: NoShowLifecycleService,
+    private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
@@ -59,9 +62,13 @@ export class SchedulerService {
       'FACE_SYNC_ENABLED',
       false,
     );
+    this.earlyVacancyEnabled = this.configService.get<boolean>(
+      'SCHEDULER_EARLY_VACANCY_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled}`,
     );
   }
 
@@ -162,6 +169,28 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] auto-release failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * EVD-001 (#34) — phát hiện phòng trống sớm (họp đã bắt đầu rồi trống).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_EARLY_VACANCY_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'early-vacancy' })
+  async earlyVacancy(): Promise<void> {
+    if (!this.schedulerEnabled || !this.earlyVacancyEnabled) return;
+
+    try {
+      const r = await this.earlyVacancyService.detect();
+      this.logger.log(
+        `[Scheduler] early-vacancy: scanned=${r.scanned} flagged=${r.flagged}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] early-vacancy failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );
