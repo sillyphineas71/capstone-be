@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
+import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 
 /**
@@ -31,6 +32,7 @@ export class SchedulerService {
     private readonly configService: ConfigService,
     private readonly iotDevicesService: IotDevicesService,
     private readonly noShowDetectionService: NoShowDetectionService,
+    private readonly noShowLifecycleService: NoShowLifecycleService,
     private readonly faceProvisioningService: FaceProvisioningService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
@@ -122,11 +124,15 @@ export class SchedulerService {
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    // NSC-001 (#31): detect() KHÔNG được ném ra ngoài cron.
+    // NSC-001 (#31) + NSL-001 (OQ-4): detect → reconcile-presence → warn.
+    // detect() commit case 'risk' trước; reconcile/warn re-query sau. KHÔNG ném ra cron.
     try {
-      const r = await this.noShowDetectionService.detect();
+      const d = await this.noShowDetectionService.detect();
+      const rec = await this.noShowLifecycleService.reconcilePresence();
+      const w = await this.noShowLifecycleService.warnBatch();
       this.logger.log(
-        `[Scheduler] no-show-check: scanned=${r.scanned} created=${r.created}`,
+        `[Scheduler] no-show-check: detected scanned=${d.scanned} created=${d.created}` +
+          ` | reconcile resolved=${rec.resolved} | warn scanned=${w.scanned} warned=${w.warned}`,
       );
     } catch (e) {
       this.logger.error(
@@ -147,10 +153,19 @@ export class SchedulerService {
   async autoRelease(): Promise<void> {
     if (!this.schedulerEnabled || !this.autoReleaseEnabled) return;
 
-    this.logger.log(
-      '[Scheduler] autoRelease() triggered — TODO: implement auto-release room logic.',
-    );
-    // TODO: inject UtilizationService và gọi autoReleaseRooms()
+    // NSL-001 (#33): release case warning_sent quá deadline. KHÔNG ném ra cron (ARCH-02).
+    try {
+      const r = await this.noShowLifecycleService.autoReleaseBatch();
+      this.logger.log(
+        `[Scheduler] auto-release: scanned=${r.scanned} released=${r.released} skipped=${r.skipped}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] auto-release failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
   }
 
   /**

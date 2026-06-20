@@ -14,8 +14,10 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { NoShowService } from '../services/no-show.service.js';
+import { NoShowLifecycleService } from '../services/no-show-lifecycle.service.js';
 import { CreateNoShowDto } from '../dto/create-no-show.dto.js';
 import { UpdateNoShowDto } from '../dto/update-no-show.dto.js';
+import { ReleaseNoShowDto } from '../dto/release-no-show.dto.js';
 import { InternalTokenGuard } from '../guards/internal-token.guard.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 
@@ -31,7 +33,10 @@ const Permissions =
 
 @Controller()
 export class NoShowController {
-  constructor(private readonly noShowService: NoShowService) {}
+  constructor(
+    private readonly noShowService: NoShowService,
+    private readonly noShowLifecycleService: NoShowLifecycleService,
+  ) {}
 
   // UC-41 (internal): tạo no-show case (token-gated, idempotent → 201/200).
   @Post('internal/no-show-cases')
@@ -73,6 +78,31 @@ export class NoShowController {
     return {
       success: true,
       message: 'No-show case updated',
+      data,
+    };
+  }
+
+  // UC-45 (#33b): admin giải phóng phòng thủ công cho no-show case.
+  // Mã trả (A): 404 not-found · 400 dismissed/resolved · 200 released/no-op · 409 booking_changed.
+  @Post('no-show-cases/:id/release')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('room.noshow.release')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async release(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReleaseNoShowDto,
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    const data = await this.noShowLifecycleService.manualRelease(
+      id,
+      dto.reason,
+      userId,
+    );
+    return {
+      success: true,
+      message: 'No-show case released',
       data,
     };
   }

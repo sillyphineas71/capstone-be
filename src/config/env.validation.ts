@@ -157,6 +157,10 @@ export const envValidationSchema = Joi.object({
   NOSHOW_INTERNAL_TOKEN: Joi.string().allow('').default(''),
   // NSC-001: ngưỡng no-show (phút) — fallback khi system_configs chưa cấu hình (#35).
   NO_SHOW_THRESHOLD_MINUTES: Joi.number().integer().min(1).default(15),
+  // NSL-001 (#32/#33/#35): grace cảnh báo + grace auto-release (phút) + bật email cảnh báo.
+  NO_SHOW_WARNING_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
+  NO_SHOW_AUTO_RELEASE_GRACE_MINUTES: Joi.number().integer().min(1).default(5),
+  NO_SHOW_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),
