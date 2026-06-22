@@ -171,6 +171,15 @@ export const envValidationSchema = Joi.object({
     .default(15),
   EARLY_VACANCY_MIN_ELAPSED_MINUTES: Joi.number().integer().min(0).default(10),
   EARLY_VACANCY_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
+  // IVS-001 (#36): IVSS bridge sidecar — base URL + shared token (2 chiều, R1) + group + timeout.
+  IVSS_BRIDGE_BASE_URL: Joi.string().allow('').default(''),
+  IVSS_BRIDGE_TOKEN: Joi.string().allow('').default(''),
+  IVSS_DEFAULT_GROUP: Joi.string().allow('').default(''),
+  IVSS_BRIDGE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(30000)
+    .default(8000),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),

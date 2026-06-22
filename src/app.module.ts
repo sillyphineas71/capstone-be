@@ -36,6 +36,7 @@ import { RoomsModule } from './modules/rooms/rooms.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TranscriptionModule } from './modules/transcription/transcription.module';
 import { UtilizationModule } from './modules/utilization/utilization.module';
+import { IvssModule } from './modules/ivss/ivss.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -104,6 +105,7 @@ void loadDevModule; // suppress unused warning
     NotificationsModule,
     ReportsModule,
     AnalyticsModule,
+    IvssModule,
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],
