@@ -11,6 +11,9 @@ import { AuditLogEntity } from '../../administration/entities/audit-log.entity.j
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { StartMeetingResponseDto } from '../dto/start-meeting-response.dto.js';
 import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
+import { QueueService } from '../../queue/queue.service.js';
+import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
+import { ConfigService } from '@nestjs/config';
 
 describe('LiveMeetingService', () => {
   let service: LiveMeetingService;
@@ -46,6 +49,22 @@ describe('LiveMeetingService', () => {
     getOne: jest.fn(),
   };
 
+
+  const mockQueueService = {
+    addJob: jest.fn().mockResolvedValue('mock-job-id'),
+    getQueue: jest.fn().mockReturnValue(undefined),
+  };
+
+  const mockBackgroundJobsService = {
+    createQueuedJob: jest.fn().mockResolvedValue({ id: 'bg-job-id' }),
+    findByIdOrNull: jest.fn().mockResolvedValue(null),
+    cancelJob: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockConfigService = {
+    get: jest.fn().mockReturnValue('scheduler'),
+  };
+
   const mockTransactionalEm = {
     createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -72,6 +91,18 @@ describe('LiveMeetingService', () => {
         {
           provide: WebsocketService,
           useValue: mockWebsocketService,
+        },
+        {
+          provide: QueueService,
+          useValue: mockQueueService,
+        },
+        {
+          provide: BackgroundJobsService,
+          useValue: mockBackgroundJobsService,
+        },
+        {
+          provide: ConfigService,
+          useValue: mockConfigService,
         },
       ],
     }).compile();

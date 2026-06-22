@@ -82,6 +82,12 @@ import { MEETING_ATTENDANCE_ERRORS } from '../constants/meeting-attendance-error
 import { AttendanceQueryDto } from '../dto/attendance-query.dto.js';
 import { MeetingAttendanceResponseDto, AttendanceParticipantDto, AttendanceMetaDto } from '../dto/attendance-response.dto.js';
 import { AttendanceStatus, ParticipantState } from '../types/attendance-participant.type.js';
+import { QueueService } from '../../queue/queue.service.js';
+import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
+import { ConfigService } from '@nestjs/config';
+import { ScheduleWarningResult } from '../types/schedule-warning-result.type.js';
+import { MEETING_WARNING_ERRORS } from '../constants/meeting-warning-error.constant.js';
+import { BackgroundJobEntity, BackgroundJobType, BackgroundJobStatus } from '../../administration/entities/background-job.entity.js';
 
 
 export interface AuthUser {
@@ -102,7 +108,16 @@ export class LiveMeetingService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly websocketService: WebsocketService,
-  ) {}
+    private readonly queueService: QueueService,
+    private readonly backgroundJobsService: BackgroundJobsService,
+    private readonly configService: ConfigService,
+  ) {
+    this.schedulerQueueName = this.configService.get<string>('QUEUE_SCHEDULER', 'scheduler');
+  }
+
+  private readonly schedulerQueueName: string;
+  private readonly DEFAULT_WARNING_MINUTES = 10;
+  private readonly SCHEDULER_JOB_NAME = 'meeting-time-warning';
 
   /**
    * ───────────────────────────────────────────────────────────
@@ -173,11 +188,28 @@ export class LiveMeetingService {
       authUser.userId,
     );
 
+    // ── Step 7: Schedule warning job (UC-IMM-12, best-effort) ──
+    let warningScheduledAt: string | undefined;
+    let warningSkipped: boolean | undefined;
+    try {
+      const warningResult = await this.scheduleWarningJob(meetingId);
+      if (warningResult.skipped === false) {
+        warningScheduledAt = warningResult.warningScheduledAt?.toISOString();
+      } else {
+        warningSkipped = true;
+      }
+    } catch (warnErr: unknown) {
+      this.logger.error('[startMeeting] scheduleWarningJob failed: ' + (warnErr as Error).message);
+      warningSkipped = true;
+    }
+
     return new StartMeetingResponseDto({
       meetingId: meeting.id,
       status: MeetingStatus.IN_PROGRESS,
       actualStartTime: actualStartTime.toISOString(),
       alreadyStarted: false,
+      warningScheduledAt,
+      warningSkipped,
     });
   }
 
@@ -888,6 +920,13 @@ export class LiveMeetingService {
           conflictCheckStatus: 'clear',
         });
       });
+
+    // Post-commit: reschedule warning job (UC-IMM-12, best-effort)
+    try {
+      await this.rescheduleWarningJob(meeting.id);
+    } catch (reschedErr: unknown) {
+      this.logger.error('[handleAutoApplyPath] rescheduleWarningJob failed: ' + (reschedErr as Error).message);
+    }
     } catch (error: unknown) {
       if (
         error instanceof NotFoundException ||
@@ -1516,6 +1555,15 @@ export class LiveMeetingService {
     }
     await this.notifyDecideResult(meetingId, requestId, effectiveDecision, hostId, notifyDetails);
 
+    // Post-commit: reschedule warning job (UC-IMM-12, best-effort)
+    if (effectiveDecision === 'approved') {
+      try {
+        await this.rescheduleWarningJob(meetingId);
+      } catch (reschedErr: unknown) {
+        this.logger.error('[decideExtension] rescheduleWarningJob failed: ' + (reschedErr as Error).message);
+      }
+    }
+
     const responseData = new DecideExtensionResponseDto({
       requestId,
       decision: effectiveDecision,
@@ -1626,6 +1674,13 @@ export class LiveMeetingService {
       authUser.userId,
       roomReleased,
     );
+
+    // ── Step 8: Cancel warning job (UC-IMM-12, best-effort) ──
+    try {
+      await this.cancelWarningJob(meetingId);
+    } catch (cancelErr: unknown) {
+      this.logger.error('[endMeeting] cancelWarningJob failed: ' + (cancelErr as Error).message);
+    }
 
     return new EndMeetingResponseDto({
       meetingId: meeting.id,
@@ -2122,7 +2177,7 @@ export class LiveMeetingService {
         where: { configKey: 'attendance.late_threshold', isActive: true } as any,
       });
       if (config && config.configValue) {
-        const parsed = parseInt(config.configValue, 10);
+        const parsed = parseInt(config.configValue || '10', 10);
         if (!isNaN(parsed) && parsed > 0) {
           lateThresholdMinutes = parsed;
         } else {
@@ -3033,6 +3088,320 @@ export class LiveMeetingService {
       : (isSearchMode ? 'Tim kiem ghi chu thanh cong' : 'Lay danh sach ghi chu thanh cong');
 
     return { data, meta: { page, limit, total, totalPages }, message };
+  }
+
+
+  /**
+   * ??c config meeting_warning_before_minutes t? system_configs.
+   * Fallback DEFAULT_WARNING_MINUTES = 10 n?u key kh?ng t?n t?i ho?c parse l?i.
+   * Covers FR-01, FR-14, ERR-01, ERR-02.
+   */
+  private async readWarningConfig(): Promise<number> {
+    try {
+      const config = await this.dataSource.getRepository(SystemConfigEntity).findOne({
+        where: { configKey: 'meeting_warning_before_minutes' },
+      });
+      if (!config) {
+        this.logger.warn('[readWarningConfig] Config key meeting_warning_before_minutes not found, using default ' + this.DEFAULT_WARNING_MINUTES);
+        return this.DEFAULT_WARNING_MINUTES;
+      }
+      const parsed = parseInt(config.configValue || '10', 10);
+      if (isNaN(parsed) || parsed <= 0) {
+        this.logger.error('[readWarningConfig] Invalid config value: ' + config.configValue + ', using default ' + this.DEFAULT_WARNING_MINUTES);
+        return this.DEFAULT_WARNING_MINUTES;
+      }
+      return parsed;
+    } catch (error: unknown) {
+      this.logger.error('[readWarningConfig] Error reading config: ' + (error as Error).message);
+      return this.DEFAULT_WARNING_MINUTES;
+    }
+  }
+
+  /**
+   * Schedule warning job for a meeting that is in_progress.
+   * Normal Flow + AF2 + skip guard.
+   * Non-blocking: catches all errors, returns result without throwing.
+   * Covers FR-01 to FR-05, FR-10, FR-12, FR-14, FR-15, FR-17, FR-18, FR-21.
+   */
+  async scheduleWarningJob(meetingId: string): Promise<ScheduleWarningResult> {
+    try {
+      // 1. Guard check: load meeting
+      const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+        where: { id: meetingId },
+        select: { id: true, status: true, endTime: true },
+      });
+      if (!meeting || meeting.deletedAt) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_NOT_FOUND_FOR_SCHEDULING + ' meetingId=' + meetingId);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+      if (meeting.status !== 'in_progress') {
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_NOT_IN_PROGRESS_FOR_SCHEDULING + ' meetingId=' + meetingId + ' status=' + meeting.status);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+      if (!meeting.endTime) {
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_END_TIME_NULL + ' meetingId=' + meetingId);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+
+      // 2. Read config
+      const configMinutes = await this.readWarningConfig();
+      const endTime = meeting.endTime;
+      const now = new Date();
+
+      // 3. Calculate warningScheduledAt
+      let warningScheduledAt = new Date(endTime.getTime() - configMinutes * 60000);
+      let adjustedWarning = false;
+
+      // 4. AF2 check: remainingMinutes <= configMinutes
+      const remainingMinutes = (endTime.getTime() - now.getTime()) / 60000;
+      if (remainingMinutes <= configMinutes) {
+        const adjustedMinutes = Math.floor(remainingMinutes / 2);
+        warningScheduledAt = new Date(now.getTime() + adjustedMinutes * 60000);
+        adjustedWarning = true;
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] AF2 triggered' +
+          ' meetingId=' + meetingId +
+          ' originalConfigMinutes=' + configMinutes +
+          ' remainingMinutes=' + remainingMinutes.toFixed(1) +
+          ' usedMinutes=' + adjustedMinutes);
+      }
+
+      // 5. Skip guard
+      if (warningScheduledAt.getTime() <= now.getTime() + 60000) {
+        // Log skip event
+        try {
+          const skipEvent = this.dataSource.getRepository(MeetingEventEntity).create({
+            meetingId,
+            eventType: MeetingEventType.WARNING_SCHEDULING_SKIPPED,
+            eventTime: now,
+            actorUserId: null,
+            sourceType: MeetingEventSourceType.SCHEDULER,
+            description: 'Warning scheduling skipped (time too close)',
+            newValueJson: { warningScheduledAt: warningScheduledAt.toISOString(), reason: 'too_close_to_now' } as Record<string, unknown>,
+            metadataJson: { configMinutes, remainingSeconds: Math.round((warningScheduledAt.getTime() - now.getTime()) / 1000) } as Record<string, unknown>,
+          });
+          await this.dataSource.getRepository(MeetingEventEntity).save(skipEvent);
+        } catch (eventErr: unknown) {
+          this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Failed to save skip event: ' + (eventErr as Error).message);
+        }
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.WARNING_SCHEDULING_SKIPPED +
+          ' meetingId=' + meetingId + ' warningScheduledAt=' + warningScheduledAt.toISOString());
+        return { skipped: true, reason: 'too_close', warningScheduledAt };
+      }
+
+      // 6. Enqueue BullMQ job
+      const delayMs = warningScheduledAt.getTime() - now.getTime();
+      const jobId = 'meeting-time-warning:' + meetingId;
+      let enqueuedJobId: string | undefined;
+      try {
+        enqueuedJobId = await this.queueService.addJob(
+          this.schedulerQueueName,
+          'meeting-time-warning',
+          {
+            meetingId,
+            warningScheduledAt: warningScheduledAt.toISOString(),
+            endTime: endTime.toISOString(),
+          },
+          {
+            jobId,
+            delay: delayMs,
+          },
+        );
+      } catch (enqueueErr: unknown) {
+        const errMsg = (enqueueErr as Error).message || '';
+        if (errMsg.includes('already exists') || errMsg.includes('deduplicate')) {
+          this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Idempotent: job already exists for meetingId=' + meetingId);
+          // Idempotent - continue to return success
+        } else {
+          this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.WARNING_ENQUEUE_FAILED +
+            ' meetingId=' + meetingId + ' error=' + errMsg);
+          return { skipped: true, reason: 'error' };
+        }
+      }
+
+      // 7. Upsert background_jobs
+      try {
+        const bgRepo = this.dataSource.getRepository(BackgroundJobEntity);
+        const existing = await bgRepo.findOne({
+          where: {
+            relatedEntityId: meetingId,
+            jobType: BackgroundJobType.MEETING_TIME_WARNING,
+          },
+        });
+        const inputJson = {
+          meetingId,
+          endTime: endTime.toISOString(),
+          warningScheduledAt: warningScheduledAt.toISOString(),
+          adjustedWarningMinutes: adjustedWarning ? Math.floor(remainingMinutes / 2) : undefined,
+        };
+        if (existing) {
+          await bgRepo.update(existing.id, {
+            status: BackgroundJobStatus.SCHEDULED,
+            scheduledAt: warningScheduledAt,
+            inputJson: inputJson,
+          } as any);
+        } else {
+          const bg = bgRepo.create({
+            jobType: BackgroundJobType.MEETING_TIME_WARNING,
+            relatedEntityType: 'meeting',
+            relatedEntityId: meetingId,
+            queueName: this.schedulerQueueName,
+            status: BackgroundJobStatus.SCHEDULED,
+            scheduledAt: warningScheduledAt,
+            inputJson: inputJson as Record<string, unknown>,
+          });
+          await bgRepo.save(bg);
+        }
+      } catch (bgErr: unknown) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] background_jobs upsert failed: ' + (bgErr as Error).message);
+        // Best-effort: continue
+      }
+
+      // 8. Save meeting_events: warning_scheduled
+      try {
+        const eventData: Record<string, unknown> = {
+          warningScheduledAt: warningScheduledAt.toISOString(),
+          jobId: enqueuedJobId || jobId,
+          adjustedWarning,
+        };
+        if (adjustedWarning) {
+          eventData.remainingMinutes = remainingMinutes;
+        }
+        const event = this.dataSource.getRepository(MeetingEventEntity).create({
+          meetingId,
+          eventType: MeetingEventType.WARNING_SCHEDULED,
+          eventTime: now,
+          actorUserId: null,
+          sourceType: MeetingEventSourceType.SCHEDULER,
+          description: 'Warning job scheduled',
+          newValueJson: eventData,
+          metadataJson: { configMinutes, remainingMinutes } as Record<string, unknown>,
+        });
+        await this.dataSource.getRepository(MeetingEventEntity).save(event);
+      } catch (eventErr: unknown) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Failed to save warning_scheduled event: ' + (eventErr as Error).message);
+        // Best-effort: continue
+      }
+
+      // 9. Log
+      this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Scheduled' +
+        ' meetingId=' + meetingId +
+        ' warningScheduledAt=' + warningScheduledAt.toISOString() +
+        ' jobId=' + jobId +
+        ' adjustedWarning=' + adjustedWarning);
+
+      return { skipped: false, warningScheduledAt };
+    } catch (error: unknown) {
+      this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Unexpected error: ' + (error as Error).message);
+      return { skipped: true, reason: 'error' };
+    }
+  }
+
+  /**
+   * Reschedule warning job when meeting is extended (AF1).
+   * Cancel old job, re-calculate, re-enqueue.
+   * Non-blocking: catches all errors.
+   * Covers FR-07, FR-11, FR-16, FR-20, FR-23.
+   */
+  async rescheduleWarningJob(meetingId: string): Promise<ScheduleWarningResult> {
+    try {
+      // 1. Guard check
+      const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+        where: { id: meetingId },
+        select: { id: true, status: true, endTime: true },
+      });
+      if (!meeting || meeting.deletedAt) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_NOT_FOUND_FOR_SCHEDULING + ' meetingId=' + meetingId);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+      if (meeting.status !== 'in_progress') {
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_NOT_IN_PROGRESS_FOR_SCHEDULING + ' meetingId=' + meetingId);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+      if (!meeting.endTime) {
+        this.logger.warn('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.MEETING_END_TIME_NULL + ' meetingId=' + meetingId);
+        return { skipped: true, reason: 'guard_failed' };
+      }
+
+      // 2. Cancel old BullMQ job
+      try {
+        const queue = this.queueService.getQueue(this.schedulerQueueName);
+        if (queue) {
+          const oldJobId = 'meeting-time-warning:' + meetingId;
+          const oldJob = await queue.getJob(oldJobId);
+          if (oldJob) {
+            await oldJob.remove();
+            this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Cancelled old job for meetingId=' + meetingId);
+          } else {
+            this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Old job not found for meetingId=' + meetingId + ' (idempotent cancel)');
+          }
+        } else {
+          this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Queue not found: ' + this.schedulerQueueName);
+          return { skipped: true, reason: 'error' };
+        }
+      } catch (cancelErr: unknown) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Cancel old job failed: ' + (cancelErr as Error).message);
+        // Continue to re-enqueue
+      }
+
+      // 3. Re-calculate and re-enqueue (reuse scheduleWarningJob logic)
+      return this.scheduleWarningJob(meetingId);
+    } catch (error: unknown) {
+      this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] rescheduleWarningJob unexpected error: ' + (error as Error).message);
+      return { skipped: true, reason: 'error' };
+    }
+  }
+
+  /**
+   * Cancel warning job when meeting ends (AF3).
+   * Remove BullMQ job + update background_jobs status.
+   * Does NOT create meeting_events (FR-13).
+   * Non-blocking: catches all errors.
+   * Covers FR-08, FR-13, FR-22.
+   */
+  async cancelWarningJob(meetingId: string): Promise<void> {
+    try {
+      // 1. Cancel BullMQ job
+      const jobId = 'meeting-time-warning:' + meetingId;
+      try {
+        const queue = this.queueService.getQueue(this.schedulerQueueName);
+        if (queue) {
+          const job = await queue.getJob(jobId);
+          if (job) {
+            await job.remove();
+            this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Cancelled warning job for meetingId=' + meetingId);
+          } else {
+            this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Warning job not found for meetingId=' + meetingId + ' (already fired or never scheduled)');
+          }
+        } else {
+          this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] Queue not found: ' + this.schedulerQueueName);
+        }
+      } catch (removeErr: unknown) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.WARNING_CANCEL_FAILED +
+          ' meetingId=' + meetingId + ' error=' + (removeErr as Error).message);
+      }
+
+      // 2. Update background_jobs to CANCELLED
+      try {
+        const bgRepo = this.dataSource.getRepository(BackgroundJobEntity);
+        const existing = await bgRepo.findOne({
+          where: {
+            relatedEntityId: meetingId,
+            jobType: BackgroundJobType.MEETING_TIME_WARNING,
+          },
+        });
+        if (existing) {
+          await bgRepo.update(existing.id, { status: BackgroundJobStatus.CANCELLED });
+          this.logger.log('[' + this.SCHEDULER_JOB_NAME + '] Updated background_job ' + existing.id + ' to CANCELLED');
+        }
+      } catch (bgErr: unknown) {
+        this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] background_jobs cancel update failed: ' + (bgErr as Error).message);
+        // Non-blocking
+      }
+
+      // 3. NO meeting_events (FR-13)
+    } catch (error: unknown) {
+      this.logger.error('[' + this.SCHEDULER_JOB_NAME + '] ' + MEETING_WARNING_ERRORS.WARNING_CANCEL_FAILED + ' error=' + (error as Error).message);
+    }
   }
 
 }

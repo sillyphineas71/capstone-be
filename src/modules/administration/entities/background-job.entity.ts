@@ -16,10 +16,13 @@ export enum BackgroundJobType {
   EXPORT_REPORT = 'export_report',
   EXPORT_MINUTES = 'export_minutes',
   MEDIA_PROCESSING = 'media_processing',
+  // UC-IMM-12: Warning schedule delayed job
+  MEETING_TIME_WARNING = 'meeting_time_warning',
 }
 
 export enum BackgroundJobStatus {
   QUEUED = 'queued',
+  SCHEDULED = 'scheduled', // UC-IMM-12: Delayed job waiting to fire at scheduledAt
   RUNNING = 'running',
   COMPLETED = 'completed',
   FAILED = 'failed',

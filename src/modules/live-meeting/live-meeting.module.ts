@@ -4,6 +4,8 @@ import { AuthModule } from '../auth/auth.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { LiveMeetingService } from './services/live-meeting.service.js';
 import { LiveMeetingController } from './controllers/live-meeting.controller.js';
+import { MeetingWarningService } from "./services/meeting-warning.service.js";
+import { MeetingWarningProcessor } from "./processors/meeting-warning.processor.js";
 
 /**
  * LiveMeetingModule quản lý In-Meeting Management:
@@ -20,7 +22,11 @@ import { LiveMeetingController } from './controllers/live-meeting.controller.js'
     WebsocketModule,
   ],
   controllers: [LiveMeetingController],
-  providers: [LiveMeetingService],
+  providers: [
+    LiveMeetingService,
+    MeetingWarningService,
+    MeetingWarningProcessor,
+  ],
   exports: [LiveMeetingService],
 })
 export class LiveMeetingModule {}

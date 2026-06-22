@@ -24,6 +24,8 @@ export enum NotificationType {
   LATE_CHECKIN_ALERT = 'late_checkin_alert',
   LATE_CHECKIN_HOST_SUMMARY = 'late_checkin_host_summary',
   ACCOUNT_WELCOME = 'account_welcome',
+  MEETING_TIME_WARNING = 'meeting_time_warning',
+  MEETING_TIME_CONFLICT_WARNING = 'meeting_time_conflict_warning',
 }
 
 export enum NotificationChannel {
