@@ -6,6 +6,7 @@ import { NoShowDetectionService } from '../rooms/services/no-show-detection.serv
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
+import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -29,6 +30,7 @@ export class SchedulerService {
   private readonly deviceOfflineDetectEnabled: boolean;
   private readonly faceSyncEnabled: boolean;
   private readonly earlyVacancyEnabled: boolean;
+  private readonly ivssSyncEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -37,6 +39,7 @@ export class SchedulerService {
     private readonly noShowLifecycleService: NoShowLifecycleService,
     private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
+    private readonly ivssPersonSyncService: IvssPersonSyncService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -66,9 +69,13 @@ export class SchedulerService {
       'SCHEDULER_EARLY_VACANCY_ENABLED',
       false,
     );
+    this.ivssSyncEnabled = this.configService.get<boolean>(
+      'SCHEDULER_IVSS_SYNC_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled}`,
     );
   }
 
@@ -191,6 +198,30 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] early-vacancy failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * IPS-001 (#37) — đồng bộ person IVSS theo cuộc họp (enroll + cleanup).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_IVSS_SYNC_ENABLED (default OFF). KHÔNG ném ra cron (ARCH-02).
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'ivss-sync' })
+  async ivssSync(): Promise<void> {
+    if (!this.schedulerEnabled || !this.ivssSyncEnabled) return;
+
+    try {
+      const p = await this.ivssPersonSyncService.provisionUpcoming();
+      const c = await this.ivssPersonSyncService.cleanupEnded();
+      this.logger.log(
+        `[Scheduler] ivss-sync: provision scanned=${p.scanned} enrolled=${p.enrolled} skipped=${p.skipped} failed=${p.failed}` +
+          ` | cleanup scanned=${c.scanned} removed=${c.removed} failed=${c.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] ivss-sync failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

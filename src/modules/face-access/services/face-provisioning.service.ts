@@ -213,6 +213,7 @@ export class FaceProvisioningService {
        FROM device_user_mappings mp
        JOIN meetings me ON me.id = (mp.metadata_json->>'bookingId')::uuid
        WHERE mp.deleted_at IS NULL
+         AND COALESCE(mp.metadata_json->>'source', '') <> 'ivss'
          AND me.status <> 'cancelled'
          AND me.end_time <= now() - ($1 * interval '1 minute')
        LIMIT 500`,
@@ -262,7 +263,9 @@ export class FaceProvisioningService {
       `SELECT mp.id, mp.device_id, mp.device_person_id, mp.sync_status, mp.metadata_json
        FROM device_user_mappings mp
        JOIN meetings me ON me.id = (mp.metadata_json->>'bookingId')::uuid
-       WHERE mp.sync_status = 'synced' AND me.end_time <= now() - ($1 * interval '1 minute')
+       WHERE mp.sync_status = 'synced'
+         AND COALESCE(mp.metadata_json->>'source', '') <> 'ivss'
+         AND me.end_time <= now() - ($1 * interval '1 minute')
        LIMIT 500`,
       [grace],
     );
@@ -283,7 +286,10 @@ export class FaceProvisioningService {
       metadata_json: Record<string, unknown> | null;
     }> = await this.dataSource.manager.query(
       `SELECT device_id, device_person_id, device_person_code, metadata_json
-       FROM device_user_mappings WHERE sync_status = 'synced' LIMIT 500`,
+       FROM device_user_mappings
+       WHERE sync_status = 'synced'
+         AND COALESCE(metadata_json->>'source', '') <> 'ivss'
+       LIMIT 500`,
     );
     for (const mp of synced) {
       try {

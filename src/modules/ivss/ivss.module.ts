@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
+import { AccountsModule } from '../accounts/accounts.module.js';
 import { IVSS_EVENT_HANDLER } from '../../common/ports/ivss-event-hook.js';
 import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
 import { IvssInternalTokenGuard } from './guards/ivss-internal-token.guard.js';
 import { DefaultIvssEventHandler } from './handlers/default-ivss-event.handler.js';
+import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
 
@@ -16,14 +18,15 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
  * IVSS_EVENT_HANDLER bind DefaultIvssEventHandler (log-only); #38–40 override.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, AccountsModule],
   controllers: [IvssWebhookController, IvssHealthController],
   providers: [
     ivssBridgeProvider,
     IvssInternalTokenGuard,
     DefaultIvssEventHandler,
     { provide: IVSS_EVENT_HANDLER, useExisting: DefaultIvssEventHandler },
+    IvssPersonSyncService,
   ],
-  exports: [IVSS_BRIDGE],
+  exports: [IVSS_BRIDGE, IvssPersonSyncService],
 })
 export class IvssModule {}

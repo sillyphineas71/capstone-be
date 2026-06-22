@@ -282,6 +282,26 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(captured).toContain(
       "end_time <= now() - ($1 * interval '1 minute')",
     );
+    // IPS-001 C1: cleanup FMP KHÔNG đụng mapping IVSS.
+    expect(captured).toContain("metadata_json->>'source', '') <> 'ivss'");
+  });
+
+  it('IPS-001 C1: reconcile (stale + dedup) loại trừ mapping IVSS', async () => {
+    const captured: string[] = [];
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      captured.push(sql);
+      return Promise.resolve([]);
+    });
+    await service.reconcile();
+    const stale = captured.find(
+      (s) =>
+        s.includes('JOIN meetings me') && s.includes("sync_status = 'synced'"),
+    );
+    const dedup = captured.find((s) =>
+      s.includes('SELECT device_id, device_person_id, device_person_code'),
+    );
+    expect(String(stale)).toContain("metadata_json->>'source', '') <> 'ivss'");
+    expect(String(dedup)).toContain("metadata_json->>'source', '') <> 'ivss'");
   });
 
   it('MCS #1 cleanup: row failed (uid NULL) họp đã kết thúc → freed (deleted_at set, KHÔNG deletePerson)', async () => {

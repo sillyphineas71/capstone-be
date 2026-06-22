@@ -7,11 +7,13 @@ import { NoShowDetectionService } from '../rooms/services/no-show-detection.serv
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
+import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
 
-describe('SchedulerService (NSL-001 + EVD-001 cron wiring)', () => {
+describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
   let detectMock: any;
   let lifecycleMock: any;
   let earlyVacancyMock: any;
+  let ivssMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -41,6 +43,19 @@ describe('SchedulerService (NSL-001 + EVD-001 cron wiring)', () => {
     earlyVacancyMock = {
       detect: jest.fn(async () => ({ scanned: 0, flagged: 0 })),
     };
+    ivssMock = {
+      provisionUpcoming: jest.fn(async () => ({
+        scanned: 0,
+        enrolled: 0,
+        skipped: 0,
+        failed: 0,
+      })),
+      cleanupEnded: jest.fn(async () => ({
+        scanned: 0,
+        removed: 0,
+        failed: 0,
+      })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -53,6 +68,7 @@ describe('SchedulerService (NSL-001 + EVD-001 cron wiring)', () => {
         { provide: NoShowLifecycleService, useValue: lifecycleMock },
         { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
+        { provide: IvssPersonSyncService, useValue: ivssMock },
       ],
     }).compile();
     return module.get(SchedulerService);
@@ -107,5 +123,29 @@ describe('SchedulerService (NSL-001 + EVD-001 cron wiring)', () => {
     const s = await build();
     earlyVacancyMock.detect.mockRejectedValueOnce(new Error('boom'));
     await expect(s.earlyVacancy()).resolves.toBeUndefined();
+  });
+
+  // ── IPS-001 ivssSync cron ──
+  it('ivssSync gate OFF (default) → KHÔNG gọi provision/cleanup', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.ivssSync();
+    expect(ivssMock.provisionUpcoming).not.toHaveBeenCalled();
+    expect(ivssMock.cleanupEnded).not.toHaveBeenCalled();
+  });
+
+  it('ivssSync ON → gọi provision + cleanup', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_IVSS_SYNC_ENABLED: true };
+    const s = await build();
+    await s.ivssSync();
+    expect(ivssMock.provisionUpcoming).toHaveBeenCalledTimes(1);
+    expect(ivssMock.cleanupEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it('ivssSync: provision throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_IVSS_SYNC_ENABLED: true };
+    const s = await build();
+    ivssMock.provisionUpcoming.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.ivssSync()).resolves.toBeUndefined();
   });
 });

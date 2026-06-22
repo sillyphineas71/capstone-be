@@ -180,6 +180,10 @@ export const envValidationSchema = Joi.object({
     .min(1000)
     .max(30000)
     .default(8000),
+  // IPS-001 (#37): cron đồng bộ person IVSS (gated default OFF) + lead/grace (phút).
+  SCHEDULER_IVSS_SYNC_ENABLED: Joi.boolean().default(false),
+  IVSS_SYNC_LEAD_MINUTES: Joi.number().integer().min(1).default(5),
+  IVSS_SYNC_GRACE_MINUTES: Joi.number().integer().min(0).default(5),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),
