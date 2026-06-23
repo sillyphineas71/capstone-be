@@ -43,7 +43,7 @@ export class UsersController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('account.user.create')
+  @RequirePermissions('accounts.user.create')
   @ApiBearerAuth()
   @UsePipes(
     new ValidationPipe({
@@ -65,7 +65,7 @@ export class UsersController {
     description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
   })
   @ApiForbiddenResponse({
-    description: 'Không đủ quyền hạn (thiếu permission account.user.create).',
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.create).',
   })
   async createUser(
     @Body() createUserDto: CreateUserDto,

@@ -52,7 +52,7 @@ export class AttendanceController {
   @ApiResponse({ status: 409, description: 'ATTENDANCE_NOT_OPEN_YET' })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getAttendanceList(
-    @Param('meetingId', new ParseUUIDPipe({ version: '4' })) meetingId: string,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Query() query: QueryAttendanceDto,
     @CurrentUser() currentUser: { userId: string },
   ): Promise<{ success: boolean; message: string; data: any; meta?: any }> {

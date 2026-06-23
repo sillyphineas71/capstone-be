@@ -1,4 +1,4 @@
-﻿import {
+import {
   Injectable,
   Logger,
   NotFoundException,
@@ -3092,8 +3092,8 @@ export class LiveMeetingService {
 
 
   /**
-   * ??c config meeting_warning_before_minutes t? system_configs.
-   * Fallback DEFAULT_WARNING_MINUTES = 10 n?u key kh?ng t?n t?i ho?c parse l?i.
+   * Doc config meeting_warning_before_minutes tu system_configs.
+   * Fallback DEFAULT_WARNING_MINUTES = 10 neu key khong ton tai hoac parse loi.
    * Covers FR-01, FR-14, ERR-01, ERR-02.
    */
   private async readWarningConfig(): Promise<number> {

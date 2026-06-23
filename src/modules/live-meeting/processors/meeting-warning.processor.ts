@@ -15,7 +15,7 @@ import { MeetingWarningService } from '../services/meeting-warning.service.js';
  * - Neu return skipped -> BullMQ ACK (khong retry)
  * - Job name khong khop -> ACK silently
  */
-@Processor('QUEUE_SCHEDULER_NAME')
+@Processor('scheduler')
 export class MeetingWarningProcessor extends WorkerHost {
   private readonly logger = new Logger(MeetingWarningProcessor.name);
 

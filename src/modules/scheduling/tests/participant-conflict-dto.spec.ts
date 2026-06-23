@@ -1,5 +1,5 @@
-﻿import { validate } from 'class-validator';
-import { CheckParticipantConflictDto } from './check-participant-conflict.dto.js';
+import { validate } from 'class-validator';
+import { CheckParticipantConflictDto } from '../dto/check-participant-conflict.dto.js';
 
 describe('CheckParticipantConflictDto', () => {
   const validDto = {
