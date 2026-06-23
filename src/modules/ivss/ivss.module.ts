@@ -6,6 +6,7 @@ import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
 import { IvssInternalTokenGuard } from './guards/ivss-internal-token.guard.js';
 import { DefaultIvssEventHandler } from './handlers/default-ivss-event.handler.js';
+import { IvssPresenceIngestionService } from './services/ivss-presence-ingestion.service.js';
 import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
@@ -23,8 +24,11 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
   providers: [
     ivssBridgeProvider,
     IvssInternalTokenGuard,
+    // DefaultIvssEventHandler giữ registered (fallback/log), KHÔNG bind token.
     DefaultIvssEventHandler,
-    { provide: IVSS_EVENT_HANDLER, useExisting: DefaultIvssEventHandler },
+    IvssPresenceIngestionService,
+    // IPI-001 (#38+#39): handler thật thay log-only.
+    { provide: IVSS_EVENT_HANDLER, useExisting: IvssPresenceIngestionService },
     IvssPersonSyncService,
   ],
   exports: [IVSS_BRIDGE, IvssPersonSyncService],
