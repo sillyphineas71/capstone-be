@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import type {
   IvssEventHandlerPort,
   IvssFaceEvent,
 } from '../../../common/ports/ivss-event-hook.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 
 interface IdRow {
   id: string;
@@ -14,6 +16,24 @@ interface UserRow {
 interface ConfigRow {
   config_json: Record<string, unknown> | null;
 }
+interface FullNameRow {
+  full_name: string | null;
+}
+
+/** IRP-001 (#40): payload realtime đẩy về client — SEC-01/C4 KHÔNG szUid/imageBase64/similarity. */
+interface PresenceBroadcast {
+  meetingId: string;
+  roomId: string;
+  userId: string;
+  fullName: string | null;
+  direction: Direction;
+  matchState: 'matched';
+  at: string;
+}
+
+const IVSS_PRESENCE_EVENT = 'ivss.presence';
+const IVSS_MEETING_ROOM = (meetingId: string): string =>
+  `ivss:meeting:${meetingId}`;
 
 type Direction = 'enter' | 'leave' | 'seen';
 type MatchState =
@@ -48,8 +68,19 @@ const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
 @Injectable()
 export class IvssPresenceIngestionService implements IvssEventHandlerPort {
   private readonly logger = new Logger(IvssPresenceIngestionService.name);
+  // IRP-001 (#40) C1/B1: gate broadcast realtime — default OFF (mirror SCHEDULER_*_ENABLED).
+  private readonly realtimeEnabled: boolean;
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly websocketService: WebsocketService,
+    private readonly configService: ConfigService,
+  ) {
+    this.realtimeEnabled = this.configService.get<boolean>(
+      'IVSS_REALTIME_ENABLED',
+      false,
+    );
+  }
 
   async onFaceEvent(evt: IvssFaceEvent): Promise<void> {
     try {
@@ -112,11 +143,63 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         this.logger.warn(
           `IVSS event ${matchState} (channel=${evt.channelId} szUid=${szUid}).`,
         );
+      } else if (this.realtimeEnabled && meetingId && roomId && userId) {
+        // IRP-001 (#40): broadcast SAU persist (OQ-7), chỉ matched + có họp (OQ-4/5).
+        // C1 gate + C3 best-effort: broadcastPresence tự nuốt lỗi, KHÔNG vỡ ingest.
+        await this.broadcastPresence({
+          meetingId,
+          roomId,
+          userId,
+          direction,
+          eventTime,
+        });
       }
     } catch (e) {
       // Webhook always-ack (#36) — handler KHÔNG throw.
       this.logger.error(
         `IVSS presence ingest failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * IRP-001 (#40): đẩy realtime presence về room ivss:meeting:<meetingId>.
+   * B2/C3: TOÀN BỘ thân (query fullName + emit) trong try/catch → KHÔNG bao giờ throw
+   * ra ngoài (không vỡ ingest, không floating-reject). C4/SEC-01: payload KHÔNG
+   * szUid/imageBase64/similarity. SEC-03: query full_name bind tham số.
+   */
+  private async broadcastPresence(args: {
+    meetingId: string;
+    roomId: string;
+    userId: string;
+    direction: Direction;
+    eventTime: Date;
+  }): Promise<void> {
+    try {
+      const rows: FullNameRow[] = await this.dataSource.manager.query(
+        `SELECT full_name FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [args.userId],
+      );
+      const payload: PresenceBroadcast = {
+        meetingId: args.meetingId,
+        roomId: args.roomId,
+        userId: args.userId,
+        fullName: rows[0]?.full_name ?? null,
+        direction: args.direction,
+        matchState: 'matched',
+        at: args.eventTime.toISOString(),
+      };
+      this.websocketService.emitToRoom(
+        IVSS_MEETING_ROOM(args.meetingId),
+        IVSS_PRESENCE_EVENT,
+        payload,
+      );
+    } catch (e) {
+      // C3 best-effort: lỗi query/emit/gateway-down → log, KHÔNG throw, KHÔNG rollback persist.
+      this.logger.warn(
+        `IVSS realtime broadcast skipped: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

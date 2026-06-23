@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
 import { IVSS_EVENT_HANDLER } from '../../common/ports/ivss-event-hook.js';
 import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
@@ -22,7 +23,7 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
  * IVSS_EVENT_HANDLER bind DefaultIvssEventHandler (log-only); #38–40 override.
  */
 @Module({
-  imports: [AuthModule, AccountsModule],
+  imports: [AuthModule, AccountsModule, WebsocketModule],
   controllers: [
     IvssWebhookController,
     IvssHealthController,

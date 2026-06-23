@@ -184,6 +184,10 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_IVSS_SYNC_ENABLED: Joi.boolean().default(false),
   IVSS_SYNC_LEAD_MINUTES: Joi.number().integer().min(1).default(5),
   IVSS_SYNC_GRACE_MINUTES: Joi.number().integer().min(0).default(5),
+  // IRP-001 (#40): broadcast realtime presence qua WS (gated default OFF).
+  // OWED-BLOCKER: WS auth handshake là tiền-điều-kiện bật =true trên prod
+  // (WS hiện vô danh — bật khi chưa auth = rò vị trí cá nhân).
+  IVSS_REALTIME_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),

@@ -1,9 +1,12 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { IvssPresenceIngestionService } from './ivss-presence-ingestion.service.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
+const MEETING_UUID = '22222222-2222-2222-2222-222222222222';
 
 const evt = (over: any = {}) => ({
   type: 'face_recognized',
@@ -17,6 +20,7 @@ const evt = (over: any = {}) => ({
 describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   let service: IvssPresenceIngestionService;
   let dsMock: any;
+  let wsMock: { emitToRoom: jest.Mock };
   let captured: Array<{ sql: string; params: any[] }>;
 
   const wire = (
@@ -26,6 +30,8 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       channelMap?: Record<string, unknown> | null;
       meeting?: any[];
       insertThrows?: boolean;
+      fullName?: any[];
+      fullNameThrows?: boolean;
     } = {},
   ) => {
     captured = [];
@@ -45,7 +51,12 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
           },
         ]);
       if (sql.includes('FROM meetings'))
-        return Promise.resolve(over.meeting ?? [{ id: 'm1' }]);
+        return Promise.resolve(over.meeting ?? [{ id: MEETING_UUID }]);
+      if (sql.includes('FROM users WHERE id')) {
+        if (over.fullNameThrows)
+          return Promise.reject(new Error('users query boom'));
+        return Promise.resolve(over.fullName ?? [{ full_name: 'Alice' }]);
+      }
       if (sql.includes('INSERT INTO iot_device_events')) {
         if (over.insertThrows) return Promise.reject(new Error('db boom'));
         return Promise.resolve(undefined);
@@ -58,15 +69,29 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     captured.find((c) => c.sql.includes('INSERT INTO iot_device_events'));
   const payloadOf = () => JSON.parse(insert()!.params[4]);
 
-  beforeEach(async () => {
-    dsMock = { manager: { query: jest.fn() } };
+  // IRP-001 (#40): build service với gate realtime ON/OFF (B1 — mirror configService.get bool).
+  const build = async (realtime = false) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IvssPresenceIngestionService,
         { provide: DataSource, useValue: dsMock },
+        { provide: WebsocketService, useValue: wsMock },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (key: string, def: unknown) =>
+              key === 'IVSS_REALTIME_ENABLED' ? realtime : def,
+          },
+        },
       ],
     }).compile();
-    service = module.get(IvssPresenceIngestionService);
+    return module.get(IvssPresenceIngestionService);
+  };
+
+  beforeEach(async () => {
+    dsMock = { manager: { query: jest.fn() } };
+    wsMock = { emitToRoom: jest.fn() };
+    service = await build(false);
   });
 
   // ── C5 matchState (4 trạng thái) ──
@@ -80,7 +105,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     expect(p.matchState).toBe('matched');
     expect(p.userId).toBe('u1');
     expect(p.roomId).toBe(ROOM_UUID);
-    expect(p.meetingId).toBe('m1');
+    expect(p.meetingId).toBe(MEETING_UUID);
   });
 
   it('C1: INSERT dùng event_type=ivss_face_event + source_protocol=ivss', async () => {
@@ -193,5 +218,94 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     const p = payloadOf();
     expect(p.matchState).toBe('matched');
     expect(p.meetingId).toBeNull();
+  });
+
+  // ── IRP-001 (#40): broadcast realtime presence ──
+  describe('IRP-001 broadcast realtime presence', () => {
+    const room = `ivss:meeting:${MEETING_UUID}`;
+
+    it('gate ON + matched + meetingId → emitToRoom đúng room + payload (KHÔNG persist-store đổi)', async () => {
+      wire();
+      service = await build(true);
+      await service.onFaceEvent(evt());
+      expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+      const [r, ev, payload] = wsMock.emitToRoom.mock.calls[0];
+      expect(r).toBe(room);
+      expect(ev).toBe('ivss.presence');
+      expect(payload).toEqual({
+        meetingId: MEETING_UUID,
+        roomId: ROOM_UUID,
+        userId: 'u1',
+        fullName: 'Alice',
+        direction: 'enter',
+        matchState: 'matched',
+        at: expect.any(String),
+      });
+    });
+
+    it('C4/SEC-01: payload KHÔNG szUid/imageBase64/similarity', async () => {
+      wire();
+      service = await build(true);
+      await service.onFaceEvent(
+        evt({ similarity: 0.97, imageBase64: 'data:image/jpeg;base64,SECRET' }),
+      );
+      const raw = JSON.stringify(wsMock.emitToRoom.mock.calls[0][2]);
+      expect(raw).not.toContain('szUid');
+      expect(raw).not.toContain('SZ1');
+      expect(raw).not.toContain('imageBase64');
+      expect(raw).not.toContain('similarity');
+      expect(raw).not.toContain('0.97');
+    });
+
+    it('gate OFF (default) → KHÔNG emit', async () => {
+      wire();
+      await service.onFaceEvent(evt()); // service = build(false) từ beforeEach
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('OQ-5: unmatched → KHÔNG emit (dù gate ON)', async () => {
+      wire({ user: [] }); // unmatched_identity
+      service = await build(true);
+      await service.onFaceEvent(evt());
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('meetingId null (không có họp active) → KHÔNG emit', async () => {
+      wire({ meeting: [] });
+      service = await build(true);
+      await service.onFaceEvent(evt());
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('OQ-7: INSERT fail → KHÔNG emit (broadcast sau persist)', async () => {
+      wire({ insertThrows: true });
+      service = await build(true);
+      await service.onFaceEvent(evt());
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('C3: emit throw → KHÔNG vỡ ingest', async () => {
+      wire();
+      wsMock.emitToRoom.mockImplementation(() => {
+        throw new Error('gateway down');
+      });
+      service = await build(true);
+      await expect(service.onFaceEvent(evt())).resolves.toBeUndefined();
+    });
+
+    it('B2: query fullName throw → KHÔNG vỡ ingest + KHÔNG emit', async () => {
+      wire({ fullNameThrows: true });
+      service = await build(true);
+      await expect(service.onFaceEvent(evt())).resolves.toBeUndefined();
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('fullName null (user không có tên) → vẫn emit, fullName:null', async () => {
+      wire({ fullName: [{ full_name: null }] });
+      service = await build(true);
+      await service.onFaceEvent(evt());
+      expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+      expect(wsMock.emitToRoom.mock.calls[0][2].fullName).toBeNull();
+    });
   });
 });
