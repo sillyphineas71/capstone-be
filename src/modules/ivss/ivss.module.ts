@@ -7,9 +7,11 @@ import { ivssBridgeProvider } from './ivss-bridge.factory.js';
 import { IvssInternalTokenGuard } from './guards/ivss-internal-token.guard.js';
 import { DefaultIvssEventHandler } from './handlers/default-ivss-event.handler.js';
 import { IvssPresenceIngestionService } from './services/ivss-presence-ingestion.service.js';
+import { IvssPresenceQueryService } from './services/ivss-presence-query.service.js';
 import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
+import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
 
 /**
  * IvssModule (IVS-001 #36) — lớp tích hợp IVSS bridge: client (outbound) + webhook (inbound)
@@ -20,7 +22,11 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
  */
 @Module({
   imports: [AuthModule, AccountsModule],
-  controllers: [IvssWebhookController, IvssHealthController],
+  controllers: [
+    IvssWebhookController,
+    IvssHealthController,
+    IvssPresenceController,
+  ],
   providers: [
     ivssBridgeProvider,
     IvssInternalTokenGuard,
@@ -30,6 +36,7 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
     // IPI-001 (#38+#39): handler thật thay log-only.
     { provide: IVSS_EVENT_HANDLER, useExisting: IvssPresenceIngestionService },
     IvssPersonSyncService,
+    IvssPresenceQueryService,
   ],
   exports: [IVSS_BRIDGE, IvssPersonSyncService],
 })
