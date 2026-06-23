@@ -6,9 +6,12 @@ import {
   ParseUUIDPipe,
   NotFoundException,
   UseGuards,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { IvssPresenceQueryService } from '../services/ivss-presence-query.service.js';
+import { IvssPresenceReportService } from '../services/ivss-presence-report.service.js';
 
 // Mock PermissionsGuard — nhất quán stranger-alert/no-show-config controller.
 const MockPermissionsGuard = class {
@@ -28,6 +31,7 @@ const Permissions =
 export class IvssPresenceController {
   constructor(
     private readonly presenceQueryService: IvssPresenceQueryService,
+    private readonly presenceReportService: IvssPresenceReportService,
   ) {}
 
   // #41 + #42 chi tiết 1 người trong 1 họp.
@@ -64,5 +68,36 @@ export class IvssPresenceController {
       });
     }
     return { success: true, message: 'IVSS meeting presence retrieved', data };
+  }
+
+  // #43 (IPR-001): tải PDF báo cáo hiện diện cả họp. C2: @Res() file, KHÔNG envelope.
+  @Get(':meetingId/presence/report')
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('ivss.presence.read')
+  async report(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Res() res: Response,
+  ) {
+    let report: { buffer: Buffer; filename: string } | null;
+    try {
+      report = await this.presenceReportService.buildMeetingReport(meetingId);
+    } catch {
+      // Lỗi render → 500, KHÔNG lộ path/chi tiết nội bộ.
+      res.status(500).end();
+      return;
+    }
+    if (!report) {
+      res.status(404).json({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${report.filename}"`,
+    );
+    res.send(report.buffer);
   }
 }

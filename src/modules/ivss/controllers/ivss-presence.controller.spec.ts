@@ -3,13 +3,25 @@ import { NotFoundException } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { IvssPresenceController } from './ivss-presence.controller.js';
 
-describe('IvssPresenceController (IPD-001 #41+#42)', () => {
+describe('IvssPresenceController (IPD-001 #41+#42 + IPR-001 #43)', () => {
   let controller: IvssPresenceController;
   let svc: any;
+  let reportSvc: any;
+
+  const resMock = () => {
+    const res: any = {};
+    res.status = jest.fn(() => res);
+    res.json = jest.fn(() => res);
+    res.setHeader = jest.fn(() => res);
+    res.send = jest.fn(() => res);
+    res.end = jest.fn(() => res);
+    return res;
+  };
 
   beforeEach(() => {
     svc = { getUserPresence: jest.fn(), getMeetingPresence: jest.fn() };
-    controller = new IvssPresenceController(svc);
+    reportSvc = { buildMeetingReport: jest.fn() };
+    controller = new IvssPresenceController(svc, reportSvc);
   });
 
   it('userPresence → envelope {success,message,data}', async () => {
@@ -52,5 +64,49 @@ describe('IvssPresenceController (IPD-001 #41+#42)', () => {
       Reflect.getMetadata('__guards__', controller.meetingPresence) ?? [];
     expect(u).toContain(JwtAuthGuard);
     expect(m).toContain(JwtAuthGuard);
+  });
+
+  // ── #43 report (C2: @Res file, no envelope) ──
+  it('report: buffer → Content-Type pdf + Content-Disposition attachment + send', async () => {
+    const buf = Buffer.from('%PDF-1.7 fake');
+    reportSvc.buildMeetingReport.mockResolvedValue({
+      buffer: buf,
+      filename: 'ivss-presence-MTG-001-20260623.pdf',
+    });
+    const res = resMock();
+    await controller.report('m1', res);
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/pdf',
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="ivss-presence-MTG-001-20260623.pdf"',
+    );
+    expect(res.send).toHaveBeenCalledWith(buf);
+  });
+
+  it('report: meeting không tồn tại (null) → 404', async () => {
+    reportSvc.buildMeetingReport.mockResolvedValue(null);
+    const res = resMock();
+    await controller.report('m1', res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.send).not.toHaveBeenCalled();
+  });
+
+  it('report: service throw → 500 .end() (KHÔNG lộ path, KHÔNG send)', async () => {
+    reportSvc.buildMeetingReport.mockRejectedValue(
+      new Error('/internal/path boom'),
+    );
+    const res = resMock();
+    await controller.report('m1', res);
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.end).toHaveBeenCalled();
+    expect(res.send).not.toHaveBeenCalled();
+  });
+
+  it('guard wiring: report route có JwtAuthGuard (SEC-02)', () => {
+    const g = Reflect.getMetadata('__guards__', controller.report) ?? [];
+    expect(g).toContain(JwtAuthGuard);
   });
 });

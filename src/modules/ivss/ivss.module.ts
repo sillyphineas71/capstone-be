@@ -8,6 +8,7 @@ import { IvssInternalTokenGuard } from './guards/ivss-internal-token.guard.js';
 import { DefaultIvssEventHandler } from './handlers/default-ivss-event.handler.js';
 import { IvssPresenceIngestionService } from './services/ivss-presence-ingestion.service.js';
 import { IvssPresenceQueryService } from './services/ivss-presence-query.service.js';
+import { IvssPresenceReportService } from './services/ivss-presence-report.service.js';
 import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
@@ -37,6 +38,7 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
     { provide: IVSS_EVENT_HANDLER, useExisting: IvssPresenceIngestionService },
     IvssPersonSyncService,
     IvssPresenceQueryService,
+    IvssPresenceReportService,
   ],
   exports: [IVSS_BRIDGE, IvssPersonSyncService],
 })
