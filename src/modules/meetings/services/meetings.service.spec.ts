@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   DataSource,
@@ -63,6 +63,7 @@ import { SystemConfigEntity } from '../../administration/entities/system-config.
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 
 describe('MeetingsService', () => {
   let service: MeetingsService;
@@ -70,6 +71,7 @@ describe('MeetingsService', () => {
   let em: jest.Mocked<EntityManager>;
   let module: TestingModule;
   let mockNotificationsService: Record<string, jest.Mock>;
+  let mockAuthzReadRepository: Record<string, jest.Mock>;
   let mockRepo: jest.Mocked<
     Pick<
       Repository<any>,
@@ -108,6 +110,10 @@ describe('MeetingsService', () => {
       enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: "notif-1" } }),
     };
 
+    mockAuthzReadRepository = {
+      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+    };
+
     em = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -137,6 +143,7 @@ describe('MeetingsService', () => {
         { provide: DataSource, useValue: dataSource },
         WarningTokenUtil,
         { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: AuthzReadRepository, useValue: mockAuthzReadRepository },
         {
           provide: JwtService,
           useValue: { sign: jest.fn(), verify: jest.fn() },

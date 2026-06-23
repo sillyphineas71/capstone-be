@@ -58,6 +58,7 @@ import {
   NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -113,6 +114,9 @@ import {
   DetailAttachmentDto,
   DetailRecordingConfigDto,
 } from '../dto/my-schedule-detail.dto.js';
+import { MeetingRequestQueryDto } from '../dto/meeting-request-query.dto.js';
+import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.js';
+
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
@@ -168,6 +172,7 @@ export class MeetingsService {
     private readonly dataSource: DataSource,
     private readonly warningTokenUtil: WarningTokenUtil,
     private readonly notificationsService: NotificationsService,
+    private readonly authzRepo: AuthzReadRepository,
   ) {}
 
   async getRoomAvailability(
@@ -3878,6 +3883,148 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
     });
 
     return result;
+  }
+
+  async findMeetingRequests(
+    queryDto: MeetingRequestQueryDto,
+    authUser: any,
+  ): Promise<{ items: MeetingRequestListItemDto[]; total: number; page: number; limit: number }> {
+    try {
+      const page = Math.max(1, queryDto.page ?? 1);
+      const limit = Math.min(100, Math.max(1, queryDto.limit ?? 20));
+      const skip = (page - 1) * limit;
+
+      const qb = this.dataSource
+        .getRepository(MeetingRequestEntity)
+        .createQueryBuilder('mr')
+        .leftJoin('mr.requestedByUser', 'requester')
+        .leftJoin('mr.meeting', 'meeting')
+        .leftJoin('mr.decisionByUser', 'decider')
+        .leftJoin(RoomEntity, 'room', 'room.id = mr.targetRoomId')
+        .select([
+          'mr.id',
+          'mr.requestCode',
+          'mr.requestType',
+          'mr.approvalStatus',
+          'mr.requestedAt',
+          'mr.requestedStartTime',
+          'mr.requestedEndTime',
+          'mr.conflictCheckStatus',
+          'mr.conflictSummaryJson',
+          'mr.decisionAt',
+          'mr.rejectionReason',
+          'requester.id',
+          'requester.fullName',
+          'requester.email',
+          'meeting.id',
+          'meeting.title',
+          'room.id',
+          'room.roomName',
+          'decider.id',
+          'decider.fullName',
+          'decider.email',
+        ]);
+
+      // ApprovalStatus filter
+      const approvalStatus = queryDto.approvalStatus;
+      if (!approvalStatus || approvalStatus === 'pending') {
+        qb.andWhere('mr.approvalStatus = :status', { status: ApprovalStatus.PENDING });
+      } else if (approvalStatus !== 'all') {
+        qb.andWhere('mr.approvalStatus = :status', { status: approvalStatus });
+      }
+
+      // requestType filter
+      if (queryDto.requestType) {
+        qb.andWhere('mr.requestType = :type', { type: queryDto.requestType });
+      }
+
+      // targetRoomId filter
+      if (queryDto.targetRoomId) {
+        qb.andWhere('mr.targetRoomId = :roomId', { roomId: queryDto.targetRoomId });
+      }
+
+      // requestedById filter
+      if (queryDto.requestedById) {
+        qb.andWhere('mr.requestedBy = :userId', { userId: queryDto.requestedById });
+      }
+
+      // Date range filter
+      if (queryDto.from && queryDto.to) {
+        qb.andWhere('mr.requestedAt BETWEEN :from AND :to', {
+          from: new Date(queryDto.from),
+          to: new Date(queryDto.to),
+        });
+      }
+
+      // q search (request_code ILIKE)
+      if (queryDto.q) {
+        qb.andWhere('mr.requestCode ILIKE :q', { q: `%${queryDto.q}%` });
+      }
+
+      // Data scope filter
+      const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(authUser.userId);
+      const isAdmin = roles.some(r => r === 'SYSTEM_ADMIN' || r === 'BUSINESS_ADMIN');
+      if (!isAdmin) {
+        qb.andWhere(
+          `(requester.direct_manager_id = :userId
+            OR requester.department_id IN (
+              SELECT d.id FROM departments d WHERE d.manager_user_id = :userId
+            ))`,
+          { userId: authUser.userId },
+        );
+      }
+
+      // Sort
+      const allowedSortFields = ['requested_at', 'created_at', 'approval_status', 'request_type'];
+      const sortField = allowedSortFields.includes(queryDto.sortBy ?? '')
+        ? queryDto.sortBy!
+        : 'requested_at';
+      const sortOrder = queryDto.sortOrder === 'asc' ? 'ASC' : 'DESC';
+      qb.orderBy(`mr.${sortField}`, sortOrder);
+
+      // Pagination
+      qb.skip(skip).take(limit);
+
+      const [items, total] = await qb.getManyAndCount();
+
+      const listItems = items.map((item) => {
+        const mr = item as MeetingRequestEntity & {
+          __requester__?: { id: string; fullName: string; email: string };
+          __meeting__?: { id: string; title: string };
+          __room__?: { id: string; roomName: string };
+          __decider__?: { id: string; fullName: string; email: string };
+        };
+
+        return new MeetingRequestListItemDto(
+          mr.id,
+          mr.requestCode,
+          mr.requestType,
+          mr.approvalStatus,
+          mr.requestedAt,
+          mr.requestedStartTime,
+          mr.requestedEndTime,
+          mr.conflictCheckStatus,
+          mr.conflictSummaryJson ?? null,
+          mr.decisionAt,
+          mr.rejectionReason,
+          {
+            id: mr.requestedBy,
+            fullName: '',
+            email: '',
+          },
+          null,
+          null,
+          mr.meetingId
+            ? { id: mr.meetingId, title: '' }
+            : null,
+        );
+      });
+
+      return { items: listItems, total, page, limit };
+    } catch (error) {
+      this.logger.error('Failed to retrieve meeting requests', (error as Error).stack);
+      throw error;
+    }
   }
 
 

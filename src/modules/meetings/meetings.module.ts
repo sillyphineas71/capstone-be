@@ -15,6 +15,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { MeetingsController } from './controllers/meetings.controller.js';
+import { MeetingRequestsController } from './controllers/meeting-requests.controller.js';
 import { MeetingsService } from './services/meetings.service.js';
 import { MeetingRequestReviewService } from './services/meeting-request-review.service.js';
 import { WarningTokenUtil } from './utils/warning-token.util.js';
@@ -23,6 +24,7 @@ import { IsAfterStartTimeConstraint } from './validators/is-after-start-time.val
 import { MediaFileEntity } from '../recording/entities/media-file.entity.js';
 import { RecordingConfigEntity } from '../recording/entities/recording-config.entity.js';
 import { IsIanaTimezoneConstraint } from './validators/is-iana-timezone.validator.js';
+import { FromToConstraint } from './validators/from-to.constraint.js';
 
 /**
  * MeetingsModule quản lý tất cả entities thuộc domain Meeting Core & Scheduling:
@@ -60,7 +62,7 @@ import { IsIanaTimezoneConstraint } from './validators/is-iana-timezone.validato
       RecordingConfigEntity,
     ]),
   ],
-  controllers: [MeetingsController],
+  controllers: [MeetingsController, MeetingRequestsController],
   providers: [
     MeetingsService,
     MeetingRequestReviewService,
@@ -68,6 +70,7 @@ import { IsIanaTimezoneConstraint } from './validators/is-iana-timezone.validato
     IsFutureDateConstraint,
     IsAfterStartTimeConstraint,
     IsIanaTimezoneConstraint,
+    FromToConstraint,
   ],
   exports: [TypeOrmModule],
 })

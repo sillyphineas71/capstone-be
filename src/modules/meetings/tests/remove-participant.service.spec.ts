@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -10,6 +10,12 @@ import {
 
 import { MeetingsService } from '../services/meetings.service.js';
 import { MeetingEntity, MeetingStatus } from '../entities/meeting.entity.js';
+import { WarningTokenUtil } from '../utils/warning-token.util.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { UserEntity } from '../../accounts/entities/user.entity.js';
 import {
   MeetingParticipantEntity,
   ParticipantRole,
@@ -88,7 +94,7 @@ describe('MeetingsService.removeParticipant', () => {
   beforeAll(async () => {
     em = {
       findOne: jest.fn(),
-      find: jest.fn(),
+      find: jest.fn().mockResolvedValue([{ id: targetUser.userId, email: 'target@example.com' }]),
       create: jest.fn(),
       save: jest.fn(),
       delete: jest.fn(),
@@ -97,12 +103,33 @@ describe('MeetingsService.removeParticipant', () => {
     dataSource = {
       getRepository: jest.fn(),
       transaction: jest.fn(),
+      manager: em,
     } as unknown as jest.Mocked<DataSource>;
+
+    const mockNotificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: 'notif-1' } }),
+    };
+
+    const mockAuthzReadRepository = {
+      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MeetingsService,
         { provide: DataSource, useValue: dataSource },
+        WarningTokenUtil,
+        { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: AuthzReadRepository, useValue: mockAuthzReadRepository },
+        {
+          provide: JwtService,
+          useValue: { sign: jest.fn(), verify: jest.fn() },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
       ],
     }).compile();
 
@@ -324,7 +351,7 @@ describe('MeetingsService.removeParticipant', () => {
   });
 
   it('T028: should throw 409 when target is Host', async () => {
-    const meeting = mockMeeting({ hostId: authUser.userId });
+    const meeting = mockMeeting({ hostId: hostUser.userId, organizerId: authUser.userId });
 
     dataSource.getRepository.mockImplementation((entity) => {
       if (entity === MeetingEntity) {
@@ -440,7 +467,17 @@ describe('MeetingsService.removeParticipant', () => {
   it('T030: should throw 409 when Admin targets Host', async () => {
     const meeting = mockMeeting();
 
+    const qb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ id: adminUser.userId }),
+    };
+
     dataSource.getRepository.mockImplementation((entity) => {
+      if (entity === UserEntity) {
+        return { createQueryBuilder: jest.fn().mockReturnValue(qb) };
+      }
       if (entity === MeetingEntity) {
         return { findOne: jest.fn().mockResolvedValue(meeting) };
       }
