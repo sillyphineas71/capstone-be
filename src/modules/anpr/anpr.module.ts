@@ -7,6 +7,7 @@ import { VehicleRegistrationController } from './controllers/vehicle-registratio
 import { VehicleWebhookController } from './controllers/vehicle-webhook.controller.js';
 import { VehicleRegistrationService } from './services/vehicle-registration.service.js';
 import { VehicleResolveService } from './services/vehicle-resolve.service.js';
+import { VehicleUnknownService } from './services/vehicle-unknown.service.js';
 import { AnprInternalTokenGuard } from './guards/anpr-internal-token.guard.js';
 import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.handler.js';
 
@@ -27,6 +28,7 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
   controllers: [VehicleRegistrationController, VehicleWebhookController],
   providers: [
     VehicleRegistrationService,
+    VehicleUnknownService,
     AnprInternalTokenGuard,
     DefaultVehicleEventHandler,
     VehicleResolveService,

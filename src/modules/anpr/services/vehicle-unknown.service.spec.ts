@@ -1,0 +1,168 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
+import { DataSource } from 'typeorm';
+import { VehicleUnknownService } from './vehicle-unknown.service.js';
+
+const row = (over: any = {}) => ({
+  plate_number: '30A12345',
+  channel_id: 5,
+  direction: 'enter',
+  event_time: new Date('2026-06-25T09:00:00.000Z'),
+  utc: '2026-06-25T09:00:00.000Z',
+  plate_color: 'white',
+  vehicle_type: 'car',
+  ...over,
+});
+
+describe('VehicleUnknownService (VUN-001 / UC6)', () => {
+  let service: VehicleUnknownService;
+  let dsMock: any;
+  let captured: Array<{ sql: string; params: any[] }>;
+
+  // total = COUNT, rows = SELECT ... event_time DESC.
+  const wire = (rows: any[] = [row()], total = 1) => {
+    captured = [];
+    dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+      captured.push({ sql, params });
+      if (sql.includes('COUNT(*)')) return Promise.resolve([{ total }]);
+      return Promise.resolve(rows);
+    });
+  };
+
+  const countCall = () => captured.find((c) => c.sql.includes('COUNT(*)'));
+  const rowsCall = () =>
+    captured.find((c) => c.sql.includes('ORDER BY event_time DESC'));
+
+  const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
+
+  beforeEach(() => {
+    dsMock = { manager: { query: jest.fn() } };
+    service = new VehicleUnknownService(dsMock as DataSource);
+  });
+
+  it('list: map đúng 7 field + meta (total=25 limit=20 → totalPages=2)', async () => {
+    wire([row()], 25);
+    const r = await service.listUnknown(q());
+    expect(r.items[0]).toEqual({
+      plateNumber: '30A12345',
+      channelId: 5,
+      direction: 'enter',
+      eventTime: new Date('2026-06-25T09:00:00.000Z'),
+      utc: '2026-06-25T09:00:00.000Z',
+      plateColor: 'white',
+      vehicleType: 'car',
+    });
+    expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
+  });
+
+  it('C1-isolation: SQL chứa event_type=ivss_vehicle_event + matchState=unmatched (KHÔNG face)', async () => {
+    wire();
+    await service.listUnknown(q());
+    const sql = rowsCall()!.sql;
+    expect(sql).toContain("event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain("payload_json->>'matchState' = 'unmatched'");
+    expect(sql).not.toContain('face_verify');
+    expect(sql).not.toContain('face_stranger');
+  });
+
+  it("JSON path TOP-LEVEL: payload_json->>'plateNumber' (1 mũi tên, KHÔNG nest)", async () => {
+    wire();
+    await service.listUnknown(q());
+    const sql = rowsCall()!.sql;
+    expect(sql).toContain("payload_json->>'plateNumber'");
+    expect(sql).not.toContain('extracted_fields');
+  });
+
+  it('channelId cast ::int', async () => {
+    wire();
+    await service.listUnknown(q());
+    expect(rowsCall()!.sql).toContain("(payload_json->>'channelId')::int");
+  });
+
+  describe('time-range build động + bind index đúng (4 tổ hợp)', () => {
+    it('không-from-không-to → KHÔNG event_time, params=[limit,offset]', async () => {
+      wire();
+      await service.listUnknown(q({ page: 1, limit: 20 }));
+      const c = rowsCall()!;
+      expect(c.sql).not.toContain('event_time >=');
+      expect(c.sql).not.toContain('event_time <=');
+      expect(c.sql).toContain('LIMIT $1 OFFSET $2');
+      expect(c.params).toEqual([20, 0]);
+    });
+
+    it('chỉ-from → event_time >= $1, LIMIT $2 OFFSET $3', async () => {
+      wire();
+      await service.listUnknown(q({ from: '2026-06-01T00:00:00.000Z' }));
+      const c = rowsCall()!;
+      expect(c.sql).toContain('event_time >= $1');
+      expect(c.sql).toContain('LIMIT $2 OFFSET $3');
+      expect(c.params).toEqual(['2026-06-01T00:00:00.000Z', 20, 0]);
+    });
+
+    it('chỉ-to → event_time <= $1, LIMIT $2 OFFSET $3', async () => {
+      wire();
+      await service.listUnknown(q({ to: '2026-06-30T00:00:00.000Z' }));
+      const c = rowsCall()!;
+      expect(c.sql).toContain('event_time <= $1');
+      expect(c.sql).toContain('LIMIT $2 OFFSET $3');
+      expect(c.params).toEqual(['2026-06-30T00:00:00.000Z', 20, 0]);
+    });
+
+    it('cả-hai → >= $1 AND <= $2, LIMIT $3 OFFSET $4 (bind index không lệch)', async () => {
+      wire();
+      await service.listUnknown(
+        q({ from: '2026-06-01T00:00:00.000Z', to: '2026-06-30T00:00:00.000Z' }),
+      );
+      const c = rowsCall()!;
+      expect(c.sql).toContain('event_time >= $1');
+      expect(c.sql).toContain('event_time <= $2');
+      expect(c.sql).toContain('LIMIT $3 OFFSET $4');
+      expect(c.params).toEqual([
+        '2026-06-01T00:00:00.000Z',
+        '2026-06-30T00:00:00.000Z',
+        20,
+        0,
+      ]);
+      // COUNT dùng CÙNG WHERE params (KHÔNG limit/offset).
+      expect(countCall()!.params).toEqual([
+        '2026-06-01T00:00:00.000Z',
+        '2026-06-30T00:00:00.000Z',
+      ]);
+    });
+  });
+
+  it('list rỗng: COUNT 0 + rows [] → data:[], meta.total=0, totalPages=0', async () => {
+    wire([], 0);
+    const r = await service.listUnknown(q());
+    expect(r.items).toEqual([]);
+    expect(r.meta.total).toBe(0);
+    expect(r.meta.totalPages).toBe(0);
+  });
+
+  it('pagination: page=2 limit=20 → LIMIT 20 OFFSET 20', async () => {
+    wire();
+    await service.listUnknown(q({ page: 2, limit: 20 }));
+    expect(rowsCall()!.params.slice(-2)).toEqual([20, 20]);
+  });
+
+  it('query rỗng (KHÔNG page/limit) → default 1/20; COUNT [] → total 0', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('COUNT(*)')) return Promise.resolve([]); // empty → ?? 0
+      return Promise.resolve([]);
+    });
+    const r = await service.listUnknown({} as any);
+    expect(r.meta.page).toBe(1);
+    expect(r.meta.limit).toBe(20);
+    expect(r.meta.total).toBe(0);
+  });
+
+  it('SEC-03/read-only: chỉ SELECT/COUNT (KHÔNG INSERT/UPDATE/DELETE)', async () => {
+    wire();
+    await service.listUnknown(q({ from: '2026-06-01T00:00:00.000Z' }));
+    for (const c of captured) {
+      expect(c.sql).toMatch(/^\s*SELECT/);
+      expect(c.sql).not.toMatch(/INSERT|UPDATE|DELETE/i);
+      // giá trị from qua bind param, KHÔNG nối chuỗi vào SQL.
+      expect(c.sql).not.toContain('2026-06-01');
+    }
+  });
+});

@@ -20,9 +20,12 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
     updatedAt: new Date('2026-06-24T00:00:00Z'),
   };
 
+  let unknownService: any;
+
   beforeEach(() => {
     service = { register: jest.fn().mockResolvedValue(entity) };
-    controller = new VehicleRegistrationController(service);
+    unknownService = { listUnknown: jest.fn() };
+    controller = new VehicleRegistrationController(service, unknownService);
   });
 
   it('USER route: register với @CurrentUser().userId (KHÔNG body user_id) + envelope 201 shape', async () => {
@@ -163,6 +166,38 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
       const guards = Reflect.getMetadata('__guards__', controller.list) ?? [];
       expect(guards).toContain(JwtAuthGuard);
       expect(guards).not.toContain(PermissionsGuard);
+    });
+  });
+
+  // ── UC6 (VUN-001): admin xem biển lạ ──
+  describe('UC6 unknown vehicles', () => {
+    const meta = { page: 1, limit: 20, total: 2, totalPages: 1 };
+    const items = [{ plateNumber: '30A12345', channelId: 5 }];
+    beforeEach(() => {
+      unknownService.listUnknown = jest.fn().mockResolvedValue({ items, meta });
+    });
+
+    it('GET admin/unknown-vehicles → service.listUnknown(query) + envelope + meta', async () => {
+      const r = await controller.listUnknown({ page: 1, limit: 20 });
+      expect(unknownService.listUnknown).toHaveBeenCalledWith({
+        page: 1,
+        limit: 20,
+      });
+      expect(r.data).toBe(items);
+      expect(r.meta).toEqual(meta);
+      expect(r.message).toBe('Unknown vehicles retrieved');
+    });
+
+    it('admin-gate THẬT: JwtAuthGuard + PermissionsGuard + @RequirePermissions(unknown_view)', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.listUnknown) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).toContain(PermissionsGuard);
+      const perms = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        controller.listUnknown,
+      );
+      expect(perms).toEqual(['anpr.vehicle.unknown_view']);
     });
   });
 });

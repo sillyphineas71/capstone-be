@@ -24,7 +24,9 @@ import { AdminCreateVehicleRegistrationDto } from '../dto/admin-create-vehicle-r
 import { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto.js';
 import { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
+import { ListUnknownVehiclesQueryDto } from '../dto/list-unknown-vehicles-query.dto.js';
 import { toVehicleRegistrationResponse } from '../dto/vehicle-registration-response.dto.js';
+import { VehicleUnknownService } from '../services/vehicle-unknown.service.js';
 
 const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
 
@@ -41,7 +43,23 @@ const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
 export class VehicleRegistrationController {
   constructor(
     private readonly vehicleRegistrationService: VehicleRegistrationService,
+    private readonly vehicleUnknownService: VehicleUnknownService,
   ) {}
+
+  // ── UC6 (VUN-001): admin xem danh sách biển lạ (unmatched) — read-only, admin-gated ──
+  @Get('admin/unknown-vehicles')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('anpr.vehicle.unknown_view')
+  @UsePipes(REGISTER_PIPE)
+  async listUnknown(@Query() query: ListUnknownVehiclesQueryDto) {
+    const { items, meta } = await this.vehicleUnknownService.listUnknown(query);
+    return {
+      success: true,
+      message: 'Unknown vehicles retrieved',
+      data: items,
+      meta,
+    };
+  }
 
   // ── UC3 (VPL-001): xem danh sách / chi tiết — chỉ biển CỦA MÌNH (list trước detail) ──
 
