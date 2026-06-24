@@ -1,5 +1,10 @@
 # API Contract - Lấy danh sách yêu cầu cuộc họp đang chờ duyệt
 
+## CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-06-24 | Fix bug response trả requestedBy/targetRoom/decisionBy rỗng và meeting null sai (do code cũ select thiếu FK column + không đọc relation đã JOIN). Cập nhật response example cho đúng dữ liệu thật, bổ sung meeting.roomId/meeting.hostId | Mục 1 Response: 200 OK |
+
 > Base URL: /api/v1
 
 ---
@@ -56,7 +61,7 @@ GET /api/v1/meeting-requests
       "rejectionReason": null,
       "requestedBy": { "id": "uuid", "fullName": "Nguyen Van A", "email": "nva@company.com" },
       "targetRoom": { "id": "uuid", "roomName": "Phong 101" },
-      "meeting": null
+      "meeting": { "id": "uuid", "title": "Hop Sprint Planning", "roomId": "uuid", "hostId": "uuid" }
     }
   ],
   "meta": { "page": 1, "limit": 20, "total": 50, "totalPages": 3 }

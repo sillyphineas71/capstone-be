@@ -7,7 +7,7 @@
  * Index-only — khong thay doi schema cot/bang.
  */
 export class AddMeetingNotesContentGinIndex20260618 implements MigrationInterface {
-  name = 'AddMeetingNotesContentGinIndex20260618';
+  name = 'AddMeetingNotesContentGinIndex2026061800000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

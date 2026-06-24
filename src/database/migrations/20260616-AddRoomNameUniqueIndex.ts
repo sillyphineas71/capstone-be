@@ -1,7 +1,7 @@
 ﻿import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class AddRoomNameUniqueIndex20260616 implements MigrationInterface {
-  name = 'AddRoomNameUniqueIndex20260616';
+  name = 'AddRoomNameUniqueIndex2026061600000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(

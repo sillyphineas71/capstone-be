@@ -1,5 +1,10 @@
 # Data Model - Lấy danh sách yêu cầu cuộc họp đang chờ duyệt
 
+## CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-06-24 | Fix bug findMeetingRequests() không hydrate relation (requestedBy/targetRoom/decisionBy rỗng, meeting.title rỗng). Bổ sung meeting.room_id, meeting.host_id vào response theo yêu cầu FE. Thêm relation targetRoom trên MeetingRequestEntity (join theo relation thay vì raw entity join) | Mục 4 (meetings), mục 1 (ghi chú select) |
+
 ## Entities Liên Quan
 
 ### 1. meeting_requests (MeetingRequestEntity)
@@ -11,7 +16,7 @@
 | request_type | varchar(40) | Y | Y | Y | Response field |
 | requested_by | uuid FK | Y | Y | | Join to users |
 | requested_at | timestamptz | Y | from/to | Y | Default sort DESC |
-| target_room_id | uuid FK null | Y | Y | | Join to rooms |
+| target_room_id | uuid FK null | Y | Y | | Join to rooms qua relation `mr.targetRoom` (ManyToOne, JoinColumn target_room_id) — không dùng raw entity join để bảo đảm TypeORM hydrate đúng |
 | meeting_id | uuid FK null | Y | | | Join to meetings |
 | requested_start_time | timestamptz null | Y | | | Response field |
 | requested_end_time | timestamptz null | Y | | | Response field |
@@ -43,5 +48,7 @@
 
 | Field | SELECT | Notes |
 |-------|:------:|-------|
-| id | | FK reference |
+| id | Y | meeting.id |
 | title | Y | meeting.title |
+| room_id | Y | meeting.roomId (bổ sung 2026-06-24 theo yêu cầu FE) |
+| host_id | Y | meeting.hostId (bổ sung 2026-06-24 theo yêu cầu FE) |

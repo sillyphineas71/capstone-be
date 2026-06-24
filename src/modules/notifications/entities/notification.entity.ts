@@ -26,6 +26,7 @@ export enum NotificationType {
   ACCOUNT_WELCOME = 'account_welcome',
   MEETING_TIME_WARNING = 'meeting_time_warning',
   MEETING_TIME_CONFLICT_WARNING = 'meeting_time_conflict_warning',
+  AVATAR_REJECTED = 'avatar_rejected',
 }
 
 export enum NotificationChannel {

@@ -20,6 +20,7 @@
 | 2026-06-23 | Tạo mới spec cho feature feat-pending-meeting-requests | Toàn bộ file |
 | 2026-06-23 | Cập nhật tasks.md/data-model.md/research.md — sửa role-check pattern, thêm FromToConstraint, bổ sung UserEntity.departmentId | tasks.md T006-T007, data-model.md UserEntity, research.md Permission check |
 | 2026-06-23 | Sửa lỗi encoding UTF-8 cho tasks.md và thêm verify 403 detail vào T011/T013 | tasks.md toàn bộ, T011, T013 |
+| 2026-06-24 | Fix bug: findMeetingRequests() trả requestedBy/targetRoom/decisionBy rỗng và meeting.title rỗng do select thiếu FK column + mapping code không đọc relation đã JOIN. Bổ sung meeting.roomId/meeting.hostId vào response relation summary theo yêu cầu FE. | FR-019, mục 5.3 |
 
 ---
 
@@ -143,7 +144,7 @@ FR-018: THE system SHALL chỉ cho phép sort theo các field: requested_at, cre
 FR-019: WHEN trả danh sách meeting requests, THE system SHALL bao gồm relation summary:
   - requestedBy: id, fullName, email
   - targetRoom: id, roomName (null nếu không có)
-  - meeting: id, title (null nếu không có)
+  - meeting: id, title, roomId, hostId (null nếu không có)
   - conflictSummary: raw JSON từ meeting_requests.conflict_summary_json, type Record<string, unknown> | null. Trả nguyên trạng, không mutate. FE dùng conflictCheckStatus cho display logic.
 FR-020: WHEN trả danh sách meeting requests, THE system SHALL bao gồm các field chính:
   - id, requestCode, requestType, approvalStatus, requestedAt
@@ -290,7 +291,7 @@ Mỗi item trong danh sách:
 | rejectionReason | string (null) | Lý do từ chối |
 | requestedBy | object | Người tạo request: id, fullName, email |
 | targetRoom | object (null) | Phòng mục tiêu: id, roomName |
-| meeting | object (null) | Cuộc họp: id, title |
+| meeting | object (null) | Cuộc họp: id, title, roomId, hostId |
 
 ### 5.4 State / Status Model
 

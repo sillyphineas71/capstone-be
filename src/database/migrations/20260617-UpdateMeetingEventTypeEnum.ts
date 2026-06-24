@@ -9,7 +9,7 @@
  * This migration exists to track the deployment intent and serve as documentation.
  */
 export class UpdateMeetingEventTypeEnum20260617 implements MigrationInterface {
-  name = 'UpdateMeetingEventTypeEnum20260617';
+  name = 'UpdateMeetingEventTypeEnum2026061700000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     // meeting_events.event_type is varchar(60) — no ALTER TYPE needed.

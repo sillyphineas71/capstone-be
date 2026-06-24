@@ -116,6 +116,8 @@ import {
 } from '../dto/my-schedule-detail.dto.js';
 import { MeetingRequestQueryDto } from '../dto/meeting-request-query.dto.js';
 import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.js';
+import { UserSummaryDto } from '../dto/user-summary.dto.js';
+import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
@@ -3900,7 +3902,7 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
         .leftJoin('mr.requestedByUser', 'requester')
         .leftJoin('mr.meeting', 'meeting')
         .leftJoin('mr.decisionByUser', 'decider')
-        .leftJoin(RoomEntity, 'room', 'room.id = mr.targetRoomId')
+        .leftJoin('mr.targetRoom', 'room')
         .select([
           'mr.id',
           'mr.requestCode',
@@ -3918,6 +3920,8 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
           'requester.email',
           'meeting.id',
           'meeting.title',
+          'meeting.roomId',
+          'meeting.hostId',
           'room.id',
           'room.roomName',
           'decider.id',
@@ -3987,14 +3991,7 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
 
       const [items, total] = await qb.getManyAndCount();
 
-      const listItems = items.map((item) => {
-        const mr = item as MeetingRequestEntity & {
-          __requester__?: { id: string; fullName: string; email: string };
-          __meeting__?: { id: string; title: string };
-          __room__?: { id: string; roomName: string };
-          __decider__?: { id: string; fullName: string; email: string };
-        };
-
+      const listItems = items.map((mr) => {
         return new MeetingRequestListItemDto(
           mr.id,
           mr.requestCode,
@@ -4007,15 +4004,28 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
           mr.conflictSummaryJson ?? null,
           mr.decisionAt,
           mr.rejectionReason,
-          {
-            id: mr.requestedBy,
-            fullName: '',
-            email: '',
-          },
-          null,
-          null,
-          mr.meetingId
-            ? { id: mr.meetingId, title: '' }
+          new UserSummaryDto(
+            mr.requestedByUser.id,
+            mr.requestedByUser.fullName,
+            mr.requestedByUser.email,
+          ),
+          mr.targetRoom
+            ? new RoomSummaryDto(mr.targetRoom.id, mr.targetRoom.roomName)
+            : null,
+          mr.decisionByUser
+            ? new UserSummaryDto(
+                mr.decisionByUser.id,
+                mr.decisionByUser.fullName,
+                mr.decisionByUser.email,
+              )
+            : null,
+          mr.meeting
+            ? {
+                id: mr.meeting.id,
+                title: mr.meeting.title,
+                roomId: mr.meeting.roomId,
+                hostId: mr.meeting.hostId,
+              }
             : null,
         );
       });
