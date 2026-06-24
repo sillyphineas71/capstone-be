@@ -6,6 +6,7 @@ import { VehicleRegistrationEntity } from './entities/vehicle-registration.entit
 import { VehicleRegistrationController } from './controllers/vehicle-registration.controller.js';
 import { VehicleWebhookController } from './controllers/vehicle-webhook.controller.js';
 import { VehicleRegistrationService } from './services/vehicle-registration.service.js';
+import { VehicleResolveService } from './services/vehicle-resolve.service.js';
 import { AnprInternalTokenGuard } from './guards/anpr-internal-token.guard.js';
 import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.handler.js';
 
@@ -15,7 +16,10 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
  * VRS-001 (Setup-0): entity `VehicleRegistrationEntity` (forFeature) + export TypeOrmModule.
  * VPR-001 (UC1) + VPM-001 (UC2) + VPL-001 (UC3): đăng ký/sửa/xóa/xem biển — controller + service.
  * VWH-001 (UC4): webhook nhận vehicle event (internal token) + normalize → handoff qua
- *   VEHICLE_EVENT_HANDLER. UC4 bind default log-only; UC5 override `useExisting` impl thật.
+ *   VEHICLE_EVENT_HANDLER. UC4 bind default log-only.
+ * VRE-001 (UC5): override VEHICLE_EVENT_HANDLER sang VehicleResolveService (resolve biển→user
+ *   + persist iot_device_events, event_type='ivss_vehicle_event'). DefaultVehicleEventHandler giữ
+ *   registered (fallback, mirror face giữ DefaultIvssEventHandler).
  * Import AuthModule để dùng PermissionsGuard thật (gate route admin) — AuthModule export sẵn.
  */
 @Module({
@@ -25,7 +29,9 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
     VehicleRegistrationService,
     AnprInternalTokenGuard,
     DefaultVehicleEventHandler,
-    { provide: VEHICLE_EVENT_HANDLER, useClass: DefaultVehicleEventHandler },
+    VehicleResolveService,
+    // VRE-001 (UC5): handler thật thay default log-only (UC4).
+    { provide: VEHICLE_EVENT_HANDLER, useExisting: VehicleResolveService },
   ],
   exports: [TypeOrmModule],
 })
