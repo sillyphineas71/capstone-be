@@ -21,11 +21,17 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
   };
 
   let unknownService: any;
+  let historyService: any;
 
   beforeEach(() => {
     service = { register: jest.fn().mockResolvedValue(entity) };
     unknownService = { listUnknown: jest.fn() };
-    controller = new VehicleRegistrationController(service, unknownService);
+    historyService = { listForUser: jest.fn(), listAll: jest.fn() };
+    controller = new VehicleRegistrationController(
+      service,
+      unknownService,
+      historyService,
+    );
   });
 
   it('USER route: register với @CurrentUser().userId (KHÔNG body user_id) + envelope 201 shape', async () => {
@@ -198,6 +204,56 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
         controller.listUnknown,
       );
       expect(perms).toEqual(['anpr.vehicle.unknown_view']);
+    });
+  });
+
+  // ── UC7 (VHI-001): lịch sử ra/vào ──
+  describe('UC7 vehicle history', () => {
+    const meta = { page: 1, limit: 20, total: 1, totalPages: 1 };
+    const items = [{ plateNumber: '30A12345', direction: 'enter' }];
+    beforeEach(() => {
+      historyService.listForUser = jest.fn().mockResolvedValue({ items, meta });
+      historyService.listAll = jest.fn().mockResolvedValue({ items, meta });
+    });
+
+    it('USER /vehicle-history → listForUser(@CurrentUser().userId, query) + envelope+meta', async () => {
+      const r = await controller.historyOwn(
+        { userId: 'u-jwt' },
+        { page: 1, limit: 20 },
+      );
+      expect(historyService.listForUser).toHaveBeenCalledWith('u-jwt', {
+        page: 1,
+        limit: 20,
+      });
+      expect(r.data).toBe(items);
+      expect(r.meta).toEqual(meta);
+      expect(r.message).toBe('Vehicle history retrieved');
+    });
+
+    it('ADMIN /admin/vehicle-history → listAll(query) + envelope+meta', async () => {
+      const r = await controller.historyAll({ page: 1, limit: 20 });
+      expect(historyService.listAll).toHaveBeenCalledWith({
+        page: 1,
+        limit: 20,
+      });
+      expect(r.data).toBe(items);
+      expect(r.message).toBe('Vehicle history retrieved');
+    });
+
+    it('user route guard = chỉ JwtAuthGuard (KHÔNG PermissionsGuard)', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.historyOwn) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).not.toContain(PermissionsGuard);
+    });
+
+    it('admin route gate THẬT: PermissionsGuard + @RequirePermissions(history_view)', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.historyAll) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).toContain(PermissionsGuard);
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.historyAll);
+      expect(perms).toEqual(['anpr.vehicle.history_view']);
     });
   });
 });

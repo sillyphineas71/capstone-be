@@ -25,8 +25,10 @@ import { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto.js';
 import { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
 import { ListUnknownVehiclesQueryDto } from '../dto/list-unknown-vehicles-query.dto.js';
+import { ListVehicleHistoryQueryDto } from '../dto/list-vehicle-history-query.dto.js';
 import { toVehicleRegistrationResponse } from '../dto/vehicle-registration-response.dto.js';
 import { VehicleUnknownService } from '../services/vehicle-unknown.service.js';
+import { VehicleHistoryService } from '../services/vehicle-history.service.js';
 
 const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
 
@@ -44,7 +46,45 @@ export class VehicleRegistrationController {
   constructor(
     private readonly vehicleRegistrationService: VehicleRegistrationService,
     private readonly vehicleUnknownService: VehicleUnknownService,
+    private readonly vehicleHistoryService: VehicleHistoryService,
   ) {}
+
+  // ── UC7 (VHI-001): lịch sử ra/vào — path tách (KHÔNG dưới :id), đặt TRƯỚC route :id ──
+
+  // USER: lịch sử xe CỦA MÌNH (chỉ matched). userId từ JWT (SEC-01).
+  @Get('vehicle-history')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(REGISTER_PIPE)
+  async historyOwn(
+    @CurrentUser() user: { userId: string },
+    @Query() query: ListVehicleHistoryQueryDto,
+  ) {
+    const { items, meta } = await this.vehicleHistoryService.listForUser(
+      user.userId,
+      query,
+    );
+    return {
+      success: true,
+      message: 'Vehicle history retrieved',
+      data: items,
+      meta,
+    };
+  }
+
+  // ADMIN: TẤT CẢ lượt ra/vào (matched + unmatched) — admin-gated.
+  @Get('admin/vehicle-history')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('anpr.vehicle.history_view')
+  @UsePipes(REGISTER_PIPE)
+  async historyAll(@Query() query: ListVehicleHistoryQueryDto) {
+    const { items, meta } = await this.vehicleHistoryService.listAll(query);
+    return {
+      success: true,
+      message: 'Vehicle history retrieved',
+      data: items,
+      meta,
+    };
+  }
 
   // ── UC6 (VUN-001): admin xem danh sách biển lạ (unmatched) — read-only, admin-gated ──
   @Get('admin/unknown-vehicles')
