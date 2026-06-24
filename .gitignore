@@ -50,6 +50,10 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Temp SQL scratch files ở root (vd _map.sql, _meeting.sql) — KHÔNG track.
+# (scripts/ivss-livetest/*.sql vẫn được track — đồ chuẩn bị có ích.)
+_*.sql
+
 # Runtime data
 pids
 *.pid
