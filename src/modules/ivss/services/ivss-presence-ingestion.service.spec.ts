@@ -32,6 +32,8 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       insertThrows?: boolean;
       fullName?: any[];
       fullNameThrows?: boolean;
+      directionMap?: Record<string, unknown> | null;
+      directionMapThrows?: boolean;
     } = {},
   ) => {
     captured = [];
@@ -41,6 +43,11 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         return Promise.resolve(over.bridge ?? [{ id: 'bridge1' }]);
       if (sql.includes('FROM device_user_mappings'))
         return Promise.resolve(over.user ?? [{ user_id: 'u1' }]);
+      if (sql.includes("config_key = 'ivss.channel_direction_map'")) {
+        if (over.directionMapThrows)
+          return Promise.reject(new Error('config boom'));
+        return Promise.resolve([{ config_json: over.directionMap ?? null }]);
+      }
       if (sql.includes("config_key = 'ivss.channel_room_map'"))
         return Promise.resolve([
           {
@@ -306,6 +313,64 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       await service.onFaceEvent(evt());
       expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
       expect(wsMock.emitToRoom.mock.calls[0][2].fullName).toBeNull();
+    });
+  });
+
+  // ── Task B: direction suy từ channel-direction-map ──
+  describe('Task B channel-direction-map', () => {
+    it('map {"2":"enter"} + channel 2 + eventAction null → direction enter', async () => {
+      wire({ directionMap: { '2': 'enter' } });
+      await service.onFaceEvent(evt({ channelId: 2, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('enter');
+    });
+
+    it('map {"3":"leave"} + channel 3 → direction leave', async () => {
+      wire({ directionMap: { '3': 'leave' } });
+      await service.onFaceEvent(evt({ channelId: 3, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('leave');
+    });
+
+    it('number↔string key: channelId=2 (number) khớp key "2" (string)', async () => {
+      wire({ directionMap: { '2': 'enter' } });
+      await service.onFaceEvent(evt({ channelId: 2, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('enter');
+    });
+
+    it('KHÔNG map, eventAction "in" → enter (đường cũ nguyên)', async () => {
+      wire({ directionMap: null });
+      await service.onFaceEvent(evt({ channelId: 9, eventAction: 'in' }));
+      expect(payloadOf().direction).toBe('enter');
+    });
+
+    it('KHÔNG map, eventAction null → seen', async () => {
+      wire({ directionMap: null });
+      await service.onFaceEvent(evt({ channelId: 9, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('seen');
+    });
+
+    it('channel ngoài map → rơi về eventAction/seen', async () => {
+      wire({ directionMap: { '2': 'enter' } });
+      await service.onFaceEvent(evt({ channelId: 7, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('seen');
+    });
+
+    it('value lạ trong map → bỏ entry → rơi về eventAction/seen', async () => {
+      wire({ directionMap: { '2': 'weird' } });
+      await service.onFaceEvent(evt({ channelId: 2, eventAction: undefined }));
+      expect(payloadOf().direction).toBe('seen');
+    });
+
+    it('channel-map ưu tiên hơn eventAction (camera thắng)', async () => {
+      wire({ directionMap: { '2': 'leave' } });
+      await service.onFaceEvent(evt({ channelId: 2, eventAction: 'in' }));
+      expect(payloadOf().direction).toBe('leave');
+    });
+
+    it('đọc config lỗi → fallback eventAction, KHÔNG vỡ ingest (vẫn persist)', async () => {
+      wire({ directionMapThrows: true });
+      await service.onFaceEvent(evt({ channelId: 2, eventAction: 'in' }));
+      expect(insert()).toBeDefined();
+      expect(payloadOf().direction).toBe('enter');
     });
   });
 });

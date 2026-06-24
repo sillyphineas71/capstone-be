@@ -101,8 +101,12 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         ? await this.resolveMeeting(roomId, eventTime)
         : null;
 
-      // C5: direction normalize ĐỘC LẬP với matchState.
-      const direction = this.normalizeDirection(evt.eventAction);
+      // Task B: direction ưu tiên channel-direction-map (camera nào thấy mặt) →
+      // fallback eventAction (normalizeDirection) → 'seen'. C5: ĐỘC LẬP matchState.
+      const directionMap = await this.getChannelDirectionMap();
+      const direction =
+        directionMap[String(evt.channelId)] ??
+        this.normalizeDirection(evt.eventAction);
       const matchState = this.matchStateOf(userId, roomId);
       const processedStatus =
         matchState === 'matched' ? 'processed' : 'unmatched';
@@ -274,6 +278,35 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       for (const [k, v] of Object.entries(raw)) {
         if (typeof v === 'string' && UUID_RE.test(v)) out[k] = v;
       }
+    }
+    return out;
+  }
+
+  /**
+   * Task B: system_configs[ivss.channel_direction_map] config_json {channelId: enter|leave|seen}.
+   * MIRROR getChannelRoomMap (cùng query, is_active=true). Chỉ nhận value ∈ {enter,leave,seen}
+   * (value lạ → bỏ entry). Lookup dùng String(channelId) — nhất quán channel_room_map.
+   * Đọc config lỗi → trả rỗng (KHÔNG throw): map-miss = đường cũ (eventAction/'seen').
+   */
+  private async getChannelDirectionMap(): Promise<Record<string, Direction>> {
+    const out: Record<string, Direction> = {};
+    try {
+      const rows: ConfigRow[] = await this.dataSource.manager.query(
+        `SELECT config_json FROM system_configs
+         WHERE config_key = 'ivss.channel_direction_map' AND is_active = true LIMIT 1`,
+      );
+      const raw = rows[0]?.config_json;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (v === 'enter' || v === 'leave' || v === 'seen') out[k] = v;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `IVSS channel_direction_map read failed (fallback eventAction): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
     }
     return out;
   }
