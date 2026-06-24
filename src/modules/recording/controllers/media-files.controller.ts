@@ -1,4 +1,4 @@
-import {
+﻿import {
   Controller,
   Get,
   Patch,
@@ -16,6 +16,7 @@ import {
 import { createReadStream } from 'fs';
 import type { Request, Response } from 'express';
 import { MediaFilesService } from '../services/media-files.service.js';
+import { StorageService } from '../../storage/storage.service.js';
 import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
 import { VisibilityDto } from '../dto/visibility.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -32,7 +33,10 @@ const Permissions =
 
 @Controller()
 export class MediaFilesController {
-  constructor(private readonly mediaFilesService: MediaFilesService) {}
+  constructor(
+    private readonly storageService: StorageService,
+    private readonly mediaFilesService: MediaFilesService,
+  ) {}
 
   // REC-006 (UC-120): list media_files theo meeting.
   @Get('meetings/:meetingId/media-files')
@@ -158,4 +162,43 @@ export class MediaFilesController {
       data,
     };
   }
+
+  // ACCT-AVATAR-REVIEW-001: secure download via signed token (no JWT, uses HMAC token).
+  @Get('media-files/:fileId/secure-download')
+  @HttpCode(200)
+  async secureDownload(
+    @Query('token') token: string,
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    
+    const result = this.storageService.verifySignedDownloadToken(token);
+    if (!result || result.mediaFileId !== fileId) {
+      res.status(403).json({
+        success: false,
+        message: 'Forbidden',
+        error: { code: 'FORBIDDEN', details: {} },
+        timestamp: new Date().toISOString(),
+        path: req.url,
+      });
+      return;
+    }
+    const resolved = await this.mediaFilesService.resolveSecureDownload(fileId);
+    if (resolved.kind === 'redirect') {
+      res.redirect(302, resolved.url);
+      return;
+    }
+    const m = resolved;
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', m.mimeType);
+    const filename = m.path.split(/[\\/]/).pop();
+    res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+    res.writeHead(200, { 'Content-Length': m.size });
+    const { createReadStream } = require('fs');
+    const stream = createReadStream(m.path);
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); });
+    stream.pipe(res);
+  }
 }
+

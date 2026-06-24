@@ -23,6 +23,7 @@ function fakeRes() {
 describe('MediaFilesController.playback (REC-006)', () => {
   let controller: MediaFilesController;
   let serviceMock: any;
+  let storageServiceMock: any;
   let stream: FakeStream;
 
   beforeEach(() => {
@@ -33,7 +34,7 @@ describe('MediaFilesController.playback (REC-006)', () => {
         mimeType: 'video/mp4',
       }),
     };
-    controller = new MediaFilesController(serviceMock);
+    controller = new MediaFilesController(storageServiceMock, serviceMock);
     stream = new FakeStream();
     createReadStreamMock.mockReturnValue(stream);
   });
@@ -133,6 +134,7 @@ describe('MediaFilesController.playback (REC-006)', () => {
 describe('MediaFilesController list/detail/visibility (REC-006)', () => {
   let controller: MediaFilesController;
   let serviceMock: any;
+  let storageServiceMock: any;
 
   beforeEach(() => {
     serviceMock = {
@@ -144,7 +146,7 @@ describe('MediaFilesController list/detail/visibility (REC-006)', () => {
         .fn()
         .mockResolvedValue({ fileId: 'f1', isActive: false }),
     };
-    controller = new MediaFilesController(serviceMock);
+    controller = new MediaFilesController(storageServiceMock, serviceMock);
   });
 
   it('list → data + meta', async () => {

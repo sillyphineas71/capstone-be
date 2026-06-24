@@ -66,6 +66,12 @@ describe('FaceProfileService (FPE-001 / UC-17)', () => {
     expect(insertSql).toContain('INSERT INTO media_files');
     expect(insertSql).toContain("'image'");
     expect(repoMock.save).toHaveBeenCalled();
+    // BR-PROFILE-CODE: profile_code dùng generator chung (FP- + 32 hex uppercase)
+    expect(repoMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileCode: expect.stringMatching(/^FP-[0-9A-F]{32}$/),
+      }),
+    );
     expect(r).toEqual({
       faceProfileId: 'fp-1',
       mediaFileId: 'media-1',

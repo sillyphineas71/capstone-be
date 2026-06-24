@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+﻿import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -193,7 +194,66 @@ export class StorageService implements OnModuleInit {
     }
   }
 
+
+  /**
+   * Generate a signed download token (HMAC-SHA256) for a media file.
+   * Token contains mediaFileId + expiry, signed with MEDIA_DOWNLOAD_TOKEN_SECRET.
+   */
+  generateSignedDownloadToken(
+    mediaFileId: string,
+    ttlSeconds?: number,
+  ): { token: string; expiresAt: string } {
+    const secret = this.configService.get<string>(
+      'MEDIA_DOWNLOAD_TOKEN_SECRET', '',
+    );
+    if (!secret) {
+      throw new Error('MEDIA_DOWNLOAD_TOKEN_SECRET is not configured');
+    }
+    const defaultTtl = this.configService.get<number>(
+      'MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS', 600,
+    );
+    const ttl = ttlSeconds ?? defaultTtl;
+    const expiresAtEpochMs = Date.now() + ttl * 1000;
+    const expiresAt = new Date(expiresAtEpochMs).toISOString();
+    const payload = mediaFileId + '|' + expiresAtEpochMs;
+    const hmac = crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
+    const token = Buffer.from(payload + '.' + hmac).toString('base64url');
+    return { token, expiresAt };
+  }
+
+  /**
+   * Verify a signed download token. Returns the mediaFileId if valid, null otherwise.
+   */
+  verifySignedDownloadToken(token: string): { mediaFileId: string } | null {
+    const secret = this.configService.get<string>(
+      'MEDIA_DOWNLOAD_TOKEN_SECRET', '',
+    );
+    if (!secret) return null;
+    let decoded;
+    try {
+      decoded = Buffer.from(token, 'base64url').toString('utf8');
+    } catch { return null; }
+    const lastDot = decoded.lastIndexOf('.');
+    if (lastDot === -1) return null;
+    const payload = decoded.slice(0, lastDot);
+    const receivedHmac = decoded.slice(lastDot + 1);
+    const expectedHmac = crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
+    if (receivedHmac.length !== expectedHmac.length) return null;
+    try {
+      if (!crypto.timingSafeEqual(
+        Buffer.from(receivedHmac, 'utf8'),
+        Buffer.from(expectedHmac, 'utf8'),
+      )) return null;
+    } catch { return null; }
+    const lastPipe = payload.lastIndexOf('|');
+    if (lastPipe === -1) return null;
+    const mediaFileId = payload.slice(0, lastPipe);
+    const expiresAtEpochMs = parseInt(payload.slice(lastPipe + 1), 10);
+    if (Date.now() > expiresAtEpochMs) return null;
+    return { mediaFileId };
+  }
   getDriver(): string {
     return this.storageDriver;
   }
 }
+

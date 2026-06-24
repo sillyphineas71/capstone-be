@@ -11,6 +11,7 @@ import { UserEntity } from './user.entity.js';
 export enum FaceProfileStatus {
   ACTIVE = 'active',
   PENDING_REVIEW = 'pending_review',
+  REJECTED = 'rejected',
   DISABLED = 'disabled',
   REVOKED = 'revoked',
 }
