@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, IsNull } from 'typeorm';
+import { DataSource, ILike, IsNull } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -41,6 +41,8 @@ import {
   DirectManagerInfoDto,
   RoleInfoDto,
 } from '../dto/user-detail-response.dto.js';
+import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
+import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
 export interface UserClientContext {
   ipAddress?: string;
@@ -478,6 +480,44 @@ export class UsersService {
     }
 
     return response;
+  }
+
+  async listUsers(
+    query: ListUsersQueryDto,
+  ): Promise<{ data: UserListItemDto[]; total: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const search = query.search?.trim();
+
+    const baseWhere = {
+      deletedAt: IsNull(),
+      accountStatus: AccountStatus.ACTIVE,
+    };
+
+    const where = search
+      ? [
+          { ...baseWhere, fullName: ILike(`%${search}%`) },
+          { ...baseWhere, email: ILike(`%${search}%`) },
+        ]
+      : baseWhere;
+
+    const [entities, total] = await this.dataSource
+      .getRepository(UserEntity)
+      .findAndCount({
+        where,
+        select: { id: true, fullName: true, email: true },
+        order: { fullName: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+
+    const data: UserListItemDto[] = entities.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+    }));
+
+    return { data, total };
   }
 
   private async resolveDepartmentScope(

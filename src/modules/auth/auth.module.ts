@@ -1,4 +1,4 @@
-import { CacheModule } from '@nestjs/cache-manager';
+﻿import { CacheModule } from '@nestjs/cache-manager';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { AuthController } from './controllers/auth.controller';
@@ -6,6 +6,7 @@ import { LoginResponsePresenter } from './presenters/login-response.presenter';
 import { AuthAuditRepository } from './repositories/auth-audit.repository';
 import { AuthzReadRepository } from './repositories/authz-read.repository';
 import { UsersAuthRepository } from './repositories/users-auth.repository';
+import { AvatarStatusRawRepository } from './repositories/avatar-status-raw.repository';
 import { UsersResetRepository } from './repositories/users-reset.repository';
 import { ResetAuditRepository } from './repositories/reset-audit.repository';
 import { UsersChangePasswordRepository } from './repositories/users-change-password.repository';
@@ -23,6 +24,7 @@ import { ChangePasswordService } from './services/change-password.service';
 import { MustChangePasswordGuard } from './guards/must-change-password.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
+import { RolesGuard } from './guards/roles.guard';
 
 @Module({
   imports: [JwtModule.register({}), CacheModule.register()],
@@ -35,6 +37,7 @@ import { PermissionsGuard } from './guards/permissions.guard';
     LogoutService,
     LoginResponsePresenter,
     UsersAuthRepository,
+    AvatarStatusRawRepository,
     AuthzReadRepository,
     AuthAuditRepository,
     UsersResetRepository,
@@ -51,6 +54,7 @@ import { PermissionsGuard } from './guards/permissions.guard';
     // Guards exported for use in other modules (MeetingsModule, AccountsModule, etc.)
     JwtAuthGuard,
     PermissionsGuard,
+    RolesGuard,
   ],
   exports: [
     // Re-export JwtModule and CacheModule so importing modules can resolve
@@ -79,6 +83,7 @@ import { PermissionsGuard } from './guards/permissions.guard';
     // Guards exported for use in other modules
     JwtAuthGuard,
     PermissionsGuard,
+    RolesGuard,
   ],
 })
 export class AuthModule {}

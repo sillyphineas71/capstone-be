@@ -1,7 +1,7 @@
-import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
+import { AvatarStatusRawRepository } from '../repositories/avatar-status-raw.repository';
 import { LoginService } from './login.service';
 import { RateLimitService } from './rate-limit.service';
 import { TokenService } from './token.service';
@@ -35,6 +35,9 @@ describe('LoginService', () => {
     getRefreshTokenTtlSeconds: jest.fn(() => 604800),
     getAccessTokenTtlSeconds: jest.fn(() => 3600),
   } as unknown as AuthConfigService;
+  const avatarStatusRawRepository = {
+    getFaceProfileRows: jest.fn(),
+  } as unknown as AvatarStatusRawRepository;
 
   const service = new LoginService(
     usersAuthRepository,
@@ -43,6 +46,7 @@ describe('LoginService', () => {
     rateLimitService,
     tokenService,
     authConfigService,
+    avatarStatusRawRepository,
   );
 
   beforeEach(() => {
@@ -50,7 +54,37 @@ describe('LoginService', () => {
     (rateLimitService.checkOrThrow as jest.Mock).mockImplementation(
       () => undefined,
     );
+    (
+      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([]);
   });
+
+  /** Mock thành công đầy đủ để chạy tới bước build summary. */
+  const mockActiveLogin = () => {
+    (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue({
+      id: 'u1',
+      email: 'user@example.com',
+      passwordHash: 'hash',
+      fullName: 'User',
+      avatarUrl: null,
+      departmentId: null,
+      accountStatus: 'active',
+    });
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    (tokenService.generateAccessToken as jest.Mock).mockResolvedValue('access');
+    (tokenService.generateRefreshToken as jest.Mock).mockResolvedValue(
+      'refresh',
+    );
+    (
+      authzReadRepository.getEffectiveRolesAndPermissions as jest.Mock
+    ).mockResolvedValue({ roles: ['INTERNAL_USER'], permissions: [] });
+    (usersAuthRepository.updateLastLoginAt as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    (authAuditRepository.logLoginSuccess as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+  };
 
   it('throws AUTH_INVALID_CREDENTIALS when user not found', async () => {
     (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue(
@@ -129,5 +163,72 @@ describe('LoginService', () => {
       },
       status: 500,
     });
+  });
+
+  // ── ACCT-AVATAR-SUBMIT-001 (BR-016): avatar fields trong login response ──
+
+  it('login response chứa avatarReviewStatus=approved khi user có row active (AC-006)', async () => {
+    mockActiveLogin();
+    (
+      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([
+      { status: 'active', lastUpdatedAt: null, enrolledAt: null },
+    ]);
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.user.avatarReviewStatus).toBe('approved');
+    expect(result.user.avatarRequired).toBe(false);
+    expect(result.user.shouldShowAvatarPopup).toBe(false);
+  });
+
+  it('login response chứa avatarReviewStatus=not_uploaded khi user chưa có row (AC-001)', async () => {
+    mockActiveLogin();
+    (
+      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([]);
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.user.avatarReviewStatus).toBe('not_uploaded');
+    expect(result.user.shouldShowAvatarPopup).toBe(true);
+  });
+
+  it('login response chứa avatarReviewStatus=rejected khi user có row rejected (AC-004)', async () => {
+    mockActiveLogin();
+    (
+      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([
+      { status: 'rejected', lastUpdatedAt: null, enrolledAt: null },
+    ]);
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.user.avatarReviewStatus).toBe('rejected');
+    expect(result.user.shouldShowAvatarPopup).toBe(true);
+  });
+
+  it('login KHÔNG fail khi đọc avatar status lỗi → fallback not_uploaded (resilience)', async () => {
+    mockActiveLogin();
+    (
+      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockRejectedValue(new Error('db down'));
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.accessToken).toBe('access');
+    expect(result.user.avatarReviewStatus).toBe('not_uploaded');
   });
 });
