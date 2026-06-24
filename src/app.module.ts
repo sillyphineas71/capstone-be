@@ -37,6 +37,7 @@ import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { TranscriptionModule } from './modules/transcription/transcription.module';
 import { UtilizationModule } from './modules/utilization/utilization.module';
 import { IvssModule } from './modules/ivss/ivss.module';
+import { AnprModule } from './modules/anpr/anpr.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -106,6 +107,7 @@ void loadDevModule; // suppress unused warning
     ReportsModule,
     AnalyticsModule,
     IvssModule,
+    AnprModule,
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],
