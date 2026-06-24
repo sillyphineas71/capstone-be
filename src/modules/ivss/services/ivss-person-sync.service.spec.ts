@@ -323,4 +323,42 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
     expect(r.removed).toBe(1);
     expect(r.failed).toBe(1);
   });
+
+  // ── Task A: extractSzUid (top-level + nested .data, guard object) ──
+  describe('extractSzUid', () => {
+    const call = (data: unknown): string | null =>
+      (service as any).extractSzUid(data);
+
+    it('nested data.szUid → "620" (shape bridge thật)', () => {
+      expect(
+        call({ success: true, data: { groupId: '1', szUid: '620' } }),
+      ).toBe('620');
+    });
+
+    it('top-level phẳng {szUid:"620"} → "620"', () => {
+      expect(call({ szUid: '620' })).toBe('620');
+    });
+
+    it('không có szUid (success:false) → null', () => {
+      expect(call({ success: false, message: 'X' })).toBeNull();
+    });
+
+    it('{} / null / string → null', () => {
+      expect(call({})).toBeNull();
+      expect(call(null)).toBeNull();
+      expect(call('abc')).toBeNull();
+    });
+
+    it('both present → deterministic: top-level scanned first', () => {
+      // KHÔNG phải rule nghiệp vụ — chỉ chốt tính xác định của thứ tự quét.
+      expect(call({ szUid: 'top', data: { szUid: 'nested' } })).toBe('top');
+    });
+
+    it('guard .data không phải object hợp lệ → null', () => {
+      expect(call({ success: false, data: null })).toBeNull();
+      expect(call({ data: 'xyz' })).toBeNull();
+      expect(call({ data: [] })).toBeNull();
+      expect(call({ data: {} })).toBeNull();
+    });
+  });
 });

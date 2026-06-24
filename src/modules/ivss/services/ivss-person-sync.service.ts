@@ -270,13 +270,27 @@ export class IvssPersonSyncService {
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
-  /** szUid field theo README bridge (owed). Fallback các field thường gặp. */
+  /**
+   * szUid field theo README bridge (owed). Quét top-level trước, rồi nested `.data`
+   * (lồng MỘT cấp — bridge thật trả `{success, message, data:{szUid}}`).
+   * Guard: chỉ nhận `.data` khi là object thật (null/string/array → bỏ qua).
+   */
   private extractSzUid(data: unknown): string | null {
-    if (data && typeof data === 'object') {
-      const d = data as Record<string, unknown>;
-      for (const k of ['szUid', 'personUid', 'uid', 'id']) {
-        const v = d[k];
+    const KEYS = ['szUid', 'personUid', 'uid', 'id'];
+    const pick = (obj: Record<string, unknown>): string | null => {
+      for (const k of KEYS) {
+        const v = obj[k];
         if (typeof v === 'string' && v) return v;
+      }
+      return null;
+    };
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const d = data as Record<string, unknown>;
+      const top = pick(d);
+      if (top) return top;
+      const nested = d['data'];
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        return pick(nested as Record<string, unknown>);
       }
     }
     return null;
