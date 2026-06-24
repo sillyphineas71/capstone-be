@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
@@ -14,6 +18,7 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve({ id: 'veh1', ...x })),
+      softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -98,5 +103,121 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       plateRaw: '99MD123456'.slice(0, 10),
     }); // 10
     expect(repo.save).toHaveBeenCalledTimes(2);
+  });
+
+  // ── UC2 (VPM-001): sửa / disable / xóa-mềm — ownership ──
+  describe('UC2 ownership + sửa/status/xóa', () => {
+    const owned = () => ({
+      id: 'veh1',
+      userId: 'u1',
+      plateNumber: '30A12345',
+      plateRaw: '30A-123.45',
+      vehicleType: 'car',
+      note: 'old',
+      status: 'active',
+    });
+
+    // CRUX: lookup luôn kèm userId + deletedAt IsNull → fold ownership.
+    it('loadOwned query lọc {id, userId, deletedAt:IsNull} (đi qua updateMetadata)', async () => {
+      repo.findOne.mockResolvedValue(owned());
+      await service.updateMetadata('veh1', 'u1', { note: 'x' });
+      const where = repo.findOne.mock.calls[0][0].where;
+      expect(where.id).toBe('veh1');
+      expect(where.userId).toBe('u1');
+      expect(where.deletedAt).toBeDefined(); // IsNull()
+    });
+
+    describe('OWNERSHIP: user A đụng biển user B → 404, KHÔNG mutate', () => {
+      beforeEach(() => repo.findOne.mockResolvedValue(null)); // không khớp userId
+
+      it('updateMetadata → 404, KHÔNG save', async () => {
+        await expect(
+          service.updateMetadata('veh1', 'attacker', { note: 'x' }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+      it('setStatus → 404, KHÔNG save', async () => {
+        await expect(
+          service.setStatus('veh1', 'attacker', 'disabled'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+      it('softDeleteOwned → 404, KHÔNG softDelete', async () => {
+        await expect(
+          service.softDeleteOwned('veh1', 'attacker'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(repo.softDelete).not.toHaveBeenCalled();
+      });
+      it('404 code=VEHICLE_NOT_FOUND, message trung tính (KHÔNG lộ tồn tại/owner)', async () => {
+        try {
+          await service.updateMetadata('veh1', 'attacker', { note: 'x' });
+          fail('should throw');
+        } catch (e: any) {
+          expect(e.response.code).toBe('VEHICLE_NOT_FOUND');
+          expect(JSON.stringify(e.response)).not.toContain('u1');
+        }
+      });
+    });
+
+    it('biển đã xóa-mềm (findOne null) → softDeleteOwned 404, KHÔNG xóa 2 lần', async () => {
+      repo.findOne.mockResolvedValue(null);
+      await expect(
+        service.softDeleteOwned('veh1', 'u1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(repo.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('updateMetadata: đổi note + vehicle_type, KHÔNG đụng plateNumber/userId/status', async () => {
+      const e = owned();
+      repo.findOne.mockResolvedValue(e);
+      await service.updateMetadata('veh1', 'u1', {
+        note: 'new',
+        vehicleType: 'truck',
+      });
+      const saved = repo.save.mock.calls[0][0];
+      expect(saved.note).toBe('new');
+      expect(saved.vehicleType).toBe('truck');
+      expect(saved.plateNumber).toBe('30A12345'); // nguyên
+      expect(saved.userId).toBe('u1');
+      expect(saved.status).toBe('active');
+    });
+
+    it('undefined: KHÔNG gửi note → giữ nguyên', async () => {
+      const e = owned();
+      repo.findOne.mockResolvedValue(e);
+      await service.updateMetadata('veh1', 'u1', { vehicleType: 'truck' });
+      expect(repo.save.mock.calls[0][0].note).toBe('old'); // giữ
+    });
+
+    it('null: gửi note=null → set null (xóa note)', async () => {
+      const e = owned();
+      repo.findOne.mockResolvedValue(e);
+      await service.updateMetadata('veh1', 'u1', { note: null });
+      expect(repo.save.mock.calls[0][0].note).toBeNull();
+    });
+
+    it('rỗng: cả note+vehicle_type absent → no-op, KHÔNG save, trả nguyên trạng', async () => {
+      const e = owned();
+      repo.findOne.mockResolvedValue(e);
+      const r = await service.updateMetadata('veh1', 'u1', {});
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(r).toBe(e);
+    });
+
+    it('setStatus: active & disabled → save status mới', async () => {
+      repo.findOne.mockResolvedValue(owned());
+      await service.setStatus('veh1', 'u1', 'disabled');
+      expect(repo.save.mock.calls[0][0].status).toBe('disabled');
+      repo.findOne.mockResolvedValue(owned());
+      await service.setStatus('veh1', 'u1', 'active');
+      expect(repo.save.mock.calls[1][0].status).toBe('active');
+    });
+
+    it('softDeleteOwned: loadOwned ok → repo.softDelete(id)', async () => {
+      repo.findOne.mockResolvedValue(owned());
+      repo.softDelete = jest.fn().mockResolvedValue({ affected: 1 });
+      await service.softDeleteOwned('veh1', 'u1');
+      expect(repo.softDelete).toHaveBeenCalledWith('veh1');
+    });
   });
 });

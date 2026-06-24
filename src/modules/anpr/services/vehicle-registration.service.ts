@@ -2,12 +2,15 @@ import {
   Injectable,
   BadRequestException,
   ConflictException,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
 import { normalizePlate } from '../utils/normalize-plate.js';
 import type { CreateVehicleRegistrationDto } from '../dto/create-vehicle-registration.dto.js';
+import type { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
+import type { VehicleStatus } from '../dto/update-vehicle-status.dto.js';
 
 // OQ-4: biển hợp lệ sau normalize — chỉ [A-Z0-9], dài 6–10.
 const PLATE_FORMAT_RE = /^[0-9A-Z]+$/;
@@ -75,6 +78,71 @@ export class VehicleRegistrationService {
       }
       throw e;
     }
+  }
+
+  // ── UC2 (VPM-001): sửa / disable / xóa-mềm — chỉ biển CỦA MÌNH ──
+
+  /**
+   * CRUX ownership (SEC-01/02): load biển của current user, chưa xóa-mềm.
+   * Fold ownership + existence + soft-delete vào 1 query → không khớp = 404
+   * (KHÔNG 403, message trung tính — giấu tồn tại biển người khác).
+   */
+  private async loadOwned(
+    id: string,
+    userId: string,
+  ): Promise<VehicleRegistrationEntity> {
+    const entity = await this.repo.findOne({
+      where: { id, userId, deletedAt: IsNull() },
+    });
+    if (!entity) {
+      throw new NotFoundException({
+        code: 'VEHICLE_NOT_FOUND',
+        message: 'Không tìm thấy biển số',
+      });
+    }
+    return entity;
+  }
+
+  /**
+   * Sửa metadata (DATA-01: CHỈ note + vehicle_type). undefined→giữ nguyên,
+   * null→xóa (set null). Cả 2 absent → no-op (KHÔNG save), trả nguyên trạng (OQ-5).
+   */
+  async updateMetadata(
+    id: string,
+    userId: string,
+    dto: UpdateVehicleRegistrationDto,
+  ): Promise<VehicleRegistrationEntity> {
+    const entity = await this.loadOwned(id, userId);
+    let changed = false;
+    if (dto.vehicleType !== undefined) {
+      entity.vehicleType = dto.vehicleType;
+      changed = true;
+    }
+    if (dto.note !== undefined) {
+      entity.note = dto.note;
+      changed = true;
+    }
+    if (!changed) {
+      return entity; // no-op
+    }
+    return this.repo.save(entity);
+  }
+
+  /** Đổi status active↔disabled (DATA-02). */
+  async setStatus(
+    id: string,
+    userId: string,
+    status: VehicleStatus,
+  ): Promise<VehicleRegistrationEntity> {
+    const entity = await this.loadOwned(id, userId);
+    entity.status = status;
+    return this.repo.save(entity);
+  }
+
+  /** Xóa-mềm (DATA-02: softDelete, KHÔNG hard-delete). Đã xóa → loadOwned 404. */
+  async softDeleteOwned(id: string, userId: string): Promise<void> {
+    await this.loadOwned(id, userId);
+    await this.repo.softDelete(id);
   }
 
   /** OQ-4: ^[0-9A-Z]+$ && dài 6–10 && ≥1 chữ && ≥1 số. */

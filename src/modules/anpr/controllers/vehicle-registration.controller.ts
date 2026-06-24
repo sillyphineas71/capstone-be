@@ -1,8 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   UseGuards,
   UsePipes,
@@ -15,6 +19,8 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { VehicleRegistrationService } from '../services/vehicle-registration.service.js';
 import { CreateVehicleRegistrationDto } from '../dto/create-vehicle-registration.dto.js';
 import { AdminCreateVehicleRegistrationDto } from '../dto/admin-create-vehicle-registration.dto.js';
+import { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
+import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto.js';
 import { toVehicleRegistrationResponse } from '../dto/vehicle-registration-response.dto.js';
 
 const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
@@ -69,6 +75,65 @@ export class VehicleRegistrationController {
       success: true,
       message: 'Vehicle registered successfully',
       data: toVehicleRegistrationResponse(entity),
+    };
+  }
+
+  // ── UC2 (VPM-001): sửa / disable / xóa-mềm — chỉ biển CỦA MÌNH (ownership trong service) ──
+
+  // Sửa metadata (note/vehicle_type). userId từ JWT; biển không thuộc → 404.
+  @Patch('vehicle-registrations/:id')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(REGISTER_PIPE)
+  async update(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateVehicleRegistrationDto,
+  ) {
+    const entity = await this.vehicleRegistrationService.updateMetadata(
+      id,
+      user.userId,
+      dto,
+    );
+    return {
+      success: true,
+      message: 'Vehicle updated successfully',
+      data: toVehicleRegistrationResponse(entity),
+    };
+  }
+
+  // Enable/disable (active↔disabled). Route /status tách riêng (OQ-3).
+  @Patch('vehicle-registrations/:id/status')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(REGISTER_PIPE)
+  async updateStatus(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateVehicleStatusDto,
+  ) {
+    const entity = await this.vehicleRegistrationService.setStatus(
+      id,
+      user.userId,
+      dto.status,
+    );
+    return {
+      success: true,
+      message: 'Vehicle status updated successfully',
+      data: toVehicleRegistrationResponse(entity),
+    };
+  }
+
+  // Xóa-mềm. DELETE trả data:null (OQ-4).
+  @Delete('vehicle-registrations/:id')
+  @UseGuards(JwtAuthGuard)
+  async remove(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.vehicleRegistrationService.softDeleteOwned(id, user.userId);
+    return {
+      success: true,
+      message: 'Vehicle deleted successfully',
+      data: null,
     };
   }
 }

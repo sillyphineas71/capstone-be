@@ -74,4 +74,58 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
     );
     expect(perms).toEqual(['anpr.vehicle.admin_register']);
   });
+
+  // ── UC2 (VPM-001): sửa / status / xóa-mềm ──
+  describe('UC2 routes', () => {
+    beforeEach(() => {
+      service.updateMetadata = jest.fn().mockResolvedValue(entity);
+      service.setStatus = jest.fn().mockResolvedValue(entity);
+      service.softDeleteOwned = jest.fn().mockResolvedValue(undefined);
+    });
+
+    it('PATCH update → service.updateMetadata(id, @CurrentUser().userId, dto), envelope + mapper', async () => {
+      const r = await controller.update({ userId: 'u-jwt' }, 'veh1', {
+        note: 'x',
+      });
+      expect(service.updateMetadata).toHaveBeenCalledWith('veh1', 'u-jwt', {
+        note: 'x',
+      });
+      expect(r.message).toBe('Vehicle updated successfully');
+      expect(r.data).toMatchObject({ id: 'veh1', plate_number: '30A12345' });
+    });
+
+    it('PATCH status → service.setStatus(id, userId, dto.status)', async () => {
+      const r = await controller.updateStatus({ userId: 'u-jwt' }, 'veh1', {
+        status: 'disabled',
+      });
+      expect(service.setStatus).toHaveBeenCalledWith(
+        'veh1',
+        'u-jwt',
+        'disabled',
+      );
+      expect(r.message).toBe('Vehicle status updated successfully');
+    });
+
+    it('DELETE → service.softDeleteOwned(id, userId) + trả data:null', async () => {
+      const r = await controller.remove({ userId: 'u-jwt' }, 'veh1');
+      expect(service.softDeleteOwned).toHaveBeenCalledWith('veh1', 'u-jwt');
+      expect(r).toEqual({
+        success: true,
+        message: 'Vehicle deleted successfully',
+        data: null,
+      });
+    });
+
+    it('cả 3 route UC2 guard = JwtAuthGuard (KHÔNG PermissionsGuard)', () => {
+      for (const h of [
+        controller.update,
+        controller.updateStatus,
+        controller.remove,
+      ]) {
+        const guards = Reflect.getMetadata('__guards__', h) ?? [];
+        expect(guards).toContain(JwtAuthGuard);
+        expect(guards).not.toContain(PermissionsGuard);
+      }
+    });
+  });
 });
