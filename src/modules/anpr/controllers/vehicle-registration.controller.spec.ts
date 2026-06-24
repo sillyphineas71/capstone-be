@@ -128,4 +128,41 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
       }
     });
   });
+
+  // ── UC3 (VPL-001): list + detail ──
+  describe('UC3 routes', () => {
+    const meta = { page: 1, limit: 20, total: 1, totalPages: 1 };
+    beforeEach(() => {
+      service.list = jest.fn().mockResolvedValue({ items: [entity], meta });
+      service.getDetail = jest.fn().mockResolvedValue(entity);
+    });
+
+    it('GET list → service.list(@CurrentUser().userId, query), map mapper + meta', async () => {
+      const r = await controller.list(
+        { userId: 'u-jwt' },
+        { page: 1, limit: 20 },
+      );
+      expect(service.list).toHaveBeenCalledWith('u-jwt', {
+        page: 1,
+        limit: 20,
+      });
+      expect(r.data).toHaveLength(1);
+      expect(r.data[0]).toMatchObject({ id: 'veh1', plate_number: '30A12345' });
+      expect(r.meta).toEqual(meta);
+      expect(r.message).toBe('Vehicle registrations retrieved');
+    });
+
+    it('GET detail → service.getDetail(id, userId) + mapper', async () => {
+      const r = await controller.detail({ userId: 'u-jwt' }, 'veh1');
+      expect(service.getDetail).toHaveBeenCalledWith('veh1', 'u-jwt');
+      expect(r.data).toMatchObject({ id: 'veh1' });
+      expect(r.message).toBe('Vehicle registration retrieved');
+    });
+
+    it('userId từ @CurrentUser (KHÔNG query/body); guard list = JwtAuthGuard', () => {
+      const guards = Reflect.getMetadata('__guards__', controller.list) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).not.toContain(PermissionsGuard);
+    });
+  });
 });

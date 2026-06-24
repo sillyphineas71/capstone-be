@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
 import {
   BadRequestException,
   ConflictException,
@@ -19,6 +19,7 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve({ id: 'veh1', ...x })),
       softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
+      findAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -218,6 +219,73 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       repo.softDelete = jest.fn().mockResolvedValue({ affected: 1 });
       await service.softDeleteOwned('veh1', 'u1');
       expect(repo.softDelete).toHaveBeenCalledWith('veh1');
+    });
+  });
+
+  // ── UC3 (VPL-001): list + getDetail ──
+  describe('UC3 list + getDetail', () => {
+    const owned = () => ({ id: 'veh1', userId: 'u1', plateNumber: '30A12345' });
+    const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
+
+    it('SEC (BẮT BUỘC): findAndCount where lọc cứng userId=current + deletedAt:IsNull', async () => {
+      repo.findAndCount.mockResolvedValue([[owned()], 1]);
+      await service.list('u1', q());
+      const arg = repo.findAndCount.mock.calls[0][0];
+      expect(arg.where.userId).toBe('u1');
+      expect(arg.where.deletedAt).toBeDefined(); // IsNull()
+      expect(arg.order).toEqual({ createdAt: 'DESC' }); // OQ-5
+    });
+
+    it('meta đúng: total=25 limit=20 → totalPages=2', async () => {
+      const rows = Array.from({ length: 20 }, () => owned());
+      repo.findAndCount.mockResolvedValue([rows, 25]);
+      const r = await service.list('u1', q({ page: 1, limit: 20 }));
+      expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
+      expect(r.items).toHaveLength(20);
+    });
+
+    it('pagination: page=2 limit=20 → skip=20, take=20', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ page: 2, limit: 20 }));
+      const arg = repo.findAndCount.mock.calls[0][0];
+      expect(arg.skip).toBe(20);
+      expect(arg.take).toBe(20);
+    });
+
+    it('filter status set → where.status; không set → where KHÔNG có khóa status', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ status: 'disabled' }));
+      expect(repo.findAndCount.mock.calls[0][0].where.status).toBe('disabled');
+
+      repo.findAndCount.mockClear();
+      await service.list('u1', q());
+      expect('status' in repo.findAndCount.mock.calls[0][0].where).toBe(false);
+    });
+
+    it('list rỗng: findAndCount [[],0] → items:[], meta.total=0, totalPages=0 (KHÔNG throw)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      const r = await service.list('u1', q());
+      expect(r.items).toEqual([]);
+      expect(r.meta.total).toBe(0);
+      expect(r.meta.totalPages).toBe(0);
+    });
+
+    it('getDetail: tái dùng loadOwned → biển của mình → trả entity', async () => {
+      const e = owned();
+      repo.findOne.mockResolvedValue(e);
+      expect(await service.getDetail('veh1', 'u1')).toBe(e);
+      // chứng minh đi qua loadOwned (findOne where id+userId+deletedAt).
+      expect(repo.findOne.mock.calls[0][0].where).toMatchObject({
+        id: 'veh1',
+        userId: 'u1',
+      });
+    });
+
+    it('getDetail: biển người khác/không tồn tại (findOne null) → 404 VEHICLE_NOT_FOUND', async () => {
+      repo.findOne.mockResolvedValue(null);
+      await expect(
+        service.getDetail('veh1', 'attacker'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

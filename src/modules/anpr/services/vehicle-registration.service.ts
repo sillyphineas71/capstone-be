@@ -5,12 +5,21 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, type FindOptionsWhere } from 'typeorm';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
 import { normalizePlate } from '../utils/normalize-plate.js';
 import type { CreateVehicleRegistrationDto } from '../dto/create-vehicle-registration.dto.js';
 import type { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
 import type { VehicleStatus } from '../dto/update-vehicle-status.dto.js';
+import type { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
+
+/** Meta phân trang — mirror shape iot-devices (CLAUDE.md §8.4). */
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
 
 // OQ-4: biển hợp lệ sau normalize — chỉ [A-Z0-9], dài 6–10.
 const PLATE_FORMAT_RE = /^[0-9A-Z]+$/;
@@ -101,6 +110,49 @@ export class VehicleRegistrationService {
       });
     }
     return entity;
+  }
+
+  // ── UC3 (VPL-001): xem danh sách / chi tiết — chỉ biển CỦA MÌNH (read-only) ──
+
+  /**
+   * List biển của current user (SEC-01: lọc cứng userId + deletedAt IS NULL).
+   * Filter `status` optional. Phân trang mirror repo. Sort created_at DESC (OQ-5).
+   */
+  async list(
+    userId: string,
+    query: ListVehicleRegistrationsQueryDto,
+  ): Promise<{ items: VehicleRegistrationEntity[]; meta: PaginationMeta }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    // Build where: KHÔNG để status:undefined lọt vào (chỉ thêm khi có giá trị).
+    const where: FindOptionsWhere<VehicleRegistrationEntity> = {
+      userId,
+      deletedAt: IsNull(),
+    };
+    if (query.status) {
+      where.status = query.status;
+    }
+
+    const [items, total] = await this.repo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      items,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /** Detail 1 biển của current user — TÁI DÙNG loadOwned (ownership + 404, OQ-3). */
+  async getDetail(
+    id: string,
+    userId: string,
+  ): Promise<VehicleRegistrationEntity> {
+    return this.loadOwned(id, userId);
   }
 
   /**

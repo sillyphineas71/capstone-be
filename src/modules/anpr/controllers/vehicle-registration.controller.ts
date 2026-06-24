@@ -2,12 +2,14 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -21,6 +23,7 @@ import { CreateVehicleRegistrationDto } from '../dto/create-vehicle-registration
 import { AdminCreateVehicleRegistrationDto } from '../dto/admin-create-vehicle-registration.dto.js';
 import { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto.js';
+import { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
 import { toVehicleRegistrationResponse } from '../dto/vehicle-registration-response.dto.js';
 
 const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
@@ -39,6 +42,46 @@ export class VehicleRegistrationController {
   constructor(
     private readonly vehicleRegistrationService: VehicleRegistrationService,
   ) {}
+
+  // ── UC3 (VPL-001): xem danh sách / chi tiết — chỉ biển CỦA MÌNH (list trước detail) ──
+
+  // List biển của current user (phân trang + filter status). userId từ JWT (SEC-01).
+  @Get('vehicle-registrations')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(REGISTER_PIPE)
+  async list(
+    @CurrentUser() user: { userId: string },
+    @Query() query: ListVehicleRegistrationsQueryDto,
+  ) {
+    const { items, meta } = await this.vehicleRegistrationService.list(
+      user.userId,
+      query,
+    );
+    return {
+      success: true,
+      message: 'Vehicle registrations retrieved',
+      data: items.map(toVehicleRegistrationResponse),
+      meta,
+    };
+  }
+
+  // Detail 1 biển của current user — không thuộc/đã xóa → 404.
+  @Get('vehicle-registrations/:id')
+  @UseGuards(JwtAuthGuard)
+  async detail(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const entity = await this.vehicleRegistrationService.getDetail(
+      id,
+      user.userId,
+    );
+    return {
+      success: true,
+      message: 'Vehicle registration retrieved',
+      data: toVehicleRegistrationResponse(entity),
+    };
+  }
 
   // USER: tự đăng ký biển của mình — user_id LẤY TỪ JWT (KHÔNG body) — SEC-01.
   @Post('vehicle-registrations')
