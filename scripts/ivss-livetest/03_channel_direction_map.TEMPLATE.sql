@@ -11,7 +11,7 @@ INSERT INTO system_configs (config_key, config_group, config_json, value_type, i
 VALUES (
   'ivss.channel_direction_map',
   'ivss',
-  '{"<CHANNEL_IN>": "enter"}'::jsonb,   -- , "<CHANNEL_OUT>": "leave"  ← thêm khi có cam 2
+  '{"0": "leave"}'::jsonb,   -- , "<CHANNEL_OUT>": "leave"  ← thêm khi có cam 2
   'json',
   true
 );
