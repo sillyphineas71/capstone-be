@@ -41,6 +41,7 @@ import {
   DirectManagerInfoDto,
   RoleInfoDto,
 } from '../dto/user-detail-response.dto.js';
+import { UserPublicProfileResponseDto } from '../dto/user-public-profile-response.dto.js';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
@@ -480,6 +481,39 @@ export class UsersService {
     }
 
     return response;
+  }
+
+  async getPublicProfile(
+    targetUserId: string,
+  ): Promise<UserPublicProfileResponseDto> {
+    const em = this.dataSource.manager;
+
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+      relations: { department: true },
+    });
+
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    return {
+      id: targetUser.id,
+      fullName: targetUser.fullName,
+      email: targetUser.email,
+      employeeCode: targetUser.employeeCode,
+      department: targetUser.department
+        ? {
+            id: targetUser.department.id,
+            departmentName: targetUser.department.departmentName,
+          }
+        : null,
+      avatarUrl: targetUser.avatarUrl,
+    };
   }
 
   async listUsers(

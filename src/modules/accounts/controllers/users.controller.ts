@@ -35,6 +35,7 @@ import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UserResponseDto } from '../dto/user-response.dto.js';
 import { UserDetailResponseDto } from '../dto/user-detail-response.dto.js';
+import { UserPublicProfileResponseDto } from '../dto/user-public-profile-response.dto.js';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
@@ -117,9 +118,7 @@ export class UsersController {
   @ApiForbiddenResponse({
     description: 'Không đủ quyền hạn (thiếu permission accounts.user.list).',
   })
-  async listUsers(
-    @Query() query: ListUsersQueryDto,
-  ): Promise<{
+  async listUsers(@Query() query: ListUsersQueryDto): Promise<{
     success: boolean;
     message: string;
     data: UserListItemDto[];
@@ -206,6 +205,55 @@ export class UsersController {
     return {
       success: true,
       message: 'User detail retrieved successfully',
+      data: result,
+    };
+  }
+
+  @Get(':userId/public-profile')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xem hồ sơ công khai tài khoản',
+    description:
+      'Cho phép bất kỳ user đã đăng nhập xem hồ sơ công khai rút gọn (id, fullName, email, employeeCode, department, avatarUrl) của một tài khoản khác. Không yêu cầu permission/role quản trị.',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần xem hồ sơ công khai',
+    type: String,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Hồ sơ công khai của tài khoản.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  async getPublicProfile(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/public-profile',
+        }),
+      }),
+    )
+    userId: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UserPublicProfileResponseDto;
+  }> {
+    const result = await this.usersService.getPublicProfile(userId);
+
+    return {
+      success: true,
+      message: 'Lấy hồ sơ công khai thành công',
       data: result,
     };
   }

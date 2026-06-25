@@ -1,4 +1,7 @@
+import 'reflect-metadata';
 import { Test, TestingModule } from '@nestjs/testing';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { ParseUUIDPipe, HttpStatus } from '@nestjs/common';
 import { UsersController } from './users.controller.js';
 import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -7,12 +10,17 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 
 describe('UsersController', () => {
   let controller: UsersController;
-  let service: { createUser: jest.Mock; getUserDetail: jest.Mock };
+  let service: {
+    createUser: jest.Mock;
+    getUserDetail: jest.Mock;
+    getPublicProfile: jest.Mock;
+  };
 
   beforeEach(async () => {
     service = {
       createUser: jest.fn(),
       getUserDetail: jest.fn(),
+      getPublicProfile: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -139,6 +147,64 @@ describe('UsersController', () => {
         success: true,
         message: 'User detail retrieved successfully',
         data: mockDetailResult,
+      });
+    });
+  });
+
+  describe('getPublicProfile', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    const mockPublicProfileResult = {
+      id: validUserId,
+      fullName: 'Nguyen Van A',
+      email: 'a.nguyen@company.com',
+      employeeCode: 'EMP001',
+      department: { id: 'dept-id', departmentName: 'Phong Ky Thuat' },
+      avatarUrl: 'https://res.cloudinary.com/demo/image/upload/avatar.jpg',
+    };
+
+    it('[AC-001] Happy path — gọi service đúng userId, response format chuẩn', async () => {
+      service.getPublicProfile.mockResolvedValue(mockPublicProfileResult);
+
+      const result = await controller.getPublicProfile(validUserId);
+
+      expect(service.getPublicProfile).toHaveBeenCalledWith(validUserId);
+      expect(result).toEqual({
+        success: true,
+        message: 'Lấy hồ sơ công khai thành công',
+        data: mockPublicProfileResult,
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { getPublicProfile } = UsersController.prototype;
+
+    it('[AC-003] Endpoint chỉ áp dụng JwtAuthGuard, KHÔNG có PermissionsGuard — mọi role đều truy cập được', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        getPublicProfile,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard]);
+      expect(guards).not.toContain(PermissionsGuard);
+    });
+
+    it('[AC-004] userId không hợp lệ → ParseUUIDPipe reject với code INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/public-profile',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
       });
     });
   });

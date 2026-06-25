@@ -527,6 +527,158 @@ describe('UsersService', () => {
     });
   });
 
+  describe('getPublicProfile', () => {
+    const targetUserId = 'public-target-user-id';
+
+    const basePublicUser = {
+      id: targetUserId,
+      fullName: 'Nguyen Van A',
+      email: 'a.nguyen@company.com',
+      employeeCode: 'EMP001',
+      avatarUrl: 'https://res.cloudinary.com/demo/image/upload/avatar.jpg',
+      department: { id: 'dept-id', departmentName: 'Phong Ky Thuat' },
+    };
+
+    // ===== HAPPY PATH & DATA FORMAT TESTS (T004) =====
+
+    it('[AC-001] Happy path — trả đủ 6 field whitelist', async () => {
+      em.findOne.mockResolvedValue(basePublicUser);
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(result).toEqual({
+        id: targetUserId,
+        fullName: 'Nguyen Van A',
+        email: 'a.nguyen@company.com',
+        employeeCode: 'EMP001',
+        department: { id: 'dept-id', departmentName: 'Phong Ky Thuat' },
+        avatarUrl: 'https://res.cloudinary.com/demo/image/upload/avatar.jpg',
+      });
+    });
+
+    it('[AC-002] Self-view — targetUserId là chính authenticated user vẫn xử lý bình thường', async () => {
+      const selfUserId = 'self-user-id';
+      em.findOne.mockResolvedValue({ ...basePublicUser, id: selfUserId });
+
+      const result = await service.getPublicProfile(selfUserId);
+
+      expect(result.id).toBe(selfUserId);
+      const [calledEntity, calledOptions] = em.findOne.mock.calls[0] as [
+        unknown,
+        { where: { id: string } },
+      ];
+      expect(calledEntity).toBe(UserEntity);
+      expect(calledOptions.where.id).toBe(selfUserId);
+    });
+
+    it('[AC-008] department = null khi department_id = null, không omit field', async () => {
+      em.findOne.mockResolvedValue({ ...basePublicUser, department: null });
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(result.department).toBeNull();
+      expect(result).toHaveProperty('department');
+    });
+
+    it('[AC-009] avatarUrl = null khi avatar_url = null (chưa được duyệt)', async () => {
+      em.findOne.mockResolvedValue({ ...basePublicUser, avatarUrl: null });
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(result.avatarUrl).toBeNull();
+      expect(result).toHaveProperty('avatarUrl');
+    });
+
+    it('[AC-010] avatarUrl có giá trị khi avatar đã được duyệt', async () => {
+      em.findOne.mockResolvedValue(basePublicUser);
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(result.avatarUrl).toBe(
+        'https://res.cloudinary.com/demo/image/upload/avatar.jpg',
+      );
+    });
+
+    it('[AC-011] employeeCode = null khi employee_code = null, không omit field', async () => {
+      em.findOne.mockResolvedValue({ ...basePublicUser, employeeCode: null });
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(result.employeeCode).toBeNull();
+      expect(result).toHaveProperty('employeeCode');
+    });
+
+    // ===== ERROR CASE TESTS (T005) =====
+
+    it('[AC-006] userId không tồn tại — 404 USER_NOT_FOUND', async () => {
+      em.findOne.mockResolvedValue(null);
+
+      await expect(service.getPublicProfile('non-existent-id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('[AC-007] target user đã soft-delete — 404 USER_NOT_FOUND giống user không tồn tại', async () => {
+      // deletedAt: IsNull() filter trong query khiến soft-deleted user không được trả về
+      em.findOne.mockResolvedValue(null);
+
+      await expect(service.getPublicProfile(targetUserId)).rejects.toThrow(
+        NotFoundException,
+      );
+
+      const [calledEntity, calledOptions] = em.findOne.mock.calls[0] as [
+        unknown,
+        { where: { id: string } },
+      ];
+      expect(calledEntity).toBe(UserEntity);
+      expect(calledOptions.where.id).toBe(targetUserId);
+    });
+
+    // ===== READ-ONLY & SENSITIVE FIELD EXCLUSION TESTS (T006) =====
+
+    it('[AC-012] Chỉ gọi findOne (SELECT), không gọi save/create', async () => {
+      em.findOne.mockResolvedValue(basePublicUser);
+
+      await service.getPublicProfile(targetUserId);
+
+      expect(em.findOne).toHaveBeenCalledTimes(1);
+      expect(em.save).not.toHaveBeenCalled();
+      expect(em.create).not.toHaveBeenCalled();
+      expect(em.find).not.toHaveBeenCalled();
+    });
+
+    it('[AC-013] Response KHÔNG chứa field quản trị nhạy cảm nào', async () => {
+      em.findOne.mockResolvedValue(basePublicUser);
+
+      const result = await service.getPublicProfile(targetUserId);
+
+      expect(Object.keys(result).sort()).toEqual(
+        [
+          'avatarUrl',
+          'department',
+          'email',
+          'employeeCode',
+          'fullName',
+          'id',
+        ].sort(),
+      );
+      expect(result).not.toHaveProperty('accountStatus');
+      expect(result).not.toHaveProperty('employmentStatus');
+      expect(result).not.toHaveProperty('mustChangePassword');
+      expect(result).not.toHaveProperty('lastLoginAt');
+      expect(result).not.toHaveProperty('failedLoginCount');
+      expect(result).not.toHaveProperty('lockedUntil');
+      expect(result).not.toHaveProperty('passwordUpdatedAt');
+      expect(result).not.toHaveProperty('roles');
+      expect(result).not.toHaveProperty('directManager');
+      expect(result).not.toHaveProperty('positionTitle');
+      expect(result).not.toHaveProperty('phoneNumber');
+      expect(result).not.toHaveProperty('hasFaceProfile');
+      expect(result).not.toHaveProperty('createdAt');
+      expect(result).not.toHaveProperty('updatedAt');
+    });
+  });
+
   describe('createUser', () => {
     it('should create user and enqueue credential email (Happy Path)', async () => {
       em.findOne.mockImplementation(
@@ -596,7 +748,9 @@ describe('UsersService', () => {
       expect(em.save).toHaveBeenCalledTimes(3);
 
       // After transaction: enqueueEmailNotification called
-      expect(notificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      expect(
+        notificationsService.enqueueEmailNotification,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           toEmails: ['nva@company.com'],
           relatedEntityType: 'users',
