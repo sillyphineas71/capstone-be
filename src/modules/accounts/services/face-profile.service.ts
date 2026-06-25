@@ -2,12 +2,12 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
 import {
   FaceProfileEntity,
   FaceProfileStatus,
 } from '../entities/face-profile.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
 
 export interface UploadedPortrait {
   buffer: Buffer;
@@ -103,7 +103,7 @@ export class FaceProfileService {
       const created = await this.faceProfileRepo.save(
         this.faceProfileRepo.create({
           userId,
-          profileCode: `FP-${randomUUID().slice(0, 8)}`,
+          profileCode: generateFaceProfileCode(),
           status: FaceProfileStatus.PENDING_REVIEW,
           primaryImageFileId: mediaFileId,
           enrolledBy,

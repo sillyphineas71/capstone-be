@@ -1,7 +1,8 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service.js';
+import { AttendanceModule } from '../attendance/attendance.module.js';
 import { IotModule } from '../iot/iot.module.js';
 import { RoomsModule } from '../rooms/rooms.module.js';
 import { FaceAccessModule } from '../face-access/face-access.module.js';
@@ -23,6 +24,7 @@ import { IvssModule } from '../ivss/ivss.module.js';
   imports: [
     ScheduleModule.forRoot(),
     ConfigModule,
+    AttendanceModule,
     IotModule,
     RoomsModule,
     FaceAccessModule,

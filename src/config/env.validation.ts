@@ -1,4 +1,4 @@
-import * as Joi from 'joi';
+﻿import * as Joi from 'joi';
 
 /**
  * Joi validation schema cho toàn bộ env variables của backend.
@@ -50,6 +50,11 @@ export const envValidationSchema = Joi.object({
   AUTH_JWT_AUDIENCE: Joi.string().default('capstone-client'),
   AUTH_JWT_BLACKLIST_PREFIX: Joi.string().default('auth:blacklist:jti:'),
   WARNING_TOKEN_SECRET: Joi.string().min(16).required(),
+
+  // --- D1. Signed Download Token ---
+  MEDIA_DOWNLOAD_TOKEN_SECRET: Joi.string().min(16).required(),
+  MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS: Joi.number().integer().min(60).max(3600).default(600),
+  API_PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
 
   // ─── E. OTP ──────────────────────────────────────────────────────────────────
   AUTH_OTP_TTL_SECONDS: Joi.number().integer().default(300),

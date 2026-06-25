@@ -1,4 +1,4 @@
-﻿import {
+import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
   ValidationArguments,
@@ -45,7 +45,15 @@ export class IsIanaTimezoneConstraint implements ValidatorConstraintInterface {
     if (typeof value !== 'string') {
       return false;
     }
-    return this.validTimezones.has(value);
+    if (this.validTimezones.has(value)) {
+      return true;
+    }
+    try {
+      new Intl.DateTimeFormat(undefined, { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   defaultMessage(args: ValidationArguments): string {

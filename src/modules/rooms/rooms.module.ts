@@ -14,6 +14,7 @@ import { WebsocketModule } from '../websocket/websocket.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
+import { RoomsService } from './services/rooms.service.js';
 import { RoomStatusService } from './services/room-status.service.js';
 import { NoShowController } from './controllers/no-show.controller.js';
 import { NoShowConfigController } from './controllers/no-show-config.controller.js';
@@ -58,6 +59,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     EarlyVacancyConfigController,
   ],
   providers: [
+    RoomsService,
     RoomStatusService,
     NoShowService,
     NoShowDetectionService,

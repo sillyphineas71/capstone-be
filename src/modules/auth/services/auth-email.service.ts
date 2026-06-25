@@ -13,18 +13,18 @@ export class AuthEmailService {
       throw new InternalServerErrorException('AUTH_EMAIL_DISPATCH_FAILED');
     }
 
-    const subject = 'Khôi ph?c m?t kh?u - Smart Meeting Management';
+    const subject = 'Khoi phuc mat khau - Smart Meeting Management';
     const text = [
-      'Kính g?i ngu?i dùng,',
+      'Kinh gui nguoi dung,',
       '',
-      'B?n dã g?i yêu c?u d?t l?i m?t kh?u trên h? th?ng Smart Meeting Management.',
-      `Mã OTP xác th?c c?a b?n là: ${otp}`,
+      'Ban da gui yeu cau dat lai mat khau tren he thong Smart Meeting Management.',
+      `Ma OTP xac thuc cua ban la: ${otp}`,
       '',
-      'Mã OTP này có hi?u l?c trong vòng 10 phút. Ð? b?o m?t, vui lòng không chia s? mã này cho b?t k? ai.',
-      'N?u b?n không g?i yêu c?u này, vui lòng b? qua email này và b?o m?t tài kho?n.',
+      'Ma OTP nay co hieu luc trong vong 10 phut. De bao mat, vui long khong chia se ma nay cho bat ky ai.',
+      'Neu ban khong gui yeu cau nay, vui long bo qua email nay va bao mat tai khoan.',
       '',
-      'Trân tr?ng,',
-      'H? th?ng Smart Meeting Management',
+      'Tran trong,',
+      'He thong Smart Meeting Management',
     ].join('\n');
 
     const result = await this.mailService.sendMail({ to: email, subject, text });

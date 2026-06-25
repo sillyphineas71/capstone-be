@@ -12,6 +12,8 @@ export enum MeetingEventType {
   MEETING_STARTED = 'meeting_started',
   MEETING_ENDED = 'meeting_ended',
   EXTENSION_REQUESTED = 'extension_requested',
+  EXTENSION_APPROVED = 'extension_approved',
+  EXTENSION_REJECTED = 'extension_rejected',
   WARNING_SENT = 'warning_sent',
   STATUS_CHANGED = 'status_changed',
   MEETING_REQUEST_CREATED = 'meeting_request_created',
@@ -20,6 +22,11 @@ export enum MeetingEventType {
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   ROOM_CHANGED = 'room_changed',
   PARTICIPANT_REMOVED = 'participant_removed',
+  EXTERNAL_PARTICIPANT_ADDED = 'external_participant_added',
+  ATTENDANCE_CHECKIN_ALERT_SENT = 'attendance_checkin_alert_sent',
+  WARNING_SCHEDULED = 'warning_scheduled',
+  WARNING_SCHEDULING_SKIPPED = 'warning_scheduling_skipped',
+  EXTERNAL_PARTICIPANT_REMOVED = 'external_participant_removed',
 }
 
 export enum MeetingEventSourceType {
@@ -28,6 +35,7 @@ export enum MeetingEventSourceType {
   WEBSOCKET = 'websocket',
   MQTT = 'mqtt',
   SCHEDULER = 'scheduler',
+  DEVICE = 'device',
 }
 
 @Entity('meeting_events')
@@ -76,4 +84,3 @@ export class MeetingEventEntity {
   @JoinColumn({ name: 'actor_user_id' })
   actorUser: UserEntity | null;
 }
-

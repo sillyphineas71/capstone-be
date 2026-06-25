@@ -1,6 +1,7 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { StorageService } from './storage.service.js';
+import { CloudinaryService } from './cloudinary.service.js';
 
 /**
  * StorageModule — Global module cung cấp StorageService dùng chung.
@@ -14,7 +15,7 @@ import { StorageService } from './storage.service.js';
 @Global()
 @Module({
   imports: [ConfigModule],
-  providers: [StorageService],
-  exports: [StorageService],
+  providers: [StorageService, CloudinaryService],
+  exports: [StorageService, CloudinaryService],
 })
 export class StorageModule {}

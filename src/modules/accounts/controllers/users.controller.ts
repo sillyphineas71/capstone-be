@@ -9,6 +9,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Req,
   UseGuards,
   UsePipes,
@@ -34,6 +35,8 @@ import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UserResponseDto } from '../dto/user-response.dto.js';
 import { UserDetailResponseDto } from '../dto/user-detail-response.dto.js';
+import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
+import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
 @ApiTags('Accounts')
 @Controller('users')
@@ -43,7 +46,7 @@ export class UsersController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('account.user.create')
+  @RequirePermissions('accounts.user.create')
   @ApiBearerAuth()
   @UsePipes(
     new ValidationPipe({
@@ -65,7 +68,7 @@ export class UsersController {
     description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
   })
   @ApiForbiddenResponse({
-    description: 'Không đủ quyền hạn (thiếu permission account.user.create).',
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.create).',
   })
   async createUser(
     @Body() createUserDto: CreateUserDto,
@@ -92,6 +95,50 @@ export class UsersController {
       message:
         'Nhân viên đã được tạo thành công và thông tin đăng nhập đã được gửi tới email.',
       data: result,
+    };
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.list')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tìm kiếm/danh sách rút gọn người dùng nội bộ',
+    description:
+      'Trả về danh sách rút gọn (id, fullName, email) của người dùng đang active, dùng cho autocomplete (ví dụ chọn người tham dự cuộc họp). Hỗ trợ tìm theo tên/email và pagination.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Danh sách người dùng (rút gọn).',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.list).',
+  })
+  async listUsers(
+    @Query() query: ListUsersQueryDto,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UserListItemDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const { data, total } = await this.usersService.listUsers(query);
+
+    return {
+      success: true,
+      message: 'Lấy danh sách người dùng thành công',
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 

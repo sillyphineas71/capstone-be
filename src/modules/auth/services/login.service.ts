@@ -14,6 +14,8 @@ import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
+import { AvatarStatusRawRepository } from '../repositories/avatar-status-raw.repository';
+import { resolveAvatarReviewStatus } from '../../../common/utils/avatar-status-resolver.util';
 import {
   AuthUserSummary,
   LoginSuccessData,
@@ -35,6 +37,7 @@ export class LoginService {
     private readonly rateLimitService: RateLimitService,
     private readonly tokenService: TokenService,
     private readonly authConfigService: AuthConfigService,
+    private readonly avatarStatusRawRepository: AvatarStatusRawRepository,
   ) {}
 
   async login(
@@ -159,11 +162,33 @@ export class LoginService {
       );
     }
 
+    // ACCT-AVATAR-SUBMIT-001 (BR-016): tính trạng thái avatar cho login response.
+    // Resilient: lỗi đọc avatar status KHÔNG làm fail login (avatar không chặn đăng nhập).
+    let avatarReview = {
+      avatarReviewStatus: 'not_uploaded' as const,
+      avatarRequired: true,
+      shouldShowAvatarPopup: true,
+    } as ReturnType<typeof resolveAvatarReviewStatus>;
+    try {
+      const rows = await this.avatarStatusRawRepository.getFaceProfileRows(
+        user.id,
+      );
+      avatarReview = resolveAvatarReviewStatus(rows);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve avatar review status for user ${user.id}; defaulting to not_uploaded.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
     const summary: AuthUserSummary = {
       id: user.id,
       email: user.email,
       fullName: user.fullName,
       avatarUrl: user.avatarUrl,
+      avatarReviewStatus: avatarReview.avatarReviewStatus,
+      avatarRequired: avatarReview.avatarRequired,
+      shouldShowAvatarPopup: avatarReview.shouldShowAvatarPopup,
       departmentId: user.departmentId,
       roles: authz.roles,
       permissions: authz.permissions,

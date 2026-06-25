@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, IsNull } from 'typeorm';
+import { DataSource, ILike, IsNull } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -19,14 +19,15 @@ import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
 import { FaceProfileEntity } from '../entities/face-profile.entity.js';
 import {
-  BackgroundJobEntity,
-  BackgroundJobType,
-  BackgroundJobStatus,
-} from '../../administration/entities/background-job.entity.js';
-import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import {
+  NotificationType,
+  NotificationChannel,
+} from '../../notifications/entities/notification.entity.js';
 
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -40,6 +41,8 @@ import {
   DirectManagerInfoDto,
   RoleInfoDto,
 } from '../dto/user-detail-response.dto.js';
+import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
+import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
 export interface UserClientContext {
   ipAddress?: string;
@@ -56,6 +59,7 @@ export class UsersService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly passwordGeneratorService: PasswordGeneratorService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createUser(
@@ -68,6 +72,7 @@ export class UsersService {
 
     let createdUser: UserEntity;
     let roles: RoleEntity[] = [];
+    let tempPassword: string;
 
     // Run transaction
     await this.dataSource.transaction(async (em) => {
@@ -196,7 +201,7 @@ export class UsersService {
       }
 
       // 7. Generate temporary password and hash
-      const tempPassword =
+      tempPassword =
         this.passwordGeneratorService.generateTemporaryPassword(12);
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(tempPassword, salt);
@@ -230,33 +235,7 @@ export class UsersService {
         await em.save(UserRoleEntity, userRole);
       }
 
-      // 10. Queue credential email in background_jobs
-      const inputJson = {
-        to: email,
-        subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
-        template: 'welcome-credential',
-        context: {
-          fullName: createdUser.fullName,
-          username: email,
-          temporaryPassword: tempPassword,
-          mustChangePassword: true,
-        },
-      };
-
-      const emailJob = em.create(BackgroundJobEntity, {
-        jobType: BackgroundJobType.SEND_EMAIL,
-        relatedEntityType: 'users',
-        relatedEntityId: createdUser.id,
-        requestedBy: creatorId,
-        status: BackgroundJobStatus.QUEUED,
-        priority: 0,
-        retryCount: 0,
-        inputJson,
-      });
-
-      await em.save(BackgroundJobEntity, emailJob);
-
-      // 11. Write audit log (non-blocking)
+      // 10. Write audit log (non-blocking)
       try {
         const auditLog = em.create(AuditLogEntity, {
           userId: creatorId,
@@ -286,6 +265,68 @@ export class UsersService {
         );
       }
     });
+
+    // ── After transaction: enqueue credential email via NotificationsService ──
+    // NotificationsService tạo notification row + background_job + BullMQ job;
+    // NotificationWorkerService xử lý job 'send-email' để gửi mail thực tế.
+    const credentialContent = [
+      'Kính gửi ' + createdUser!.fullName + ',',
+      '',
+      'Tài khoản Smart Meeting của bạn đã được tạo thành công.',
+      '',
+      'Thông tin đăng nhập:',
+      '- Email: ' + email,
+      '- Mật khẩu tạm thời: ' + tempPassword!,
+      '',
+      'Vui lòng đăng nhập và đổi mật khẩu ngay sau lần đầu tiên.',
+      '',
+      'Trân trọng,',
+      'Hệ thống Smart Meeting Management',
+    ].join('\n');
+
+    try {
+      await this.notificationsService.enqueueEmailNotification({
+        notificationType: NotificationType.ACCOUNT_WELCOME,
+        channel: NotificationChannel.EMAIL,
+        subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
+        content: credentialContent,
+        toEmails: [email],
+        relatedEntityType: 'users',
+        relatedEntityId: createdUser!.id,
+        recipientScope: 'user_list',
+        createdBy: creatorId,
+        payloadJson: {
+          fullName: createdUser!.fullName,
+          username: email,
+          mustChangePassword: true,
+        },
+      });
+    } catch (enqueueError) {
+      this.logger.error(
+        `Failed to enqueue welcome email for user ${createdUser!.id}: ${(enqueueError as Error).message}`,
+      );
+      // Non-blocking: ghi warning audit log, KHÔNG rollback tạo user
+      try {
+        await this.dataSource.manager.save(AuditLogEntity, {
+          userId: creatorId,
+          actionType: 'NOTIFICATION_ENQUEUE_FAILED',
+          entityType: 'users',
+          entityId: createdUser!.id,
+          severity: AuditLogSeverity.WARNING,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+          metadataJson: {
+            error: 'Failed to enqueue welcome credential email',
+            details: (enqueueError as Error).message,
+          },
+        } as any);
+      } catch (auditError) {
+        this.logger.error(
+          `Failed to write audit log for notification failure of user ${createdUser!.id}: ${(auditError as Error).message}`,
+        );
+      }
+    }
 
     // Map roles to DTO structure
     const rolesDto: UserRoleResponseDto[] = roles.map((role) => ({
@@ -439,6 +480,44 @@ export class UsersService {
     }
 
     return response;
+  }
+
+  async listUsers(
+    query: ListUsersQueryDto,
+  ): Promise<{ data: UserListItemDto[]; total: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const search = query.search?.trim();
+
+    const baseWhere = {
+      deletedAt: IsNull(),
+      accountStatus: AccountStatus.ACTIVE,
+    };
+
+    const where = search
+      ? [
+          { ...baseWhere, fullName: ILike(`%${search}%`) },
+          { ...baseWhere, email: ILike(`%${search}%`) },
+        ]
+      : baseWhere;
+
+    const [entities, total] = await this.dataSource
+      .getRepository(UserEntity)
+      .findAndCount({
+        where,
+        select: { id: true, fullName: true, email: true },
+        order: { fullName: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+
+    const data: UserListItemDto[] = entities.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+    }));
+
+    return { data, total };
   }
 
   private async resolveDepartmentScope(

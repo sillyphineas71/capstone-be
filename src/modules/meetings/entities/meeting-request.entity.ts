@@ -7,6 +7,7 @@ import {
 } from 'typeorm';
 import { UserEntity } from '../../../modules/accounts/entities/user.entity.js';
 import { MeetingEntity } from './meeting.entity.js';
+import { RoomEntity } from '../../rooms/entities/room.entity.js';
 
 export enum MeetingRequestType {
   CREATE_MEETING = 'create_meeting',
@@ -130,4 +131,8 @@ export class MeetingRequestEntity {
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'decision_by' })
   decisionByUser: UserEntity | null;
+
+  @ManyToOne(() => RoomEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'target_room_id' })
+  targetRoom: RoomEntity | null;
 }

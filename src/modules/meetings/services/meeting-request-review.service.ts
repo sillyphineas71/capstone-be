@@ -1,3 +1,4 @@
+﻿import { UserEntity } from '../../accounts/entities/user.entity.js';
 import {
   Injectable,
   Logger,
@@ -27,15 +28,15 @@ import {
   RoomBookingStatus,
 } from '../../rooms/entities/room-booking.entity.js';
 import {
-  NotificationEntity,
   NotificationType,
   NotificationChannel,
-  NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js';
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
@@ -44,11 +45,27 @@ import { RejectResponseDto } from '../dto/reject-response.dto.js';
 
 import type { AuthUser, ClientContext } from './meetings.service.js';
 
+interface MeetingApprovalResult {
+  meetingId: string;
+  meetingTitle: string;
+  meetingStartTime: Date;
+  bookingId: string;
+  appliedAt: Date;
+  participantIds: string[];
+  externalEmails: string[];
+  requesterId: string;
+  hostId: string | null;
+  decisionNote: string | null;
+}
+
 @Injectable()
 export class MeetingRequestReviewService {
   private readonly logger = new Logger(MeetingRequestReviewService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async approve(
     requestId: string,
@@ -56,7 +73,7 @@ export class MeetingRequestReviewService {
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<ApproveResponseDto> {
-    return this.dataSource.transaction(async (em) => {
+    const approvalResult = await this.dataSource.transaction(async (em) => {
       const request = await em.findOne(MeetingRequestEntity, {
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -90,7 +107,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu cầu cuộc họp không còn ở trạng thái chờ duyệt',
+          message: 'Yêu cầu cuộc họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -119,7 +136,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cuộc họp không còn ở trạng thái chờ phê duyệt',
+          message: 'Cuộc họp không còn trạng thái chờ phê duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -148,7 +165,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng họp không còn ở trạng thái chờ duyệt',
+          message: 'Booking phòng họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -270,67 +287,6 @@ export class MeetingRequestReviewService {
         .map((ep) => ep.email)
         .filter((email): email is string => !!email);
 
-      const notifications: NotificationEntity[] = [];
-
-      for (const uid of participantIds) {
-        notifications.push(
-          em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_INVITE,
-            channel: NotificationChannel.IN_APP,
-            subject: `Thư mời tham dự cuộc họp: ${meeting.title}`,
-            content: `Bạn được mời tham dự cuộc họp "${meeting.title}" vào lúc ${meeting.startTime.toISOString()}`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: requestId,
-            recipientScope: 'user_list',
-            recipientUserIdsJson: [uid],
-            priority: 'normal' as any,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          }),
-        );
-      }
-
-      for (const email of externalEmails) {
-        notifications.push(
-          em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_INVITE,
-            channel: NotificationChannel.EMAIL,
-            subject: `Thư mời tham dự cuộc họp: ${meeting.title}`,
-            content: `Bạn được mời tham dự cuộc họp "${meeting.title}" vào lúc ${meeting.startTime.toISOString()}`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: requestId,
-            recipientScope: 'user_list',
-            recipientEmailsJson: [email],
-            priority: 'normal' as any,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          }),
-        );
-      }
-
-      const notifyUserIds: string[] = [request.requestedBy];
-      if (meeting.hostId && !notifyUserIds.includes(meeting.hostId)) {
-        notifyUserIds.push(meeting.hostId);
-      }
-
-      notifications.push(
-        em.create(NotificationEntity, {
-          notificationType: NotificationType.MEETING_REQUEST_APPROVED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Yêu cầu cuộc họp "${meeting.title}" đã được phê duyệt`,
-          content: `Yêu cầu cuộc họp "${meeting.title}" của bạn đã được phê duyệt`,
-          relatedEntityType: 'meeting_request',
-          relatedEntityId: requestId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: notifyUserIds,
-          priority: 'normal' as any,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          createdBy: authUser.userId,
-        }),
-      );
-
-      await em.save(NotificationEntity, notifications);
-
       const auditLog = em.create(AuditLogEntity, {
         userId: authUser.userId,
         actionType: 'approve',
@@ -358,14 +314,135 @@ export class MeetingRequestReviewService {
       });
       await em.save(AuditLogEntity, auditLog);
 
-      return new ApproveResponseDto({
-        requestId,
-        approvalStatus: ApprovalStatus.APPROVED,
+      return {
         meetingId: meeting.id,
+        meetingTitle: meeting.title,
+        meetingStartTime: meeting.startTime,
         bookingId: booking.id,
         appliedAt: now,
-      });
+        participantIds,
+        externalEmails,
+        requesterId: request.requestedBy,
+        hostId: meeting.hostId,
+        decisionNote: dto.decisionNote || null,
+      } as MeetingApprovalResult;
     });
+
+    // ── After transaction: enqueue notifications ──
+    await this.enqueueApprovalNotifications(approvalResult, authUser, clientContext);
+
+    return new ApproveResponseDto({
+      requestId,
+      approvalStatus: ApprovalStatus.APPROVED,
+      meetingId: approvalResult.meetingId,
+      bookingId: approvalResult.bookingId,
+      appliedAt: approvalResult.appliedAt,
+    });
+  }
+
+  private async enqueueApprovalNotifications(
+    result: MeetingApprovalResult,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<void> {
+    const meetingId = result.meetingId;
+
+    // 1. Internal participants — in-app MEETING_INVITE
+    for (const uid of result.participantIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.IN_APP,
+          subject: `Thư mời tham dự cuộc họp: ${result.meetingTitle}`,
+          content: `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send IN_APP notify to participant ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to notify participant ${uid}: ${(error as Error).message}`);
+      }
+    }
+
+    // 2. External participants — email MEETING_INVITE
+    for (const email of result.externalEmails) {
+      try {
+        await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_INVITE,
+          channel: NotificationChannel.EMAIL,
+          subject: `Thư mời tham dự cuộc họp: ${result.meetingTitle}`,
+          content: `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`,
+          toEmails: [email],
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send email to external ${email}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to email external ${email}: ${(error as Error).message}`);
+      }
+    }
+
+    // 3. Requester + host — in-app MEETING_REQUEST_APPROVED
+    const notifyUserIds: string[] = [result.requesterId];
+    if (result.hostId && !notifyUserIds.includes(result.hostId)) {
+      notifyUserIds.push(result.hostId);
+    }
+    for (const uid of notifyUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_APPROVED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã được phê duyệt`,
+          content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã được phê duyệt`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send approved notify to ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
+          `Failed to notify ${uid} of approval: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  private async writeNotificationFailureAudit(
+    meetingId: string,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+    detail: string,
+  ): Promise<void> {
+    try {
+      await this.dataSource.manager.save(AuditLogEntity, {
+        userId: authUser.userId,
+        actionType: 'NOTIFICATION_FAILURE',
+        entityType: 'meeting',
+        entityId: meetingId,
+        severity: AuditLogSeverity.WARNING,
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        metadataJson: { error: detail },
+      } as any);
+    } catch (auditError) {
+      this.logger.error(
+        `Failed to write notification failure audit log: ${(auditError as Error).message}`,
+      );
+    }
   }
 
   async reject(
@@ -374,7 +451,7 @@ export class MeetingRequestReviewService {
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<RejectResponseDto> {
-    return this.dataSource.transaction(async (em) => {
+    const rejectResult = await this.dataSource.transaction(async (em) => {
       const request = await em.findOne(MeetingRequestEntity, {
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -408,7 +485,7 @@ export class MeetingRequestReviewService {
       if (request.approvalStatus !== ApprovalStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Yêu cầu cuộc họp không còn ở trạng thái chờ duyệt',
+          message: 'Yêu cầu cuộc họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -437,7 +514,7 @@ export class MeetingRequestReviewService {
       if (meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         throw new ConflictException({
           success: false,
-          message: 'Cuộc họp không còn ở trạng thái chờ phê duyệt',
+          message: 'Cuộc họp không còn trạng thái chờ phê duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -466,7 +543,7 @@ export class MeetingRequestReviewService {
       if (booking.status !== RoomBookingStatus.PENDING) {
         throw new ConflictException({
           success: false,
-          message: 'Booking phòng họp không còn ở trạng thái chờ duyệt',
+          message: 'Booking phòng họp không còn trạng thái chờ duyệt',
           error: {
             code: 'INVALID_STATE',
             details: {
@@ -525,26 +602,6 @@ export class MeetingRequestReviewService {
       });
       await em.save(MeetingEventEntity, event);
 
-      const notifyUserIds: string[] = [request.requestedBy];
-      if (meeting.hostId && !notifyUserIds.includes(meeting.hostId)) {
-        notifyUserIds.push(meeting.hostId);
-      }
-
-      const notification = em.create(NotificationEntity, {
-        notificationType: NotificationType.MEETING_REQUEST_REJECTED,
-        channel: NotificationChannel.IN_APP,
-        subject: `Yêu cầu cuộc họp "${meeting.title}" đã bị từ chối`,
-        content: `Yêu cầu cuộc họp "${meeting.title}" của bạn đã bị từ chối. Lý do: ${dto.rejectionReason}`,
-        relatedEntityType: 'meeting_request',
-        relatedEntityId: requestId,
-        recipientScope: 'user_list',
-        recipientUserIdsJson: notifyUserIds,
-        priority: 'normal' as any,
-        deliveryStatus: NotificationDeliveryStatus.QUEUED,
-        createdBy: authUser.userId,
-      });
-      await em.save(NotificationEntity, notification);
-
       const auditLog = em.create(AuditLogEntity, {
         userId: authUser.userId,
         actionType: 'reject',
@@ -572,11 +629,55 @@ export class MeetingRequestReviewService {
       });
       await em.save(AuditLogEntity, auditLog);
 
-      return new RejectResponseDto({
-        requestId,
-        approvalStatus: ApprovalStatus.REJECTED,
-        decisionAt: now,
-      });
+      return {
+        meetingTitle: meeting.title,
+        meetingId: meeting.id,
+        appliedAt: now,
+        requesterId: request.requestedBy,
+        hostId: meeting.hostId,
+      };
+    });
+
+    // ── After transaction: enqueue notification ──
+    await this.enqueueRejectionNotifications(rejectResult, authUser, clientContext);
+
+    return new RejectResponseDto({
+      requestId,
+      approvalStatus: ApprovalStatus.REJECTED,
+      decisionAt: rejectResult.appliedAt,
     });
   }
+
+  private async enqueueRejectionNotifications(
+    result: { meetingTitle: string; meetingId: string; requesterId: string; hostId: string | null },
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<void> {
+    const notifyUserIds: string[] = [result.requesterId];
+    if (result.hostId && !notifyUserIds.includes(result.hostId)) {
+      notifyUserIds.push(result.hostId);
+    }
+    for (const uid of notifyUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_REJECTED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã bị từ chối`,
+          content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã bị từ chối.`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: result.meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: [uid],
+          createdBy: authUser.userId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `[Reject] Failed to send rejection notify to ${uid}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(result.meetingId, authUser, clientContext,
+          `Failed to notify ${uid} of rejection: ${(error as Error).message}`);
+      }
+    }
+  }
 }
+

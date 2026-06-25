@@ -125,6 +125,26 @@ export class MediaFilesService {
     return { path: resolved, size, mimeType: m.mimeType };
   }
 
+  /**
+   * ACCT-AVATAR-REVIEW-001: resolve cho secure-download — hỗ trợ cả
+   * local (stream từ đĩa) và cloud_provider (redirect sang file_url,
+   * VD: Cloudinary, vì backend không lưu bytes của các file này).
+   */
+  async resolveSecureDownload(
+    fileId: string,
+  ): Promise<
+    | { kind: 'redirect'; url: string }
+    | { kind: 'local'; path: string; size: number; mimeType: string }
+  > {
+    const m = await this.loadActive(fileId);
+    if (m.storageProvider === StorageProvider.CLOUD_PROVIDER) {
+      if (!m.fileUrl) throw this.notFound();
+      return { kind: 'redirect', url: m.fileUrl };
+    }
+    const playback = await this.resolvePlayback(fileId);
+    return { kind: 'local', ...playback };
+  }
+
   /** UC-123: hide (is_active=false) hoặc soft_delete (deleted_at). */
   async setVisibility(
     fileId: string,

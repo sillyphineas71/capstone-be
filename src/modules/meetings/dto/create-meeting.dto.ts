@@ -11,6 +11,7 @@ import {
   MaxLength,
   Validate,
   ValidateNested,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsFutureDateConstraint } from '../validators/is-future-date.validator.js';
@@ -28,7 +29,7 @@ export class CreateMeetingDto {
   @IsOptional()
   description?: string;
 
-  @IsUUID('4', { message: 'host_id phải là định dạng UUID' })
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, { message: 'host_id phải là định dạng UUID' })
   @IsOptional()
   hostId?: string;
 
@@ -50,7 +51,7 @@ export class CreateMeetingDto {
   })
   endTime: string;
 
-  @IsUUID('4', { message: 'room_id phải là định dạng UUID' })
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, { message: 'room_id phải là định dạng UUID' })
   @IsNotEmpty({ message: 'room_id không được để trống' })
   roomId: string;
 
@@ -72,7 +73,7 @@ export class CreateMeetingDto {
   capacityOverrideConfirmed?: boolean;
 
   @IsArray({ message: 'participant_user_ids phải là mảng' })
-  @IsUUID('4', {
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
     each: true,
     message: 'Mỗi participant_user_id phải là định dạng UUID',
   })

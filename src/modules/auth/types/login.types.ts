@@ -1,8 +1,14 @@
+import type { AvatarReviewStatus } from '../../../common/utils/avatar-status-resolver.util';
+
 export interface AuthUserSummary {
   id: string;
   email: string;
   fullName: string;
   avatarUrl: string | null;
+  // ACCT-AVATAR-SUBMIT-001 (BR-016): field derived trạng thái avatar cho FE popup.
+  avatarReviewStatus: AvatarReviewStatus;
+  avatarRequired: boolean;
+  shouldShowAvatarPopup: boolean;
   departmentId: string | null;
   roles: string[];
   permissions: string[];

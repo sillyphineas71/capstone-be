@@ -42,7 +42,7 @@ import {
   MeetingEventType,
   MeetingEventSourceType,
 } from '../entities/meeting-event.entity.js';
-import { MeetingAgendaEntity } from '../entities/meeting-agenda.entity.js';
+import { MeetingAgendaEntity, AgendaStatus } from '../entities/meeting-agenda.entity.js';
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { RoomEventEntity } from '../../rooms/entities/room-event.entity.js';
 import {
@@ -57,6 +57,8 @@ import {
   NotificationPriority,
   NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -92,9 +94,13 @@ import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.j
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
 import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
 import { RemoveParticipantResponseDto } from '../dto/remove-participant-response.dto.js';
+import { AddExternalParticipantDto } from '../dto/add-external-participant.dto.js';
+import type { IAddExternalParticipantResponse } from '../dto/add-external-participant-response.dto.js';
 import { RemoveScope } from '../types/remove-scope.type.js';
 import type { IAddInternalParticipantResponse } from '../dto/add-internal-participant-response.dto.js';
 import { MyScheduleQueryDto } from '../dto/my-schedule-query.dto.js';
+import { RemoveExternalParticipantBodyDto } from '../dto/remove-external-participant-body.dto.js';
+import { RemoveExternalParticipantResponseDto } from '../dto/remove-external-participant-response.dto.js';
 import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
 import { ScheduleEventDto } from '../dto/schedule-event.dto.js';
 import { ScheduleRoomDto } from '../dto/schedule-room.dto.js';
@@ -112,8 +118,19 @@ import {
   DetailAttachmentDto,
   DetailRecordingConfigDto,
 } from '../dto/my-schedule-detail.dto.js';
-import { WarningTokenUtil } from '../utils/warning-token.util.js';
+import { MeetingRequestQueryDto } from '../dto/meeting-request-query.dto.js';
+import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.js';
+import { UserSummaryDto } from '../dto/user-summary.dto.js';
+import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 
+import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
+import { AgendaItemDto } from '../dto/agenda-item.dto.js';
+import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
+import {
+  AgendaItemResponseDto,
+  AgendaListResponseDto,
+  ReplaceAgendaResponseDto,
+} from '../dto/agenda-response.dto.js';
 export interface AuthUser {
   userId: string;
   jti?: string;
@@ -146,11 +163,11 @@ interface ConflictResult {
 interface ParticipantConflictResult {
   conflicts: Array<{
     userId: string;
-    meetingTitle: string;
-    meetingId: string;
-    startTime: Date;
-    endTime: Date;
+    busyFrom: string;
+    busyTo: string;
   }>;
+  hasConflict: boolean;
+  conflictCount: number;
 }
 
 @Injectable()
@@ -160,6 +177,8 @@ export class MeetingsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly warningTokenUtil: WarningTokenUtil,
+    private readonly notificationsService: NotificationsService,
+    private readonly authzRepo: AuthzReadRepository,
   ) {}
 
   async getRoomAvailability(
@@ -232,43 +251,72 @@ export class MeetingsService {
     endTime: Date,
   ): Promise<ParticipantConflictResult> {
     if (!userIds.length) {
-      return { conflicts: [] };
+      return { conflicts: [], hasConflict: false, conflictCount: 0 };
     }
 
     const conflicts = await this.dataSource
       .getRepository(MeetingParticipantEntity)
       .createQueryBuilder('mp')
       .innerJoin('mp.meeting', 'm')
-      .select(['mp.userId', 'm.title', 'm.id', 'm.startTime', 'm.endTime'])
+      .select(['mp.userId', 'm.startTime', 'm.endTime'])
       .where('mp.userId IN (:...userIds)', { userIds })
       .andWhere('m.status NOT IN (:...excludedStatuses)', {
         excludedStatuses: [MeetingStatus.CANCELLED, MeetingStatus.COMPLETED],
       })
       .andWhere('m.startTime < :endTime', { endTime })
       .andWhere('m.endTime > :startTime', { startTime })
+      .andWhere('m.deletedAt IS NULL')
       .getMany();
 
     return {
-      conflicts: conflicts.map((mp) => {
-        const meeting = (
-          mp as unknown as {
-            meeting: {
-              title: string;
-              id: string;
-              startTime: Date;
-              endTime: Date;
-            };
-          }
-        ).meeting;
-        return {
-          userId: mp.userId,
-          meetingTitle: meeting.title,
-          meetingId: meeting.id,
-          startTime: meeting.startTime,
-          endTime: meeting.endTime,
-        };
-      }),
+      conflicts: this.groupAndMergeConflictsByUser(conflicts),
+      hasConflict: conflicts.length > 0,
+      conflictCount: new Set(conflicts.map((mp) => mp.userId)).size,
     };
+  }
+
+  private groupAndMergeConflictsByUser(
+    participants: Array<{ userId: string; meeting: { startTime: Date; endTime: Date } }>,
+  ): ParticipantConflictResult['conflicts'] {
+    const userMap = new Map<string, { busyFrom: Date; busyTo: Date }[]>();
+
+    for (const mp of participants) {
+      const meeting = (mp as unknown as { meeting: { startTime: Date; endTime: Date } }).meeting;
+      if (!userMap.has(mp.userId)) {
+        userMap.set(mp.userId, []);
+      }
+      userMap.get(mp.userId)!.push({ busyFrom: meeting.startTime, busyTo: meeting.endTime });
+    }
+
+    const result: ParticipantConflictResult['conflicts'] = [];
+
+    for (const [userId, slots] of userMap) {
+      slots.sort((a, b) => a.busyFrom.getTime() - b.busyFrom.getTime());
+
+      const merged: { busyFrom: Date; busyTo: Date }[] = [];
+      let current = { ...slots[0] };
+
+      for (let i = 1; i < slots.length; i++) {
+        const next = slots[i];
+        if (current.busyTo.getTime() >= next.busyFrom.getTime()) {
+          if (next.busyTo.getTime() > current.busyTo.getTime()) {
+            current.busyTo = next.busyTo;
+          }
+        } else {
+          merged.push(current);
+          current = { ...next };
+        }
+      }
+      merged.push(current);
+
+      result.push({
+        userId,
+        busyFrom: merged[0].busyFrom.toISOString(),
+        busyTo: merged[merged.length - 1].busyTo.toISOString(),
+      });
+    }
+
+    return result;
   }
 
   async getAvailableRooms(
@@ -585,22 +633,6 @@ export class MeetingsService {
         });
         await em.save(MeetingEventEntity, event);
 
-        if (approverIds.length > 0) {
-          const notification = em.create(NotificationEntity, {
-            notificationType: NotificationType.MEETING_REQUEST_CREATED,
-            channel: NotificationChannel.IN_APP,
-            subject: `Yêu cầu họp mới: ${dto.title}`,
-            content: `Người dùng ${authUser.userId} đã tạo yêu cầu cuộc họp "${dto.title}" chờ phê duyệt.`,
-            relatedEntityType: 'meeting_request',
-            relatedEntityId: request.id,
-            recipientScope: 'user_list',
-            recipientUserIdsJson: approverIds,
-            priority: NotificationPriority.NORMAL,
-            deliveryStatus: NotificationDeliveryStatus.QUEUED,
-            createdBy: authUser.userId,
-          });
-          await em.save(NotificationEntity, notification);
-        }
 
         const auditLog = em.create(AuditLogEntity, {
           userId: authUser.userId,
@@ -622,6 +654,39 @@ export class MeetingsService {
       throw error;
     }
 
+
+    // Post-transaction: notify approvers (non-blocking, no rollback)
+    if (approverIds.length > 0) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Y\u00ea\u0301u c\u00e2\u0300u ho\u0323p m\u01a1\u0301i: ${dto.title}`,
+          content: `Ng\u01b0\u01a1\u0300i du\u0300ng ${authUser.userId} \u0111a\u0303 ta\u0323o y\u00eau c\u00e2\u0300u cu\u00f4\u0323c ho\u0323p "${dto.title}" ch\u01a1\u0300 ph\u00ea duy\u00ea\u0323t.`,
+          relatedEntityType: 'meeting_request',
+          relatedEntityId: request!.id,
+          recipientScope: 'user_list',
+          recipientUserIds: approverIds,
+          createdBy: authUser.userId,
+        });
+      } catch (notifError) {
+        this.logger.error("[Create] Failed to send approver notification for meeting " + meeting!.id + ": " + (notifError as Error).message);
+      }
+    }
+
+    try {
+      const emailMap = await this.resolveUserEmails([...new Set([...(dto.participantUserIds || []), hostId, authUser.userId])], this.dataSource.manager);
+      await this.notifyMeetingRecipients(
+        NotificationType.MEETING_INVITE,
+        `L\u1eddi m\u1eddi tham gia cu\u1ed9c h\u1ecdp: ${dto.title}`,
+        `B\u1ea1n \u0111\u00e3 \u0111\u01b0\u1ee3c th\u00eam v\u00e0o cu\u1ed9c h\u1ecdp "${dto.title}".`,
+        [...new Set([...(dto.participantUserIds || []), hostId, authUser.userId])],
+        (dto.externalParticipants || []).filter((ep: any) => ep.email).map((ep: any) => ep.email),
+        'meeting', meeting!.id, authUser.userId,
+      );
+    } catch (participantNotifError) {
+      this.logger.error("[Create] Participant block failed for meeting " + meeting!.id + ": " + (participantNotifError as Error).message);
+    }
     return new CreateMeetingResponseDto({
       id: meeting!.id,
       meetingCode,
@@ -641,6 +706,67 @@ export class MeetingsService {
       createdAt: meeting!.createdAt,
     });
   }
+
+  // --- Shared notification helpers ---
+
+  private async resolveUserEmails(userIds: string[], manager: any): Promise<Map<string, string>> {
+    if (userIds.length === 0) return new Map();
+    try {
+      const users = await manager.find(UserEntity, { where: { id: In(userIds) }, select: { id: true, email: true } });
+      return new Map(users.map((u: any) => [u.id, u.email]));
+    } catch (err) {
+      this.logger.error("[resolveUserEmails] Failed: " + (err as Error).message);
+      return new Map();
+    }
+  }
+
+  private async notifyMeetingRecipients(
+    notificationType: NotificationType,
+    subject: string, content: string,
+    internalUserIds: string[], externalEmails: string[],
+    relatedEntityType: string, relatedEntityId: string, createdBy: string,
+  ): Promise<void> {
+    const allUserIds = [...new Set(internalUserIds)];
+    const emailMap = await this.resolveUserEmails(allUserIds, this.dataSource.manager);
+    const allExternal = [...new Set(externalEmails.filter(Boolean))];
+    for (const uid of allUserIds) {
+      try {
+        await this.notificationsService.createNotification({
+          notificationType, channel: NotificationChannel.IN_APP,
+          subject, content, relatedEntityType, relatedEntityId,
+          recipientScope: 'user_list', recipientUserIds: [uid], createdBy,
+        });
+      } catch (err) {
+        this.logger.error("[notify] IN_APP failed for " + uid + ": " + (err as Error).message);
+      }
+      const userEmail = emailMap.get(uid);
+      if (userEmail) {
+        try {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType, channel: NotificationChannel.EMAIL,
+            subject, content, toEmails: [userEmail],
+            relatedEntityType, relatedEntityId,
+            recipientScope: 'user_list', createdBy,
+          });
+        } catch (err) {
+          this.logger.error("[notify] EMAIL failed for " + uid + ": " + (err as Error).message);
+        }
+      }
+    }
+    for (const email of allExternal) {
+      try {
+        await this.notificationsService.enqueueEmailNotification({
+          notificationType, channel: NotificationChannel.EMAIL,
+          subject, content, toEmails: [email],
+          relatedEntityType, relatedEntityId,
+          recipientScope: 'user_list', createdBy,
+        });
+      } catch (err) {
+        this.logger.error("[notify] External EMAIL failed for " + email + ": " + (err as Error).message);
+      }
+    }
+  }
+
 
   async updateMeetingTime(
     meetingId: string,
@@ -887,7 +1013,7 @@ export class MeetingsService {
         .getRepository(MeetingParticipantEntity)
         .createQueryBuilder('mp')
         .innerJoin('mp.meeting', 'm')
-        .select(['mp.userId', 'm.title', 'm.id', 'm.startTime', 'm.endTime'])
+        .select(['mp.userId', 'm.startTime', 'm.endTime'])
         .where('mp.userId IN (:...userIds)', { userIds: internalUserIds })
         .andWhere('m.id != :meetingId', { meetingId })
         .andWhere('m.status NOT IN (:...excludedStatuses)', {
@@ -1139,62 +1265,57 @@ export class MeetingsService {
         ]),
       ];
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.MEETING_TIME_UPDATED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
-          content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: [
-            ...(externalParticipants
-              .filter((ep) => ep.email)
-              .map((ep) => ep.email) as string[]),
-          ],
-          priority: 'normal' as any,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            oldStartTime: oldMeetingData.startTime,
-            oldEndTime: oldMeetingData.endTime,
-            newStartTime: dto.startTime,
-            newEndTime: dto.endTime,
-            oldRoomId: meeting.roomId,
-            newRoomId: targetRoomId,
-            changeReason: dto.changeReason || null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        oldStartTime: oldMeetingData.startTime,
+        oldEndTime: oldMeetingData.endTime,
+        newStartTime: dto.startTime,
+        newEndTime: dto.endTime,
+        oldRoomId: meeting.roomId,
+        newRoomId: targetRoomId !== meeting.roomId ? targetRoomId : null,
+        changeReason: dto.changeReason || null,
+      };
 
-      const emailRecipients = allUserIds.filter((id) => id !== authUser.userId);
-      if (emailRecipients.length > 0 || externalParticipants.length > 0) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_TIME_UPDATED,
+        channel: NotificationChannel.IN_APP,
+        subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+        content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL notification to non-actor + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || externalParticipants.length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const toEmails = [...emailMap.values(), ...externalParticipants.filter((ep) => !!ep.email).map((ep) => ep.email)].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.MEETING_TIME_UPDATED,
+            channel: NotificationChannel.EMAIL,
+            subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+            content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_time_updated',
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for meeting time update: ${(notifError as Error).message}`,
+        `[updateMeetingTime] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
       );
-      notificationStatus = 'failed';
+      notificationStatus = "failed";
     }
+
 
     return {
       meetingId,
@@ -1666,7 +1787,7 @@ export class MeetingsService {
       throw error;
     }
 
-    try {
+        try {
       const participants = await this.dataSource
         .getRepository(MeetingParticipantEntity)
         .find({ where: { meetingId } });
@@ -1687,64 +1808,55 @@ export class MeetingsService {
         ]),
       ];
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.MEETING_ROOM_UPDATED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Cập nhật phòng họp: ${meeting.title}`,
-          content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: (externalParticipants || [])
-            .filter((ep) => ep.email)
-            .map((ep) => ep.email) as string[],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            oldRoomId: meeting.roomId,
-            oldRoomName,
-            newRoomId: dto.newRoomId,
-            newRoomName,
-            changeReason: dto.changeReason || null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        oldRoomId: meeting.roomId,
+        oldRoomName,
+        newRoomId: dto.newRoomId,
+        newRoomName,
+        changeReason: dto.changeReason || null,
+      };
 
-      const emailRecipients = allUserIds.filter((id) => id !== authUser.userId);
-      if (
-        emailRecipients.length > 0 ||
-        (externalParticipants || []).length > 0
-      ) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_ROOM_UPDATED,
+        channel: NotificationChannel.IN_APP,
+        subject: `Cập nhật phòng họp: ${meeting.title}`,
+        content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL notification to non-actor + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || (externalParticipants || []).length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const toEmails = [...emailMap.values(), ...(externalParticipants || []).filter((ep) => !!ep.email).map((ep) => ep.email)].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.MEETING_ROOM_UPDATED,
+            channel: NotificationChannel.EMAIL,
+            subject: `Cập nhật phòng họp: ${meeting.title}`,
+            content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_room_updated',
-              maxRetries: 3,
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
-
-      notificationStatus = 'sent';
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for meeting room update: ${(notifError as Error).message}`,
+        `[updateMeetingRoom] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
       );
-      notificationStatus = 'failed';
+      notificationStatus = "failed";
     }
+
 
     return {
       meetingId,
@@ -2041,8 +2153,8 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 5: Outside transaction — create notification + background_job ──
-    let notificationStatus = 'queued';
+        // ── Step 5: Outside transaction — notification via NotificationsService ──
+    let notificationStatus = "queued";
 
     try {
       const participants = await this.dataSource
@@ -2065,87 +2177,71 @@ export class MeetingsService {
         ]),
       ];
 
-      const allRecipientEmails = [
-        ...(participants || [])
-          .filter((p) => (p as unknown as Record<string, unknown>)?.email)
-          .map(
-            (p) =>
-              (
-                p as unknown as {
-                  email?: string;
-                }
-              ).email,
-          ),
-        ...(externalParticipants || [])
-          .filter((ep) => ep.email)
-          .map((ep) => ep.email),
-      ].filter(Boolean) as string[];
-
-      const notificationReason = cancellationReason
+      const notificationReasonStr = cancellationReason
         ? ` Lý do: ${cancellationReason}`
-        : '';
+        : "";
 
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
-          notificationType: NotificationType.CANCELLATION,
-          channel: NotificationChannel.EMAIL,
-          subject: `[CANCELLED] ${meeting.title}`,
-          content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReason}`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: allUserIds,
-          recipientEmailsJson: allRecipientEmails,
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            action: 'cancel_meeting',
-            meetingId,
-            reason: cancellationReason ?? null,
-          },
-          createdBy: authUser.userId,
-        });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
+      const payloadJson = {
+        action: "cancel_meeting",
+        meetingId,
+        reason: cancellationReason ?? null,
+      };
 
-      if (allUserIds.length > 0 || allRecipientEmails.length > 0) {
-        const bgJob = this.dataSource
-          .getRepository(BackgroundJobEntity)
-          .create({
-            jobType: BackgroundJobType.SEND_EMAIL,
-            relatedEntityType: 'meeting',
+      // IN_APP notification for all participants
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.CANCELLATION,
+        channel: NotificationChannel.IN_APP,
+        subject: `[CANCELLED] ${meeting.title}`,
+        content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReasonStr}`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: allUserIds,
+        payloadJson,
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL to internal (excluding actor) + external participants
+      const emailRecipientIds = allUserIds.filter((id) => id !== authUser.userId);
+      if (emailRecipientIds.length > 0 || (externalParticipants || []).length > 0) {
+        const emailMap = await this.resolveUserEmails(emailRecipientIds, this.dataSource.manager);
+        const extEmails = (externalParticipants || []).filter((ep) => !!ep.email).map((ep) => ep.email);
+        const toEmails = [...emailMap.values(), ...extEmails].filter(Boolean) as string[];
+        if (toEmails.length > 0) {
+          await this.notificationsService.enqueueEmailNotification({
+            notificationType: NotificationType.CANCELLATION,
+            channel: NotificationChannel.EMAIL,
+            subject: `[CANCELLED] ${meeting.title}`,
+            content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReasonStr}`,
+            toEmails,
+            relatedEntityType: "meeting",
             relatedEntityId: meetingId,
-            status: BackgroundJobStatus.QUEUED,
-            inputJson: {
-              notificationId: notification.id,
-              template: 'meeting_cancelled',
-            },
-            requestedBy: authUser.userId,
+            recipientScope: "user_list",
+            payloadJson,
+            createdBy: authUser.userId,
           });
-        await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+        }
       }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to queue cancellation notification: ${(notifError as Error).message}`,
+        `[cancelMeeting] Failed to queue cancellation notification for meeting ${meetingId}: ${(notifError as Error).message}`,
         (notifError as Error).stack,
       );
       await this.dataSource.getRepository(AuditLogEntity).save({
         userId: authUser.userId,
-        actionType: 'notification_failure',
-        entityType: 'meeting',
+        actionType: "notification_failure",
+        entityType: "meeting",
         entityId: meetingId,
         metadataJson: {
-          error: 'Failed to queue cancellation notification',
+          error: "Failed to queue cancellation notification",
           reason: cancellationReason ?? null,
         } as any,
         severity: AuditLogSeverity.WARNING,
       } as any);
-      notificationStatus = 'failed_to_queue';
+      notificationStatus = "failed_to_queue";
     }
 
-    // ── Step 6: Return response ──
+// ── Step 6: Return response ──
     return {
       meetingId,
       status: 'cancelled',
@@ -2260,7 +2356,7 @@ export class MeetingsService {
     for (const conflict of conflictResult.conflicts) {
       warnings.push({
         type: 'SCHEDULE_CONFLICT',
-        message: `Người dùng đang có cuộc họp trùng giờ: '${conflict.meetingTitle}' (${conflict.startTime.toISOString()}-${conflict.endTime.toISOString()}).`,
+        message: `Người dùng đang có lịch bận từ ${conflict.busyFrom} đến ${conflict.busyTo}.`,
       });
     }
 
@@ -2464,47 +2560,46 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 5: Post-transaction async (best-effort) ──
+        // ── Step 5: Post-transaction async (best-effort) ──
     try {
-      const notification = this.dataSource
-        .getRepository(NotificationEntity)
-        .create({
+      // IN_APP notification for the added participant
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_INVITE,
+        channel: NotificationChannel.IN_APP,
+        subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
+        content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: [dto.userId],
+        payloadJson: { invitedBy: authUser.userId },
+        createdBy: authUser.userId,
+      });
+
+      // EMAIL to the added participant
+      const emailMap = await this.resolveUserEmails([dto.userId], this.dataSource.manager);
+      const userEmail = emailMap.get(dto.userId);
+      if (userEmail) {
+        await this.notificationsService.enqueueEmailNotification({
           notificationType: NotificationType.MEETING_INVITE,
-          channel: NotificationChannel.IN_APP,
+          channel: NotificationChannel.EMAIL,
           subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
           content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
-          relatedEntityType: 'meeting',
+          toEmails: [userEmail],
+          relatedEntityType: "meeting",
           relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: [dto.userId],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
+          recipientScope: "user_list",
           payloadJson: { invitedBy: authUser.userId },
           createdBy: authUser.userId,
         });
-      await this.dataSource
-        .getRepository(NotificationEntity)
-        .save(notification);
-
-      const bgJob = this.dataSource.getRepository(BackgroundJobEntity).create({
-        jobType: BackgroundJobType.SEND_EMAIL,
-        relatedEntityType: 'meeting',
-        relatedEntityId: meetingId,
-        status: BackgroundJobStatus.QUEUED,
-        inputJson: {
-          notificationId: notification.id,
-          template: 'meeting_invite',
-        },
-        requestedBy: authUser.userId,
-      });
-      await this.dataSource.getRepository(BackgroundJobEntity).save(bgJob);
+      }
     } catch (notifError: unknown) {
       this.logger.error(
-        `Failed to create notification for add participant: ${(notifError as Error).message}`,
+        `[addInternalParticipant] Failed to notify added participant: ${(notifError as Error).message}`,
       );
     }
 
-    if (meeting.status === MeetingStatus.IN_PROGRESS) {
+if (meeting.status === MeetingStatus.IN_PROGRESS) {
       this.logger.log(
         `[Device Sync] Meeting ${meetingId}: participant ${dto.userId} added. Device sync event emitted (best-effort).`,
       );
@@ -3089,8 +3184,6 @@ export class MeetingsService {
 
     // ── Step 7: Transaction ──
     let removedAt!: Date;
-    let notificationId!: string;
-    let backgroundJobId!: string;
 
     try {
       await this.dataSource.transaction(async (em) => {
@@ -3154,42 +3247,6 @@ export class MeetingsService {
           severity: AuditLogSeverity.INFO,
         });
 
-        // 7d: Insert notification
-        const notification = em.create(NotificationEntity, {
-          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
-          channel: NotificationChannel.IN_APP,
-          subject: 'Bạn đã bị gỡ khỏi cuộc họp',
-          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          recipientScope: 'user_list',
-          recipientUserIdsJson: [participantUserId],
-          priority: NotificationPriority.NORMAL,
-          deliveryStatus: NotificationDeliveryStatus.QUEUED,
-          payloadJson: {
-            removedBy: authUser.userId,
-            reason: body?.reason ?? null,
-          } as any,
-          createdBy: authUser.userId,
-        });
-        await em.save(NotificationEntity, notification);
-        notificationId = notification.id;
-
-        // 7e: Insert background job for email
-        const bgJob = em.create(BackgroundJobEntity, {
-          jobType: BackgroundJobType.SEND_EMAIL,
-          relatedEntityType: 'meeting',
-          relatedEntityId: meetingId,
-          status: BackgroundJobStatus.QUEUED,
-          inputJson: {
-            notificationId: notification.id,
-            recipientId: participantUserId,
-            template: 'meeting_participant_removed',
-          } as any,
-          requestedBy: authUser.userId,
-        });
-        await em.save(BackgroundJobEntity, bgJob);
-        backgroundJobId = bgJob.id;
 
         removedAt = new Date();
 
@@ -3214,13 +3271,615 @@ export class MeetingsService {
       throw error;
     }
 
-    // ── Step 8: Build response ──
+        // ── Post-transaction: notify removed participant (best-effort) ──
+    let notificationId = "";
+    let backgroundJobId = "";
+
+    try {
+      // IN_APP notification for the removed participant
+      const notif = await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+        channel: NotificationChannel.IN_APP,
+        subject: "Bạn đã bị gỡ khỏi cuộc họp",
+        content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+        relatedEntityType: "meeting",
+        relatedEntityId: meetingId,
+        recipientScope: "user_list",
+        recipientUserIds: [participantUserId],
+        payloadJson: {
+          removedBy: authUser.userId,
+          reason: body?.reason ?? null,
+        },
+        createdBy: authUser.userId,
+      });
+      notificationId = notif.id;
+
+      // EMAIL to the removed participant
+      const emailMap = await this.resolveUserEmails([participantUserId], this.dataSource.manager);
+      const userEmail = emailMap.get(participantUserId);
+      if (userEmail) {
+        const emailResult = await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+          channel: NotificationChannel.EMAIL,
+          subject: "Bạn đã bị gỡ khỏi cuộc họp",
+          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+          toEmails: [userEmail],
+          relatedEntityType: "meeting",
+          relatedEntityId: meetingId,
+          recipientScope: "user_list",
+          payloadJson: {
+            removedBy: authUser.userId,
+            reason: body?.reason ?? null,
+          },
+          createdBy: authUser.userId,
+        });
+        if (emailResult.jobId) {
+          backgroundJobId = emailResult.jobId;
+        }
+      }
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[removeParticipant] Failed to notify removed participant for meeting ${meetingId}: ${(notifError as Error).message}`,
+      );
+    }
+
+// ── Step 8: Build response ──
     return new RemoveParticipantResponseDto({
       meetingId,
       removedParticipantUserId: participantUserId,
       removed: true,
       removedAt,
       notificationQueued: true,
+      notificationId,
+      backgroundJobId,
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Add External Meeting Participant (MEET-ADD-EXTERNAL-PARTICIPANT-001)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Thêm khách mời bên ngoài vào cuộc họp đã tạo.
+   * Cho phép Organizer/Host/Manager có quyền `meeting.participant.add.external`.
+   * Chỉ áp dụng cho meeting ở trạng thái scheduled hoặc in_progress.
+   * Kiểm tra sức chứa phòng, duplicate email, và ghi event/audit log trong transaction.
+   * Gửi email invite best-effort sau transaction.
+   */
+  async addExternalParticipant(
+    meetingId: string,
+    dto: AddExternalParticipantDto,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<IAddExternalParticipantResponse> {
+    // ── Step 1: Meeting existence check ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── Step 2: State validation ──
+    if (
+      meeting.status !== MeetingStatus.SCHEDULED &&
+      meeting.status !== MeetingStatus.IN_PROGRESS
+    ) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Cuộc họp không ở trạng thái scheduled hoặc in_progress',
+        error: {
+          code: 'INVALID_MEETING_STATUS',
+          details: { currentStatus: meeting.status },
+        },
+      });
+    }
+
+    // ── Step 3: Authorization check ──
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+    const hasPermission = await this.checkUserPermission(
+      authUser.userId,
+      'meeting.participant.add.external',
+    );
+
+    if (!isOwner && !hasPermission) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền thêm khách mời bên ngoài vào cuộc họp này',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    // ── Step 4: Private meeting check ──
+    if (meeting.visibilityLevel === MeetingVisibilityLevel.PRIVATE && !isOwner) {
+      const hasAdminAll = await this.checkUserPermission(authUser.userId, 'admin.all');
+      if (!hasAdminAll) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Cuộc họp riêng tư: chỉ Organizer/Host/Admin mới được thêm khách mời',
+          error: { code: 'FORBIDDEN_ACCESS', details: {} },
+        });
+      }
+    }
+
+    // ── Step 5: Duplicate email pre-check (case-insensitive) ──
+    const existingExternal = await this.dataSource
+      .getRepository(MeetingExternalParticipantEntity)
+      .createQueryBuilder('ep')
+      .where('ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)', {
+        meetingId,
+        email: dto.email,
+      })
+      .getOne();
+
+    if (existingExternal) {
+      throw new ConflictException({
+        success: false,
+        message: 'Email khách mời đã tồn tại trong cuộc họp này',
+        error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
+      });
+    }
+
+    // ── Step 6: Room capacity check (nếu có roomId) ──
+    let capacityWarnings: WarningItem[] = [];
+    let warningTokenFromCapacity: string | null = null;
+
+    if (meeting.roomId) {
+      const attendeeCount = await this.getAttendeeCount(meetingId);
+      const room = await this.dataSource.getRepository(RoomEntity).findOne({
+        where: { id: meeting.roomId },
+      });
+
+      if (room && attendeeCount + 1 > room.capacity) {
+        // Read capacity policy
+        const config = await this.dataSource
+          .getRepository(SystemConfigEntity)
+          .findOne({
+            where: { configKey: 'meeting.capacity_policy', isActive: true },
+          });
+        const policy = config?.configValue ?? 'warning';
+
+        if (policy === 'block') {
+          throw new UnprocessableEntityException({
+            success: false,
+            message: 'Sức chứa phòng không đủ. Chính sách hiện tại là block.',
+            error: {
+              code: 'ROOM_CAPACITY_EXCEEDED',
+              details: { capacity: room.capacity, attendeeCount: attendeeCount + 1 },
+            },
+          });
+        }
+
+        // policy === 'warning'
+        capacityWarnings.push({
+          type: 'ROOM_CAPACITY_WARNING',
+          message: `Sức chứa phòng (${room.capacity} người) không đủ cho tổng số người tham dự (${attendeeCount + 1} người).`,
+        });
+
+        // Check if override was provided
+        if (!dto.overrideWarnings || !dto.warningToken) {
+          warningTokenFromCapacity = this.warningTokenUtil.generateToken(
+            meetingId,
+            dto.email,
+            capacityWarnings,
+          );
+
+          throw new UnprocessableEntityException({
+            success: false,
+            message: 'Phát hiện cảnh báo sức chứa phòng. Vui lòng xác nhận.',
+            error: {
+              code: 'WARNING_CONFIRMATION_REQUIRED',
+              details: {
+                warningToken: warningTokenFromCapacity,
+                warnings: capacityWarnings,
+              },
+            },
+          });
+        }
+
+        // Verify warning token
+        const verifyResult = this.warningTokenUtil.verifyToken(
+          dto.warningToken,
+          meetingId,
+          dto.email,
+        );
+
+        if (!verifyResult.valid) {
+          throw new BadRequestException({
+            success: false,
+            message: 'Warning token không hợp lệ hoặc đã hết hạn',
+            error: { code: 'INVALID_WARNING_TOKEN', details: {} },
+          });
+        }
+
+        // Check override capacity permission if ROOM_CAPACITY_WARNING is present
+        if (capacityWarnings.some((w) => w.type === 'ROOM_CAPACITY_WARNING')) {
+          const hasOverridePermission = await this.checkUserPermission(
+            authUser.userId,
+            'meeting.participant.override_capacity',
+          );
+
+          if (!hasOverridePermission) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Bạn không có quyền ghi đè cảnh báo sức chứa phòng',
+              error: {
+                code: 'ROOM_CAPACITY_EXCEEDED',
+                details: { capacity: room.capacity, attendeeCount: attendeeCount + 1 },
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // ── Step 7: Transaction ──
+    let createdParticipantId!: string;
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        // Pessimistic lock on meeting row
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        // Re-check duplicate email inside transaction
+        const dupInTx = await em
+          .getRepository(MeetingExternalParticipantEntity)
+          .createQueryBuilder('ep')
+          .where('ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)', {
+            meetingId,
+            email: dto.email,
+          })
+          .getOne();
+
+        if (dupInTx) {
+          throw new ConflictException({
+            success: false,
+            message: 'Email khách mời đã tồn tại trong cuộc họp này',
+            error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
+          });
+        }
+
+        // 7a: Insert external participant
+        const participant = em.create(MeetingExternalParticipantEntity, {
+          meetingId,
+          fullName: dto.fullName,
+          email: dto.email,
+          organizationName: dto.organizationName ?? null,
+          phoneNumber: dto.phoneNumber ?? null,
+          participantRole: 'attendee',
+          invitationStatus: 'pending',
+        });
+        const savedParticipant = await em.save(
+          MeetingExternalParticipantEntity,
+          participant,
+        );
+        createdParticipantId = savedParticipant.id;
+
+        // 7b: Insert meeting event
+        const event = em.create(MeetingEventEntity, {
+          meetingId,
+          eventType: MeetingEventType.EXTERNAL_PARTICIPANT_ADDED,
+          actorUserId: authUser.userId,
+          sourceType: MeetingEventSourceType.MANUAL,
+          description: `External participant ${dto.email} added to meeting ${meetingId}`,
+          metadataJson: {
+            email: dto.email,
+            fullName: dto.fullName,
+          } as any,
+        });
+        await em.save(MeetingEventEntity, event);
+
+        // 7c: Insert audit log
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'add_external_participant',
+          entityType: 'meeting_external_participant',
+          entityId: createdParticipantId,
+          newValueJson: {
+            meetingId,
+            email: dto.email,
+            fullName: dto.fullName,
+            organizationName: dto.organizationName ?? null,
+            phoneNumber: dto.phoneNumber ?? null,
+          } as any,
+          ipAddress: clientContext.ipAddress ?? null,
+          userAgent: clientContext.userAgent ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        this.logger.log(
+          `[AddExternalParticipant] Meeting ${meetingId}: external participant ${dto.email} added by ${authUser.userId}`,
+        );
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for addExternalParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 8: Post-transaction notification (best-effort) ──
+    try {
+      // EMAIL notification only — NO in-app notification for external
+      await this.notificationsService.enqueueEmailNotification({
+        notificationType: NotificationType.MEETING_INVITE,
+        channel: NotificationChannel.EMAIL,
+        subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
+        content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+        toEmails: [dto.email],
+        relatedEntityType: 'meeting',
+        relatedEntityId: meetingId,
+        recipientScope: 'user_list',
+        payloadJson: { invitedBy: authUser.userId },
+        createdBy: authUser.userId,
+      });
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[addExternalParticipant] Failed to notify external participant: ${(notifError as Error).message}`,
+      );
+    }
+
+    // Best-effort device sync log if in_progress
+    if (meeting.status === MeetingStatus.IN_PROGRESS) {
+      this.logger.log(
+        `[Device Sync] Meeting ${meetingId}: external participant ${dto.email} added while in_progress (best-effort).`,
+      );
+    }
+
+    // ── Step 9: Build response ──
+    return {
+      externalParticipantId: createdParticipantId,
+      meetingId,
+      fullName: dto.fullName,
+      email: dto.email,
+      organizationName: dto.organizationName ?? null,
+      phoneNumber: dto.phoneNumber ?? null,
+      role: 'attendee',
+      status: 'pending',
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Remove External Meeting Participant (MEET-REMOVE-EXTERNAL-PARTICIPANT-001)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Gỡ bỏ khách mời bên ngoài khỏi cuộc họp.
+   * Chỉ áp dụng cho meeting ở trạng thái scheduled.
+   * Hard delete row + ghi event/audit log trong transaction.
+   * Gửi email thông báo best-effort sau transaction (nếu có email).
+   * Không cần Host/Organizer protection check và agenda-owner check
+   * vì external participant không thể giữ các vai trò đó.
+   */
+  async removeExternalParticipant(
+    meetingId: string,
+    externalParticipantId: string,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+    body?: RemoveExternalParticipantBodyDto,
+  ): Promise<RemoveExternalParticipantResponseDto> {
+    // ── Step 1: Meeting existence check ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── Step 2: State validation — only scheduled ──
+    if (meeting.status !== MeetingStatus.SCHEDULED) {
+      throw new ConflictException({
+        success: false,
+        message: 'Không thể gỡ khách mời: cuộc họp không ở trạng thái scheduled',
+        error: {
+          code: 'MEETING_NOT_REMOVABLE',
+          details: { currentStatus: meeting.status },
+        },
+      });
+    }
+
+    // ── Step 3: Authorization check ──
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+    const hasPermission = await this.checkUserPermission(
+      authUser.userId,
+      'meeting.participant.remove.external',
+    );
+
+    if (!isOwner && !hasPermission) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền gỡ khách mời bên ngoài khỏi cuộc họp này',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    // ── Step 4: Target lookup ──
+    const target = await this.dataSource
+      .getRepository(MeetingExternalParticipantEntity)
+      .findOne({
+        where: { id: externalParticipantId, meetingId },
+      });
+
+    if (!target) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khách mời bên ngoài không có trong cuộc họp này',
+        error: { code: 'EXTERNAL_PARTICIPANT_NOT_IN_MEETING', details: {} },
+      });
+    }
+
+    // ── Step 5: Recurring scope check ──
+    const scope = body?.scope ?? RemoveScope.INSTANCE;
+    if (scope === RemoveScope.SERIES) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Không thể gỡ khách mời khỏi toàn bộ recurring series. Chỉ hỗ trợ gỡ trên một instance cụ thể.',
+        error: {
+          code: 'RECURRING_SERIES_SCOPE_NOT_SUPPORTED',
+          details: {},
+        },
+      });
+    }
+
+    // ── Step 6: Transaction (lock + re-check + delete + event + audit) ──
+    let removedAt!: Date;
+    const targetEmail = target.email; // capture for post-transaction
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        // Pessimistic lock on meeting row
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        // Re-check target still exists inside transaction
+        const reCheck = await em.findOne(MeetingExternalParticipantEntity, {
+          where: { id: externalParticipantId, meetingId },
+        });
+
+        if (!reCheck) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Khách mời bên ngoài không có trong cuộc họp này',
+            error: { code: 'EXTERNAL_PARTICIPANT_NOT_IN_MEETING', details: {} },
+          });
+        }
+
+        // 6a: Hard delete participant row
+        await em.delete(MeetingExternalParticipantEntity, {
+          id: externalParticipantId,
+          meetingId,
+        });
+
+        // 6b: Insert meeting event
+        const event = em.create(MeetingEventEntity, {
+          meetingId,
+          eventType: MeetingEventType.EXTERNAL_PARTICIPANT_REMOVED,
+          actorUserId: authUser.userId,
+          sourceType: MeetingEventSourceType.MANUAL,
+          description: `External participant ${target.email} removed from meeting ${meetingId}`,
+          metadataJson: {
+            removedExternalParticipantId: externalParticipantId,
+            removedByUserId: authUser.userId,
+            reason: body?.reason ?? null,
+          } as any,
+        });
+        await em.save(MeetingEventEntity, event);
+
+        // 6c: Insert audit log
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'remove_external_participant',
+          entityType: 'meeting_external_participant',
+          entityId: externalParticipantId,
+          oldValueJson: {
+            meetingId,
+            fullName: target.fullName,
+            email: target.email,
+          } as any,
+          newValueJson: {
+            removed: true,
+            removedAt: new Date(),
+            reason: body?.reason ?? null,
+          } as any,
+          ipAddress: clientContext.ipAddress ?? null,
+          userAgent: clientContext.userAgent ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        removedAt = new Date();
+
+        this.logger.log(
+          `[RemoveExternalParticipant] Meeting ${meetingId}: external participant ${externalParticipantId} removed by ${authUser.userId}`,
+        );
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for removeExternalParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 7: Post-transaction notification (best-effort) ──
+    let notificationId: string | null = null;
+    let backgroundJobId: string | null = null;
+    let notificationQueued = false;
+
+    try {
+      if (targetEmail) {
+        const emailResult = await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+          channel: NotificationChannel.EMAIL,
+          subject: 'Bạn đã bị gỡ khỏi cuộc họp',
+          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+          toEmails: [targetEmail],
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          payloadJson: {
+            removedBy: authUser.userId,
+            reason: body?.reason ?? null,
+          },
+          createdBy: authUser.userId,
+        });
+        notificationId = emailResult.notification.id;
+        backgroundJobId = emailResult.jobId ?? null;
+        notificationQueued = true;
+      } else {
+        this.logger.log(
+          `[RemoveExternalParticipant] Skipped email notification for ${externalParticipantId} — no email on file.`,
+        );
+      }
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[RemoveExternalParticipant] Failed to notify removed external participant: ${(notifError as Error).message}`,
+      );
+    }
+
+    // ── Step 8: Build response ──
+    return new RemoveExternalParticipantResponseDto({
+      meetingId,
+      removedExternalParticipantId: externalParticipantId,
+      removed: true,
+      removedAt,
+      notificationQueued,
       notificationId,
       backgroundJobId,
     });
@@ -3274,5 +3933,664 @@ export class MeetingsService {
       return [];
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda feature (UC-MM-09)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Check if user has read permission for meeting agenda.
+   * User must be organizer, host, or internal participant.
+   */
+  private async checkAgendaReadPermission(
+    meetingId: string,
+    userId: string,
+  ): Promise<MeetingEntity> {
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException('MEETING_NOT_FOUND');
+    }
+    // Organizer or host always has read access
+    if (meeting.organizerId === userId || meeting.hostId === userId) {
+      return meeting;
+    }
+    // Internal participants have read access
+    const participant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({
+        where: { meetingId: meeting.id, userId },
+      });
+    if (!participant) {
+      throw new ForbiddenException('AGENDA_READ_FORBIDDEN');
+    }
+    return meeting;
+  }
+
+  /**
+   * Verify user has write permission for meeting agenda.
+   * Only organizer (meetings.organizer_id) or host (meetings.host_id).
+   * Does NOT use participant_role.
+   */
+  private checkAgendaWritePermission(
+    meeting: MeetingEntity,
+    userId: string,
+  ): void {
+    if (meeting.organizerId !== userId && meeting.hostId !== userId) {
+      throw new ForbiddenException('AGENDA_WRITE_FORBIDDEN');
+    }
+  }
+
+  /**
+   * Validate meeting time is valid for agenda operations.
+   */
+  private validateMeetingTimeForAgenda(meeting: MeetingEntity): void {
+    if (
+      !meeting.startTime ||
+      !meeting.endTime ||
+      meeting.endTime <= meeting.startTime
+    ) {
+      throw new ConflictException('MEETING_TIME_INVALID_FOR_AGENDA');
+    }
+  }
+
+  /**
+   * Validate meeting status allows agenda editing.
+   * Only 'scheduled' status permits write operations.
+   */
+  private validateMeetingStatusForAgendaWrite(meeting: MeetingEntity): void {
+    if (meeting.status !== MeetingStatus.SCHEDULED) {
+      throw new ConflictException('AGENDA_MEETING_STATUS_BLOCKED');
+    }
+  }
+
+  /**
+   * Calculate meeting duration in minutes from start/end time.
+   */
+  private getMeetingDurationMinutes(meeting: MeetingEntity): number {
+    const diffMs = meeting.endTime.getTime() - meeting.startTime.getTime();
+    return Math.floor(diffMs / 60000);
+  }
+
+  // ── T005: GET Agendas ──────────────────────────────────────
+
+  /**
+   * Get agenda list for a meeting.
+   * Returns sorted items with metadata (durationStatus, isLockedForEditing).
+   */
+  async getAgendas(
+    meetingId: string,
+    userId: string,
+  ): Promise<AgendaListResponseDto> {
+    // 1. Load meeting & check read permission
+    const meeting = await this.checkAgendaReadPermission(meetingId, userId);
+
+    // 2. Compute meeting duration
+    const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+
+    // 3. Query agenda items with owner name
+    const agendas = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .find({
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+        relations: { owner: true },
+      });
+
+    // 4. Map to response DTOs
+    const items = agendas.map(
+      (agenda) =>
+        new AgendaItemResponseDto({
+          id: agenda.id,
+          agendaOrder: agenda.agendaOrder,
+          title: agenda.title,
+          description: agenda.description,
+          ownerId: agenda.ownerId,
+          ownerName: agenda.owner?.fullName ?? null,
+          plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+          status: agenda.status,
+        }),
+    );
+
+    // 5. Calculate totals
+    const totalPlannedDurationMinutes = items.reduce(
+      (sum, item) => sum + item.plannedDurationMinutes,
+      0,
+    );
+    const remainingDurationMinutes = Math.max(
+      0,
+      meetingDurationMinutes - totalPlannedDurationMinutes,
+    );
+    const durationStatus =
+      totalPlannedDurationMinutes <= meetingDurationMinutes ? 'valid' : 'overflow';
+    const isLockedForEditing = meeting.status !== MeetingStatus.SCHEDULED;
+    let lockReason: string | null = null;
+    if (isLockedForEditing) {
+      lockReason = meeting.status === MeetingStatus.IN_PROGRESS
+        ? 'MEETING_NOT_SCHEDULED'
+        : 'MEETING_NOT_SCHEDULED';
+    }
+
+    return new AgendaListResponseDto({
+      meetingId: meeting.id,
+      meetingStatus: meeting.status,
+      meetingDurationMinutes,
+      totalPlannedDurationMinutes,
+      remainingDurationMinutes,
+      durationStatus,
+      isLockedForEditing,
+      lockReason,
+      items,
+    });
+  }
+
+  // ── T006: Validation Chain ─────────────────────────────────
+
+  /**
+   * Validate replace agenda request with priority chain.
+   * Stops at first validation error.
+   */
+  private async validateReplaceAgendaRequest(
+    meeting: MeetingEntity,
+    dto: ReplaceAgendaDto,
+  ): Promise<void> {
+    // 1. Meeting time invalid
+    this.validateMeetingTimeForAgenda(meeting);
+
+    // 2. Meeting status blocked
+    this.validateMeetingStatusForAgendaWrite(meeting);
+
+    // 3. Item limit exceeded
+    if (dto.items.length > 50) {
+      throw new UnprocessableEntityException('AGENDA_ITEM_LIMIT_EXCEEDED');
+    }
+
+    // 4. Duplicate item id
+    const requestIds = dto.items
+      .filter((item) => item.id)
+      .map((item) => item.id!);
+    const uniqueIds = new Set(requestIds);
+    if (uniqueIds.size !== requestIds.length) {
+      throw new UnprocessableEntityException('AGENDA_DUPLICATE_ITEM_ID');
+    }
+
+    // 5. Item id not in meeting
+    if (requestIds.length > 0) {
+      const existingItems = await this.dataSource
+        .getRepository(MeetingAgendaEntity)
+        .find({
+          where: { id: In(requestIds), meetingId: meeting.id },
+        });
+      const existingIdSet = new Set(existingItems.map((i) => i.id));
+      const notFoundIds = requestIds.filter((id) => !existingIdSet.has(id));
+      if (notFoundIds.length > 0) {
+        throw new UnprocessableEntityException('AGENDA_ITEM_NOT_IN_MEETING');
+      }
+    }
+
+    // 6. Field validation (per item)
+    const participantUserIds = await this.getParticipantUserIds(meeting.id);
+
+    for (const item of dto.items) {
+      // Title empty after trim
+      if (!item.title || item.title.trim().length === 0) {
+        throw new UnprocessableEntityException('AGENDA_TITLE_REQUIRED');
+      }
+      // Title > 255
+      if (item.title.trim().length > 255) {
+        throw new UnprocessableEntityException('AGENDA_TITLE_TOO_LONG');
+      }
+      // Description > 2000
+      if (item.description && item.description.length > 2000) {
+        throw new UnprocessableEntityException('AGENDA_DESCRIPTION_TOO_LONG');
+      }
+      // plannedDurationMinutes invalid
+      if (
+        item.plannedDurationMinutes == null ||
+        !Number.isInteger(item.plannedDurationMinutes) ||
+        item.plannedDurationMinutes <= 0
+      ) {
+        throw new UnprocessableEntityException('AGENDA_INVALID_DURATION');
+      }
+    }
+
+    // 7. Owner not participant
+    for (const item of dto.items) {
+      if (item.ownerId && !participantUserIds.has(item.ownerId)) {
+        throw new UnprocessableEntityException('AGENDA_OWNER_NOT_PARTICIPANT');
+      }
+    }
+
+    // 8. Duration overflow
+    const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+    const totalPlanned = dto.items.reduce(
+      (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+      0,
+    );
+    if (totalPlanned > meetingDurationMinutes) {
+      throw new UnprocessableEntityException('AGENDA_DURATION_OVERFLOW');
+    }
+  }
+
+  /**
+   * Get set of internal participant user IDs for a meeting.
+   */
+  private async getParticipantUserIds(
+    meetingId: string,
+  ): Promise<Set<string>> {
+    const participants = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .find({
+        where: { meetingId },
+        select: { userId: true },
+      });
+    return new Set(participants.map((p) => p.userId));
+  }
+
+  /**
+   * Compare two agenda item arrays for no-op detection.
+   * Compares: id, agendaOrder, title (trimmed), description, ownerId,
+   * plannedDurationMinutes, status.
+   */
+  private isAgendaPayloadSame(
+    existingItems: MeetingAgendaEntity[],
+    requestItems: AgendaItemDto[],
+  ): boolean {
+    if (existingItems.length !== requestItems.length) return false;
+
+    // Sort existing by agendaOrder
+    const sortedExisting = [...existingItems].sort(
+      (a, b) => a.agendaOrder - b.agendaOrder,
+    );
+    // Normalize request order by array index
+    const normalizedRequest = requestItems.map((item, index) => ({
+      id: item.id ?? null,
+      agendaOrder: index + 1,
+      title: item.title.trim(),
+      description: item.description ?? null,
+      ownerId: item.ownerId ?? null,
+      plannedDurationMinutes: item.plannedDurationMinutes,
+      status: 'planned' as const,
+    }));
+
+    for (let i = 0; i < sortedExisting.length; i++) {
+      const e = sortedExisting[i];
+      const r = normalizedRequest[i];
+      if (
+        e.id !== (r.id ?? undefined) ||
+        e.agendaOrder !== r.agendaOrder ||
+        e.title.trim() !== r.title ||
+        (e.description ?? null) !== r.description ||
+        (e.ownerId ?? null) !== r.ownerId ||
+        e.plannedDurationMinutes !== r.plannedDurationMinutes ||
+        e.status !== r.status
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // ── T007: Replace Agendas (Atomic Replace) ─────────────────
+
+  /**
+   * Atomic replace of entire agenda list.
+   * Normalizes agenda_order, populates created_by/updated_by,
+   * writes audit log.
+   */
+  async replaceAgendas(
+    meetingId: string,
+    dto: ReplaceAgendaDto,
+    userId: string,
+    clientContext?: ClientContext,
+  ): Promise<ReplaceAgendaResponseDto> {
+    // Load meeting
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException('MEETING_NOT_FOUND');
+    }
+
+    // Check write permission
+    this.checkAgendaWritePermission(meeting, userId);
+
+    // Validate request with priority chain
+    await this.validateReplaceAgendaRequest(meeting, dto);
+
+    // Load existing items for no-op detection
+    const existingItems = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .find({
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+      });
+
+    // No-op detection
+    if (this.isAgendaPayloadSame(existingItems, dto.items)) {
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const totalPlanned = existingItems.reduce(
+        (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+        0,
+      );
+      const items = existingItems.map(
+        (agenda) =>
+          new AgendaItemResponseDto({
+            id: agenda.id,
+            agendaOrder: agenda.agendaOrder,
+            title: agenda.title,
+            description: agenda.description,
+            ownerId: agenda.ownerId,
+            ownerName: null,
+            plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+            status: agenda.status,
+          }),
+      );
+      return new ReplaceAgendaResponseDto({
+        meetingId: meeting.id,
+        totalPlannedDurationMinutes: totalPlanned,
+        remainingDurationMinutes: Math.max(0, meetingDurationMinutes - totalPlanned),
+        items,
+      });
+    }
+
+    // Atomic replace transaction
+    const result = await this.dataSource.transaction(async (em) => {
+      // Lock meeting row to prevent race conditions
+      await em.findOne(MeetingEntity, {
+        where: { id: meeting.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      // Determine item IDs to keep (only those with valid IDs)
+      const keepIds = dto.items
+        .filter((item) => item.id)
+        .map((item) => item.id!)
+        .filter((id) => existingItems.some((e) => e.id === id));
+
+      // Delete items not in request
+      if (existingItems.length > 0) {
+        const idsToDelete = existingItems
+          .filter((e) => !keepIds.includes(e.id))
+          .map((e) => e.id);
+        if (idsToDelete.length > 0) {
+          await em.delete(MeetingAgendaEntity, idsToDelete);
+        }
+      }
+
+      // Normalize and save items
+      const normalizedItems = dto.items.map((item, index) => ({
+        agendaOrder: index + 1,
+        title: item.title.trim(),
+        description: item.description ?? null,
+        ownerId: item.ownerId ?? null,
+        plannedDurationMinutes: item.plannedDurationMinutes,
+        status: AgendaStatus.PLANNED as string,
+      }));
+
+      // Update existing items
+      const updatedItemIds: string[] = [];
+      for (let i = 0; i < dto.items.length; i++) {
+        const item = dto.items[i];
+        if (item.id && existingItems.some((e) => e.id === item.id)) {
+          await em.update(
+            MeetingAgendaEntity,
+            { id: item.id, meetingId: meeting.id },
+            {
+              agendaOrder: i + 1,
+              title: item.title.trim(),
+              description: item.description ?? null,
+              ownerId: item.ownerId ?? null,
+              plannedDurationMinutes: item.plannedDurationMinutes,
+              updatedBy: userId,
+            },
+          );
+          updatedItemIds.push(item.id);
+        }
+      }
+
+      // Insert new items
+      const newItems: MeetingAgendaEntity[] = [];
+      for (let i = 0; i < dto.items.length; i++) {
+        const item = dto.items[i];
+        if (!item.id) {
+          const newEntity = em.create(MeetingAgendaEntity, {
+            meetingId: meeting.id,
+            agendaOrder: i + 1,
+            title: item.title.trim(),
+            description: item.description ?? null,
+            ownerId: item.ownerId ?? null,
+            plannedDurationMinutes: item.plannedDurationMinutes,
+            status: AgendaStatus.PLANNED,
+            createdBy: userId,
+            updatedBy: userId,
+          });
+          await em.save(MeetingAgendaEntity, newEntity);
+          newItems.push(newEntity);
+        }
+      }
+
+      // Reload all items to return sorted result
+      const allItems = await em.find(MeetingAgendaEntity, {
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+        relations: { owner: true },
+      });
+
+      // Write audit log
+      const oldValueJson = existingItems.map((e) => ({
+        id: e.id,
+        agendaOrder: e.agendaOrder,
+        title: e.title,
+        description: e.description,
+        ownerId: e.ownerId,
+        plannedDurationMinutes: e.plannedDurationMinutes,
+        status: e.status,
+      }));
+      const newValueJson = allItems.map((e) => ({
+        id: e.id,
+        agendaOrder: e.agendaOrder,
+        title: e.title,
+        description: e.description,
+        ownerId: e.ownerId,
+        plannedDurationMinutes: e.plannedDurationMinutes,
+        status: e.status,
+      }));
+
+      const auditLog = em.create(AuditLogEntity, {
+        userId,
+        actionType: 'agenda_saved',
+        entityType: 'meeting',
+        entityId: meeting.id,
+        oldValueJson: { items: oldValueJson },
+        newValueJson: { items: newValueJson },
+        ipAddress: clientContext?.ipAddress ?? null,
+        userAgent: clientContext?.userAgent ?? null,
+        severity: AuditLogSeverity.INFO,
+      });
+      await em.save(AuditLogEntity, auditLog);
+
+      // Return response
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const totalPlanned = allItems.reduce(
+        (sum, item) => sum + (item.plannedDurationMinutes ?? 0),
+        0,
+      );
+      const items = allItems.map(
+        (agenda) =>
+          new AgendaItemResponseDto({
+            id: agenda.id,
+            agendaOrder: agenda.agendaOrder,
+            title: agenda.title,
+            description: agenda.description,
+            ownerId: agenda.ownerId,
+            ownerName: agenda.owner?.fullName ?? null,
+            plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
+            status: agenda.status,
+          }),
+      );
+      return new ReplaceAgendaResponseDto({
+        meetingId: meeting.id,
+        totalPlannedDurationMinutes: totalPlanned,
+        remainingDurationMinutes: Math.max(0, meetingDurationMinutes - totalPlanned),
+        items,
+      });
+    });
+
+    return result;
+  }
+
+  async findMeetingRequests(
+    queryDto: MeetingRequestQueryDto,
+    authUser: any,
+  ): Promise<{ items: MeetingRequestListItemDto[]; total: number; page: number; limit: number }> {
+    try {
+      const page = Math.max(1, queryDto.page ?? 1);
+      const limit = Math.min(100, Math.max(1, queryDto.limit ?? 20));
+      const skip = (page - 1) * limit;
+
+      const qb = this.dataSource
+        .getRepository(MeetingRequestEntity)
+        .createQueryBuilder('mr')
+        .leftJoin('mr.requestedByUser', 'requester')
+        .leftJoin('mr.meeting', 'meeting')
+        .leftJoin('mr.decisionByUser', 'decider')
+        .leftJoin('mr.targetRoom', 'room')
+        .select([
+          'mr.id',
+          'mr.requestCode',
+          'mr.requestType',
+          'mr.approvalStatus',
+          'mr.requestedAt',
+          'mr.requestedStartTime',
+          'mr.requestedEndTime',
+          'mr.conflictCheckStatus',
+          'mr.conflictSummaryJson',
+          'mr.decisionAt',
+          'mr.rejectionReason',
+          'requester.id',
+          'requester.fullName',
+          'requester.email',
+          'meeting.id',
+          'meeting.title',
+          'meeting.roomId',
+          'meeting.hostId',
+          'room.id',
+          'room.roomName',
+          'decider.id',
+          'decider.fullName',
+          'decider.email',
+        ]);
+
+      // ApprovalStatus filter
+      const approvalStatus = queryDto.approvalStatus;
+      if (!approvalStatus || approvalStatus === 'pending') {
+        qb.andWhere('mr.approvalStatus = :status', { status: ApprovalStatus.PENDING });
+      } else if (approvalStatus !== 'all') {
+        qb.andWhere('mr.approvalStatus = :status', { status: approvalStatus });
+      }
+
+      // requestType filter
+      if (queryDto.requestType) {
+        qb.andWhere('mr.requestType = :type', { type: queryDto.requestType });
+      }
+
+      // targetRoomId filter
+      if (queryDto.targetRoomId) {
+        qb.andWhere('mr.targetRoomId = :roomId', { roomId: queryDto.targetRoomId });
+      }
+
+      // requestedById filter
+      if (queryDto.requestedById) {
+        qb.andWhere('mr.requestedBy = :userId', { userId: queryDto.requestedById });
+      }
+
+      // Date range filter
+      if (queryDto.from && queryDto.to) {
+        qb.andWhere('mr.requestedAt BETWEEN :from AND :to', {
+          from: new Date(queryDto.from),
+          to: new Date(queryDto.to),
+        });
+      }
+
+      // q search (request_code ILIKE)
+      if (queryDto.q) {
+        qb.andWhere('mr.requestCode ILIKE :q', { q: `%${queryDto.q}%` });
+      }
+
+      // Data scope filter
+      const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(authUser.userId);
+      const isAdmin = roles.some(r => r === 'SYSTEM_ADMIN' || r === 'BUSINESS_ADMIN');
+      if (!isAdmin) {
+        qb.andWhere(
+          `(requester.direct_manager_id = :userId
+            OR requester.department_id IN (
+              SELECT d.id FROM departments d WHERE d.manager_user_id = :userId
+            ))`,
+          { userId: authUser.userId },
+        );
+      }
+
+      // Sort
+      const allowedSortFields = ['requested_at', 'created_at', 'approval_status', 'request_type'];
+      const sortField = allowedSortFields.includes(queryDto.sortBy ?? '')
+        ? queryDto.sortBy!
+        : 'requested_at';
+      const sortOrder = queryDto.sortOrder === 'asc' ? 'ASC' : 'DESC';
+      qb.orderBy(`mr.${sortField}`, sortOrder);
+
+      // Pagination
+      qb.skip(skip).take(limit);
+
+      const [items, total] = await qb.getManyAndCount();
+
+      const listItems = items.map((mr) => {
+        return new MeetingRequestListItemDto(
+          mr.id,
+          mr.requestCode,
+          mr.requestType,
+          mr.approvalStatus,
+          mr.requestedAt,
+          mr.requestedStartTime,
+          mr.requestedEndTime,
+          mr.conflictCheckStatus,
+          mr.conflictSummaryJson ?? null,
+          mr.decisionAt,
+          mr.rejectionReason,
+          new UserSummaryDto(
+            mr.requestedByUser.id,
+            mr.requestedByUser.fullName,
+            mr.requestedByUser.email,
+          ),
+          mr.targetRoom
+            ? new RoomSummaryDto(mr.targetRoom.id, mr.targetRoom.roomName)
+            : null,
+          mr.decisionByUser
+            ? new UserSummaryDto(
+                mr.decisionByUser.id,
+                mr.decisionByUser.fullName,
+                mr.decisionByUser.email,
+              )
+            : null,
+          mr.meeting
+            ? {
+                id: mr.meeting.id,
+                title: mr.meeting.title,
+                roomId: mr.meeting.roomId,
+                hostId: mr.meeting.hostId,
+              }
+            : null,
+        );
+      });
+
+      return { items: listItems, total, page, limit };
+    } catch (error) {
+      this.logger.error('Failed to retrieve meeting requests', (error as Error).stack);
+      throw error;
+    }
+  }
+
+
 }
 

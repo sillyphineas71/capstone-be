@@ -13,7 +13,7 @@ describe('RoomsController (RMS-001)', () => {
       getRealtimeStatus: jest.fn().mockResolvedValue([{ roomId: 'r1' }]),
       getRoomStatus: jest.fn().mockResolvedValue({ roomId: 'r1' }),
     };
-    controller = new RoomsController(serviceMock as never);
+    controller = new RoomsController(undefined as never, serviceMock as never);
   });
 
   it('list → envelope {success,message,data}', async () => {
