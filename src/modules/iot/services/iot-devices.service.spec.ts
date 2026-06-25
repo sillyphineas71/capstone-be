@@ -8,10 +8,13 @@ import { IotDeviceEventsService } from './iot-device-events.service.js';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { IoTDeviceType } from '../entities/iot-device.entity.js';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
+import * as nodeCrypto from 'crypto';
 
 jest.mock('../utils/rtsp-probe.util.js', () => ({
   probeTcp: jest.fn(),
@@ -57,6 +60,8 @@ describe('IotDevicesService', () => {
       logDeviceUpdate: jest.fn(),
       logDeviceStatusChange: jest.fn(),
       logConfigureRtsp: jest.fn(),
+      logRevokeFaceServerToken: jest.fn(),
+      logRotateFaceServerToken: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -602,7 +607,7 @@ describe('IotDevicesService', () => {
         42,
       ]);
 
-      const result = await service.findAll({ page: 1, limit: 20 } as any);
+      const result = await service.findAll({ page: 1, limit: 20 });
 
       expect(qbMock.andWhere).not.toHaveBeenCalled();
       expect(qbMock.orderBy).toHaveBeenCalledWith('d.createdAt', 'DESC');
@@ -627,7 +632,7 @@ describe('IotDevicesService', () => {
 
     it('search: bound ILIKE on deviceName/deviceCode', async () => {
       qbMock.getManyAndCount.mockResolvedValue([[], 0]);
-      await service.findAll({ page: 1, limit: 20, search: 'ipcam' } as any);
+      await service.findAll({ page: 1, limit: 20, search: 'ipcam' });
       expect(qbMock.andWhere).toHaveBeenCalledWith(
         '(d.deviceName ILIKE :s OR d.deviceCode ILIKE :s)',
         { s: '%ipcam%' },
@@ -636,13 +641,13 @@ describe('IotDevicesService', () => {
 
     it('page 2: skip (2-1)*20 = 20', async () => {
       qbMock.getManyAndCount.mockResolvedValue([[], 42]);
-      await service.findAll({ page: 2, limit: 20 } as any);
+      await service.findAll({ page: 2, limit: 20 });
       expect(qbMock.skip).toHaveBeenCalledWith(20);
     });
 
     it('empty: total 0 -> totalPages 0', async () => {
       qbMock.getManyAndCount.mockResolvedValue([[], 0]);
-      const result = await service.findAll({ page: 1, limit: 20 } as any);
+      const result = await service.findAll({ page: 1, limit: 20 });
       expect(result.items).toEqual([]);
       expect(result.meta.total).toBe(0);
       expect(result.meta.totalPages).toBe(0);
@@ -681,7 +686,7 @@ describe('IotDevicesService', () => {
       await service.configureRtsp(
         'user-1',
         'dev-1',
-        rtspDto({ rtsp_password: 'super-secret' }) as any,
+        rtspDto({ rtsp_password: 'super-secret' }),
       );
 
       const cfg = device.metadataJson.rtsp_config;
@@ -709,7 +714,7 @@ describe('IotDevicesService', () => {
         async (_e: unknown, obj: any) => obj,
       );
 
-      await service.configureRtsp('user-1', 'dev-1', rtspDto() as any);
+      await service.configureRtsp('user-1', 'dev-1', rtspDto());
 
       const cfg = device.metadataJson.rtsp_config;
       expect(cfg.rtsp_password_encrypted).toBe('OLD_BLOB_BASE64');
@@ -785,7 +790,11 @@ describe('IotDevicesService', () => {
         queryRunnerMock.manager,
         expect.objectContaining({ action: 'auto_online', userId: null }),
       );
-      expect(r.transitions[0]).toEqual({ id: 'c1', from: 'offline', to: 'online' });
+      expect(r.transitions[0]).toEqual({
+        id: 'c1',
+        from: 'offline',
+        to: 'online',
+      });
     });
 
     it('idempotent: same status -> no transaction/audit/transition', async () => {
@@ -816,7 +825,12 @@ describe('IotDevicesService', () => {
 
     it('fallback ip_address:554 when no stream_url', async () => {
       (dataSourceMock.manager.find as jest.Mock).mockResolvedValue([
-        cam({ id: 'c1', status: 'online', streamUrl: null, ipAddress: '10.0.0.9' }),
+        cam({
+          id: 'c1',
+          status: 'online',
+          streamUrl: null,
+          ipAddress: '10.0.0.9',
+        }),
       ]);
       probeTcpMock.mockResolvedValue('online');
 
@@ -843,6 +857,334 @@ describe('IotDevicesService', () => {
       expect(r.offline_count).toBe(2);
       expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalledTimes(1);
       expect(r.transitions).toHaveLength(1); // chỉ c2 thành công
+    });
+  });
+
+  describe('receiveStrangerEvent — FR-008 strip SanpPic (SAL-001)', () => {
+    it('body có SanpPic → payload_json (storeRawEvent) + recent_stranger_event_samples đều stripped', async () => {
+      const token = 'tok';
+      const hash = nodeCrypto.createHash('sha256').update(token).digest('hex');
+      const device: any = {
+        id: 'dev1',
+        deviceCode: 'FACE-1',
+        deviceType: IoTDeviceType.FACE_SERVER,
+        roomId: 'room1',
+        metadataJson: {
+          face_server_config: {
+            callback_enabled: true,
+            callback_token_hash: hash,
+          },
+        },
+      };
+      dataSourceMock.manager.findOne.mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        (_e: unknown, obj: any) => obj,
+      );
+
+      await service.receiveStrangerEvent({
+        headers: { 'x-callback-token': token },
+        body: {
+          stranger_id: 's1',
+          SanpPic: 'data:image/jpeg;base64,/9j/4AAQSkZJRgVERYLONGBASE64DATA==',
+        },
+        query: {},
+        params: { deviceCode: 'FACE-1' },
+        clientIp: '127.0.0.1',
+        files: [],
+      });
+
+      // (a) storeRawEvent.rawPayloadSample đã strip (→ payload_json)
+      const eventsSvc: any = (service as any).iotDeviceEventsService;
+      const callArg = eventsSvc.storeRawEvent.mock.calls[0][0];
+      expect(callArg.rawPayloadSample.SanpPic).toBe('[stripped]');
+      expect(JSON.stringify(callArg.rawPayloadSample)).not.toContain('base64');
+
+      // (b) device.metadataJson.recent_stranger_event_samples cũng strip
+      const samples = device.metadataJson.recent_stranger_event_samples;
+      expect(samples[0].raw_payload_sample.SanpPic).toBe('[stripped]');
+      expect(JSON.stringify(samples)).not.toContain('base64');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TKR-001 (#11) — revoke / rotate callback token + assertCallbackToken gate
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('TKR-001 — assertCallbackToken gate (qua receiveVerify/StrangerEvent)', () => {
+    const TOKEN = 'plain-token';
+    const HASH = nodeCrypto.createHash('sha256').update(TOKEN).digest('hex');
+
+    const faceDevice = (fsc: any): any => ({
+      id: 'dev1',
+      deviceCode: 'FACE-1',
+      deviceType: IoTDeviceType.FACE_SERVER,
+      roomId: 'room1',
+      metadataJson: { face_server_config: fsc },
+    });
+    const callbackInput = (token: string | undefined) => ({
+      headers: token ? { 'x-callback-token': token } : {},
+      body: { stranger_id: 's1' },
+      query: {},
+      params: { deviceCode: 'FACE-1' },
+      clientIp: '127.0.0.1',
+      files: [],
+    });
+
+    it('chưa config token (không callback_token_hash) → 409 CALLBACK_TOKEN_NOT_CONFIGURED', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true }),
+      );
+      await expect(
+        service.receiveStrangerEvent(callbackInput(TOKEN)),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('token đúng + chưa revoke → PASS (tới storeRawEvent, không throw)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true, callback_token_hash: HASH }),
+      );
+      queryRunnerMock.manager.save.mockImplementation(
+        (_e: unknown, obj: any) => obj,
+      );
+      await expect(
+        service.receiveStrangerEvent(callbackInput(TOKEN)),
+      ).resolves.toBeDefined();
+    });
+
+    it('token SAI → 401 INVALID_CALLBACK_TOKEN', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true, callback_token_hash: HASH }),
+      );
+      await expect(
+        service.receiveStrangerEvent(callbackInput('wrong-token')),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('đã revoke (revoked_at set) + token ĐÚNG → 403 CALLBACK_TOKEN_REVOKED (stranger)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({
+          callback_enabled: true,
+          callback_token_hash: HASH,
+          revoked_at: '2026-06-19T00:00:00.000Z',
+        }),
+      );
+      await expect(
+        service.receiveStrangerEvent(callbackInput(TOKEN)),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('đã revoke + token ĐÚNG → 403 (verify) — gate dùng chung cho cả 2 handler', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({
+          callback_enabled: true,
+          callback_token_hash: HASH,
+          revoked_at: '2026-06-19T00:00:00.000Z',
+        }),
+      );
+      await expect(
+        service.receiveVerifyEvent(callbackInput(TOKEN)),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('TKR-001 — revokeFaceServerToken (T2)', () => {
+    const HASH = nodeCrypto.createHash('sha256').update('x').digest('hex');
+    const faceDevice = (fsc: any): any => ({
+      id: 'dev1',
+      deviceType: IoTDeviceType.FACE_SERVER,
+      metadataJson: { face_server_config: fsc },
+    });
+
+    it('device đã config → set revoked_at + audit; reason lưu vào revoked_reason', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true, callback_token_hash: HASH }),
+      );
+      const saved = await service.revokeFaceServerToken('admin1', 'dev1', {
+        reason: 'token leaked',
+      });
+      const fsc = saved.metadataJson!.face_server_config as any;
+      expect(fsc.revoked_at).toBeDefined();
+      expect(fsc.revoked_reason).toBe('token leaked');
+      expect(auditRepoMock.logRevokeFaceServerToken).toHaveBeenCalledTimes(1);
+      const auditArg = auditRepoMock.logRevokeFaceServerToken.mock.calls[0][1];
+      expect(auditArg).toMatchObject({ deviceId: 'test-id', reason: 'token leaked' });
+      // SEC: audit KHÔNG chứa token/hash
+      expect(JSON.stringify(auditArg)).not.toContain(HASH);
+    });
+
+    it('idempotent: đã revoked → return 200, KHÔNG đổi revoked_at, KHÔNG save/audit', async () => {
+      const original = '2026-06-01T00:00:00.000Z';
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({
+          callback_enabled: true,
+          callback_token_hash: HASH,
+          revoked_at: original,
+        }),
+      );
+      const out = await service.revokeFaceServerToken('admin1', 'dev1', {});
+      const fsc = out.metadataJson!.face_server_config as any;
+      expect(fsc.revoked_at).toBe(original);
+      expect(queryRunnerMock.startTransaction).not.toHaveBeenCalled();
+      expect(auditRepoMock.logRevokeFaceServerToken).not.toHaveBeenCalled();
+    });
+
+    it('chưa config (không callback_token_hash) → 409 FACE_SERVER_NOT_CONFIGURED', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true }),
+      );
+      await expect(
+        service.revokeFaceServerToken('admin1', 'dev1', {}),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('device không phải face_server → ConflictException', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue({
+        id: 'dev1',
+        deviceType: IoTDeviceType.ROOM_CAMERA,
+        metadataJson: {},
+      });
+      await expect(
+        service.revokeFaceServerToken('admin1', 'dev1', {}),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('device không tồn tại → NotFoundException', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(null);
+      await expect(
+        service.revokeFaceServerToken('admin1', 'dev1', {}),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('save lỗi → rollbackTransaction + release (rethrow)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true, callback_token_hash: HASH }),
+      );
+      queryRunnerMock.manager.save.mockRejectedValueOnce(new Error('db down'));
+      await expect(
+        service.revokeFaceServerToken('admin1', 'dev1', {}),
+      ).rejects.toThrow('db down');
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.release).toHaveBeenCalled();
+    });
+  });
+
+  describe('TKR-001 — rotateFaceServerToken (T3)', () => {
+    const OLD_HASH = nodeCrypto
+      .createHash('sha256')
+      .update('old-token')
+      .digest('hex');
+    const faceDevice = (fsc: any): any => ({
+      id: 'dev1',
+      deviceType: IoTDeviceType.FACE_SERVER,
+      metadataJson: { face_server_config: fsc },
+    });
+
+    it('token mới (hash/last4 khác cũ) + clear revoked + trả oneTimeCallbackToken + audit', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({
+          callback_enabled: true,
+          callback_token_hash: OLD_HASH,
+          callback_token_last4: 'oldd',
+          revoked_at: '2026-06-01T00:00:00.000Z',
+          revoked_reason: 'leak',
+        }),
+      );
+      const { device, oneTimeCallbackToken } =
+        await service.rotateFaceServerToken('admin1', 'dev1');
+      const fsc = device.metadataJson!.face_server_config as any;
+      // hash mới khớp token trả về
+      const expectHash = nodeCrypto
+        .createHash('sha256')
+        .update(oneTimeCallbackToken)
+        .digest('hex');
+      expect(fsc.callback_token_hash).toBe(expectHash);
+      expect(fsc.callback_token_hash).not.toBe(OLD_HASH);
+      // revoked cleared
+      expect(fsc.revoked_at).toBeUndefined();
+      expect(fsc.revoked_reason).toBeUndefined();
+      // giữ field config khác
+      expect(fsc.callback_enabled).toBe(true);
+      expect(auditRepoMock.logRotateFaceServerToken).toHaveBeenCalledTimes(1);
+      // SEC: audit KHÔNG chứa token/hash mới
+      const auditArg = auditRepoMock.logRotateFaceServerToken.mock.calls[0][1];
+      expect(JSON.stringify(auditArg)).not.toContain(oneTimeCallbackToken);
+      expect(JSON.stringify(auditArg)).not.toContain(expectHash);
+    });
+
+    it('chưa config → 409 FACE_SERVER_NOT_CONFIGURED', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true }),
+      );
+      await expect(
+        service.rotateFaceServerToken('admin1', 'dev1'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('save lỗi → rollbackTransaction + release (rethrow)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDevice({ callback_enabled: true, callback_token_hash: OLD_HASH }),
+      );
+      queryRunnerMock.manager.save.mockRejectedValueOnce(new Error('db down'));
+      await expect(
+        service.rotateFaceServerToken('admin1', 'dev1'),
+      ).rejects.toThrow('db down');
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.release).toHaveBeenCalled();
+    });
+  });
+
+  describe('TKR-001 — end-to-end: rotate → token cũ chết, token mới sống', () => {
+    it('sau rotate: token CŨ → 401, token MỚI → PASS', async () => {
+      const oldToken = 'old-token';
+      const oldHash = nodeCrypto
+        .createHash('sha256')
+        .update(oldToken)
+        .digest('hex');
+      dataSourceMock.manager.findOne.mockResolvedValue({
+        id: 'dev1',
+        deviceCode: 'FACE-1',
+        deviceType: IoTDeviceType.FACE_SERVER,
+        roomId: 'room1',
+        metadataJson: {
+          face_server_config: {
+            callback_enabled: true,
+            callback_token_hash: oldHash,
+          },
+        },
+      });
+      const { device, oneTimeCallbackToken: newToken } =
+        await service.rotateFaceServerToken('admin1', 'dev1');
+
+      const rotatedConfig = device.metadataJson!.face_server_config as any;
+      const deviceAfter = (): any => ({
+        id: 'dev1',
+        deviceCode: 'FACE-1',
+        deviceType: IoTDeviceType.FACE_SERVER,
+        roomId: 'room1',
+        metadataJson: { face_server_config: { ...rotatedConfig } },
+      });
+      const input = (token: string) => ({
+        headers: { 'x-callback-token': token },
+        body: { stranger_id: 's1' },
+        query: {},
+        params: { deviceCode: 'FACE-1' },
+        clientIp: '127.0.0.1',
+        files: [],
+      });
+
+      // token CŨ → 401
+      dataSourceMock.manager.findOne.mockResolvedValue(deviceAfter());
+      await expect(
+        service.receiveStrangerEvent(input(oldToken)),
+      ).rejects.toThrow(UnauthorizedException);
+
+      // token MỚI → PASS
+      dataSourceMock.manager.findOne.mockResolvedValue(deviceAfter());
+      queryRunnerMock.manager.save.mockImplementation(
+        (_e: unknown, obj: any) => obj,
+      );
+      await expect(
+        service.receiveStrangerEvent(input(newToken)),
+      ).resolves.toBeDefined();
     });
   });
 });

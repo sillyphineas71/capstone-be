@@ -15,6 +15,7 @@ category: face-access
 | Ngày | Tóm tắt | Vị trí |
 | :--- | :--- | :--- |
 | 2026-06-17 | Khởi tạo plan.md FMP-001 (service raw SQL, factory+getPortraitBytes, scheduler 2 cron gated, env). | Toàn bộ file |
+| 2026-06-18 | Gộp constraint-safety hardening (nguyên MCS-001) vào FMP-001 — hardening #46/#47, không phải UC mới. | Mục "Constraint-safety hardening" (cuối file) |
 
 ---
 
@@ -114,3 +115,75 @@ scheduler.module: imports + FaceAccessModule.
 ```
 
 > Trạng thái: CHỜ REVIEW sau code. Chưa commit.
+
+## Constraint-safety hardening (rev 2026-06-18, nguyên MCS-001)
+
+### Phạm vi (1 file core + counter)
+```
+faceSync (EVERY_MINUTE)
+  provisionUpcomingMeetings()  → {scanned, skipped}        [#2 + counter]
+    provisionMeeting(m)                                     (tổng hợp participant result)
+      provisionParticipant(m, device, user)                [#2 slot-check TRƯỚC upload]
+        ├─ slot trống            → upload+add+find+upsert(synced)   → 'provisioned'
+        ├─ slot cùng booking synced → return                        → 'noop'
+        ├─ slot cùng booking khác  → upload+add+find+upsert(UPDATE) → 'revived'
+        └─ slot khác booking (active) → warn + return (KHÔNG upload) → 'skipped'
+      upsertMapping(...)         → UPDATE revive set deleted_at=NULL [#3]
+  deprovisionEndedMeetings()
+    removeMapping(mp)            → UPDATE ... deleted_at=now()       [#1]
+```
+
+### Files
+| File | Hành động |
+| :--- | :--- |
+| `src/modules/face-access/services/face-provisioning.service.ts` | EDIT — #1 `removeMapping` (+`deleted_at=now()`); #3 `upsertMapping` UPDATE (+`deleted_at=NULL`); #2 `provisionParticipant` slot-check + rẽ nhánh; `provisionMeeting`/`provisionUpcomingMeetings` tổng hợp `skipped`. |
+| `src/modules/scheduler/scheduler.service.ts` | EDIT (nhỏ) — log thêm `skipped` trong `faceSync` (optional, chỉ chuỗi log). |
+| `src/modules/face-access/services/face-provisioning.service.spec.ts` | EDIT — test #1/#2/#3 + counter (≥80% branch). |
+
+### #1 removeMapping (+ #2b cleanup query)
+- UPDATE: `SET sync_status='deleted', deleted_at=now(), last_synced_at=now() WHERE id=$1`.
+- **null-uid-safe**: giữ guard `if (mp.device_person_id)` → chỉ `deletePerson(mp.device_person_id)` khi uid NOT NULL; null → bỏ qua deletePerson, **vẫn** set `deleted_at`.
+- **#2b** `deprovisionEndedMeetings` query: bỏ điều kiện `mp.sync_status='synced'`, đổi thành **`mp.deleted_at IS NULL`** (mọi sync_status) để cleanup luôn row `failed`/`pending` của họp đã kết thúc:
+  ```sql
+  ... FROM device_user_mappings mp JOIN meetings me ON me.id=(mp.metadata_json->>'bookingId')::uuid
+   WHERE mp.deleted_at IS NULL AND me.status <> 'cancelled'
+     AND me.end_time <= now() - ($1 * interval '1 minute') LIMIT 500
+  ```
+
+### #3 upsertMapping (revive)
+- Nhánh UPDATE thêm `deleted_at = NULL` vào SET (mọi revive → row "sống" lại).
+- INSERT giữ nguyên (row mới mặc định deleted_at NULL).
+- existing-check giữ `(user,device,bookingId)` (không lọc deleted_at) — đúng vì #2 đã đảm bảo chỉ tới upsert khi slot trống / cùng booking (không có row sống khác booking).
+
+### #2 provisionParticipant — slot-check trước upload
+> **GỠ idempotency-check cũ** ([:123-131](../../../../src/modules/face-access/services/face-provisioning.service.ts) `SELECT sync_status … if synced → return`). Slot-check dưới đây thay thế hoàn toàn (nhánh "cùng booking + synced → noop"). KHÔNG để 2 chỗ cùng quyết skip.
+```
+uname = hash(userId, meeting.id)
+slot = SELECT id, sync_status, metadata_json->>'bookingId' AS booking_id
+        FROM device_user_mappings
+       WHERE device_id=$1 AND user_id=$2 AND deleted_at IS NULL LIMIT 1
+if (!slot) {
+  // trống → bình thường
+  bytes = getPortraitBytes(userId); if (!bytes) return 'noop'(skip-enroll)
+  ref = uploadFace; addPerson; uid = findUidByName
+  upsertMapping(synced); return 'provisioned'
+}
+if (slot.booking_id === meeting.id) {
+  if (slot.sync_status === 'synced') return 'noop'   // idempotent
+  // cùng booking, chưa synced → revive
+  bytes = getPortraitBytes; if (!bytes) return 'noop'
+  upload+add+find; upsertMapping(synced)  // UPDATE row cũ (#3 deleted_at=NULL)
+  return 'revived'
+}
+// slot bận bởi meeting KHÁC đang sống → skip
+logger.warn(`slot busy: device=… user=… holder booking=${slot.booking_id} ≠ ${meeting.id} — skip provision (defer).`)
+return 'skipped'   // KHÔNG upload, KHÔNG ghi mapping
+```
+- `provisionMeeting`: gom kết quả participant; trả `{ skipped: n }`.
+- `provisionUpcomingMeetings`: cộng dồn `skipped` → `{ scanned, skipped }`.
+- Lưu ý `getPortraitBytes` null vẫn skip-enroll như cũ (không tính vào `skipped` constraint — đó là thiếu ảnh, phân biệt rõ trong log nếu cần).
+
+### Quyết định
+- **Bất biến 1 slot sống/(device,user)** giữ bằng slot-check trước upload + #1 freed slot + #3 revive — KHÔNG repoint.
+- Slot bận → defer (skip), tick sau (sau deprovision M1) tự provision M2 → M2 nhận diện trễ ≤ GRACE (chấp nhận).
+- KHÔNG migration; raw parameterized; không đụng FAT/DCO/UMR.

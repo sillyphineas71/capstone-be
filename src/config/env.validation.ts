@@ -137,6 +137,8 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_NO_SHOW_CHECK_CRON: Joi.string().default('*/5 * * * *'),
   SCHEDULER_AUTO_RELEASE_ENABLED: Joi.boolean().default(false),
   SCHEDULER_AUTO_RELEASE_CRON: Joi.string().default('*/5 * * * *'),
+  // EVD-001 (#34): cron phát hiện phòng trống sớm (gated default OFF).
+  SCHEDULER_EARLY_VACANCY_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_CRON: Joi.string().default('0 * * * *'),
 
@@ -157,6 +159,35 @@ export const envValidationSchema = Joi.object({
   NOSHOW_INTERNAL_TOKEN: Joi.string().allow('').default(''),
   // NSC-001: ngưỡng no-show (phút) — fallback khi system_configs chưa cấu hình (#35).
   NO_SHOW_THRESHOLD_MINUTES: Joi.number().integer().min(1).default(15),
+  // NSL-001 (#32/#33/#35): grace cảnh báo + grace auto-release (phút) + bật email cảnh báo.
+  NO_SHOW_WARNING_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
+  NO_SHOW_AUTO_RELEASE_GRACE_MINUTES: Joi.number().integer().min(1).default(5),
+  NO_SHOW_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
+  // EVD-001 (#34/#48): ngưỡng early-vacancy (phút) + bật email cảnh báo trống sớm.
+  EARLY_VACANCY_EMPTY_MINUTES: Joi.number().integer().min(1).default(10),
+  EARLY_VACANCY_MIN_REMAINING_MINUTES: Joi.number()
+    .integer()
+    .min(0)
+    .default(15),
+  EARLY_VACANCY_MIN_ELAPSED_MINUTES: Joi.number().integer().min(0).default(10),
+  EARLY_VACANCY_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
+  // IVS-001 (#36): IVSS bridge sidecar — base URL + shared token (2 chiều, R1) + group + timeout.
+  IVSS_BRIDGE_BASE_URL: Joi.string().allow('').default(''),
+  IVSS_BRIDGE_TOKEN: Joi.string().allow('').default(''),
+  IVSS_DEFAULT_GROUP: Joi.string().allow('').default(''),
+  IVSS_BRIDGE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(30000)
+    .default(8000),
+  // IPS-001 (#37): cron đồng bộ person IVSS (gated default OFF) + lead/grace (phút).
+  SCHEDULER_IVSS_SYNC_ENABLED: Joi.boolean().default(false),
+  IVSS_SYNC_LEAD_MINUTES: Joi.number().integer().min(1).default(5),
+  IVSS_SYNC_GRACE_MINUTES: Joi.number().integer().min(0).default(5),
+  // IRP-001 (#40): broadcast realtime presence qua WS (gated default OFF).
+  // OWED-BLOCKER: WS auth handshake là tiền-điều-kiện bật =true trên prod
+  // (WS hiện vô danh — bật khi chưa auth = rò vị trí cá nhân).
+  IVSS_REALTIME_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),
@@ -171,6 +202,14 @@ export const envValidationSchema = Joi.object({
   ATTENDANCE_LATE_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
   // FAT-001: bật debug log payload verify callback (đã strip SanpPic).
   FACE_VERIFY_DEBUG: Joi.boolean().default(false),
+  // DCO-001: giá trị info.Direction = RA (check-out). Giả định 2=out/1=in, xác nhận live.
+  FACE_DIRECTION_OUT_VALUE: Joi.string().default('2'),
+  // UMR-001: cửa sổ (phút) lấy verify gần đây cho danh sách unmapped (mặc định 24h).
+  FACE_UNMAPPED_WINDOW_MINUTES: Joi.number().integer().min(1).default(1440),
+  // SAL-001 (#20): throttle cảnh báo stranger (giây/device), window list (phút), email opt-in.
+  STRANGER_ALERT_THROTTLE_SECONDS: Joi.number().integer().min(1).default(300),
+  STRANGER_ALERT_WINDOW_MINUTES: Joi.number().integer().min(1).default(1440),
+  STRANGER_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
 
   // ─── L. System Config Cache ──────────────────────────────────────────────────
   SYSTEM_CONFIG_CACHE_ENABLED: Joi.boolean().default(true),

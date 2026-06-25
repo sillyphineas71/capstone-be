@@ -5,6 +5,7 @@ import { SchedulerService } from './scheduler.service.js';
 import { IotModule } from '../iot/iot.module.js';
 import { RoomsModule } from '../rooms/rooms.module.js';
 import { FaceAccessModule } from '../face-access/face-access.module.js';
+import { IvssModule } from '../ivss/ivss.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -25,6 +26,7 @@ import { FaceAccessModule } from '../face-access/face-access.module.js';
     IotModule,
     RoomsModule,
     FaceAccessModule,
+    IvssModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

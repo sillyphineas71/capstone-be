@@ -28,6 +28,22 @@ describe('parseVerifyPayload (FAT-001 ingestion)', () => {
     expect(r.personName).toBe('u1:m1');
   });
 
+  it('DCO-001 PURE: trích directionRaw/opendoorWay thô, KHÔNG suy in/out, KHÔNG đọc env', () => {
+    const r = parseVerifyPayload(
+      realPayload({ info: { Direction: 2, OpendoorWay: 1 } }),
+    );
+    expect(r.directionRaw).toBe('2'); // số → chuỗi thô
+    expect(r.opendoorWay).toBe('1');
+    // ParsedVerify KHÔNG có field 'direction' (map IN/OUT làm ở service).
+    expect('direction' in r).toBe(false);
+  });
+
+  it('DCO-001: thiếu Direction/OpendoorWay → null', () => {
+    const r = parseVerifyPayload(realPayload());
+    expect(r.directionRaw).toBeNull();
+    expect(r.opendoorWay).toBeNull();
+  });
+
   it('operator ≠ VerifyPush → KHÔNG hợp lệ', () => {
     const r = parseVerifyPayload(realPayload({ operator: 'Heartbeat' }));
     expect(r.isValid).toBe(false);

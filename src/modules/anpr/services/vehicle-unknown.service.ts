@@ -1,0 +1,105 @@
+import { Injectable } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import type { ListUnknownVehiclesQueryDto } from '../dto/list-unknown-vehicles-query.dto.js';
+
+interface UnknownRow {
+  plate_number: string | null;
+  channel_id: number | null;
+  direction: string | null;
+  event_time: Date;
+  utc: string | null;
+  plate_color: string | null;
+  vehicle_type: string | null;
+}
+interface CountRow {
+  total: number;
+}
+
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface UnknownVehicleItem {
+  plateNumber: string | null;
+  channelId: number | null;
+  direction: string | null;
+  eventTime: Date;
+  utc: string | null;
+  plateColor: string | null;
+  vehicleType: string | null;
+}
+
+/**
+ * VehicleUnknownService (VUN-001 / UC6) — admin xem danh sách biển lạ (unmatched) đã ghi bởi UC5.
+ *
+ * Read-only: query iot_device_events (raw SQL, mirror face unmapped-review).
+ * DATA-01 C1-isolation: CHỈ event_type='ivss_vehicle_event' AND payload_json->>'matchState'='unmatched'
+ *   → KHÔNG nhiễm face. JSON path TOP-LEVEL (UC5 lưu top-level, KHÁC face extracted_fields).
+ * SEC-03: bind tham số (from/to/limit/offset). SEC-01: KHÔNG imageBase64 (UC5 vốn không lưu).
+ * KHÔNG dùng VehicleRegistrationService (raw query riêng).
+ */
+@Injectable()
+export class VehicleUnknownService {
+  constructor(private readonly dataSource: DataSource) {}
+
+  async listUnknown(
+    query: ListUnknownVehiclesQueryDto,
+  ): Promise<{ items: UnknownVehicleItem[]; meta: PaginationMeta }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const offset = (page - 1) * limit;
+
+    // WHERE base = literal (KHÔNG user input). Time-range build động → bind ($1, $2...).
+    const params: unknown[] = [];
+    let where = `event_type = 'ivss_vehicle_event' AND payload_json->>'matchState' = 'unmatched'`;
+    if (query.from) {
+      params.push(query.from);
+      where += ` AND event_time >= $${params.length}`;
+    }
+    if (query.to) {
+      params.push(query.to);
+      where += ` AND event_time <= $${params.length}`;
+    }
+
+    // total: COUNT cùng WHERE (KHÔNG limit/offset).
+    const countRows: CountRow[] = await this.dataSource.manager.query(
+      `SELECT COUNT(*)::int AS total FROM iot_device_events WHERE ${where}`,
+      params,
+    );
+    const total = countRows[0]?.total ?? 0;
+
+    // rows: thêm limit/offset SAU params động → bind index liên tục.
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
+    const rows: UnknownRow[] = await this.dataSource.manager.query(
+      `SELECT payload_json->>'plateNumber'        AS plate_number,
+              (payload_json->>'channelId')::int   AS channel_id,
+              payload_json->>'direction'          AS direction,
+              event_time,
+              payload_json->>'utc'                AS utc,
+              payload_json->>'plateColor'         AS plate_color,
+              payload_json->>'vehicleType'        AS vehicle_type
+         FROM iot_device_events
+        WHERE ${where}
+        ORDER BY event_time DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, limit, offset],
+    );
+
+    return {
+      items: rows.map((r) => ({
+        plateNumber: r.plate_number,
+        channelId: r.channel_id,
+        direction: r.direction,
+        eventTime: r.event_time,
+        utc: r.utc,
+        plateColor: r.plate_color,
+        vehicleType: r.vehicle_type,
+      })),
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+}

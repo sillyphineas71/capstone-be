@@ -124,6 +124,45 @@ export class IotAuditRepository {
     );
   }
 
+  async logRevokeFaceServerToken(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      reason: string | null;
+    },
+  ): Promise<void> {
+    // SEC-01: KHÔNG ghi token/hash. reason là metadata không nhạy cảm.
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'revoke_face_server_token', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [
+        params.userId,
+        params.deviceId,
+        JSON.stringify({ reason: params.reason }),
+      ],
+    );
+  }
+
+  async logRotateFaceServerToken(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+    },
+  ): Promise<void> {
+    // SEC-01: KHÔNG ghi token/hash mới — chỉ ghi sự kiện rotate.
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'rotate_face_server_token', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [params.userId, params.deviceId, JSON.stringify({ rotated: true })],
+    );
+  }
+
   async logConfigureRtsp(
     entityManager: EntityManager,
     params: {

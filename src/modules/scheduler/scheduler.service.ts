@@ -3,7 +3,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
+import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
+import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
+import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -26,22 +29,53 @@ export class SchedulerService {
   private readonly reminderEnabled: boolean;
   private readonly deviceOfflineDetectEnabled: boolean;
   private readonly faceSyncEnabled: boolean;
+  private readonly earlyVacancyEnabled: boolean;
+  private readonly ivssSyncEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly iotDevicesService: IotDevicesService,
     private readonly noShowDetectionService: NoShowDetectionService,
+    private readonly noShowLifecycleService: NoShowLifecycleService,
+    private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
+    private readonly ivssPersonSyncService: IvssPersonSyncService,
   ) {
-    this.schedulerEnabled = this.configService.get<boolean>('SCHEDULER_ENABLED', true);
-    this.noShowEnabled = this.configService.get<boolean>('SCHEDULER_NO_SHOW_CHECK_ENABLED', false);
-    this.autoReleaseEnabled = this.configService.get<boolean>('SCHEDULER_AUTO_RELEASE_ENABLED', false);
-    this.reminderEnabled = this.configService.get<boolean>('SCHEDULER_NOTIFICATION_REMINDER_ENABLED', false);
-    this.deviceOfflineDetectEnabled = this.configService.get<boolean>('DEVICE_OFFLINE_DETECT_ENABLED', true);
-    this.faceSyncEnabled = this.configService.get<boolean>('FACE_SYNC_ENABLED', false);
+    this.schedulerEnabled = this.configService.get<boolean>(
+      'SCHEDULER_ENABLED',
+      true,
+    );
+    this.noShowEnabled = this.configService.get<boolean>(
+      'SCHEDULER_NO_SHOW_CHECK_ENABLED',
+      false,
+    );
+    this.autoReleaseEnabled = this.configService.get<boolean>(
+      'SCHEDULER_AUTO_RELEASE_ENABLED',
+      false,
+    );
+    this.reminderEnabled = this.configService.get<boolean>(
+      'SCHEDULER_NOTIFICATION_REMINDER_ENABLED',
+      false,
+    );
+    this.deviceOfflineDetectEnabled = this.configService.get<boolean>(
+      'DEVICE_OFFLINE_DETECT_ENABLED',
+      true,
+    );
+    this.faceSyncEnabled = this.configService.get<boolean>(
+      'FACE_SYNC_ENABLED',
+      false,
+    );
+    this.earlyVacancyEnabled = this.configService.get<boolean>(
+      'SCHEDULER_EARLY_VACANCY_ENABLED',
+      false,
+    );
+    this.ivssSyncEnabled = this.configService.get<boolean>(
+      'SCHEDULER_IVSS_SYNC_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled}`,
     );
   }
 
@@ -56,7 +90,7 @@ export class SchedulerService {
       const p = await this.faceProvisioningService.provisionUpcomingMeetings();
       const d = await this.faceProvisioningService.deprovisionEndedMeetings();
       this.logger.log(
-        `[Scheduler] face-sync: provisioned-scan=${p.scanned} deprovisioned-scan=${d.scanned}`,
+        `[Scheduler] face-sync: provisioned-scan=${p.scanned} skipped=${p.skipped} deprovisioned-scan=${d.scanned}`,
       );
     } catch (e) {
       this.logger.error(
@@ -104,11 +138,15 @@ export class SchedulerService {
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    // NSC-001 (#31): detect() KHÔNG được ném ra ngoài cron.
+    // NSC-001 (#31) + NSL-001 (OQ-4): detect → reconcile-presence → warn.
+    // detect() commit case 'risk' trước; reconcile/warn re-query sau. KHÔNG ném ra cron.
     try {
-      const r = await this.noShowDetectionService.detect();
+      const d = await this.noShowDetectionService.detect();
+      const rec = await this.noShowLifecycleService.reconcilePresence();
+      const w = await this.noShowLifecycleService.warnBatch();
       this.logger.log(
-        `[Scheduler] no-show-check: scanned=${r.scanned} created=${r.created}`,
+        `[Scheduler] no-show-check: detected scanned=${d.scanned} created=${d.created}` +
+          ` | reconcile resolved=${rec.resolved} | warn scanned=${w.scanned} warned=${w.warned}`,
       );
     } catch (e) {
       this.logger.error(
@@ -129,8 +167,65 @@ export class SchedulerService {
   async autoRelease(): Promise<void> {
     if (!this.schedulerEnabled || !this.autoReleaseEnabled) return;
 
-    this.logger.log('[Scheduler] autoRelease() triggered — TODO: implement auto-release room logic.');
-    // TODO: inject UtilizationService và gọi autoReleaseRooms()
+    // NSL-001 (#33): release case warning_sent quá deadline. KHÔNG ném ra cron (ARCH-02).
+    try {
+      const r = await this.noShowLifecycleService.autoReleaseBatch();
+      this.logger.log(
+        `[Scheduler] auto-release: scanned=${r.scanned} released=${r.released} skipped=${r.skipped}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] auto-release failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * EVD-001 (#34) — phát hiện phòng trống sớm (họp đã bắt đầu rồi trống).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_EARLY_VACANCY_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'early-vacancy' })
+  async earlyVacancy(): Promise<void> {
+    if (!this.schedulerEnabled || !this.earlyVacancyEnabled) return;
+
+    try {
+      const r = await this.earlyVacancyService.detect();
+      this.logger.log(
+        `[Scheduler] early-vacancy: scanned=${r.scanned} flagged=${r.flagged}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] early-vacancy failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * IPS-001 (#37) — đồng bộ person IVSS theo cuộc họp (enroll + cleanup).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_IVSS_SYNC_ENABLED (default OFF). KHÔNG ném ra cron (ARCH-02).
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'ivss-sync' })
+  async ivssSync(): Promise<void> {
+    if (!this.schedulerEnabled || !this.ivssSyncEnabled) return;
+
+    try {
+      const p = await this.ivssPersonSyncService.provisionUpcoming();
+      const c = await this.ivssPersonSyncService.cleanupEnded();
+      this.logger.log(
+        `[Scheduler] ivss-sync: provision scanned=${p.scanned} enrolled=${p.enrolled} skipped=${p.skipped} failed=${p.failed}` +
+          ` | cleanup scanned=${c.scanned} removed=${c.removed} failed=${c.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] ivss-sync failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
   }
 
   /**
@@ -143,7 +238,9 @@ export class SchedulerService {
   async sendReminders(): Promise<void> {
     if (!this.schedulerEnabled || !this.reminderEnabled) return;
 
-    this.logger.log('[Scheduler] sendReminders() triggered — TODO: implement reminder notification logic.');
+    this.logger.log(
+      '[Scheduler] sendReminders() triggered — TODO: implement reminder notification logic.',
+    );
     // TODO: inject NotificationsService và gọi sendScheduledReminders()
   }
 }

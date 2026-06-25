@@ -24,6 +24,9 @@ interface MappingRow {
   metadata_json: Record<string, unknown> | null;
 }
 
+/** Kết quả provision 1 participant (MCS #2). */
+type ProvisionResult = 'provisioned' | 'noop' | 'revived' | 'skipped';
+
 /**
  * FaceProvisioningService (FMP-001 / Ticket B) — đẩy/gỡ khuôn mặt theo cuộc họp.
  *
@@ -56,7 +59,10 @@ export class FaceProvisioningService {
   }
 
   // ── PROVISION ──────────────────────────────────────────────────────────
-  async provisionUpcomingMeetings(): Promise<{ scanned: number }> {
+  async provisionUpcomingMeetings(): Promise<{
+    scanned: number;
+    skipped: number;
+  }> {
     const lead = this.configService.get<number>('FACE_SYNC_LEAD_MINUTES', 5);
     const meetings: MeetingRow[] = await this.dataSource.manager.query(
       `SELECT id, room_id, start_time, end_time FROM meetings
@@ -65,24 +71,26 @@ export class FaceProvisioningService {
          AND end_time > now()`,
       [lead],
     );
+    let skipped = 0;
     for (const m of meetings) {
       try {
-        await this.provisionMeeting(m);
+        const r = await this.provisionMeeting(m);
+        skipped += r.skipped;
       } catch (e) {
         this.logger.error(`provisionMeeting ${m.id} failed: ${this.msg(e)}`);
       }
     }
-    return { scanned: meetings.length };
+    return { scanned: meetings.length, skipped };
   }
 
-  async provisionMeeting(meeting: MeetingRow): Promise<void> {
-    if (!meeting.room_id) return;
+  async provisionMeeting(meeting: MeetingRow): Promise<{ skipped: number }> {
+    if (!meeting.room_id) return { skipped: 0 };
     const device = await this.findFaceDevice(meeting.room_id);
     if (!device) {
       this.logger.warn(
         `No face_server device in room ${meeting.room_id} (meeting ${meeting.id}).`,
       );
-      return;
+      return { skipped: 0 };
     }
 
     const participants: Array<{ user_id: string }> =
@@ -91,9 +99,11 @@ export class FaceProvisioningService {
         [meeting.id],
       );
 
+    let skipped = 0;
     for (const p of participants) {
       try {
-        await this.provisionParticipant(meeting, device, p.user_id);
+        const r = await this.provisionParticipant(meeting, device, p.user_id);
+        if (r === 'skipped') skipped++;
       } catch (e) {
         await this.upsertMapping({
           deviceId: device.id,
@@ -111,31 +121,48 @@ export class FaceProvisioningService {
         );
       }
     }
+    return { skipped };
   }
 
   private async provisionParticipant(
     meeting: MeetingRow,
     device: DeviceRow,
     userId: string,
-  ): Promise<void> {
+  ): Promise<ProvisionResult> {
     const uname = this.unameOf(userId, meeting.id);
 
-    // Idempotency: đã synced cho (user, device, bookingId) → bỏ qua.
-    const existing: Array<{ sync_status: string }> =
-      await this.dataSource.manager.query(
-        `SELECT sync_status FROM device_user_mappings
-         WHERE user_id = $1 AND device_id = $2 AND metadata_json->>'bookingId' = $3
-         LIMIT 1`,
-        [userId, device.id, meeting.id],
+    // MCS #2: slot-check (device,user) còn sống TRƯỚC upload — THAY idempotency-check cũ.
+    // DB cho 1 mapping sống / (device,user) (partial-unique deleted_at IS NULL).
+    const slot: Array<{
+      id: string;
+      sync_status: string;
+      booking_id: string | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, sync_status, metadata_json->>'bookingId' AS booking_id
+       FROM device_user_mappings
+       WHERE device_id = $1 AND user_id = $2 AND deleted_at IS NULL
+       LIMIT 1`,
+      [device.id, userId],
+    );
+    const live = slot?.[0];
+    if (live && live.booking_id !== meeting.id) {
+      // Slot bận bởi meeting KHÁC đang sống → defer (KHÔNG upload, KHÔNG ghi mapping).
+      this.logger.warn(
+        `slot busy: device=${device.id} user=${userId} holder booking=${live.booking_id} ≠ ${meeting.id} — skip provision (defer).`,
       );
-    if (existing[0]?.sync_status === 'synced') return;
+      return 'skipped';
+    }
+    if (live && live.sync_status === 'synced') {
+      // Cùng booking + đã synced → idempotent (thay check :123-131 cũ).
+      return 'noop';
+    }
 
     const bytes = await this.faceProfileService.getPortraitBytes(userId);
     if (!bytes) {
       this.logger.warn(
         `No portrait for user ${userId} (meeting ${meeting.id}) — skip enroll.`,
       );
-      return;
+      return 'noop';
     }
 
     const provider = this.factory.create({
@@ -167,6 +194,8 @@ export class FaceProvisioningService {
       status: 'synced',
       error: null,
     });
+    // live cùng booking (chưa synced) → revive; không có live → provisioned.
+    return live ? 'revived' : 'provisioned';
   }
 
   // ── DEPROVISION ────────────────────────────────────────────────────────
@@ -178,10 +207,13 @@ export class FaceProvisioningService {
   async deprovisionEndedMeetings(): Promise<{ scanned: number }> {
     const grace = this.configService.get<number>('FACE_SYNC_GRACE_MINUTES', 5);
     const maps: MappingRow[] = await this.dataSource.manager.query(
+      // MCS #1 cleanup: lấy MỌI mapping còn sống (mọi sync_status: failed/pending/synced)
+      // của họp đã kết thúc ≥ grace → freed slot (không để failed/pending chiếm vĩnh viễn).
       `SELECT mp.id, mp.device_id, mp.device_person_id, mp.sync_status, mp.metadata_json
        FROM device_user_mappings mp
        JOIN meetings me ON me.id = (mp.metadata_json->>'bookingId')::uuid
-       WHERE mp.sync_status = 'synced' AND mp.deleted_at IS NULL
+       WHERE mp.deleted_at IS NULL
+         AND COALESCE(mp.metadata_json->>'source', '') <> 'ivss'
          AND me.status <> 'cancelled'
          AND me.end_time <= now() - ($1 * interval '1 minute')
        LIMIT 500`,
@@ -231,7 +263,9 @@ export class FaceProvisioningService {
       `SELECT mp.id, mp.device_id, mp.device_person_id, mp.sync_status, mp.metadata_json
        FROM device_user_mappings mp
        JOIN meetings me ON me.id = (mp.metadata_json->>'bookingId')::uuid
-       WHERE mp.sync_status = 'synced' AND me.end_time <= now() - ($1 * interval '1 minute')
+       WHERE mp.sync_status = 'synced'
+         AND COALESCE(mp.metadata_json->>'source', '') <> 'ivss'
+         AND me.end_time <= now() - ($1 * interval '1 minute')
        LIMIT 500`,
       [grace],
     );
@@ -252,7 +286,10 @@ export class FaceProvisioningService {
       metadata_json: Record<string, unknown> | null;
     }> = await this.dataSource.manager.query(
       `SELECT device_id, device_person_id, device_person_code, metadata_json
-       FROM device_user_mappings WHERE sync_status = 'synced' LIMIT 500`,
+       FROM device_user_mappings
+       WHERE sync_status = 'synced'
+         AND COALESCE(metadata_json->>'source', '') <> 'ivss'
+       LIMIT 500`,
     );
     for (const mp of synced) {
       try {
@@ -295,7 +332,8 @@ export class FaceProvisioningService {
       }
     }
     await this.dataSource.manager.query(
-      `UPDATE device_user_mappings SET sync_status = 'deleted', last_synced_at = now() WHERE id = $1`,
+      // MCS #1: soft-delete THẬT (set deleted_at) → giải phóng 2 partial-unique slot.
+      `UPDATE device_user_mappings SET sync_status = 'deleted', deleted_at = now(), last_synced_at = now() WHERE id = $1`,
       [mp.id],
     );
   }
@@ -343,11 +381,12 @@ export class FaceProvisioningService {
     const synced = params.status === 'synced';
     if (existing[0]) {
       await this.dataSource.manager.query(
+        // MCS #3: revive → clear deleted_at (kẻo synced mà deleted_at cũ → resolveMapping trượt).
         `UPDATE device_user_mappings SET
            device_person_id = $2, device_person_code = $3, device_person_name = $3,
            face_registered = $4, sync_status = $5, last_synced_at = now(),
            last_sync_error = $6, registered_at = COALESCE(registered_at, $7),
-           metadata_json = $8
+           metadata_json = $8, deleted_at = NULL
          WHERE id = $1`,
         [
           existing[0].id,

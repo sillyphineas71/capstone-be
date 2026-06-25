@@ -1,18 +1,28 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/unbound-method */
+import {
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { NoShowController } from './no-show.controller.js';
 import { InternalTokenGuard } from '../guards/internal-token.guard.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 
 describe('NoShowController (NSC-001)', () => {
   let controller: NoShowController;
   let serviceMock: any;
+  let lifecycleMock: any;
 
   beforeEach(() => {
     serviceMock = {
       create: jest.fn(),
       update: jest.fn(),
     };
-    controller = new NoShowController(serviceMock);
+    lifecycleMock = {
+      manualRelease: jest.fn(),
+    };
+    controller = new NoShowController(serviceMock, lifecycleMock);
   });
 
   it('createInternal: created=true → status 201 + envelope', async () => {
@@ -62,6 +72,62 @@ describe('NoShowController (NSC-001)', () => {
     await expect(
       controller.update('nsc-1', {} as any, { user: {} } as any),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  // ── #33b manual release endpoint (fold A: map mã trả) ──
+  const callRelease = () =>
+    controller.release('nsc-1', { reason: 'admin reason' }, {
+      user: { sub: 'admin1' },
+    } as any);
+
+  it('release: success → envelope released:true + userId từ token', async () => {
+    lifecycleMock.manualRelease.mockResolvedValue({
+      noShowCaseId: 'nsc-1',
+      detectionStatus: 'released',
+      released: true,
+    });
+    const r = await callRelease();
+    expect(lifecycleMock.manualRelease).toHaveBeenCalledWith(
+      'nsc-1',
+      'admin reason',
+      'admin1',
+    );
+    expect(r.success).toBe(true);
+    expect(r.data).toMatchObject({ released: true });
+  });
+
+  it('release: 200 no-op (already released) → released:false', async () => {
+    lifecycleMock.manualRelease.mockResolvedValue({
+      noShowCaseId: 'nsc-1',
+      detectionStatus: 'released',
+      released: false,
+    });
+    const r = await callRelease();
+    expect(r.data).toMatchObject({ released: false });
+  });
+
+  it('release: case không tồn tại → 404 propagate', async () => {
+    lifecycleMock.manualRelease.mockRejectedValue(new NotFoundException());
+    await expect(callRelease()).rejects.toThrow(NotFoundException);
+  });
+
+  it('release: dismissed|resolved → 400 INVALID_NO_SHOW_TRANSITION propagate', async () => {
+    lifecycleMock.manualRelease.mockRejectedValue(
+      new BadRequestException({ code: 'INVALID_NO_SHOW_TRANSITION' }),
+    );
+    await expect(callRelease()).rejects.toThrow(BadRequestException);
+  });
+
+  it('release: booking_changed → 409 BOOKING_NOT_RELEASABLE propagate', async () => {
+    lifecycleMock.manualRelease.mockRejectedValue(
+      new ConflictException({ code: 'BOOKING_NOT_RELEASABLE' }),
+    );
+    await expect(callRelease()).rejects.toThrow(ConflictException);
+  });
+
+  it('guard wiring: release endpoint có JwtAuthGuard (SEC-02)', () => {
+    const guards = Reflect.getMetadata('__guards__', controller.release) ?? [];
+    expect(guards).toContain(JwtAuthGuard);
   });
 });
 

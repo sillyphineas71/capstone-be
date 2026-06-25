@@ -19,6 +19,7 @@ import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
 import { ListIotDevicesQueryDto } from '../dto/list-iot-devices-query.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
+import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js';
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -191,6 +192,65 @@ export class IotDevicesController {
       success: true,
       message: 'RTSP configuration updated successfully',
       data: toIotDeviceResponse(device),
+    };
+  }
+
+  // TKR-001 (#11): thu hồi callback token face-server. POST action 200, body reason optional.
+  @Post(':id/face-server/revoke')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:configure_face_server')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async revokeFaceServerToken(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RevokeFaceServerTokenDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const device = await this.iotDevicesService.revokeFaceServerToken(
+      userId,
+      id,
+      dto,
+    );
+
+    return {
+      success: true,
+      message: 'Face server callback token revoked successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  // TKR-001 (#11): xoay callback token face-server. POST action 200, không body.
+  // Trả one_time_callback_token (plaintext 1 lần).
+  @Post(':id/face-server/rotate')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
+  @Permissions('iot_devices:configure_face_server')
+  async rotateFaceServerToken(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const result = await this.iotDevicesService.rotateFaceServerToken(
+      userId,
+      id,
+    );
+
+    return {
+      success: true,
+      message: 'Face server callback token rotated successfully',
+      data: {
+        device: toIotDeviceResponse(result.device),
+        one_time_callback_token: result.oneTimeCallbackToken,
+      },
     };
   }
 

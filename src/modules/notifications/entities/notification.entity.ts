@@ -13,6 +13,7 @@ export enum NotificationType {
   REMINDER = 'reminder',
   CANCELLATION = 'cancellation',
   NO_SHOW_ALERT = 'no_show_alert',
+  ROOM_EARLY_VACANCY = 'room_early_vacancy',
   UNKNOWN_FACE_ALERT = 'unknown_face_alert',
   MINUTES_DISTRIBUTION = 'minutes_distribution',
   MEETING_REQUEST_CREATED = 'meeting_request_created',

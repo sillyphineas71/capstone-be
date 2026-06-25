@@ -1,0 +1,84 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/unbound-method */
+import { AnprInternalTokenGuard } from '../guards/anpr-internal-token.guard.js';
+import { VehicleWebhookController } from './vehicle-webhook.controller.js';
+
+describe('VehicleWebhookController (VWH-001 / UC4)', () => {
+  let controller: VehicleWebhookController;
+  let handler: { onVehicleEvent: jest.Mock };
+
+  const dto = (over: any = {}) => ({
+    plateNumber: '30A-123.45',
+    channelId: 5,
+    utc: '2026-06-24T09:00:00.000Z',
+    ...over,
+  });
+
+  beforeEach(() => {
+    handler = { onVehicleEvent: jest.fn().mockResolvedValue(undefined) };
+    controller = new VehicleWebhookController(handler);
+  });
+
+  it('payload hợp lệ → 200 accepted + handler.onVehicleEvent gọi 1 lần', async () => {
+    const r = await controller.receiveEvent(dto());
+    expect(handler.onVehicleEvent).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({
+      success: true,
+      message: 'Vehicle event accepted',
+      data: { accepted: true },
+    });
+  });
+
+  it('normalize single-source UC1: "30A-123.45" → plateNumber="30A12345", plateRaw giữ gốc', async () => {
+    await controller.receiveEvent(dto());
+    const event = handler.onVehicleEvent.mock.calls[0][0];
+    expect(event.plateNumber).toBe('30A12345');
+    expect(event.plateRaw).toBe('30A-123.45');
+    expect(event.channelId).toBe(5);
+  });
+
+  it('always-ack: handler ném lỗi → vẫn trả 200 accepted:true', async () => {
+    handler.onVehicleEvent.mockRejectedValue(new Error('UC5 down'));
+    const r = await controller.receiveEvent(dto());
+    expect(r.data).toEqual({ accepted: true });
+  });
+
+  it('optional fields (eventAction/màu/type) truyền qua event khi có', async () => {
+    await controller.receiveEvent(
+      dto({
+        eventAction: 'in',
+        plateColor: 'white',
+        vehicleColor: 'black',
+        vehicleType: 'car',
+      }),
+    );
+    const event = handler.onVehicleEvent.mock.calls[0][0];
+    expect(event.eventAction).toBe('in');
+    expect(event.plateColor).toBe('white');
+    expect(event.vehicleType).toBe('car');
+  });
+
+  it('SEC-01: handler lỗi → log KHÔNG chứa imageBase64', async () => {
+    const warn = jest
+      .spyOn((controller as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    handler.onVehicleEvent.mockRejectedValue(new Error('boom'));
+    await controller.receiveEvent(
+      dto({ imageBase64: 'data:image/jpeg;base64,SECRETB64' }),
+    );
+    const logged = warn.mock.calls.map((c) => String(c[0])).join('|');
+    expect(logged).not.toContain('SECRETB64');
+    expect(logged).not.toContain('imageBase64');
+  });
+
+  it('always-ack: handler ném non-Error (string) → vẫn 200 (nhánh "unknown")', async () => {
+    handler.onVehicleEvent.mockRejectedValue('plain string fail');
+    const r = await controller.receiveEvent(dto());
+    expect(r.data).toEqual({ accepted: true });
+  });
+
+  it('guard wiring: route có AnprInternalTokenGuard', () => {
+    const guards =
+      Reflect.getMetadata('__guards__', controller.receiveEvent) ?? [];
+    expect(guards).toContain(AnprInternalTokenGuard);
+  });
+});

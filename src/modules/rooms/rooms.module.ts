@@ -11,11 +11,19 @@ import { AccountsModule } from '../accounts/accounts.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AdministrationModule } from '../administration/administration.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomStatusService } from './services/room-status.service.js';
 import { NoShowController } from './controllers/no-show.controller.js';
+import { NoShowConfigController } from './controllers/no-show-config.controller.js';
+import { EarlyVacancyConfigController } from './controllers/early-vacancy-config.controller.js';
 import { NoShowService } from './services/no-show.service.js';
 import { NoShowDetectionService } from './services/no-show-detection.service.js';
+import { NoShowConfigService } from './services/no-show-config.service.js';
+import { NoShowLifecycleService } from './services/no-show-lifecycle.service.js';
+import { EarlyVacancyService } from './services/early-vacancy.service.js';
+import { EarlyVacancyConfigService } from './services/early-vacancy-config.service.js';
 
 /**
  * RoomsModule quản lý tất cả entities thuộc domain Room & Utilization:
@@ -31,6 +39,8 @@ import { NoShowDetectionService } from './services/no-show-detection.service.js'
     MeetingsModule,
     AuthModule,
     WebsocketModule,
+    NotificationsModule,
+    AdministrationModule,
     JwtModule.register({}),
     CacheModule.register(),
     TypeOrmModule.forFeature([
@@ -41,8 +51,26 @@ import { NoShowDetectionService } from './services/no-show-detection.service.js'
       RoomEventEntity,
     ]),
   ],
-  controllers: [RoomsController, NoShowController],
-  providers: [RoomStatusService, NoShowService, NoShowDetectionService],
-  exports: [TypeOrmModule, NoShowDetectionService],
+  controllers: [
+    RoomsController,
+    NoShowController,
+    NoShowConfigController,
+    EarlyVacancyConfigController,
+  ],
+  providers: [
+    RoomStatusService,
+    NoShowService,
+    NoShowDetectionService,
+    NoShowConfigService,
+    NoShowLifecycleService,
+    EarlyVacancyService,
+    EarlyVacancyConfigService,
+  ],
+  exports: [
+    TypeOrmModule,
+    NoShowDetectionService,
+    NoShowLifecycleService,
+    EarlyVacancyService,
+  ],
 })
 export class RoomsModule {}
