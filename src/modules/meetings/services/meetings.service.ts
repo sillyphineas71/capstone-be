@@ -94,9 +94,13 @@ import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.j
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
 import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
 import { RemoveParticipantResponseDto } from '../dto/remove-participant-response.dto.js';
+import { AddExternalParticipantDto } from '../dto/add-external-participant.dto.js';
+import type { IAddExternalParticipantResponse } from '../dto/add-external-participant-response.dto.js';
 import { RemoveScope } from '../types/remove-scope.type.js';
 import type { IAddInternalParticipantResponse } from '../dto/add-internal-participant-response.dto.js';
 import { MyScheduleQueryDto } from '../dto/my-schedule-query.dto.js';
+import { RemoveExternalParticipantBodyDto } from '../dto/remove-external-participant-body.dto.js';
+import { RemoveExternalParticipantResponseDto } from '../dto/remove-external-participant-response.dto.js';
 import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
 import { ScheduleEventDto } from '../dto/schedule-event.dto.js';
 import { ScheduleRoomDto } from '../dto/schedule-room.dto.js';
@@ -119,7 +123,7 @@ import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.
 import { UserSummaryDto } from '../dto/user-summary.dto.js';
 import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 
-import { WarningTokenUtil } from '../utils/warning-token.util.js';
+import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
 import {
@@ -3326,6 +3330,556 @@ if (meeting.status === MeetingStatus.IN_PROGRESS) {
       removed: true,
       removedAt,
       notificationQueued: true,
+      notificationId,
+      backgroundJobId,
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Add External Meeting Participant (MEET-ADD-EXTERNAL-PARTICIPANT-001)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Thêm khách mời bên ngoài vào cuộc họp đã tạo.
+   * Cho phép Organizer/Host/Manager có quyền `meeting.participant.add.external`.
+   * Chỉ áp dụng cho meeting ở trạng thái scheduled hoặc in_progress.
+   * Kiểm tra sức chứa phòng, duplicate email, và ghi event/audit log trong transaction.
+   * Gửi email invite best-effort sau transaction.
+   */
+  async addExternalParticipant(
+    meetingId: string,
+    dto: AddExternalParticipantDto,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<IAddExternalParticipantResponse> {
+    // ── Step 1: Meeting existence check ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── Step 2: State validation ──
+    if (
+      meeting.status !== MeetingStatus.SCHEDULED &&
+      meeting.status !== MeetingStatus.IN_PROGRESS
+    ) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Cuộc họp không ở trạng thái scheduled hoặc in_progress',
+        error: {
+          code: 'INVALID_MEETING_STATUS',
+          details: { currentStatus: meeting.status },
+        },
+      });
+    }
+
+    // ── Step 3: Authorization check ──
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+    const hasPermission = await this.checkUserPermission(
+      authUser.userId,
+      'meeting.participant.add.external',
+    );
+
+    if (!isOwner && !hasPermission) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền thêm khách mời bên ngoài vào cuộc họp này',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    // ── Step 4: Private meeting check ──
+    if (meeting.visibilityLevel === MeetingVisibilityLevel.PRIVATE && !isOwner) {
+      const hasAdminAll = await this.checkUserPermission(authUser.userId, 'admin.all');
+      if (!hasAdminAll) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Cuộc họp riêng tư: chỉ Organizer/Host/Admin mới được thêm khách mời',
+          error: { code: 'FORBIDDEN_ACCESS', details: {} },
+        });
+      }
+    }
+
+    // ── Step 5: Duplicate email pre-check (case-insensitive) ──
+    const existingExternal = await this.dataSource
+      .getRepository(MeetingExternalParticipantEntity)
+      .createQueryBuilder('ep')
+      .where('ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)', {
+        meetingId,
+        email: dto.email,
+      })
+      .getOne();
+
+    if (existingExternal) {
+      throw new ConflictException({
+        success: false,
+        message: 'Email khách mời đã tồn tại trong cuộc họp này',
+        error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
+      });
+    }
+
+    // ── Step 6: Room capacity check (nếu có roomId) ──
+    let capacityWarnings: WarningItem[] = [];
+    let warningTokenFromCapacity: string | null = null;
+
+    if (meeting.roomId) {
+      const attendeeCount = await this.getAttendeeCount(meetingId);
+      const room = await this.dataSource.getRepository(RoomEntity).findOne({
+        where: { id: meeting.roomId },
+      });
+
+      if (room && attendeeCount + 1 > room.capacity) {
+        // Read capacity policy
+        const config = await this.dataSource
+          .getRepository(SystemConfigEntity)
+          .findOne({
+            where: { configKey: 'meeting.capacity_policy', isActive: true },
+          });
+        const policy = config?.configValue ?? 'warning';
+
+        if (policy === 'block') {
+          throw new UnprocessableEntityException({
+            success: false,
+            message: 'Sức chứa phòng không đủ. Chính sách hiện tại là block.',
+            error: {
+              code: 'ROOM_CAPACITY_EXCEEDED',
+              details: { capacity: room.capacity, attendeeCount: attendeeCount + 1 },
+            },
+          });
+        }
+
+        // policy === 'warning'
+        capacityWarnings.push({
+          type: 'ROOM_CAPACITY_WARNING',
+          message: `Sức chứa phòng (${room.capacity} người) không đủ cho tổng số người tham dự (${attendeeCount + 1} người).`,
+        });
+
+        // Check if override was provided
+        if (!dto.overrideWarnings || !dto.warningToken) {
+          warningTokenFromCapacity = this.warningTokenUtil.generateToken(
+            meetingId,
+            dto.email,
+            capacityWarnings,
+          );
+
+          throw new UnprocessableEntityException({
+            success: false,
+            message: 'Phát hiện cảnh báo sức chứa phòng. Vui lòng xác nhận.',
+            error: {
+              code: 'WARNING_CONFIRMATION_REQUIRED',
+              details: {
+                warningToken: warningTokenFromCapacity,
+                warnings: capacityWarnings,
+              },
+            },
+          });
+        }
+
+        // Verify warning token
+        const verifyResult = this.warningTokenUtil.verifyToken(
+          dto.warningToken,
+          meetingId,
+          dto.email,
+        );
+
+        if (!verifyResult.valid) {
+          throw new BadRequestException({
+            success: false,
+            message: 'Warning token không hợp lệ hoặc đã hết hạn',
+            error: { code: 'INVALID_WARNING_TOKEN', details: {} },
+          });
+        }
+
+        // Check override capacity permission if ROOM_CAPACITY_WARNING is present
+        if (capacityWarnings.some((w) => w.type === 'ROOM_CAPACITY_WARNING')) {
+          const hasOverridePermission = await this.checkUserPermission(
+            authUser.userId,
+            'meeting.participant.override_capacity',
+          );
+
+          if (!hasOverridePermission) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Bạn không có quyền ghi đè cảnh báo sức chứa phòng',
+              error: {
+                code: 'ROOM_CAPACITY_EXCEEDED',
+                details: { capacity: room.capacity, attendeeCount: attendeeCount + 1 },
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // ── Step 7: Transaction ──
+    let createdParticipantId!: string;
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        // Pessimistic lock on meeting row
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        // Re-check duplicate email inside transaction
+        const dupInTx = await em
+          .getRepository(MeetingExternalParticipantEntity)
+          .createQueryBuilder('ep')
+          .where('ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)', {
+            meetingId,
+            email: dto.email,
+          })
+          .getOne();
+
+        if (dupInTx) {
+          throw new ConflictException({
+            success: false,
+            message: 'Email khách mời đã tồn tại trong cuộc họp này',
+            error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
+          });
+        }
+
+        // 7a: Insert external participant
+        const participant = em.create(MeetingExternalParticipantEntity, {
+          meetingId,
+          fullName: dto.fullName,
+          email: dto.email,
+          organizationName: dto.organizationName ?? null,
+          phoneNumber: dto.phoneNumber ?? null,
+          participantRole: 'attendee',
+          invitationStatus: 'pending',
+        });
+        const savedParticipant = await em.save(
+          MeetingExternalParticipantEntity,
+          participant,
+        );
+        createdParticipantId = savedParticipant.id;
+
+        // 7b: Insert meeting event
+        const event = em.create(MeetingEventEntity, {
+          meetingId,
+          eventType: MeetingEventType.EXTERNAL_PARTICIPANT_ADDED,
+          actorUserId: authUser.userId,
+          sourceType: MeetingEventSourceType.MANUAL,
+          description: `External participant ${dto.email} added to meeting ${meetingId}`,
+          metadataJson: {
+            email: dto.email,
+            fullName: dto.fullName,
+          } as any,
+        });
+        await em.save(MeetingEventEntity, event);
+
+        // 7c: Insert audit log
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'add_external_participant',
+          entityType: 'meeting_external_participant',
+          entityId: createdParticipantId,
+          newValueJson: {
+            meetingId,
+            email: dto.email,
+            fullName: dto.fullName,
+            organizationName: dto.organizationName ?? null,
+            phoneNumber: dto.phoneNumber ?? null,
+          } as any,
+          ipAddress: clientContext.ipAddress ?? null,
+          userAgent: clientContext.userAgent ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        this.logger.log(
+          `[AddExternalParticipant] Meeting ${meetingId}: external participant ${dto.email} added by ${authUser.userId}`,
+        );
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for addExternalParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 8: Post-transaction notification (best-effort) ──
+    try {
+      // EMAIL notification only — NO in-app notification for external
+      await this.notificationsService.enqueueEmailNotification({
+        notificationType: NotificationType.MEETING_INVITE,
+        channel: NotificationChannel.EMAIL,
+        subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
+        content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+        toEmails: [dto.email],
+        relatedEntityType: 'meeting',
+        relatedEntityId: meetingId,
+        recipientScope: 'user_list',
+        payloadJson: { invitedBy: authUser.userId },
+        createdBy: authUser.userId,
+      });
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[addExternalParticipant] Failed to notify external participant: ${(notifError as Error).message}`,
+      );
+    }
+
+    // Best-effort device sync log if in_progress
+    if (meeting.status === MeetingStatus.IN_PROGRESS) {
+      this.logger.log(
+        `[Device Sync] Meeting ${meetingId}: external participant ${dto.email} added while in_progress (best-effort).`,
+      );
+    }
+
+    // ── Step 9: Build response ──
+    return {
+      externalParticipantId: createdParticipantId,
+      meetingId,
+      fullName: dto.fullName,
+      email: dto.email,
+      organizationName: dto.organizationName ?? null,
+      phoneNumber: dto.phoneNumber ?? null,
+      role: 'attendee',
+      status: 'pending',
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Remove External Meeting Participant (MEET-REMOVE-EXTERNAL-PARTICIPANT-001)
+  // ════════════════════════════════════════════════════════════════
+
+  /**
+   * Gỡ bỏ khách mời bên ngoài khỏi cuộc họp.
+   * Chỉ áp dụng cho meeting ở trạng thái scheduled.
+   * Hard delete row + ghi event/audit log trong transaction.
+   * Gửi email thông báo best-effort sau transaction (nếu có email).
+   * Không cần Host/Organizer protection check và agenda-owner check
+   * vì external participant không thể giữ các vai trò đó.
+   */
+  async removeExternalParticipant(
+    meetingId: string,
+    externalParticipantId: string,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+    body?: RemoveExternalParticipantBodyDto,
+  ): Promise<RemoveExternalParticipantResponseDto> {
+    // ── Step 1: Meeting existence check ──
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy cuộc họp',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── Step 2: State validation — only scheduled ──
+    if (meeting.status !== MeetingStatus.SCHEDULED) {
+      throw new ConflictException({
+        success: false,
+        message: 'Không thể gỡ khách mời: cuộc họp không ở trạng thái scheduled',
+        error: {
+          code: 'MEETING_NOT_REMOVABLE',
+          details: { currentStatus: meeting.status },
+        },
+      });
+    }
+
+    // ── Step 3: Authorization check ──
+    const isOwner =
+      meeting.organizerId === authUser.userId ||
+      meeting.hostId === authUser.userId;
+    const hasPermission = await this.checkUserPermission(
+      authUser.userId,
+      'meeting.participant.remove.external',
+    );
+
+    if (!isOwner && !hasPermission) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền gỡ khách mời bên ngoài khỏi cuộc họp này',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    // ── Step 4: Target lookup ──
+    const target = await this.dataSource
+      .getRepository(MeetingExternalParticipantEntity)
+      .findOne({
+        where: { id: externalParticipantId, meetingId },
+      });
+
+    if (!target) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khách mời bên ngoài không có trong cuộc họp này',
+        error: { code: 'EXTERNAL_PARTICIPANT_NOT_IN_MEETING', details: {} },
+      });
+    }
+
+    // ── Step 5: Recurring scope check ──
+    const scope = body?.scope ?? RemoveScope.INSTANCE;
+    if (scope === RemoveScope.SERIES) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Không thể gỡ khách mời khỏi toàn bộ recurring series. Chỉ hỗ trợ gỡ trên một instance cụ thể.',
+        error: {
+          code: 'RECURRING_SERIES_SCOPE_NOT_SUPPORTED',
+          details: {},
+        },
+      });
+    }
+
+    // ── Step 6: Transaction (lock + re-check + delete + event + audit) ──
+    let removedAt!: Date;
+    const targetEmail = target.email; // capture for post-transaction
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        // Pessimistic lock on meeting row
+        await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        // Re-check target still exists inside transaction
+        const reCheck = await em.findOne(MeetingExternalParticipantEntity, {
+          where: { id: externalParticipantId, meetingId },
+        });
+
+        if (!reCheck) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Khách mời bên ngoài không có trong cuộc họp này',
+            error: { code: 'EXTERNAL_PARTICIPANT_NOT_IN_MEETING', details: {} },
+          });
+        }
+
+        // 6a: Hard delete participant row
+        await em.delete(MeetingExternalParticipantEntity, {
+          id: externalParticipantId,
+          meetingId,
+        });
+
+        // 6b: Insert meeting event
+        const event = em.create(MeetingEventEntity, {
+          meetingId,
+          eventType: MeetingEventType.EXTERNAL_PARTICIPANT_REMOVED,
+          actorUserId: authUser.userId,
+          sourceType: MeetingEventSourceType.MANUAL,
+          description: `External participant ${target.email} removed from meeting ${meetingId}`,
+          metadataJson: {
+            removedExternalParticipantId: externalParticipantId,
+            removedByUserId: authUser.userId,
+            reason: body?.reason ?? null,
+          } as any,
+        });
+        await em.save(MeetingEventEntity, event);
+
+        // 6c: Insert audit log
+        await em.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'remove_external_participant',
+          entityType: 'meeting_external_participant',
+          entityId: externalParticipantId,
+          oldValueJson: {
+            meetingId,
+            fullName: target.fullName,
+            email: target.email,
+          } as any,
+          newValueJson: {
+            removed: true,
+            removedAt: new Date(),
+            reason: body?.reason ?? null,
+          } as any,
+          ipAddress: clientContext.ipAddress ?? null,
+          userAgent: clientContext.userAgent ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+
+        removedAt = new Date();
+
+        this.logger.log(
+          `[RemoveExternalParticipant] Meeting ${meetingId}: external participant ${externalParticipantId} removed by ${authUser.userId}`,
+        );
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof NotFoundException ||
+        error instanceof ConflictException ||
+        error instanceof UnprocessableEntityException ||
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
+      ) {
+        throw error;
+      }
+      this.logger.error(
+        `Transaction failed for removeExternalParticipant: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    // ── Step 7: Post-transaction notification (best-effort) ──
+    let notificationId: string | null = null;
+    let backgroundJobId: string | null = null;
+    let notificationQueued = false;
+
+    try {
+      if (targetEmail) {
+        const emailResult = await this.notificationsService.enqueueEmailNotification({
+          notificationType: NotificationType.MEETING_PARTICIPANT_REMOVED,
+          channel: NotificationChannel.EMAIL,
+          subject: 'Bạn đã bị gỡ khỏi cuộc họp',
+          content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+          toEmails: [targetEmail],
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          payloadJson: {
+            removedBy: authUser.userId,
+            reason: body?.reason ?? null,
+          },
+          createdBy: authUser.userId,
+        });
+        notificationId = emailResult.notification.id;
+        backgroundJobId = emailResult.jobId ?? null;
+        notificationQueued = true;
+      } else {
+        this.logger.log(
+          `[RemoveExternalParticipant] Skipped email notification for ${externalParticipantId} — no email on file.`,
+        );
+      }
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[RemoveExternalParticipant] Failed to notify removed external participant: ${(notifError as Error).message}`,
+      );
+    }
+
+    // ── Step 8: Build response ──
+    return new RemoveExternalParticipantResponseDto({
+      meetingId,
+      removedExternalParticipantId: externalParticipantId,
+      removed: true,
+      removedAt,
+      notificationQueued,
       notificationId,
       backgroundJobId,
     });

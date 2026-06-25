@@ -22,9 +22,11 @@ export enum MeetingEventType {
   MEETING_TIME_UPDATED = 'meeting_time_updated',
   ROOM_CHANGED = 'room_changed',
   PARTICIPANT_REMOVED = 'participant_removed',
+  EXTERNAL_PARTICIPANT_ADDED = 'external_participant_added',
   ATTENDANCE_CHECKIN_ALERT_SENT = 'attendance_checkin_alert_sent',
   WARNING_SCHEDULED = 'warning_scheduled',
   WARNING_SCHEDULING_SKIPPED = 'warning_scheduling_skipped',
+  EXTERNAL_PARTICIPANT_REMOVED = 'external_participant_removed',
 }
 
 export enum MeetingEventSourceType {
