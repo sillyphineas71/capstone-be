@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
+import { PresenceModule } from '../presence/presence.module.js';
 import { IVSS_EVENT_HANDLER } from '../../common/ports/ivss-event-hook.js';
 import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
@@ -14,6 +15,8 @@ import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
 import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
+import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
+import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
 
 /**
  * IvssModule (IVS-001 #36) — lớp tích hợp IVSS bridge: client (outbound) + webhook (inbound)
@@ -23,11 +26,12 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
  * IVSS_EVENT_HANDLER bind DefaultIvssEventHandler (log-only); #38–40 override.
  */
 @Module({
-  imports: [AuthModule, AccountsModule, WebsocketModule],
+  imports: [AuthModule, AccountsModule, WebsocketModule, PresenceModule],
   controllers: [
     IvssWebhookController,
     IvssHealthController,
     IvssPresenceController,
+    IvssOccupancyController,
   ],
   providers: [
     ivssBridgeProvider,
@@ -40,6 +44,8 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
     IvssPersonSyncService,
     IvssPresenceQueryService,
     IvssPresenceReportService,
+    // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
+    IvssOccupancyIngestService,
   ],
   exports: [IVSS_BRIDGE, IvssPersonSyncService],
 })

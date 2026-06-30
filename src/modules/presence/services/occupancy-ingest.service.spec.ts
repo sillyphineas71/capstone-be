@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { OccupancyIngestService } from './occupancy-ingest.service.js';
+import { OccupancyPersistenceService } from './occupancy-persistence.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 
 const TOKEN = 'secret-token';
@@ -90,6 +91,7 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OccupancyIngestService,
+        OccupancyPersistenceService,
         { provide: DataSource, useValue: dataSourceMock },
         { provide: WebsocketService, useValue: wsMock },
       ],

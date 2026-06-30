@@ -7,6 +7,7 @@ import { RoomsModule } from '../rooms/rooms.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { RoomCameraController } from './controllers/room-camera.controller.js';
 import { OccupancyIngestService } from './services/occupancy-ingest.service.js';
+import { OccupancyPersistenceService } from './services/occupancy-persistence.service.js';
 
 /**
  * PresenceModule — presence snapshots + occupancy ingest (OCC-001 / UC-75).
@@ -25,7 +26,7 @@ import { OccupancyIngestService } from './services/occupancy-ingest.service.js';
     TypeOrmModule.forFeature([PresenceSnapshotEntity]),
   ],
   controllers: [RoomCameraController],
-  providers: [OccupancyIngestService],
-  exports: [TypeOrmModule],
+  providers: [OccupancyIngestService, OccupancyPersistenceService],
+  exports: [TypeOrmModule, OccupancyPersistenceService],
 })
 export class PresenceModule {}
