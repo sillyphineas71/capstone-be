@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -27,6 +27,8 @@ const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
  */
 @Injectable()
 export class FaceProfileService {
+  private readonly logger = new Logger(FaceProfileService.name);
+
   constructor(
     @InjectRepository(FaceProfileEntity)
     private readonly faceProfileRepo: Repository<FaceProfileEntity>,
@@ -121,19 +123,62 @@ export class FaceProfileService {
     };
   }
 
-  /** Ticket B: đọc bytes portrait của user (local). null nếu không có. */
+  /**
+   * Ticket B / FPB-001: đọc bytes portrait ĐÃ DUYỆT (ACTIVE) của user.
+   * local → đọc đĩa; cloud_provider → tải từ file_url (Cloudinary https). null nếu không có/lỗi.
+   */
   async getPortraitBytes(userId: string): Promise<Buffer | null> {
-    const face = await this.faceProfileRepo.findOne({ where: { userId } });
+    // R2 + VAL-01: chỉ lấy ảnh ĐÃ DUYỆT (ACTIVE). 1 user chỉ 1 ACTIVE (approve revoke cái cũ).
+    const face = await this.faceProfileRepo.findOne({
+      where: { userId, status: FaceProfileStatus.ACTIVE },
+    });
     if (!face || !face.primaryImageFileId) return null;
 
-    const rows: Array<{ storage_key: string; storage_provider: string }> =
-      await this.dataSource.manager.query(
-        `SELECT storage_key, storage_provider FROM media_files WHERE id = $1 LIMIT 1`,
-        [face.primaryImageFileId],
-      );
+    const rows: Array<{
+      storage_key: string;
+      storage_provider: string;
+      file_url: string | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT storage_key, storage_provider, file_url
+       FROM media_files WHERE id = $1 LIMIT 1`,
+      [face.primaryImageFileId],
+    );
     const media = rows?.[0];
-    if (!media || media.storage_provider !== 'local') return null;
+    if (!media) return null;
 
-    return this.storageService.getFile(media.storage_key);
+    // R4: local (luồng cũ) — đọc đĩa. getFile() đồng bộ (Buffer), throw nếu thiếu/path lạ.
+    if (media.storage_provider === 'local') {
+      try {
+        return this.storageService.getFile(media.storage_key);
+      } catch {
+        return null;
+      }
+    }
+
+    // R3 + R5: cloud (Cloudinary) — tải từ file_url (secureUrl https) → Buffer.
+    if (media.storage_provider === 'cloud_provider') {
+      if (!media.file_url) return null;
+      try {
+        const res = await fetch(media.file_url);
+        if (!res.ok) {
+          this.logger.warn(
+            `getPortraitBytes: Cloudinary fetch ${res.status} for user ${userId}.`,
+          );
+          return null;
+        }
+        const arrayBuf = await res.arrayBuffer();
+        return Buffer.from(arrayBuf);
+      } catch (e) {
+        this.logger.warn(
+          `getPortraitBytes: Cloudinary fetch error user ${userId}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+        return null;
+      }
+    }
+
+    // provider lạ → null an toàn.
+    return null;
   }
 }

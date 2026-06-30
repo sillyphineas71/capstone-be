@@ -5,7 +5,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
 import { FaceProfileService } from './face-profile.service.js';
-import { FaceProfileEntity } from '../entities/face-profile.entity.js';
+import {
+  FaceProfileEntity,
+  FaceProfileStatus,
+} from '../entities/face-profile.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 const file = (over: any = {}) => ({
@@ -56,7 +59,10 @@ describe('FaceProfileService (FPE-001 / UC-17)', () => {
     service = module.get(FaceProfileService);
   });
 
-  afterEach(() => jest.clearAllMocks());
+  afterEach(() => {
+    jest.clearAllMocks();
+    delete (global as { fetch?: unknown }).fetch;
+  });
 
   // ── enrollPortrait ──
   it('happy: saveFile → media_files → tạo face_profiles (pending_review)', async () => {
@@ -112,31 +118,105 @@ describe('FaceProfileService (FPE-001 / UC-17)', () => {
     expect(r.faceProfileId).toBe('fp-existing');
   });
 
-  // ── getPortraitBytes ──
-  it('getPortraitBytes: có profile+ảnh local → Buffer', async () => {
+  // ── getPortraitBytes (FPB-001) ──
+  // T1: local provider → getFile → Buffer (+ chỉ query profile ACTIVE).
+  it('getPortraitBytes: profile ACTIVE + ảnh local → Buffer; findOne lọc status ACTIVE', async () => {
     repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
     dsMock.manager.query.mockResolvedValue([
-      { storage_key: 'face-profiles/x.jpg', storage_provider: 'local' },
+      {
+        storage_key: 'face-profiles/x.jpg',
+        storage_provider: 'local',
+        file_url: null,
+      },
     ]);
     const buf = await service.getPortraitBytes('u1');
     expect(buf?.toString()).toBe('PORTRAIT');
     expect(storageMock.getFile).toHaveBeenCalledWith('face-profiles/x.jpg');
+    // VAL-01: where lọc status=ACTIVE.
+    expect(repoMock.findOne).toHaveBeenCalledWith({
+      where: { userId: 'u1', status: FaceProfileStatus.ACTIVE },
+    });
   });
 
-  it('getPortraitBytes: không có profile → null', async () => {
+  // T2: không có profile ACTIVE (pending/rejected/không có) → null.
+  it('getPortraitBytes: KHÔNG có profile ACTIVE → null', async () => {
     repoMock.findOne.mockResolvedValue(null);
     expect(await service.getPortraitBytes('u1')).toBeNull();
   });
 
-  it('getPortraitBytes: profile không có ảnh → null', async () => {
+  it('getPortraitBytes: profile ACTIVE nhưng không có ảnh → null', async () => {
     repoMock.findOne.mockResolvedValue({ primaryImageFileId: null });
     expect(await service.getPortraitBytes('u1')).toBeNull();
   });
 
-  it('getPortraitBytes: media non-local → null', async () => {
+  // T3: cloud_provider + fetch ok → Buffer (tải từ file_url https).
+  it('getPortraitBytes: cloud_provider + fetch ok → Buffer', async () => {
     repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
     dsMock.manager.query.mockResolvedValue([
-      { storage_key: 's3/x.jpg', storage_provider: 's3' },
+      {
+        storage_key: 'pubId',
+        storage_provider: 'cloud_provider',
+        file_url: 'https://res.cloudinary.com/x/img.jpg',
+      },
+    ]);
+    const ab = new TextEncoder().encode('CLOUDIMG');
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: jest.fn().mockResolvedValue(ab.buffer),
+    });
+    const buf = await service.getPortraitBytes('u1');
+    expect(buf?.toString()).toBe('CLOUDIMG');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://res.cloudinary.com/x/img.jpg',
+    );
+    expect(storageMock.getFile).not.toHaveBeenCalled();
+  });
+
+  // T4: cloud_provider + fetch !ok (404) → null, KHÔNG throw.
+  it('getPortraitBytes: cloud_provider + fetch 404 → null (KHÔNG throw)', async () => {
+    repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
+    dsMock.manager.query.mockResolvedValue([
+      {
+        storage_key: 'pubId',
+        storage_provider: 'cloud_provider',
+        file_url: 'https://res.cloudinary.com/x/missing.jpg',
+      },
+    ]);
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
+    await expect(service.getPortraitBytes('u1')).resolves.toBeNull();
+  });
+
+  // T4b: cloud_provider + fetch reject → null, KHÔNG throw.
+  it('getPortraitBytes: cloud_provider + fetch reject → null (KHÔNG throw)', async () => {
+    repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
+    dsMock.manager.query.mockResolvedValue([
+      {
+        storage_key: 'pubId',
+        storage_provider: 'cloud_provider',
+        file_url: 'https://res.cloudinary.com/x/err.jpg',
+      },
+    ]);
+    global.fetch = jest.fn().mockRejectedValue(new Error('network'));
+    await expect(service.getPortraitBytes('u1')).resolves.toBeNull();
+  });
+
+  // T5: cloud_provider + file_url null → null.
+  it('getPortraitBytes: cloud_provider + file_url null → null', async () => {
+    repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
+    dsMock.manager.query.mockResolvedValue([
+      {
+        storage_key: 'pubId',
+        storage_provider: 'cloud_provider',
+        file_url: null,
+      },
+    ]);
+    expect(await service.getPortraitBytes('u1')).toBeNull();
+  });
+
+  it('getPortraitBytes: provider lạ (s3) → null', async () => {
+    repoMock.findOne.mockResolvedValue({ primaryImageFileId: 'media-1' });
+    dsMock.manager.query.mockResolvedValue([
+      { storage_key: 's3/x.jpg', storage_provider: 's3', file_url: null },
     ]);
     expect(await service.getPortraitBytes('u1')).toBeNull();
   });
