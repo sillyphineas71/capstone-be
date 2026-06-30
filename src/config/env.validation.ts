@@ -150,6 +150,8 @@ export const envValidationSchema = Joi.object({
   // ─── K2. Device Probe (IOT-014) ──────────────────────────────────────────────
   DEVICE_OFFLINE_DETECT_ENABLED: Joi.boolean().default(true),
   RTSP_PROBE_TIMEOUT_MS: Joi.number().integer().min(100).default(3000),
+  // A5 (IOT-005): timeout riêng cho runtime RTSP probe (chẩn đoán đơn lẻ, chờ lâu hơn batch).
+  RTSP_RUNTIME_PROBE_TIMEOUT_MS: Joi.number().integer().min(100).default(10000),
 
   // ─── Q. Recording Capture (IOT-015 / #23) ────────────────────────────────────
   // Khóa mã hóa mật khẩu RTSP (AES-256-GCM, key=sha256(RTSP_CRED_KEY)).
