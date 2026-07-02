@@ -121,3 +121,55 @@ export function probeMedia(filePath: string): Promise<MediaProbe | null> {
     });
   });
 }
+
+/**
+ * Probe duration cho file audio thuần (m4a/wav/mp3...) — probeMedia() ở trên chỉ
+ * nhận diện video stream nên luôn trả null cho audio-only. Dùng cho REC audio-upload
+ * (manual upload phục vụ transcription). Best-effort: lỗi/timeout → null, KHÔNG ném.
+ */
+export function probeAudioDuration(filePath: string): Promise<number | null> {
+  const bin = process.env.FFPROBE_PATH || 'ffprobe';
+  const args = [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'default=noprint_wrappers=1:nokey=1',
+    filePath,
+  ];
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (r: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+
+    let stdout = '';
+    const proc = spawn(bin, args, { windowsHide: true });
+
+    const timer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        // process có thể đã thoát.
+      }
+      done(null);
+    }, FFPROBE_TIMEOUT_MS);
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.on('error', () => done(null));
+    proc.on('close', (code) => {
+      if (code !== 0) return done(null);
+      const seconds = Number(stdout.trim());
+      done(
+        Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null,
+      );
+    });
+  });
+}
