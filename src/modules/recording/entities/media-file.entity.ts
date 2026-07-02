@@ -59,6 +59,9 @@ export class MediaFileEntity {
   @Column({ name: 'recording_session_id', type: 'uuid', nullable: true })
   recordingSessionId: string | null;
 
+  @Column({ name: 'channel_user_id', type: 'uuid', nullable: true })
+  channelUserId: string | null;
+
   @Column({ name: 'uploaded_by', type: 'uuid', nullable: true })
   uploadedBy: string | null;
 
@@ -128,4 +131,8 @@ export class MediaFileEntity {
   @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'uploaded_by' })
   uploadedByUser: UserEntity | null;
+
+  @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'channel_user_id' })
+  channelUser: UserEntity | null;
 }

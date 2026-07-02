@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { Client as MinioClient } from 'minio';
 
 export interface SaveFileOptions {
   /** Buffer hoặc nội dung file */
@@ -36,6 +37,8 @@ export class StorageService implements OnModuleInit {
   private readonly storageDriver: string;
   private readonly localPath: string;
   private readonly publicBaseUrl: string;
+  private readonly s3Bucket: string;
+  private minioClient: MinioClient | null = null;
 
   constructor(private readonly configService: ConfigService) {
     this.storageDriver = this.configService.get<string>(
@@ -50,15 +53,65 @@ export class StorageService implements OnModuleInit {
       'STORAGE_PUBLIC_BASE_URL',
       'http://localhost:3000/uploads',
     );
+    this.s3Bucket = this.configService.get<string>('STORAGE_S3_BUCKET', '');
   }
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     if (this.storageDriver === 'local') {
       this.ensureLocalDirExists();
+    } else if (this.storageDriver === 's3') {
+      await this.initMinioClient();
+      await this.ensureBucketExists();
     }
     this.logger.log(
       `StorageService initialized — driver: ${this.storageDriver}`,
     );
+  }
+
+  /**
+   * Khởi tạo MinIO/S3 client. Dynamic import để package `minio` không bị
+   * load ở môi trường test/driver=local (tránh phá Jest nếu chưa cần dùng).
+   */
+  private async initMinioClient(): Promise<void> {
+    const { Client } = await import('minio');
+    const endpoint =
+      this.configService.get<string>('STORAGE_S3_ENDPOINT', 'localhost') ||
+      'localhost';
+    const cleanEndpoint = endpoint.replace(/^https?:\/\//, '');
+    this.minioClient = new Client({
+      endPoint: cleanEndpoint,
+      port: this.configService.get<number>('STORAGE_S3_PORT', 9000),
+      useSSL: this.configService.get<boolean>('STORAGE_S3_USE_SSL', false),
+      accessKey: this.configService.get<string>('STORAGE_S3_ACCESS_KEY', ''),
+      secretKey: this.configService.get<string>('STORAGE_S3_SECRET_KEY', ''),
+    });
+  }
+
+  private async ensureBucketExists(): Promise<void> {
+    if (!this.minioClient || !this.s3Bucket) return;
+    try {
+      const exists = await this.minioClient.bucketExists(this.s3Bucket);
+      if (!exists) {
+        await this.minioClient.makeBucket(
+          this.s3Bucket,
+          this.configService.get<string>('STORAGE_S3_REGION', 'us-east-1'),
+        );
+        this.logger.log(`Created MinIO bucket: ${this.s3Bucket}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown';
+      this.logger.warn(`Could not verify/create MinIO bucket: ${message}`);
+    }
+  }
+
+  private static async streamToBuffer(
+    stream: NodeJS.ReadableStream,
+  ): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
   }
 
   /**
@@ -89,16 +142,27 @@ export class StorageService implements OnModuleInit {
    * Hiện tại: local filesystem.
    */
   async saveFile(options: SaveFileOptions): Promise<SaveFileResult> {
-    if (this.storageDriver !== 'local') {
-      // TODO: implement S3 adapter
-      throw new Error(
-        `Storage driver "${this.storageDriver}" is not yet implemented.`,
-      );
-    }
-
     const storageKey =
       options.storageKey ??
       this.getStorageKey(options.originalName, options.folder);
+
+    if (this.storageDriver === 's3') {
+      if (!this.minioClient) {
+        throw new Error('MinIO client is not initialized.');
+      }
+      await this.minioClient.putObject(
+        this.s3Bucket,
+        storageKey,
+        options.buffer,
+        options.buffer.length,
+      );
+      return {
+        storageKey,
+        publicUrl: this.getPublicUrl(storageKey),
+        sizeBytes: options.buffer.length,
+      };
+    }
+
     const resolvedPath = path.resolve(this.localPath, storageKey);
     const dir = path.dirname(resolvedPath);
 
@@ -119,11 +183,13 @@ export class StorageService implements OnModuleInit {
    * Xóa file khỏi storage.
    */
   async deleteFile(storageKey: string): Promise<void> {
-    if (this.storageDriver !== 'local') {
-      // TODO: implement S3 adapter
-      throw new Error(
-        `Storage driver "${this.storageDriver}" is not yet implemented.`,
-      );
+    if (this.storageDriver === 's3') {
+      if (!this.minioClient) {
+        throw new Error('MinIO client is not initialized.');
+      }
+      await this.minioClient.removeObject(this.s3Bucket, storageKey);
+      this.logger.log(`Deleted file (s3): ${storageKey}`);
+      return;
     }
 
     const resolvedPath = path.resolve(this.localPath, storageKey);
@@ -138,6 +204,7 @@ export class StorageService implements OnModuleInit {
   /**
    * Đọc bytes file local (FPE-001). SEC-03: chống path-traversal — resolved phải nằm
    * trong localPath; file thiếu → ném lỗi rõ.
+   * Chỉ hỗ trợ driver local — dùng downloadFile() cho driver s3/MinIO.
    */
   getFile(storageKey: string): Buffer {
     if (this.storageDriver !== 'local') {
@@ -154,6 +221,44 @@ export class StorageService implements OnModuleInit {
       throw new Error('File not found.');
     }
     return fs.readFileSync(resolved);
+  }
+
+  /**
+   * Đọc bytes file — hỗ trợ cả driver local và s3/MinIO.
+   */
+  async downloadFile(storageKey: string): Promise<Buffer> {
+    if (this.storageDriver === 's3') {
+      if (!this.minioClient) {
+        throw new Error('MinIO client is not initialized.');
+      }
+      const stream = await this.minioClient.getObject(
+        this.s3Bucket,
+        storageKey,
+      );
+      return StorageService.streamToBuffer(stream);
+    }
+    return this.getFile(storageKey);
+  }
+
+  /**
+   * Sinh presigned URL có thời hạn ngắn để truy cập object trên MinIO/S3.
+   * Chỉ áp dụng cho driver s3 — không tạo public URL cho private bucket.
+   */
+  async getSignedStorageUrl(
+    storageKey: string,
+    ttlSeconds = 600,
+  ): Promise<string> {
+    if (this.storageDriver !== 's3') {
+      throw new Error('getSignedStorageUrl chỉ hỗ trợ driver s3.');
+    }
+    if (!this.minioClient) {
+      throw new Error('MinIO client is not initialized.');
+    }
+    return this.minioClient.presignedGetObject(
+      this.s3Bucket,
+      storageKey,
+      ttlSeconds,
+    );
   }
 
   /**
@@ -194,7 +299,6 @@ export class StorageService implements OnModuleInit {
     }
   }
 
-
   /**
    * Generate a signed download token (HMAC-SHA256) for a media file.
    * Token contains mediaFileId + expiry, signed with MEDIA_DOWNLOAD_TOKEN_SECRET.
@@ -204,19 +308,24 @@ export class StorageService implements OnModuleInit {
     ttlSeconds?: number,
   ): { token: string; expiresAt: string } {
     const secret = this.configService.get<string>(
-      'MEDIA_DOWNLOAD_TOKEN_SECRET', '',
+      'MEDIA_DOWNLOAD_TOKEN_SECRET',
+      '',
     );
     if (!secret) {
       throw new Error('MEDIA_DOWNLOAD_TOKEN_SECRET is not configured');
     }
     const defaultTtl = this.configService.get<number>(
-      'MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS', 600,
+      'MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS',
+      600,
     );
     const ttl = ttlSeconds ?? defaultTtl;
     const expiresAtEpochMs = Date.now() + ttl * 1000;
     const expiresAt = new Date(expiresAtEpochMs).toISOString();
     const payload = mediaFileId + '|' + expiresAtEpochMs;
-    const hmac = crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
+    const hmac = crypto
+      .createHmac('sha256', secret)
+      .update(payload, 'utf8')
+      .digest('hex');
     const token = Buffer.from(payload + '.' + hmac).toString('base64url');
     return { token, expiresAt };
   }
@@ -226,25 +335,36 @@ export class StorageService implements OnModuleInit {
    */
   verifySignedDownloadToken(token: string): { mediaFileId: string } | null {
     const secret = this.configService.get<string>(
-      'MEDIA_DOWNLOAD_TOKEN_SECRET', '',
+      'MEDIA_DOWNLOAD_TOKEN_SECRET',
+      '',
     );
     if (!secret) return null;
     let decoded;
     try {
       decoded = Buffer.from(token, 'base64url').toString('utf8');
-    } catch { return null; }
+    } catch {
+      return null;
+    }
     const lastDot = decoded.lastIndexOf('.');
     if (lastDot === -1) return null;
     const payload = decoded.slice(0, lastDot);
     const receivedHmac = decoded.slice(lastDot + 1);
-    const expectedHmac = crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
+    const expectedHmac = crypto
+      .createHmac('sha256', secret)
+      .update(payload, 'utf8')
+      .digest('hex');
     if (receivedHmac.length !== expectedHmac.length) return null;
     try {
-      if (!crypto.timingSafeEqual(
-        Buffer.from(receivedHmac, 'utf8'),
-        Buffer.from(expectedHmac, 'utf8'),
-      )) return null;
-    } catch { return null; }
+      if (
+        !crypto.timingSafeEqual(
+          Buffer.from(receivedHmac, 'utf8'),
+          Buffer.from(expectedHmac, 'utf8'),
+        )
+      )
+        return null;
+    } catch {
+      return null;
+    }
     const lastPipe = payload.lastIndexOf('|');
     if (lastPipe === -1) return null;
     const mediaFileId = payload.slice(0, lastPipe);
@@ -255,5 +375,9 @@ export class StorageService implements OnModuleInit {
   getDriver(): string {
     return this.storageDriver;
   }
-}
 
+  /** Bucket hiện tại (chỉ có ý nghĩa khi driver=s3, null nếu driver=local). */
+  getBucketName(): string | null {
+    return this.storageDriver === 's3' ? this.s3Bucket || null : null;
+  }
+}

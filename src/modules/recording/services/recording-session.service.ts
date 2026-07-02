@@ -5,12 +5,14 @@ import {
   BadRequestException,
   BadGatewayException,
   ConflictException,
+  ForbiddenException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID, createHash } from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   RecordingSessionEntity,
@@ -21,7 +23,8 @@ import {
 import { StartVideoDto } from '../dto/start-video.dto.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { decryptSecret } from '../../../common/utils/secret-crypto.util.js';
-import { probeMedia } from '../utils/ffprobe.util.js';
+import { probeMedia, probeAudioDuration } from '../utils/ffprobe.util.js';
+import { StorageService } from '../../storage/storage.service.js';
 
 interface RtspConfig {
   rtsp_protocol?: string;
@@ -39,10 +42,22 @@ export class RecordingSessionService {
   private static readonly START_PROBE_MS = 5000;
   private static readonly POLL_MS = 250;
 
+  private static readonly SUPPORTED_AUDIO_EXTENSIONS = [
+    '.wav',
+    '.mp3',
+    '.m4a',
+    '.mp4',
+    '.aac',
+    '.flac',
+    '.ogg',
+    '.webm',
+  ];
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
     private readonly processManager: RecordingProcessManager,
+    private readonly storageService: StorageService,
   ) {}
 
   async startVideo(
@@ -345,6 +360,360 @@ export class RecordingSessionService {
       mediaFileId: result.mediaFileId,
       captured: true,
     };
+  }
+
+  /**
+   * Upload audio đã ghi sẵn (ví dụ .m4a) cho 1 meeting, dùng để test/feed pipeline
+   * transcription (TRANS-OFFLINE-001) khi không có camera/capture agent thật.
+   * Tạo 1 recording_session (sessionType=audio, sourceType=manual_upload, status
+   * stopped ngay vì file đã hoàn chỉnh) + 1 media_files (file_type=audio).
+   * Chỉ Host/Organizer của meeting hoặc Business/System Admin được upload.
+   */
+  async uploadAudioForTranscription(
+    meetingId: string,
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+      size: number;
+    },
+    userId: string | null,
+  ): Promise<{
+    recordingSessionId: string;
+    mediaFileId: string;
+    storageKey: string;
+    durationSeconds: number | null;
+  }> {
+    const meetingRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (!meetingRows || meetingRows.length === 0) {
+      throw new NotFoundException({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+    }
+
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId);
+    }
+
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException({
+        code: 'EMPTY_AUDIO_FILE',
+        message: 'File audio rỗng hoặc không hợp lệ.',
+      });
+    }
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!RecordingSessionService.SUPPORTED_AUDIO_EXTENSIONS.includes(ext)) {
+      throw new BadRequestException({
+        code: 'UNSUPPORTED_MEDIA_FORMAT',
+        message: `Định dạng "${ext}" không được hỗ trợ. Chấp nhận: ${RecordingSessionService.SUPPORTED_AUDIO_EXTENSIONS.join(', ')}`,
+      });
+    }
+
+    const sessionId = randomUUID();
+    const checksum = createHash('sha256').update(file.buffer).digest('hex');
+    const durationSeconds = await this.probeUploadedAudioDuration(
+      file.buffer,
+      ext,
+    );
+
+    const saved = await this.storageService.saveFile({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      folder: `recordings/${meetingId}`,
+    });
+    const driver = this.storageService.getDriver();
+    const bucket = this.storageService.getBucketName();
+
+    const startedAt = new Date();
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let mediaFileId: string;
+    try {
+      const session = queryRunner.manager.create(RecordingSessionEntity, {
+        id: sessionId,
+        meetingId,
+        sessionType: RecordingSessionType.AUDIO,
+        sourceType: RecordingSourceType.MANUAL_UPLOAD,
+        status: RecordingSessionStatus.STOPPED,
+        startedAt,
+        stoppedAt: startedAt,
+        startedBy: userId,
+        stoppedBy: userId,
+        storageProvider: driver,
+        storagePath: saved.storageKey,
+        fileSizeBytes: String(file.size),
+        durationSeconds,
+        checksum,
+      });
+      await queryRunner.manager.save(RecordingSessionEntity, session);
+
+      const insert = (await queryRunner.query(
+        `INSERT INTO media_files
+           (file_name, file_type, mime_type, storage_provider, storage_bucket, storage_key,
+            recording_session_id, meeting_id, uploaded_by,
+            file_size_bytes, checksum, duration_seconds, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)
+         RETURNING id`,
+        [
+          file.originalname,
+          'audio',
+          file.mimetype || 'application/octet-stream',
+          driver,
+          bucket,
+          saved.storageKey,
+          sessionId,
+          meetingId,
+          userId,
+          String(file.size),
+          checksum,
+          durationSeconds,
+        ],
+      )) as Array<{ id: string }>;
+      mediaFileId = insert[0].id;
+
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `uploadAudioForTranscription failed for meeting ${meetingId}: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      throw new InternalServerErrorException({
+        code: 'AUDIO_UPLOAD_FAILED',
+        message: 'Failed to save uploaded audio.',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      recordingSessionId: sessionId,
+      mediaFileId,
+      storageKey: saved.storageKey,
+      durationSeconds,
+    };
+  }
+
+  /**
+   * Giai đoạn 1 — PLAN-transcription-completion: Participant upload audio track
+   * riêng của mình sau khi meeting kết thúc (status=completed). userId lấy từ JWT.
+   * Tạo MediaFile với channelUserId = userId để pipeline channel_zone biết ai nói.
+   */
+  async uploadAudioTrack(
+    meetingId: string,
+    sessionId: string,
+    file: {
+      buffer: Buffer;
+      originalname: string;
+      mimetype: string;
+      size: number;
+    },
+    userId: string,
+  ): Promise<{
+    mediaFileId: string;
+    storageKey: string;
+    channelUserId: string;
+    durationSeconds: number | null;
+  }> {
+    const meetingRows: Array<{ id: string; status: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id, status FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (!meetingRows || meetingRows.length === 0) {
+      throw new NotFoundException({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+    }
+    if (meetingRows[0].status !== 'completed') {
+      throw new BadRequestException({
+        code: 'MEETING_NOT_ENDED',
+        message: 'Chi duoc upload audio track sau khi cuoc hop da ket thuc.',
+      });
+    }
+
+    const participantRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2',
+        [meetingId, userId],
+      );
+    if (!participantRows || participantRows.length === 0) {
+      throw new ForbiddenException({
+        code: 'NOT_A_PARTICIPANT',
+        message: 'Ban khong phai la thanh vien cua cuoc hop nay.',
+      });
+    }
+
+    const sessionRows: Array<{ id: string; meeting_id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id, meeting_id FROM recording_sessions WHERE id = $1',
+        [sessionId],
+      );
+    if (
+      !sessionRows ||
+      sessionRows.length === 0 ||
+      sessionRows[0].meeting_id !== meetingId
+    ) {
+      throw new NotFoundException({
+        code: 'RECORDING_SESSION_NOT_FOUND',
+        message:
+          'Recording session not found or does not belong to this meeting.',
+      });
+    }
+
+    const existingRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        `SELECT id FROM media_files
+         WHERE recording_session_id = $1
+           AND channel_user_id = $2
+           AND file_type = 'audio'
+           AND is_active = true
+           AND deleted_at IS NULL`,
+        [sessionId, userId],
+      );
+    if (existingRows && existingRows.length > 0) {
+      throw new ConflictException({
+        code: 'AUDIO_TRACK_ALREADY_EXISTS',
+        message: 'Ban da upload audio track cho session nay roi.',
+      });
+    }
+
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException({
+        code: 'EMPTY_AUDIO_FILE',
+        message: 'File audio rong hoac khong hop le.',
+      });
+    }
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!RecordingSessionService.SUPPORTED_AUDIO_EXTENSIONS.includes(ext)) {
+      throw new BadRequestException({
+        code: 'UNSUPPORTED_MEDIA_FORMAT',
+        message: `Dinh dang "${ext}" khong duoc ho tro. Chap nhan: ${RecordingSessionService.SUPPORTED_AUDIO_EXTENSIONS.join(', ')}`,
+      });
+    }
+
+    const checksum = createHash('sha256').update(file.buffer).digest('hex');
+    const durationSeconds = await this.probeUploadedAudioDuration(
+      file.buffer,
+      ext,
+    );
+
+    const saved = await this.storageService.saveFile({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      folder: `meetings/${meetingId}/sessions/${sessionId}/${userId}`,
+    });
+    const driver = this.storageService.getDriver();
+    const bucket = this.storageService.getBucketName();
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let mediaFileId: string;
+    try {
+      const insert = (await queryRunner.query(
+        `INSERT INTO media_files
+           (file_name, file_type, mime_type, storage_provider, storage_bucket, storage_key,
+            recording_session_id, meeting_id, uploaded_by, channel_user_id,
+            file_size_bytes, checksum, duration_seconds, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true)
+         RETURNING id`,
+        [
+          file.originalname,
+          'audio',
+          file.mimetype || 'application/octet-stream',
+          driver,
+          bucket,
+          saved.storageKey,
+          sessionId,
+          meetingId,
+          userId,
+          userId,
+          String(file.size),
+          checksum,
+          durationSeconds,
+        ],
+      )) as Array<{ id: string }>;
+      mediaFileId = insert[0].id;
+
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `uploadAudioTrack failed for meeting ${meetingId} user ${userId}: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      throw new InternalServerErrorException({
+        code: 'AUDIO_TRACK_UPLOAD_FAILED',
+        message: 'Failed to save uploaded audio track.',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      mediaFileId,
+      storageKey: saved.storageKey,
+      channelUserId: userId,
+      durationSeconds,
+    };
+  }
+
+  /** Host/Organizer của meeting hoặc Business/System Admin — ngoài ra từ chối. */
+  private async assertHostOrAdmin(
+    meetingId: string,
+    userId: string,
+  ): Promise<void> {
+    const hostRows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2 AND participant_role = 'host'`,
+      [meetingId, userId],
+    );
+    if (hostRows && hostRows.length > 0) return;
+
+    const roleRows: Array<{ role_code: string }> =
+      await this.dataSource.manager.query(
+        `SELECT r.role_code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1 AND r.is_active = true`,
+        [userId],
+      );
+    const isAdmin = roleRows.some((r) =>
+      ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'].includes(r.role_code),
+    );
+    if (!isAdmin) {
+      throw new ForbiddenException({
+        code: 'PERMISSION_DENIED',
+        message:
+          'Chỉ Host/Organizer hoặc Admin được upload audio cho meeting này.',
+      });
+    }
+  }
+
+  /** Ghi buffer ra temp file để ffprobe đo duration (audio-only, best-effort), rồi xoá. */
+  private async probeUploadedAudioDuration(
+    buffer: Buffer,
+    ext: string,
+  ): Promise<number | null> {
+    const tmpPath = path.join(os.tmpdir(), `audio-probe-${randomUUID()}${ext}`);
+    try {
+      fs.writeFileSync(tmpPath, buffer);
+      return await probeAudioDuration(tmpPath);
+    } catch {
+      return null;
+    } finally {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // best-effort cleanup
+      }
+    }
   }
 
   /**

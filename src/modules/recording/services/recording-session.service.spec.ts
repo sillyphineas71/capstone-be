@@ -7,10 +7,12 @@ import {
   BadRequestException,
   BadGatewayException,
   ConflictException,
+  ForbiddenException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { RecordingSessionService } from './recording-session.service.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
+import { StorageService } from '../../storage/storage.service.js';
 import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { redactUrl } from '../utils/ffmpeg.util.js';
 import { EventEmitter } from 'events';
@@ -22,6 +24,7 @@ const fsMock = fs as jest.Mocked<typeof fs>;
 // REC-005: mock ffprobe (default null → fallback wall-clock; tests đặt Once khi cần probe).
 jest.mock('../utils/ffprobe.util.js', () => ({
   probeMedia: jest.fn().mockResolvedValue(null),
+  probeAudioDuration: jest.fn().mockResolvedValue(60),
 }));
 import { probeMedia } from '../utils/ffprobe.util.js';
 const probeMock = probeMedia as jest.Mock;
@@ -93,6 +96,7 @@ describe('RecordingSessionService (REC-002)', () => {
           useValue: { get: (_k: string, d?: unknown) => d },
         },
         { provide: RecordingProcessManager, useValue: managerMock },
+        { provide: StorageService, useValue: { saveFile: jest.fn() } },
       ],
     }).compile();
     service = module.get(RecordingSessionService);
@@ -311,6 +315,7 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
           useValue: { get: (_k: string, d?: unknown) => d },
         },
         { provide: RecordingProcessManager, useValue: managerMock },
+        { provide: StorageService, useValue: { saveFile: jest.fn() } },
       ],
     }).compile();
     service = module.get(RecordingSessionService);
@@ -535,6 +540,7 @@ describe('RecordingSessionService.getStatus (REC-004)', () => {
           useValue: { get: (_k: string, d?: unknown) => d },
         },
         { provide: RecordingProcessManager, useValue: managerMock },
+        { provide: StorageService, useValue: { saveFile: jest.fn() } },
       ],
     }).compile();
     service = module.get(RecordingSessionService);
@@ -599,5 +605,152 @@ describe('RecordingSessionService.getStatus (REC-004)', () => {
     await expect(service.getStatus('m1', 'sess-1')).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+describe('RecordingSessionService.uploadAudioForTranscription', () => {
+  let service: RecordingSessionService;
+  let dataSourceMock: any;
+  let storageMock: any;
+  let qr: any;
+
+  const goodFile = () => ({
+    buffer: Buffer.from('fake-m4a-bytes'),
+    originalname: 'meeting.m4a',
+    mimetype: 'audio/mp4',
+    size: 14,
+  });
+
+  // query() router theo SQL — meeting tồn tại + user là host theo mặc định.
+  const makeQuery =
+    (opts: { meeting?: any[]; host?: any[]; roles?: any[] }) =>
+    (sql: string) => {
+      if (sql.includes('FROM meetings'))
+        return Promise.resolve(opts.meeting ?? [{ id: 'm1' }]);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(opts.host ?? [{ id: 'mp-1' }]);
+      if (sql.includes('FROM user_roles'))
+        return Promise.resolve(opts.roles ?? []);
+      return Promise.resolve([]);
+    };
+
+  beforeEach(async () => {
+    qr = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      startTransaction: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue([{ id: 'media-1' }]),
+      manager: {
+        create: jest.fn((_e: unknown, obj: any) => obj),
+        save: jest.fn().mockResolvedValue(undefined),
+      },
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+    };
+    dataSourceMock = {
+      manager: { query: jest.fn().mockImplementation(makeQuery({})) },
+      createQueryRunner: jest.fn(() => qr),
+    };
+    storageMock = {
+      saveFile: jest.fn().mockResolvedValue({
+        storageKey: 'recordings/m1/audio.m4a',
+        publicUrl: 'http://localhost:3000/uploads/recordings/m1/audio.m4a',
+        sizeBytes: 14,
+      }),
+      getDriver: jest.fn().mockReturnValue('s3'),
+      getBucketName: jest.fn().mockReturnValue('capstone-media'),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RecordingSessionService,
+        { provide: DataSource, useValue: dataSourceMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+        { provide: RecordingProcessManager, useValue: {} },
+        { provide: StorageService, useValue: storageMock },
+      ],
+    }).compile();
+    service = module.get(RecordingSessionService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('happy: host upload audio hợp lệ → tạo session + media_files qua MinIO', async () => {
+    const result = await service.uploadAudioForTranscription(
+      'm1',
+      goodFile(),
+      'u1',
+    );
+
+    expect(result.mediaFileId).toBe('media-1');
+    expect(result.storageKey).toBe('recordings/m1/audio.m4a');
+    expect(storageMock.saveFile).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'recordings/m1' }),
+    );
+    expect(qr.manager.save).toHaveBeenCalled();
+    const insertParams = qr.query.mock.calls[0][1];
+    expect(insertParams).toEqual(
+      expect.arrayContaining(['audio', 's3', 'capstone-media']),
+    );
+    expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('404: meeting không tồn tại', async () => {
+    dataSourceMock.manager.query.mockImplementation(makeQuery({ meeting: [] }));
+    await expect(
+      service.uploadAudioForTranscription('m1', goodFile(), 'u1'),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('403: không phải host và không phải admin', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], roles: [{ role_code: 'INTERNAL_USER' }] }),
+    );
+    await expect(
+      service.uploadAudioForTranscription('m1', goodFile(), 'u1'),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('admin (không phải host) vẫn upload được', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], roles: [{ role_code: 'SYSTEM_ADMIN' }] }),
+    );
+    const result = await service.uploadAudioForTranscription(
+      'm1',
+      goodFile(),
+      'u1',
+    );
+    expect(result.mediaFileId).toBe('media-1');
+  });
+
+  it('400: định dạng file không được hỗ trợ', async () => {
+    await expect(
+      service.uploadAudioForTranscription(
+        'm1',
+        { ...goodFile(), originalname: 'notes.txt' },
+        'u1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('400: file rỗng', async () => {
+    await expect(
+      service.uploadAudioForTranscription(
+        'm1',
+        { ...goodFile(), buffer: Buffer.alloc(0) },
+        'u1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('lỗi DB → rollback + 500 AUDIO_UPLOAD_FAILED', async () => {
+    qr.query.mockRejectedValue(new Error('db insert failed'));
+    await expect(
+      service.uploadAudioForTranscription('m1', goodFile(), 'u1'),
+    ).rejects.toThrow(InternalServerErrorException);
+    expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
   });
 });
