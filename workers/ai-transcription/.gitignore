@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tmp
+__pycache__/
+*.pyc
+
+# Model weights (pyannote, faster-whisper...) preload thủ công theo T-HF-001 —
+# không commit vào Git, tải lại trên máy khác khi cần.
+models/
+.env

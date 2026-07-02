@@ -1,0 +1,9 @@
+faster-whisper>=1.0.0
+psutil>=5.9.0
+pytest>=8.0.0
+
+# M2 — diarization (T016). pyannote.audio kéo theo torch/torchaudio (nặng) —
+# chỉ cần cài khi DIARIZATION_ENABLED=true (mặc định false ở local profile,
+# mục 8.2 plan). Model weights KHÔNG tải qua pip — phải preload thủ công theo
+# T-HF-001 (accept license HuggingFace, copy vào PYANNOTE_MODEL_PATH).
+pyannote.audio>=3.1,<4.0
