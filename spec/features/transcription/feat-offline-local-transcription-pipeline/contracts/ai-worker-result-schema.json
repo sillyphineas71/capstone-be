@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://capstone.internal/schemas/transcription/ai-worker-result-schema.json",
+  "title": "AI Worker Transcription Result",
+  "description": "Schema JSON output của Python AI pipeline (workers/ai-transcription/python/transcribe_pipeline.py) gửi về Node AI Worker. Node Worker phải validate đúng schema này trước khi ghi vào bảng transcripts. Không được chứa audio/transcript nhạy cảm trong các field ngoài dữ liệu nghiệp vụ cần thiết.",
+  "$comment": "Nguồn: docs/Offline Meeting Transcription Pipeline Plan.md mục T013, T021, T022. Không tự thêm field ngoài schema này nếu chưa được duyệt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "languageCode",
+    "rawText",
+    "cleanedText",
+    "confidenceScore",
+    "segments",
+    "detectedSpeakers",
+    "modelVersions",
+    "warnings"
+  ],
+  "properties": {
+    "languageCode": {
+      "type": "string",
+      "description": "Mã ngôn ngữ của transcript, ví dụ vi-VN.",
+      "examples": ["vi-VN"]
+    },
+    "rawText": {
+      "type": "string",
+      "description": "Text thô từ faster-whisper, chưa qua chuẩn hoá."
+    },
+    "cleanedText": {
+      "type": "string",
+      "description": "Text đã chuẩn hoá. MVP có thể bằng rawText."
+    },
+    "confidenceScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence tổng hợp của toàn bộ transcript."
+    },
+    "segments": {
+      "type": "array",
+      "description": "Danh sách segment theo timestamp, đã gán speaker theo quy tắc mục 5 của plan gốc.",
+      "items": { "$ref": "#/$defs/segment" }
+    },
+    "detectedSpeakers": {
+      "type": "array",
+      "description": "Danh sách speaker phát hiện được trong toàn bộ audio.",
+      "items": { "$ref": "#/$defs/detectedSpeaker" }
+    },
+    "modelVersions": {
+      "type": "object",
+      "description": "Version/tên model đang dùng cho job này, dùng để audit và debug, không chứa secret/token.",
+      "additionalProperties": false,
+      "required": ["whisper"],
+      "properties": {
+        "whisper": {
+          "type": "string",
+          "description": "Model whisper đang active, ví dụ small, medium, large-v3.",
+          "examples": ["small", "medium", "large-v3"]
+        },
+        "pyannote": {
+          "type": ["string", "null"],
+          "description": "Version pyannote đang dùng, null nếu DIARIZATION_ENABLED=false."
+        },
+        "sepformer": {
+          "type": ["string", "null"],
+          "description": "Version SepFormer đang dùng, null nếu SEPARATION_ENABLED=false hoặc không có overlap nào trong audio."
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Danh sách warning code khi pipeline đi qua nhánh fallback/best-effort.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "diarization_failed_fallback_unknown",
+          "overlap_separation_low_confidence",
+          "sepformer_skipped_low_resources",
+          "sepformer_error_skipped",
+          "low_confidence_transcript",
+          "chunking_applied"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segmentId",
+        "startMs",
+        "endMs",
+        "text",
+        "speakerLabel",
+        "speakerSource",
+        "userId",
+        "channelId",
+        "roomZoneLabel",
+        "sttConfidence",
+        "diarizationConfidence",
+        "separationConfidence",
+        "finalConfidence",
+        "overlap",
+        "lowConfidence",
+        "manualReviewRequired",
+        "notes"
+      ],
+      "properties": {
+        "segmentId": {
+          "type": "string",
+          "description": "ID duy nhất của segment trong phạm vi 1 transcript, ví dụ seg-0001.",
+          "pattern": "^seg-[0-9]{4,}$"
+        },
+        "startMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Thời điểm bắt đầu segment tính bằng milliseconds, theo timestamp global (sau khi merge chunk nếu có)."
+        },
+        "endMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Thời điểm kết thúc segment tính bằng milliseconds."
+        },
+        "text": {
+          "type": "string",
+          "description": "Nội dung text của segment."
+        },
+        "speakerLabel": {
+          "type": "string",
+          "description": "Nhãn speaker. Là 'unknown' nếu không đủ tin cậy để gán speaker cụ thể (theo quy tắc mục 5.2 plan gốc) — KHÔNG được ép gán speaker khác khi không chắc.",
+          "examples": ["Speaker_1", "unknown"]
+        },
+        "speakerSource": {
+          "type": "string",
+          "description": "Nguồn xác định speakerLabel.",
+          "enum": ["pyannote", "channel_zone", "sepformer", "unknown"]
+        },
+        "userId": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "User đã map được với speaker nếu có dữ liệu mapping, null nếu chưa map."
+        },
+        "channelId": {
+          "type": ["string", "null"],
+          "description": "Channel/mic id nếu dùng speakerMappingMode=channel_zone, null nếu không áp dụng."
+        },
+        "roomZoneLabel": {
+          "type": ["string", "null"],
+          "description": "Nhãn vùng phòng (zone) nếu có dữ liệu mapping, null nếu không áp dụng."
+        },
+        "sttConfidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence STT cho segment này (từ avg logprob/no_speech_prob converted nếu có)."
+        },
+        "diarizationConfidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence diarization cho segment này, null nếu DIARIZATION_ENABLED=false hoặc pyannote thất bại."
+        },
+        "separationConfidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence SepFormer nếu segment này có chạy separation, null nếu không có overlap hoặc SEPARATION_ENABLED=false."
+        },
+        "finalConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence tổng hợp cuối cùng dùng để so sánh với TRANSCRIPT_MANUAL_REVIEW_THRESHOLD."
+        },
+        "overlap": {
+          "type": "boolean",
+          "description": "True nếu segment nằm trong vùng được pyannote/overlap_detector xác định là overlapped speech."
+        },
+        "lowConfidence": {
+          "type": "boolean",
+          "description": "True nếu finalConfidence hoặc separationConfidence dưới threshold cấu hình."
+        },
+        "manualReviewRequired": {
+          "type": "boolean",
+          "description": "True nếu segment cần Host/Admin review thủ công trước khi tin tưởng nội dung/speaker."
+        },
+        "notes": {
+          "type": "array",
+          "description": "Ghi chú bổ sung cho segment, ví dụ lý do gán unknown.",
+          "items": { "type": "string" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "speakerLabel": { "const": "unknown" } }
+          },
+          "then": {
+            "properties": {
+              "userId": { "const": null }
+            }
+          }
+        }
+      ]
+    },
+    "detectedSpeaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "speakerLabel",
+        "totalSpeakingMs",
+        "segmentCount",
+        "mappedUserId",
+        "mappingSource",
+        "confidence"
+      ],
+      "properties": {
+        "speakerLabel": {
+          "type": "string",
+          "description": "Nhãn speaker duy nhất trong phạm vi transcript này."
+        },
+        "totalSpeakingMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tổng thời gian nói của speaker này tính bằng milliseconds."
+        },
+        "segmentCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Số segment thuộc speaker này."
+        },
+        "mappedUserId": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "User đã map được với speaker này nếu có dữ liệu, null nếu chưa map (KHÔNG tự đoán user)."
+        },
+        "mappingSource": {
+          "type": "string",
+          "enum": ["diarization", "channel_zone", "manual", "unmapped"],
+          "description": "Nguồn của việc map speaker sang user."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence cho việc phát hiện/mapping speaker này."
+        }
+      }
+    }
+  }
+}
