@@ -38,7 +38,7 @@ describe('PermissionsController', () => {
     it('[AC-002] should return paginated permissions list', async () => {
       service.findAll.mockResolvedValue({ data: [], total: 0 });
 
-      const result = await controller.findAll({ page: 1, limit: 20 } as any);
+      const result = await controller.findAll({ page: 1, limit: 20 });
 
       expect(result.success).toBe(true);
       expect(result.meta).toBeDefined();
@@ -48,7 +48,10 @@ describe('PermissionsController', () => {
 
   describe('findOne', () => {
     it('[AC-003] should return a permission', async () => {
-      service.findOne.mockResolvedValue({ id: 'uuid', permissionCode: 'test.read' } as any);
+      service.findOne.mockResolvedValue({
+        id: 'uuid',
+        permissionCode: 'test.read',
+      } as any);
 
       const result = await controller.findOne('uuid');
       expect(result.success).toBe(true);
@@ -58,12 +61,20 @@ describe('PermissionsController', () => {
 
   describe('create', () => {
     it('[AC-001] should create and return 201', async () => {
-      service.create.mockResolvedValue({ id: 'uuid', permissionCode: 'test.read' } as any);
+      service.create.mockResolvedValue({
+        id: 'uuid',
+        permissionCode: 'test.read',
+      } as any);
       const user = { userId: 'user-uuid' };
 
       const result = await controller.create(
-        { permissionCode: 'test.read', permissionName: 'Test', moduleCode: 'meetings', actionCode: 'read' } as any,
-        user as any,
+        {
+          permissionCode: 'test.read',
+          permissionName: 'Test',
+          moduleCode: 'meetings',
+          actionCode: 'read',
+        },
+        user,
       );
 
       expect(result.success).toBe(true);
@@ -74,16 +85,25 @@ describe('PermissionsController', () => {
     });
 
     it('[AC-013] should handle missing user', async () => {
-      await expect(controller.create({} as any, undefined as any)).rejects.toThrow();
+      await expect(
+        controller.create({} as any, undefined as any),
+      ).rejects.toThrow();
     });
   });
 
   describe('update', () => {
     it('[AC-004] should update permission', async () => {
-      service.update.mockResolvedValue({ id: 'uuid', permissionName: 'Updated' } as any);
+      service.update.mockResolvedValue({
+        id: 'uuid',
+        permissionName: 'Updated',
+      } as any);
       const user = { userId: 'user-uuid' };
 
-      const result = await controller.update('uuid', { permissionName: 'Updated' } as any, user as any);
+      const result = await controller.update(
+        'uuid',
+        { permissionName: 'Updated' },
+        user,
+      );
       expect(result.success).toBe(true);
     });
 
@@ -91,7 +111,11 @@ describe('PermissionsController', () => {
       const user = { userId: 'user-uuid' };
 
       await expect(
-        controller.update('uuid', { permissionName: 'Test', permissionCode: 'new.code' } as any, user as any),
+        controller.update(
+          'uuid',
+          { permissionName: 'Test', permissionCode: 'new.code' } as any,
+          user as any,
+        ),
       ).rejects.toThrow();
     });
   });
@@ -101,7 +125,7 @@ describe('PermissionsController', () => {
       service.toggleActive.mockResolvedValue({ id: 'uuid', isActive: false });
       const user = { userId: 'user-uuid' };
 
-      const result = await controller.toggleActive('uuid', user as any);
+      const result = await controller.toggleActive('uuid', user);
       expect(result.success).toBe(true);
       expect(result.data.isActive).toBe(false);
     });

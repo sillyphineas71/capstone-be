@@ -28,9 +28,12 @@ export class DevController {
    * Response: { success, messageId?, error? }
    */
   @Post('test-mail')
-  async testMail(
-    @Body() body: TestMailBody,
-  ): Promise<{ success: boolean; messageId?: string; error?: string; message: string }> {
+  async testMail(@Body() body: TestMailBody): Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+    message: string;
+  }> {
     const to = body.to ?? 'dev-test@capstone.local';
     const subject = body.subject ?? '[DEV] CAPSTONE Mail Test';
 

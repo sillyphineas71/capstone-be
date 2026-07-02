@@ -25,7 +25,9 @@ describe('RolePermissionsController', () => {
       .useValue({ canActivate: () => true })
       .compile();
 
-    controller = module.get<RolePermissionsController>(RolePermissionsController);
+    controller = module.get<RolePermissionsController>(
+      RolePermissionsController,
+    );
   });
 
   it('should be defined', () => {
@@ -43,24 +45,40 @@ describe('RolePermissionsController', () => {
 
   describe('assign', () => {
     it('[AC-006] should assign permissions', async () => {
-      service.assign.mockResolvedValue({ assigned: ['perm-uuid'], skippedAlreadyAssigned: [], skippedDuplicatedInRequest: [] });
+      service.assign.mockResolvedValue({
+        assigned: ['perm-uuid'],
+        skippedAlreadyAssigned: [],
+        skippedDuplicatedInRequest: [],
+      });
       const user = { userId: 'user-uuid' };
 
       const result = await controller.assign(
         'role-uuid',
-        { permissionIds: ['perm-uuid'] } as any,
-        user as any,
+        { permissionIds: ['perm-uuid'] },
+        user,
       );
 
       expect(result.success).toBe(true);
-      expect(service.assign).toHaveBeenCalledWith('role-uuid', { permissionIds: ['perm-uuid'] }, 'user-uuid');
+      expect(service.assign).toHaveBeenCalledWith(
+        'role-uuid',
+        { permissionIds: ['perm-uuid'] },
+        'user-uuid',
+      );
     });
 
     it('should handle empty assign (all skipped)', async () => {
-      service.assign.mockResolvedValue({ assigned: [], skippedAlreadyAssigned: ['perm-uuid'], skippedDuplicatedInRequest: [] });
+      service.assign.mockResolvedValue({
+        assigned: [],
+        skippedAlreadyAssigned: ['perm-uuid'],
+        skippedDuplicatedInRequest: [],
+      });
       const user = { userId: 'user-uuid' };
 
-      const result = await controller.assign('role-uuid', { permissionIds: ['perm-uuid'] } as any, user as any);
+      const result = await controller.assign(
+        'role-uuid',
+        { permissionIds: ['perm-uuid'] },
+        user,
+      );
       expect(result.success).toBe(true);
       expect(result.data.assigned).toEqual([]);
     });
@@ -71,9 +89,13 @@ describe('RolePermissionsController', () => {
       service.revoke.mockResolvedValue(undefined);
       const user = { userId: 'user-uuid' };
 
-      const result = await controller.revoke('role-uuid', 'perm-uuid', user as any);
+      const result = await controller.revoke('role-uuid', 'perm-uuid', user);
       expect(result.success).toBe(true);
-      expect(service.revoke).toHaveBeenCalledWith('role-uuid', 'perm-uuid', 'user-uuid');
+      expect(service.revoke).toHaveBeenCalledWith(
+        'role-uuid',
+        'perm-uuid',
+        'user-uuid',
+      );
     });
   });
 });

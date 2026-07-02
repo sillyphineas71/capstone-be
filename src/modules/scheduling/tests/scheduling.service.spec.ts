@@ -57,7 +57,7 @@ describe('SchedulingService', () => {
   });
 
   function setupMockQueryBuilder(result: any[]) {
-    let params: Record<string, any> = {};
+    const params: Record<string, any> = {};
     const mockQueryBuilder = {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -115,9 +115,24 @@ describe('SchedulingService', () => {
 
     it('[SVC-4] should sort by capacity diff ascending', async () => {
       setupMockQueryBuilder([
-        mockRoom({ id: 'r1', roomCode: 'R201', roomName: 'Z Room', capacity: 10 }),
-        mockRoom({ id: 'r2', roomCode: 'R101', roomName: 'A Room', capacity: 6 }),
-        mockRoom({ id: 'r3', roomCode: 'R301', roomName: 'B Room', capacity: 8 }),
+        mockRoom({
+          id: 'r1',
+          roomCode: 'R201',
+          roomName: 'Z Room',
+          capacity: 10,
+        }),
+        mockRoom({
+          id: 'r2',
+          roomCode: 'R101',
+          roomName: 'A Room',
+          capacity: 6,
+        }),
+        mockRoom({
+          id: 'r3',
+          roomCode: 'R301',
+          roomName: 'B Room',
+          capacity: 8,
+        }),
       ]);
 
       const dto = { ...validDto, attendeeCount: 5 };
@@ -228,4 +243,3 @@ describe('SchedulingService', () => {
     });
   });
 });
-

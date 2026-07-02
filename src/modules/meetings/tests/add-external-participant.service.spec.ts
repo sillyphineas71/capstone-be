@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -10,7 +10,11 @@ import {
 } from '@nestjs/common';
 
 import { MeetingsService } from '../services/meetings.service.js';
-import { MeetingEntity, MeetingStatus, MeetingVisibilityLevel } from '../entities/meeting.entity.js';
+import {
+  MeetingEntity,
+  MeetingStatus,
+  MeetingVisibilityLevel,
+} from '../entities/meeting.entity.js';
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
@@ -95,9 +99,11 @@ describe('MeetingsService.addExternalParticipant', () => {
         create: jest.fn(),
         save: jest.fn(),
       }),
-      transaction: jest.fn().mockImplementation(async (cb: (em: EntityManager) => Promise<any>) => {
-        return cb(em);
-      }),
+      transaction: jest
+        .fn()
+        .mockImplementation(async (cb: (em: EntityManager) => Promise<any>) => {
+          return cb(em);
+        }),
       manager: {} as EntityManager,
     } as unknown as jest.Mocked<DataSource>;
 
@@ -107,12 +113,16 @@ describe('MeetingsService.addExternalParticipant', () => {
     } as unknown as jest.Mocked<WarningTokenUtil>;
 
     notificationsService = {
-      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: 'notif-1' }, jobId: 'job-1' }),
+      enqueueEmailNotification: jest
+        .fn()
+        .mockResolvedValue({ notification: { id: 'notif-1' }, jobId: 'job-1' }),
       createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
     } as unknown as jest.Mocked<NotificationsService>;
 
     const authzRepo = {
-      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
     } as unknown as jest.Mocked<AuthzReadRepository>;
 
     const module: TestingModule = await Test.createTestingModule({
@@ -139,48 +149,52 @@ describe('MeetingsService.addExternalParticipant', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Default mock: meeting found
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return {
+            findOne: jest.fn().mockResolvedValue(mockMeeting),
+            createQueryBuilder: jest.fn().mockReturnValue({
+              innerJoin: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              andWhere: jest.fn().mockReturnThis(),
+              getOne: jest.fn().mockResolvedValue(null),
+              getMany: jest.fn().mockResolvedValue([]),
+            }),
+          };
+        }
+        if (entity === MeetingExternalParticipantEntity) {
+          return {
+            createQueryBuilder: jest.fn().mockReturnValue({
+              where: jest.fn().mockReturnThis(),
+              getOne: jest.fn().mockResolvedValue(null),
+            }),
+            create: jest.fn().mockReturnValue(mockExternalParticipant),
+            save: jest.fn().mockResolvedValue(mockExternalParticipant),
+          };
+        }
+        if (entity === MeetingParticipantEntity) {
+          return { count: jest.fn().mockResolvedValue(0) };
+        }
+        if (entity === RoomEntity) {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
+        if (entity === SystemConfigEntity) {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
         return {
-          findOne: jest.fn().mockResolvedValue(mockMeeting),
-          createQueryBuilder: jest.fn().mockReturnValue({
-            innerJoin: jest.fn().mockReturnThis(),
-            where: jest.fn().mockReturnThis(),
-            andWhere: jest.fn().mockReturnThis(),
-            getOne: jest.fn().mockResolvedValue(null),
-            getMany: jest.fn().mockResolvedValue([]),
-          }),
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockReturnValue({}),
+          save: jest.fn().mockResolvedValue({}),
         };
-      }
-      if (entity === MeetingExternalParticipantEntity) {
-        return {
-          createQueryBuilder: jest.fn().mockReturnValue({
-            where: jest.fn().mockReturnThis(),
-            getOne: jest.fn().mockResolvedValue(null),
-          }),
-          create: jest.fn().mockReturnValue(mockExternalParticipant),
-          save: jest.fn().mockResolvedValue(mockExternalParticipant),
-        };
-      }
-      if (entity === MeetingParticipantEntity) {
-        return { count: jest.fn().mockResolvedValue(0) };
-      }
-      if (entity === RoomEntity) {
-        return { findOne: jest.fn().mockResolvedValue(null) };
-      }
-      if (entity === SystemConfigEntity) {
-        return { findOne: jest.fn().mockResolvedValue(null) };
-      }
-      return {
-        findOne: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockReturnValue({}),
-        save: jest.fn().mockResolvedValue({}),
-      };
-    });
+      },
+    );
 
     // em.save — the first call persists the new participant and must return its id
     (em.save as jest.Mock).mockResolvedValue(mockExternalParticipant);
-    (em.create as jest.Mock).mockImplementation((_entity: any, data: any) => data);
+    (em.create as jest.Mock).mockImplementation(
+      (_entity: any, data: any) => data,
+    );
 
     // em.getRepository — used for the duplicate-email re-check inside the transaction
     (em.getRepository as jest.Mock).mockImplementation((entity: any) => {
@@ -201,14 +215,21 @@ describe('MeetingsService.addExternalParticipant', () => {
     });
 
     // Transaction mock
-    (dataSource.transaction as jest.Mock).mockImplementation(async (cb: any) => {
-      return cb(em);
-    });
+    (dataSource.transaction as jest.Mock).mockImplementation(
+      async (cb: any) => {
+        return cb(em);
+      },
+    );
   });
 
   // T022: Happy path
   it('should add external participant successfully (T022)', async () => {
-    const result = await service.addExternalParticipant('meeting-1', validDto, mockAuthUser, {});
+    const result = await service.addExternalParticipant(
+      'meeting-1',
+      validDto,
+      mockAuthUser,
+      {},
+    );
 
     expect(result.externalParticipantId).toBeDefined();
     expect(result.email).toBe('khach@partner.com');
@@ -218,12 +239,14 @@ describe('MeetingsService.addExternalParticipant', () => {
 
   // T023: Meeting not found
   it('should throw 404 when meeting not found (T023)', async () => {
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
         return { findOne: jest.fn().mockResolvedValue(null) };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+      },
+    );
 
     await expect(
       service.addExternalParticipant('bad-id', validDto, mockAuthUser, {}),
@@ -232,13 +255,18 @@ describe('MeetingsService.addExternalParticipant', () => {
 
   // T024: Wrong meeting status
   it('should throw 400 when meeting status is invalid (T024)', async () => {
-    const cancelledMeeting = { ...mockMeeting, status: MeetingStatus.CANCELLED };
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
-        return { findOne: jest.fn().mockResolvedValue(cancelledMeeting) };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+    const cancelledMeeting = {
+      ...mockMeeting,
+      status: MeetingStatus.CANCELLED,
+    };
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(cancelledMeeting) };
+        }
+        return { findOne: jest.fn().mockResolvedValue(null) };
+      },
+    );
 
     await expect(
       service.addExternalParticipant('meeting-1', validDto, mockAuthUser, {}),
@@ -250,26 +278,33 @@ describe('MeetingsService.addExternalParticipant', () => {
     const unauthorizedUser = { userId: 'some-other-user' };
 
     await expect(
-      service.addExternalParticipant('meeting-1', validDto, unauthorizedUser, {}),
+      service.addExternalParticipant(
+        'meeting-1',
+        validDto,
+        unauthorizedUser,
+        {},
+      ),
     ).rejects.toThrow(ForbiddenException);
   });
 
   // T030: Duplicate email
   it('should throw 409 when email already exists (T030)', async () => {
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
-        return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
-      }
-      if (entity === MeetingExternalParticipantEntity) {
-        return {
-          createQueryBuilder: jest.fn().mockReturnValue({
-            where: jest.fn().mockReturnThis(),
-            getOne: jest.fn().mockResolvedValue(mockExternalParticipant),
-          }),
-        };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
+        }
+        if (entity === MeetingExternalParticipantEntity) {
+          return {
+            createQueryBuilder: jest.fn().mockReturnValue({
+              where: jest.fn().mockReturnThis(),
+              getOne: jest.fn().mockResolvedValue(mockExternalParticipant),
+            }),
+          };
+        }
+        return { findOne: jest.fn().mockResolvedValue(null) };
+      },
+    );
 
     await expect(
       service.addExternalParticipant('meeting-1', validDto, mockAuthUser, {}),

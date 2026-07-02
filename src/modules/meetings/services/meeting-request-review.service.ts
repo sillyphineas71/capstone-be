@@ -325,11 +325,15 @@ export class MeetingRequestReviewService {
         requesterId: request.requestedBy,
         hostId: meeting.hostId,
         decisionNote: dto.decisionNote || null,
-      } as MeetingApprovalResult;
+      };
     });
 
     // ── After transaction: enqueue notifications ──
-    await this.enqueueApprovalNotifications(approvalResult, authUser, clientContext);
+    await this.enqueueApprovalNotifications(
+      approvalResult,
+      authUser,
+      clientContext,
+    );
 
     return new ApproveResponseDto({
       requestId,
@@ -365,8 +369,12 @@ export class MeetingRequestReviewService {
         this.logger.error(
           `[Approve] Failed to send IN_APP notify to participant ${uid}: ${(error as Error).message}`,
         );
-        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
-          `Failed to notify participant ${uid}: ${(error as Error).message}`);
+        await this.writeNotificationFailureAudit(
+          meetingId,
+          authUser,
+          clientContext,
+          `Failed to notify participant ${uid}: ${(error as Error).message}`,
+        );
       }
     }
 
@@ -388,8 +396,12 @@ export class MeetingRequestReviewService {
         this.logger.error(
           `[Approve] Failed to send email to external ${email}: ${(error as Error).message}`,
         );
-        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
-          `Failed to email external ${email}: ${(error as Error).message}`);
+        await this.writeNotificationFailureAudit(
+          meetingId,
+          authUser,
+          clientContext,
+          `Failed to email external ${email}: ${(error as Error).message}`,
+        );
       }
     }
 
@@ -415,8 +427,12 @@ export class MeetingRequestReviewService {
         this.logger.error(
           `[Approve] Failed to send approved notify to ${uid}: ${(error as Error).message}`,
         );
-        await this.writeNotificationFailureAudit(meetingId, authUser, clientContext,
-          `Failed to notify ${uid} of approval: ${(error as Error).message}`);
+        await this.writeNotificationFailureAudit(
+          meetingId,
+          authUser,
+          clientContext,
+          `Failed to notify ${uid} of approval: ${(error as Error).message}`,
+        );
       }
     }
   }
@@ -639,7 +655,11 @@ export class MeetingRequestReviewService {
     });
 
     // ── After transaction: enqueue notification ──
-    await this.enqueueRejectionNotifications(rejectResult, authUser, clientContext);
+    await this.enqueueRejectionNotifications(
+      rejectResult,
+      authUser,
+      clientContext,
+    );
 
     return new RejectResponseDto({
       requestId,
@@ -649,7 +669,12 @@ export class MeetingRequestReviewService {
   }
 
   private async enqueueRejectionNotifications(
-    result: { meetingTitle: string; meetingId: string; requesterId: string; hostId: string | null },
+    result: {
+      meetingTitle: string;
+      meetingId: string;
+      requesterId: string;
+      hostId: string | null;
+    },
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<void> {
@@ -674,10 +699,13 @@ export class MeetingRequestReviewService {
         this.logger.error(
           `[Reject] Failed to send rejection notify to ${uid}: ${(error as Error).message}`,
         );
-        await this.writeNotificationFailureAudit(result.meetingId, authUser, clientContext,
-          `Failed to notify ${uid} of rejection: ${(error as Error).message}`);
+        await this.writeNotificationFailureAudit(
+          result.meetingId,
+          authUser,
+          clientContext,
+          `Failed to notify ${uid} of rejection: ${(error as Error).message}`,
+        );
       }
     }
   }
 }
-

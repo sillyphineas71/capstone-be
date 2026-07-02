@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -64,9 +64,11 @@ describe('MeetingsService.removeExternalParticipant', () => {
           getOne: jest.fn(),
         }),
       }),
-      transaction: jest.fn().mockImplementation(async (cb: (em: EntityManager) => Promise<any>) => {
-        return cb(em);
-      }),
+      transaction: jest
+        .fn()
+        .mockImplementation(async (cb: (em: EntityManager) => Promise<any>) => {
+          return cb(em);
+        }),
       manager: {} as EntityManager,
     } as unknown as jest.Mocked<DataSource>;
 
@@ -76,12 +78,16 @@ describe('MeetingsService.removeExternalParticipant', () => {
     } as unknown as jest.Mocked<WarningTokenUtil>;
 
     const notificationsService = {
-      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: 'notif-1' }, jobId: 'job-1' }),
+      enqueueEmailNotification: jest
+        .fn()
+        .mockResolvedValue({ notification: { id: 'notif-1' }, jobId: 'job-1' }),
       createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
     } as unknown as jest.Mocked<NotificationsService>;
 
     const authzRepo = {
-      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
     } as unknown as jest.Mocked<AuthzReadRepository>;
 
     const module: TestingModule = await Test.createTestingModule({
@@ -109,21 +115,25 @@ describe('MeetingsService.removeExternalParticipant', () => {
     jest.clearAllMocks();
 
     // Default mocks
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
-        return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
-      }
-      if (entity === MeetingExternalParticipantEntity) {
-        return {
-          findOne: jest.fn().mockResolvedValue(mockTarget),
-        };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
+        }
+        if (entity === MeetingExternalParticipantEntity) {
+          return {
+            findOne: jest.fn().mockResolvedValue(mockTarget),
+          };
+        }
+        return { findOne: jest.fn().mockResolvedValue(null) };
+      },
+    );
 
-    (dataSource.transaction as jest.Mock).mockImplementation(async (cb: any) => {
-      return cb(em);
-    });
+    (dataSource.transaction as jest.Mock).mockImplementation(
+      async (cb: any) => {
+        return cb(em);
+      },
+    );
 
     em.findOne = jest.fn().mockResolvedValue(mockMeeting);
     em.delete = jest.fn().mockResolvedValue({ affected: 1 });
@@ -134,7 +144,10 @@ describe('MeetingsService.removeExternalParticipant', () => {
   // T022: Happy path
   it('should remove external participant successfully (T022)', async () => {
     const result = await service.removeExternalParticipant(
-      'meeting-1', 'ext-part-1', mockAuthUser, {},
+      'meeting-1',
+      'ext-part-1',
+      mockAuthUser,
+      {},
     );
 
     expect(result.removed).toBe(true);
@@ -144,30 +157,47 @@ describe('MeetingsService.removeExternalParticipant', () => {
 
   // T024: Meeting not found
   it('should throw 404 when meeting not found (T024)', async () => {
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
         return { findOne: jest.fn().mockResolvedValue(null) };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+      },
+    );
 
     await expect(
-      service.removeExternalParticipant('bad-id', 'ext-part-1', mockAuthUser, {}),
+      service.removeExternalParticipant(
+        'bad-id',
+        'ext-part-1',
+        mockAuthUser,
+        {},
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
   // T025: Wrong meeting status
   it('should throw 409 when meeting is not scheduled (T025)', async () => {
-    const inProgressMeeting = { ...mockMeeting, status: MeetingStatus.IN_PROGRESS };
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
-        return { findOne: jest.fn().mockResolvedValue(inProgressMeeting) };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+    const inProgressMeeting = {
+      ...mockMeeting,
+      status: MeetingStatus.IN_PROGRESS,
+    };
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(inProgressMeeting) };
+        }
+        return { findOne: jest.fn().mockResolvedValue(null) };
+      },
+    );
 
     await expect(
-      service.removeExternalParticipant('meeting-1', 'ext-part-1', mockAuthUser, {}),
+      service.removeExternalParticipant(
+        'meeting-1',
+        'ext-part-1',
+        mockAuthUser,
+        {},
+      ),
     ).rejects.toThrow(ConflictException);
   });
 
@@ -176,24 +206,36 @@ describe('MeetingsService.removeExternalParticipant', () => {
     const unauthorizedUser = { userId: 'some-other-user' };
 
     await expect(
-      service.removeExternalParticipant('meeting-1', 'ext-part-1', unauthorizedUser, {}),
+      service.removeExternalParticipant(
+        'meeting-1',
+        'ext-part-1',
+        unauthorizedUser,
+        {},
+      ),
     ).rejects.toThrow(ForbiddenException);
   });
 
   // T030: Participant not in meeting
   it('should throw 404 when participant not in meeting (T030)', async () => {
-    (dataSource.getRepository as jest.Mock).mockImplementation((entity: any) => {
-      if (entity === MeetingEntity) {
-        return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
-      }
-      if (entity === MeetingExternalParticipantEntity) {
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: any) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(mockMeeting) };
+        }
+        if (entity === MeetingExternalParticipantEntity) {
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }
         return { findOne: jest.fn().mockResolvedValue(null) };
-      }
-      return { findOne: jest.fn().mockResolvedValue(null) };
-    });
+      },
+    );
 
     await expect(
-      service.removeExternalParticipant('meeting-1', 'bad-ext-id', mockAuthUser, {}),
+      service.removeExternalParticipant(
+        'meeting-1',
+        'bad-ext-id',
+        mockAuthUser,
+        {},
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -203,7 +245,13 @@ describe('MeetingsService.removeExternalParticipant', () => {
     body.scope = 'series';
 
     await expect(
-      service.removeExternalParticipant('meeting-1', 'ext-part-1', mockAuthUser, {}, body),
+      service.removeExternalParticipant(
+        'meeting-1',
+        'ext-part-1',
+        mockAuthUser,
+        {},
+        body,
+      ),
     ).rejects.toThrow(UnprocessableEntityException);
   });
 });

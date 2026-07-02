@@ -106,12 +106,16 @@ describe('MeetingsService', () => {
     };
 
     mockNotificationsService = {
-      createNotification: jest.fn().mockResolvedValue({ id: "notif-1" }),
-      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: "notif-1" } }),
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
+      enqueueEmailNotification: jest
+        .fn()
+        .mockResolvedValue({ notification: { id: 'notif-1' } }),
     };
 
     mockAuthzReadRepository = {
-      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
     };
 
     em = {
@@ -418,7 +422,7 @@ describe('MeetingsService', () => {
         if (Array.isArray(idFilter)) {
           ids = idFilter;
         } else if (idFilter && typeof idFilter === 'object') {
-          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          const possible = idFilter._value ?? idFilter._subExpression ?? [];
           ids = Array.isArray(possible) ? possible : [possible];
         }
         return ids.map((uid: string) => ({
@@ -428,10 +432,16 @@ describe('MeetingsService', () => {
         }));
       });
 
-      em.find = jest.fn().mockImplementation(async (entity: any, options?: any) => {
-        const ids: string[] = options?.where?.id?._value ?? [];
-        return ids.map((uid: string) => ({ id: uid, email: uid + "@company.com", accountStatus: AccountStatus.ACTIVE }));
-      });
+      em.find = jest
+        .fn()
+        .mockImplementation(async (entity: any, options?: any) => {
+          const ids: string[] = options?.where?.id?._value ?? [];
+          return ids.map((uid: string) => ({
+            id: uid,
+            email: uid + '@company.com',
+            accountStatus: AccountStatus.ACTIVE,
+          }));
+        });
       mockRepo.count.mockResolvedValue(0);
 
       const conflictQb = mockQueryBuilder();
@@ -515,7 +525,7 @@ describe('MeetingsService', () => {
         if (Array.isArray(idFilter)) {
           ids = idFilter;
         } else if (idFilter && typeof idFilter === 'object') {
-          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          const possible = idFilter._value ?? idFilter._subExpression ?? [];
           ids = Array.isArray(possible) ? possible : [possible];
         }
         return ids.map((uid: string) => ({
@@ -590,7 +600,7 @@ describe('MeetingsService', () => {
         if (Array.isArray(idFilter)) {
           ids = idFilter;
         } else if (idFilter && typeof idFilter === 'object') {
-          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          const possible = idFilter._value ?? idFilter._subExpression ?? [];
           ids = Array.isArray(possible) ? possible : [possible];
         }
         return ids.map((uid: string) => ({
@@ -653,7 +663,7 @@ describe('MeetingsService', () => {
         if (Array.isArray(idFilter)) {
           ids = idFilter;
         } else if (idFilter && typeof idFilter === 'object') {
-          const possible = (idFilter as any)._value ?? (idFilter as any)._subExpression ?? [];
+          const possible = idFilter._value ?? idFilter._subExpression ?? [];
           ids = Array.isArray(possible) ? possible : [possible];
         }
         return ids.map((uid: string) => ({
@@ -717,11 +727,15 @@ describe('MeetingsService', () => {
         }),
       );
 
-      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_INVITE,
           channel: NotificationChannel.EMAIL,
-          toEmails: expect.arrayContaining([expect.stringMatching(/@company\.com$/)]),
+          toEmails: expect.arrayContaining([
+            expect.stringMatching(/@company\.com$/),
+          ]),
           relatedEntityType: 'meeting',
         }),
       );
@@ -756,14 +770,18 @@ describe('MeetingsService', () => {
       };
       setupDefaultMocks();
 
-      await service.create(dtoWithExternal as any, authUser, clientContext);
+      await service.create(dtoWithExternal, authUser, clientContext);
 
-      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           toEmails: ['guest1@external.com'],
         }),
       );
-      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           toEmails: ['guest2@external.com'],
         }),
@@ -793,7 +811,6 @@ describe('MeetingsService', () => {
       expect(result.id).toBeDefined();
       expect(result.status).toBe(MeetingStatus.PENDING_APPROVAL);
     });
-
 
     it('should throw BadRequest for past startTime', async () => {
       const pastDto = {
@@ -945,9 +962,9 @@ describe('MeetingsService', () => {
     });
   });
 
-  describe("updateMeetingTime", () => {
-    const authUser = { userId: "auth-user-uuid" };
-    const clientContext = { ipAddress: "127.0.0.1", userAgent: "test" };
+  describe('updateMeetingTime', () => {
+    const authUser = { userId: 'auth-user-uuid' };
+    const clientContext = { ipAddress: '127.0.0.1', userAgent: 'test' };
 
     function futureDate(hours: number, minutes: number = 0): Date {
       const d = new Date();
@@ -957,54 +974,59 @@ describe('MeetingsService', () => {
     }
 
     const fakeRoom = {
-      id: "room-uuid",
-      roomName: "Room A",
+      id: 'room-uuid',
+      roomName: 'Room A',
       capacity: 20,
       isActive: true,
-      currentStatus: "available",
+      currentStatus: 'available',
     };
 
     const fakeMeeting = {
-      id: "meeting-uuid",
-      meetingCode: "MT-20260701-001",
-      title: "Test Meeting",
-      roomId: "room-uuid",
-      organizerId: "auth-user-uuid",
-      hostId: "auth-user-uuid",
+      id: 'meeting-uuid',
+      meetingCode: 'MT-20260701-001',
+      title: 'Test Meeting',
+      roomId: 'room-uuid',
+      organizerId: 'auth-user-uuid',
+      hostId: 'auth-user-uuid',
       startTime: futureDate(9, 0),
       endTime: futureDate(10, 0),
       status: MeetingStatus.SCHEDULED,
       recurrenceRuleId: null,
       parentMeetingId: null,
       deletedAt: null,
-      organizer: { id: "auth-user-uuid", fullName: "Auth User", email: "auth@test.com" },
+      organizer: {
+        id: 'auth-user-uuid',
+        fullName: 'Auth User',
+        email: 'auth@test.com',
+      },
     };
 
     const fakeActiveBooking = {
-      id: "booking-uuid",
-      bookingCode: "BK-001",
-      meetingId: "meeting-uuid",
-      roomId: "room-uuid",
+      id: 'booking-uuid',
+      bookingCode: 'BK-001',
+      meetingId: 'meeting-uuid',
+      roomId: 'room-uuid',
       status: RoomBookingStatus.APPROVED,
       reservedStartTime: futureDate(9, 0),
       reservedEndTime: futureDate(10, 0),
       bookingType: BookingType.SCHEDULED,
-      bookedBy: "auth-user-uuid",
+      bookedBy: 'auth-user-uuid',
     };
 
     function setupMocks() {
       mockRepo.findOne.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
         const id = where.id;
-        if (id === "meeting-uuid") return fakeMeeting;
-        if (id === "room-uuid") return fakeRoom;
-        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        if (id === 'meeting-uuid') return fakeMeeting;
+        if (id === 'room-uuid') return fakeRoom;
+        if (where.meetingId === 'meeting-uuid' && where.status)
+          return fakeActiveBooking;
         return null;
       });
 
       mockRepo.find.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
-        if (where.meetingId === "meeting-uuid" && where.roomId) return [];
+        if (where.meetingId === 'meeting-uuid' && where.roomId) return [];
         return [];
       });
 
@@ -1017,7 +1039,7 @@ describe('MeetingsService', () => {
       em.find.mockResolvedValue([]);
       em.create.mockImplementation((_: any, plain: any): any => plain);
       em.save.mockImplementation(async (_entity: any, data: any) => {
-        if (data && typeof data === "object" && !data.id) data.id = "saved-id";
+        if (data && typeof data === 'object' && !data.id) data.id = 'saved-id';
         return data;
       });
       em.getRepository = jest.fn().mockImplementation((_entity: any) => ({
@@ -1035,24 +1057,34 @@ describe('MeetingsService', () => {
       endTime: futureDate(15, 0).toISOString(),
     };
 
-    it("should update meeting time and return correct response", async () => {
+    it('should update meeting time and return correct response', async () => {
       setupMocks();
-      const result = await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
-      expect(result.meetingId).toBe("meeting-uuid");
+      const result = await service.updateMeetingTime(
+        'meeting-uuid',
+        validDto,
+        authUser,
+        clientContext,
+      );
+      expect(result.meetingId).toBe('meeting-uuid');
       expect(result.newStartTime).toBe(validDto.startTime);
       expect(result.newEndTime).toBe(validDto.endTime);
-      expect(result.bookingId).toBe("booking-uuid");
+      expect(result.bookingId).toBe('booking-uuid');
       expect(dataSource.transaction).toHaveBeenCalled();
     });
 
-    it("[T040] should call createNotification with MEETING_TIME_UPDATED and old/new times in payload", async () => {
+    it('[T040] should call createNotification with MEETING_TIME_UPDATED and old/new times in payload', async () => {
       setupMocks();
-      await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
+      await service.updateMeetingTime(
+        'meeting-uuid',
+        validDto,
+        authUser,
+        clientContext,
+      );
       expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_TIME_UPDATED,
           channel: NotificationChannel.IN_APP,
-          relatedEntityType: "meeting",
+          relatedEntityType: 'meeting',
           payloadJson: expect.objectContaining({
             oldStartTime: expect.any(String),
             oldEndTime: expect.any(String),
@@ -1063,99 +1095,143 @@ describe('MeetingsService', () => {
       );
     });
 
-    it("[T041] should call enqueueEmailNotification with correct recipients", async () => {
+    it('[T041] should call enqueueEmailNotification with correct recipients', async () => {
       setupMocks();
       mockRepo.find.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
-        if (where.meetingId === "meeting-uuid" && where.roomId) return [];
-        if (where.meetingId === "meeting-uuid") {
-          return [
-            { userId: "user-1" } as any,
-            { userId: "user-2" } as any,
-          ];
+        if (where.meetingId === 'meeting-uuid' && where.roomId) return [];
+        if (where.meetingId === 'meeting-uuid') {
+          return [{ userId: 'user-1' } as any, { userId: 'user-2' } as any];
         }
         return [];
       });
 
-      em.find = jest.fn().mockImplementation(async (_entity: any, options: any = {}) => {
-        const idVal = options?.where?.id;
-        if (idVal && idVal._value && Array.isArray(idVal._value)) {
-          return idVal._value.map((uid: string) => ({ id: uid, email: uid + "@company.com" }));
-        }
-        return [];
-      });
+      em.find = jest
+        .fn()
+        .mockImplementation(async (_entity: any, options: any = {}) => {
+          const idVal = options?.where?.id;
+          if (idVal && idVal._value && Array.isArray(idVal._value)) {
+            return idVal._value.map((uid: string) => ({
+              id: uid,
+              email: uid + '@company.com',
+            }));
+          }
+          return [];
+        });
 
-      await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
-      expect(mockNotificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      await service.updateMeetingTime(
+        'meeting-uuid',
+        validDto,
+        authUser,
+        clientContext,
+      );
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_TIME_UPDATED,
           channel: NotificationChannel.EMAIL,
-          toEmails: expect.arrayContaining([expect.stringMatching(/@company\.com$/)]),
+          toEmails: expect.arrayContaining([
+            expect.stringMatching(/@company\.com$/),
+          ]),
         }),
       );
     });
 
-    it("[T042] should succeed and return notificationStatus=failed when notification/email fails", async () => {
+    it('[T042] should succeed and return notificationStatus=failed when notification/email fails', async () => {
       setupMocks();
-      mockNotificationsService.createNotification.mockRejectedValue(new Error("Notify failed"));
-      const result = await service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext);
-      expect(result.meetingId).toBe("meeting-uuid");
-      expect(result.notificationStatus).toBe("failed");
+      mockNotificationsService.createNotification.mockRejectedValue(
+        new Error('Notify failed'),
+      );
+      const result = await service.updateMeetingTime(
+        'meeting-uuid',
+        validDto,
+        authUser,
+        clientContext,
+      );
+      expect(result.meetingId).toBe('meeting-uuid');
+      expect(result.notificationStatus).toBe('failed');
     });
 
-    it("should throw 422 for past startTime", async () => {
+    it('should throw 422 for past startTime', async () => {
       setupMocks();
       const pastDto = {
-        startTime: new Date("2020-01-01T10:00:00Z").toISOString(),
-        endTime: new Date("2020-01-01T11:00:00Z").toISOString(),
+        startTime: new Date('2020-01-01T10:00:00Z').toISOString(),
+        endTime: new Date('2020-01-01T11:00:00Z').toISOString(),
       };
       await expect(
-        service.updateMeetingTime("meeting-uuid", pastDto, authUser, clientContext),
+        service.updateMeetingTime(
+          'meeting-uuid',
+          pastDto,
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
-    it("should throw 422 for startTime >= endTime", async () => {
+    it('should throw 422 for startTime >= endTime', async () => {
       setupMocks();
       const invalidDto = {
         startTime: futureDate(15, 0).toISOString(),
         endTime: futureDate(14, 0).toISOString(),
       };
       await expect(
-        service.updateMeetingTime("meeting-uuid", invalidDto, authUser, clientContext),
+        service.updateMeetingTime(
+          'meeting-uuid',
+          invalidDto,
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(UnprocessableEntityException);
     });
 
-    it("should throw 403 for non-owner/host", async () => {
+    it('should throw 403 for non-owner/host', async () => {
       setupMocks();
       mockRepo.findOne.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
         const id = where.id;
-        if (id === "meeting-uuid") {
-          return { ...fakeMeeting, organizerId: "other-user", hostId: "other-user" };
+        if (id === 'meeting-uuid') {
+          return {
+            ...fakeMeeting,
+            organizerId: 'other-user',
+            hostId: 'other-user',
+          };
         }
-        if (id === "room-uuid") return fakeRoom;
-        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        if (id === 'room-uuid') return fakeRoom;
+        if (where.meetingId === 'meeting-uuid' && where.status)
+          return fakeActiveBooking;
         return null;
       });
       await expect(
-        service.updateMeetingTime("meeting-uuid", validDto, { userId: "unauth-user" }, clientContext),
+        service.updateMeetingTime(
+          'meeting-uuid',
+          validDto,
+          { userId: 'unauth-user' },
+          clientContext,
+        ),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it("should throw 409 for non-SCHEDULED meeting", async () => {
+    it('should throw 409 for non-SCHEDULED meeting', async () => {
       setupMocks();
       mockRepo.findOne.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
         const id = where.id;
-        if (id === "meeting-uuid") {
+        if (id === 'meeting-uuid') {
           return { ...fakeMeeting, status: MeetingStatus.IN_PROGRESS };
         }
-        if (id === "room-uuid") return fakeRoom;
-        if (where.meetingId === "meeting-uuid" && where.status) return fakeActiveBooking;
+        if (id === 'room-uuid') return fakeRoom;
+        if (where.meetingId === 'meeting-uuid' && where.status)
+          return fakeActiveBooking;
         return null;
       });
       await expect(
-        service.updateMeetingTime("meeting-uuid", validDto, authUser, clientContext),
+        service.updateMeetingTime(
+          'meeting-uuid',
+          validDto,
+          authUser,
+          clientContext,
+        ),
       ).rejects.toThrow(ConflictException);
     });
   });
@@ -1541,7 +1617,9 @@ describe('MeetingsService', () => {
       setupFindOneMocks();
       setupAttendeeCountMocks(5);
       setupTransactionMocks();
-      mockNotificationsService.createNotification.mockRejectedValue(new Error('Send failed'));
+      mockNotificationsService.createNotification.mockRejectedValue(
+        new Error('Send failed'),
+      );
 
       const result = await service.updateMeetingRoom(
         'meeting-uuid',
@@ -2539,7 +2617,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2578,7 +2658,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2592,7 +2674,9 @@ describe('MeetingsService', () => {
     });
 
     it('[T026] empty range returns empty items with empty=true', async () => {
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue([]) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue([]),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2625,7 +2709,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2641,7 +2727,9 @@ describe('MeetingsService', () => {
     it('[T028] role filter - user is organizer, filter role=attendee excludes meeting', async () => {
       const rawEvents: any[] = [];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2675,7 +2763,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2709,7 +2799,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2762,7 +2854,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2796,7 +2890,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2846,7 +2942,9 @@ describe('MeetingsService', () => {
         },
       ];
 
-      const qb = buildScheduleQb({ getRawMany: jest.fn().mockResolvedValue(rawEvents) });
+      const qb = buildScheduleQb({
+        getRawMany: jest.fn().mockResolvedValue(rawEvents),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMySchedule('user-1', {
@@ -2905,7 +3003,11 @@ describe('MeetingsService', () => {
           participantRole: 'member',
           invitationStatus: 'accepted',
           attendanceStatus: 'not_yet',
-          user: { id: 'participant-1', fullName: 'Part User', email: 'part@test.com' },
+          user: {
+            id: 'participant-1',
+            fullName: 'Part User',
+            email: 'part@test.com',
+          },
         },
       ];
 
@@ -2914,20 +3016,29 @@ describe('MeetingsService', () => {
         const id = where.id;
         if (id === 'meeting-uuid') return mockMeeting;
         if (id === 'room-uuid') return mockRoom;
-        if (where.meetingId === 'meeting-uuid' && where.userId === 'participant-1') return mockParticipants[0];
+        if (
+          where.meetingId === 'meeting-uuid' &&
+          where.userId === 'participant-1'
+        )
+          return mockParticipants[0];
         if (where.meetingId === 'meeting-uuid') return null;
         if (where.meetingId) return null;
         return null;
       });
 
-      const findQb = buildScheduleQb({ getMany: jest.fn().mockResolvedValue(mockParticipants) });
+      const findQb = buildScheduleQb({
+        getMany: jest.fn().mockResolvedValue(mockParticipants),
+      });
       mockRepo.createQueryBuilder.mockReturnValue(findQb);
 
       const findMock = jest.fn().mockResolvedValue([]);
       mockRepo.find = findMock;
       mockRepo.find.mockResolvedValue([]);
 
-      const result = await service.getMyScheduleDetail('participant-1', 'meeting-uuid');
+      const result = await service.getMyScheduleDetail(
+        'participant-1',
+        'meeting-uuid',
+      );
 
       expect(result.meeting.meetingId).toBe('meeting-uuid');
       expect(result.room).toBeDefined();
@@ -2947,7 +3058,8 @@ describe('MeetingsService', () => {
         const where = options?.where ?? {};
         if (where.id === 'meeting-uuid') return mockMeeting;
         if (where.id === 'room-uuid') return null;
-        if (where.meetingId === 'meeting-uuid' && where.userId === 'other-user') return null;
+        if (where.meetingId === 'meeting-uuid' && where.userId === 'other-user')
+          return null;
         return null;
       });
 
@@ -2968,4 +3080,3 @@ describe('MeetingsService', () => {
     });
   });
 });
-

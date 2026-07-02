@@ -16,7 +16,7 @@ export class PaginationQueryDto {
 
   @IsOptional()
   @IsString({ message: 'sortBy phải là chuỗi ký tự' })
-  @IsIn(PERMISSION_SORT_FIELDS as unknown as string[], {
+  @IsIn(PERMISSION_SORT_FIELDS, {
     message: `sortBy không hợp lệ. Giá trị cho phép: ${(PERMISSION_SORT_FIELDS as unknown as string[]).join(', ')}`,
   })
   sortBy?: string = 'createdAt';

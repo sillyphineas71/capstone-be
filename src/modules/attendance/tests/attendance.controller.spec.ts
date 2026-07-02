@@ -13,13 +13,11 @@ describe('AttendanceController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AttendanceController],
-      providers: [
-        { provide: AttendanceService, useValue: mockService },
-      ],
+      providers: [{ provide: AttendanceService, useValue: mockService }],
     }).compile();
 
     controller = module.get<AttendanceController>(AttendanceController);
-    service = module.get(AttendanceService) as jest.Mocked<AttendanceService>;
+    service = module.get(AttendanceService);
   });
 
   it('should be defined', () => {
@@ -33,7 +31,16 @@ describe('AttendanceController', () => {
       data: {
         meeting: { id: 'meeting-uuid' },
         permissions: { canViewAttendanceSource: true },
-        summary: { totalParticipants: 1, checkedInCount: 1, presentCount: 1, lateCount: 0, absentCount: 0, notCheckedInCount: 0, attendanceRate: 100, scope: 'internal_participants_only' },
+        summary: {
+          totalParticipants: 1,
+          checkedInCount: 1,
+          presentCount: 1,
+          lateCount: 0,
+          absentCount: 0,
+          notCheckedInCount: 0,
+          attendanceRate: 100,
+          scope: 'internal_participants_only',
+        },
         items: [],
       },
       meta: { page: 1, pageSize: 20, total: 0, totalPages: 1 },

@@ -1,5 +1,8 @@
 import { validate } from 'class-validator';
-import { QueryAttendanceDto, AttendanceQueryStatusList } from '../dto/query-attendance.dto.js';
+import {
+  QueryAttendanceDto,
+  AttendanceQueryStatusList,
+} from '../dto/query-attendance.dto.js';
 
 describe('QueryAttendanceDto', () => {
   it('should pass validation with valid params', async () => {
@@ -43,7 +46,7 @@ describe('QueryAttendanceDto', () => {
   it('should accept all valid status values', async () => {
     for (const status of AttendanceQueryStatusList) {
       const dto = new QueryAttendanceDto();
-      dto.status = status as any;
+      dto.status = status;
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     }

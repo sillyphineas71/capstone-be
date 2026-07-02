@@ -29,7 +29,7 @@ export class NoShowDetectionService {
   async detect(): Promise<{ scanned: number; created: number }> {
     const threshold = await this.readThreshold();
 
-    const candidates = (await this.dataSource.manager.query(
+    const candidates = await this.dataSource.manager.query(
       `SELECT b.id AS booking_id, b.meeting_id, b.room_id
        FROM room_bookings b
        LEFT JOIN room_booking_usages u ON u.booking_id = b.id
@@ -38,7 +38,7 @@ export class NoShowDetectionService {
          AND u.first_presence_at IS NULL
          AND NOT EXISTS (SELECT 1 FROM no_show_cases nc WHERE nc.booking_id = b.id)`,
       [threshold],
-    )) as CandidateRow[];
+    );
 
     let created = 0;
     const detectedAt = new Date().toISOString();
@@ -68,9 +68,9 @@ export class NoShowDetectionService {
   /** Precedence (NC-2): system_configs[no_show.threshold_minutes] → env → default 15. */
   private async readThreshold(): Promise<number> {
     try {
-      const rows = (await this.dataSource.manager.query(
+      const rows = await this.dataSource.manager.query(
         `SELECT config_value FROM system_configs WHERE config_key = 'no_show.threshold_minutes' LIMIT 1`,
-      )) as Array<{ config_value: string | null }>;
+      );
       const raw = rows?.[0]?.config_value;
       if (raw != null) {
         const n = parseInt(raw, 10);

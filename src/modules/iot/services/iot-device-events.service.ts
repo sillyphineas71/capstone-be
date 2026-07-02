@@ -101,7 +101,9 @@ export class IotDeviceEventsService {
       stored_by_uc: storedByUc,
     };
 
-    const eventTime = this.getValidDate(occurredAt) ? (occurredAt as Date) : receivedAt;
+    const eventTime = this.getValidDate(occurredAt)
+      ? (occurredAt as Date)
+      : receivedAt;
 
     const event = new IoTDeviceEventEntity();
     event.deviceId = device.id;
@@ -133,14 +135,24 @@ export class IotDeviceEventsService {
     return !isNaN(time) && time > 0;
   }
 
-  async normalizeRawEvent(rawEventId: string): Promise<IoTDeviceEventEntity | { status: string; reason: string }> {
-    const event = await this.iotDeviceEventsRepository.findOne({ where: { id: rawEventId } });
+  async normalizeRawEvent(
+    rawEventId: string,
+  ): Promise<IoTDeviceEventEntity | { status: string; reason: string }> {
+    const event = await this.iotDeviceEventsRepository.findOne({
+      where: { id: rawEventId },
+    });
     if (!event) {
-      throw new NotFoundException({ code: 'RAW_EVENT_NOT_FOUND', message: 'Raw event not found.' });
+      throw new NotFoundException({
+        code: 'RAW_EVENT_NOT_FOUND',
+        message: 'Raw event not found.',
+      });
     }
 
     if (event.processedStatus !== IoTEventProcessedStatus.RECEIVED) {
-      return { status: 'skipped', reason: 'Already processed or invalid status' };
+      return {
+        status: 'skipped',
+        reason: 'Already processed or invalid status',
+      };
     }
 
     if (
@@ -154,7 +166,7 @@ export class IotDeviceEventsService {
 
     try {
       const normalizedEvent = this.buildNormalizedEvent(event);
-      
+
       // Clone payloadJson to avoid mutating the original reference directly, then merge
       const updatedPayloadJson = {
         ...event.payloadJson,
@@ -167,11 +179,17 @@ export class IotDeviceEventsService {
 
       return await this.iotDeviceEventsRepository.save(event);
     } catch (error: any) {
-      this.logger.error(`Failed to normalize event ${rawEventId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Failed to normalize event ${rawEventId}: ${error.message}`,
+        error.stack,
+      );
       event.processedStatus = IoTEventProcessedStatus.FAILED;
       let safeError = error.message || 'Unknown error';
       // Basic masking for potential tokens
-      safeError = safeError.replace(/(token|password|secret)["':= ]+([a-zA-Z0-9\-_]+)/gi, '$1: ***');
+      safeError = safeError.replace(
+        /(token|password|secret)["':= ]+([a-zA-Z0-9\-_]+)/gi,
+        '$1: ***',
+      );
       event.errorMessage = safeError.substring(0, 500); // short error
       return await this.iotDeviceEventsRepository.save(event);
     }
@@ -193,7 +211,7 @@ export class IotDeviceEventsService {
       take: limit,
     });
 
-    let total = events.length;
+    const total = events.length;
     let processed = 0;
     let ignored = 0;
     let failed = 0;
@@ -211,7 +229,9 @@ export class IotDeviceEventsService {
           else if (ps === 'failed') failed++;
         }
       } catch (error) {
-        this.logger.error(`Batch normalize error for event ${event.id}: ${error}`);
+        this.logger.error(
+          `Batch normalize error for event ${event.id}: ${error}`,
+        );
         failed++;
       }
     }
@@ -223,40 +243,97 @@ export class IotDeviceEventsService {
     const payloadJson = (rawEvent.payloadJson || {}) as any;
     const payload = payloadJson.raw_payload_sample || {};
     const extracted = payloadJson.extracted_fields || {};
-    
+
     // Combine payload and extracted to find fields
-    const searchSource = { ...payload, ...extracted, data: payload.data || {}, info: payload.info || {} };
+    const searchSource = {
+      ...payload,
+      ...extracted,
+      data: payload.data || {},
+      info: payload.info || {},
+    };
 
     const devicePersonId = this.extractField(searchSource, [
-      'person_id', 'personId', 'PersonID', 'UserID', 'user_id', 'EmployeeID', 'employee_id', 'card_no', 'CardNo', 'id',
-      'data.person_id', 'data.personId', 'data.PersonID', 'info.PersonID'
+      'person_id',
+      'personId',
+      'PersonID',
+      'UserID',
+      'user_id',
+      'EmployeeID',
+      'employee_id',
+      'card_no',
+      'CardNo',
+      'id',
+      'data.person_id',
+      'data.personId',
+      'data.PersonID',
+      'info.PersonID',
     ]);
     const devicePersonName = this.extractField(searchSource, [
-      'person_name', 'personName', 'PersonName', 'name', 'Name', 'UserName', 'employee_name', 'EmployeeName',
-      'data.personName', 'info.PersonName'
+      'person_name',
+      'personName',
+      'PersonName',
+      'name',
+      'Name',
+      'UserName',
+      'employee_name',
+      'EmployeeName',
+      'data.personName',
+      'info.PersonName',
     ]);
     const devicePersonCode = this.extractField(searchSource, [
-      'person_code', 'personCode', 'PersonCode', 'employee_code', 'EmployeeCode'
+      'person_code',
+      'personCode',
+      'PersonCode',
+      'employee_code',
+      'EmployeeCode',
     ]);
 
     const similarityVal = this.extractField(searchSource, [
-      'similarity', 'Similarity', 'score', 'Score', 'confidence', 'confidence_score', 'Confidence', 'FaceScore',
-      'data.similarity', 'info.Similarity'
+      'similarity',
+      'Similarity',
+      'score',
+      'Score',
+      'confidence',
+      'confidence_score',
+      'Confidence',
+      'FaceScore',
+      'data.similarity',
+      'info.Similarity',
     ]);
-    
-    const similarity = similarityVal !== null && !isNaN(Number(similarityVal)) ? Number(similarityVal) : null;
+
+    const similarity =
+      similarityVal !== null && !isNaN(Number(similarityVal))
+        ? Number(similarityVal)
+        : null;
 
     const eventTimeVal = this.extractField(searchSource, [
-      'event_time', 'eventTime', 'EventTime', 'capture_time', 'captureTime', 'CaptureTime', 
-      'verify_time', 'verifyTime', 'VerifyTime', 'timestamp', 'Timestamp', 'time', 'Time'
+      'event_time',
+      'eventTime',
+      'EventTime',
+      'capture_time',
+      'captureTime',
+      'CaptureTime',
+      'verify_time',
+      'verifyTime',
+      'VerifyTime',
+      'timestamp',
+      'Timestamp',
+      'time',
+      'Time',
     ]);
 
     const dbEventTime = rawEvent.eventTime;
-    const requestReceivedAt = payloadJson.request_meta?.received_at ? new Date(payloadJson.request_meta.received_at) : new Date();
+    const requestReceivedAt = payloadJson.request_meta?.received_at
+      ? new Date(payloadJson.request_meta.received_at)
+      : new Date();
 
-    const finalEventTime = this.parseTolerantDate(eventTimeVal, dbEventTime, requestReceivedAt);
+    const finalEventTime = this.parseTolerantDate(
+      eventTimeVal,
+      dbEventTime,
+      requestReceivedAt,
+    );
 
-    let recognitionResult =
+    const recognitionResult =
       rawEvent.eventType === IoTDeviceEventType.FACE_VERIFY
         ? 'recognized'
         : 'stranger';
@@ -297,7 +374,7 @@ export class IotDeviceEventsService {
         status: 'success',
         normalized_at: new Date().toISOString(),
         mapper_version: 'face_server_v1',
-      }
+      },
     };
   }
 
@@ -317,11 +394,21 @@ export class IotDeviceEventsService {
             break;
           }
         }
-        if (found && current !== null && current !== undefined && current !== '') {
+        if (
+          found &&
+          current !== null &&
+          current !== undefined &&
+          current !== ''
+        ) {
           return current;
         }
       } else {
-        if (key in payload && payload[key] !== null && payload[key] !== undefined && payload[key] !== '') {
+        if (
+          key in payload &&
+          payload[key] !== null &&
+          payload[key] !== undefined &&
+          payload[key] !== ''
+        ) {
           return payload[key];
         }
       }
@@ -329,7 +416,11 @@ export class IotDeviceEventsService {
     return null;
   }
 
-  private parseTolerantDate(payloadVal: any, dbEventTime: Date, requestReceivedAt: Date): Date {
+  private parseTolerantDate(
+    payloadVal: any,
+    dbEventTime: Date,
+    requestReceivedAt: Date,
+  ): Date {
     if (payloadVal) {
       const numVal = Number(payloadVal);
       if (!isNaN(numVal)) {
@@ -339,7 +430,7 @@ export class IotDeviceEventsService {
           return new Date(numVal * 1000);
         }
       }
-      
+
       const parsed = new Date(payloadVal);
       if (!isNaN(parsed.getTime())) {
         return parsed;

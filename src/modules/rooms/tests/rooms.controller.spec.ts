@@ -44,9 +44,13 @@ describe('RoomsController', () => {
         { provide: RoomStatusService, useValue: roomStatusService },
       ],
     })
-      .overrideGuard(require('../../auth/guards/jwt-auth.guard.js').JwtAuthGuard)
+      .overrideGuard(
+        require('../../auth/guards/jwt-auth.guard.js').JwtAuthGuard,
+      )
       .useValue({ canActivate: () => true })
-      .overrideGuard(require('../../auth/guards/permissions.guard.js').PermissionsGuard)
+      .overrideGuard(
+        require('../../auth/guards/permissions.guard.js').PermissionsGuard,
+      )
       .useValue({ canActivate: () => true })
       .compile();
 
@@ -60,13 +64,17 @@ describe('RoomsController', () => {
   describe('create', () => {
     it('should return 201 with room data on success', async () => {
       const result = await controller.create(
-        validDto as any,
+        validDto,
         { userId: mockUserId },
         '127.0.0.1',
         {} as any,
       );
 
-      expect(roomsService.create).toHaveBeenCalledWith(validDto, mockUserId, '127.0.0.1');
+      expect(roomsService.create).toHaveBeenCalledWith(
+        validDto,
+        mockUserId,
+        '127.0.0.1',
+      );
       expect(result.success).toBe(true);
       expect(result.message).toBe('Room created successfully');
       expect(result.data.roomCode).toBe('R301');
@@ -82,7 +90,12 @@ describe('RoomsController', () => {
       roomsService.create.mockRejectedValue(new Error('Service error'));
 
       await expect(
-        controller.create(validDto as any, { userId: mockUserId }, '127.0.0.1', {} as any),
+        controller.create(
+          validDto as any,
+          { userId: mockUserId },
+          '127.0.0.1',
+          {} as any,
+        ),
       ).rejects.toThrow('Service error');
     });
   });

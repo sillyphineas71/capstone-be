@@ -1,4 +1,10 @@
-﻿import { IsString, IsOptional, Matches, MaxLength, IsIn } from 'class-validator';
+﻿import {
+  IsString,
+  IsOptional,
+  Matches,
+  MaxLength,
+  IsIn,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import { MODULE_CODE_ALLOWLIST } from '../constants/permission-module-allowlist.constant.js';
 
@@ -28,7 +34,7 @@ export class CreatePermissionDto {
   )
   @IsString({ message: 'moduleCode phải là chuỗi ký tự' })
   @MaxLength(80, { message: 'moduleCode không được vượt quá 80 ký tự' })
-  @IsIn(MODULE_CODE_ALLOWLIST as unknown as string[], {
+  @IsIn(MODULE_CODE_ALLOWLIST, {
     message: 'moduleCode không hợp lệ hoặc chưa được hỗ trợ',
   })
   moduleCode: string;

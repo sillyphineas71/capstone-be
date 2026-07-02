@@ -4,8 +4,14 @@ import { Job } from 'bullmq';
 import { NotificationWorkerService } from './notification-worker.service.js';
 import { MailService } from '../mail/mail.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
-import { BackgroundJobEntity, BackgroundJobStatus } from '../administration/entities/background-job.entity.js';
-import { NotificationEntity, NotificationDeliveryStatus } from './entities/notification.entity.js';
+import {
+  BackgroundJobEntity,
+  BackgroundJobStatus,
+} from '../administration/entities/background-job.entity.js';
+import {
+  NotificationEntity,
+  NotificationDeliveryStatus,
+} from './entities/notification.entity.js';
 
 function makeMockJob(overrides: Partial<Job> & { data: any }): Job {
   return {
@@ -57,8 +63,14 @@ describe('NotificationWorkerService', () => {
         NotificationWorkerService,
         { provide: MailService, useValue: mailService },
         { provide: BackgroundJobsService, useValue: backgroundJobsService },
-        { provide: getRepositoryToken(NotificationEntity), useValue: notificationRepo },
-        { provide: getRepositoryToken(BackgroundJobEntity), useValue: bgJobRepo },
+        {
+          provide: getRepositoryToken(NotificationEntity),
+          useValue: notificationRepo,
+        },
+        {
+          provide: getRepositoryToken(BackgroundJobEntity),
+          useValue: bgJobRepo,
+        },
       ],
     }).compile();
 
@@ -71,7 +83,10 @@ describe('NotificationWorkerService', () => {
 
   // ── T1: Email sent successfully ──
   it('[T1] should send email and mark notification SENT + bg_job COMPLETED', async () => {
-    mailService.sendMail.mockResolvedValue({ success: true, messageId: 'msg-001' });
+    mailService.sendMail.mockResolvedValue({
+      success: true,
+      messageId: 'msg-001',
+    });
     notificationRepo.findOne.mockResolvedValue({
       id: testData.notificationId,
       deliveryStatus: NotificationDeliveryStatus.QUEUED,
@@ -97,11 +112,14 @@ describe('NotificationWorkerService', () => {
     });
 
     // Marked notification SENT
-    expect(notificationRepo.update).toHaveBeenCalledWith(testData.notificationId, {
-      deliveryStatus: NotificationDeliveryStatus.SENT,
-      sentAt: expect.any(Date),
-      deliveryResultJson: { messageId: 'msg-001' },
-    });
+    expect(notificationRepo.update).toHaveBeenCalledWith(
+      testData.notificationId,
+      {
+        deliveryStatus: NotificationDeliveryStatus.SENT,
+        sentAt: expect.any(Date),
+        deliveryResultJson: { messageId: 'msg-001' },
+      },
+    );
 
     // completed event handler marks bg_job COMPLETED
     await service.onJobCompleted(job);
@@ -113,7 +131,10 @@ describe('NotificationWorkerService', () => {
 
   // ── T2: Email fails, retries remain ──
   it('[T2] should throw error and mark bg_job RETRYING when email fails with retries left', async () => {
-    mailService.sendMail.mockResolvedValue({ success: false, error: 'SMTP timeout' });
+    mailService.sendMail.mockResolvedValue({
+      success: false,
+      error: 'SMTP timeout',
+    });
     notificationRepo.findOne.mockResolvedValue({
       id: testData.notificationId,
       deliveryStatus: NotificationDeliveryStatus.QUEUED,
@@ -122,7 +143,7 @@ describe('NotificationWorkerService', () => {
     const job = makeMockJob({
       data: testData,
       attemptsMade: 1,
-      opts: { attempts: 3 } as any,
+      opts: { attempts: 3 },
     });
 
     // process should throw so BullMQ retries
@@ -130,7 +151,9 @@ describe('NotificationWorkerService', () => {
 
     // failed event with retries left
     await service.onJobFailed(job, new Error('SMTP timeout'));
-    expect(backgroundJobsService.markRetrying).toHaveBeenCalledWith(testData.backgroundJobId);
+    expect(backgroundJobsService.markRetrying).toHaveBeenCalledWith(
+      testData.backgroundJobId,
+    );
     expect(bgJobRepo.update).toHaveBeenCalledWith(testData.backgroundJobId, {
       errorMessage: 'SMTP timeout',
     });
@@ -138,13 +161,18 @@ describe('NotificationWorkerService', () => {
     expect(backgroundJobsService.markFailed).not.toHaveBeenCalled();
     expect(notificationRepo.update).not.toHaveBeenCalledWith(
       testData.notificationId,
-      expect.objectContaining({ deliveryStatus: NotificationDeliveryStatus.FAILED }),
+      expect.objectContaining({
+        deliveryStatus: NotificationDeliveryStatus.FAILED,
+      }),
     );
   });
 
   // ── T3: Email fails, final attempt exhausted ──
   it('[T3] should mark notification FAILED + bg_job FAILED when final attempt exhausted', async () => {
-    mailService.sendMail.mockResolvedValue({ success: false, error: 'Connection refused' });
+    mailService.sendMail.mockResolvedValue({
+      success: false,
+      error: 'Connection refused',
+    });
     notificationRepo.findOne.mockResolvedValue({
       id: testData.notificationId,
       deliveryStatus: NotificationDeliveryStatus.QUEUED,
@@ -153,17 +181,20 @@ describe('NotificationWorkerService', () => {
     const job = makeMockJob({
       data: testData,
       attemptsMade: 3,
-      opts: { attempts: 3 } as any,
+      opts: { attempts: 3 },
     });
 
     await expect(service.process(job)).rejects.toThrow('Connection refused');
 
     // failed event with final attempt
     await service.onJobFailed(job, new Error('Connection refused'));
-    expect(notificationRepo.update).toHaveBeenCalledWith(testData.notificationId, {
-      deliveryStatus: NotificationDeliveryStatus.FAILED,
-      failureReason: 'Connection refused',
-    });
+    expect(notificationRepo.update).toHaveBeenCalledWith(
+      testData.notificationId,
+      {
+        deliveryStatus: NotificationDeliveryStatus.FAILED,
+        failureReason: 'Connection refused',
+      },
+    );
     expect(backgroundJobsService.markFailed).toHaveBeenCalledWith(
       testData.backgroundJobId,
       'Connection refused',
@@ -184,7 +215,9 @@ describe('NotificationWorkerService', () => {
 
     expect(result.sent).toBe(false);
     expect(mailService.sendMail).not.toHaveBeenCalled();
-    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(testData.backgroundJobId);
+    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(
+      testData.backgroundJobId,
+    );
   });
 
   // ── T5: Notification missing ──
@@ -196,12 +229,17 @@ describe('NotificationWorkerService', () => {
 
     expect(result.sent).toBe(false);
     expect(mailService.sendMail).not.toHaveBeenCalled();
-    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(testData.backgroundJobId);
+    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(
+      testData.backgroundJobId,
+    );
   });
 
   // ── T6: Multiple recipients ──
   it('[T6] should send email to multiple recipients', async () => {
-    mailService.sendMail.mockResolvedValue({ success: true, messageId: 'msg-002' });
+    mailService.sendMail.mockResolvedValue({
+      success: true,
+      messageId: 'msg-002',
+    });
     notificationRepo.findOne.mockResolvedValue({
       id: testData.notificationId,
       deliveryStatus: NotificationDeliveryStatus.QUEUED,
@@ -242,11 +280,15 @@ describe('NotificationWorkerService', () => {
 
     expect(result.sent).toBe(false);
     expect(mailService.sendMail).not.toHaveBeenCalled();
-    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(testData.backgroundJobId);
+    expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(
+      testData.backgroundJobId,
+    );
   });
 
   // ── failed event with undefined job ──
   it('should handle onJobFailed with undefined job gracefully', async () => {
-    await expect(service.onJobFailed(undefined, new Error('test'))).resolves.toBeUndefined();
+    await expect(
+      service.onJobFailed(undefined, new Error('test')),
+    ).resolves.toBeUndefined();
   });
 });

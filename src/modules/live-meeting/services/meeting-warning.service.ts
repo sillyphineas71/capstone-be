@@ -2,14 +2,23 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
-import { MeetingEntity, MeetingStatus } from '../../meetings/entities/meeting.entity.js';
+import {
+  MeetingEntity,
+  MeetingStatus,
+} from '../../meetings/entities/meeting.entity.js';
 import {
   MeetingEventEntity,
   MeetingEventType,
   MeetingEventSourceType,
 } from '../../meetings/entities/meeting-event.entity.js';
-import { MeetingParticipantEntity, ParticipantRole } from '../../meetings/entities/meeting-participant.entity.js';
-import { RoomBookingEntity, RoomBookingStatus } from '../../rooms/entities/room-booking.entity.js';
+import {
+  MeetingParticipantEntity,
+  ParticipantRole,
+} from '../../meetings/entities/meeting-participant.entity.js';
+import {
+  RoomBookingEntity,
+  RoomBookingStatus,
+} from '../../rooms/entities/room-booking.entity.js';
 import {
   NotificationEntity,
   NotificationType,
@@ -17,7 +26,11 @@ import {
   NotificationPriority,
   NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
-import { BackgroundJobEntity, BackgroundJobType, BackgroundJobStatus } from '../../administration/entities/background-job.entity.js';
+import {
+  BackgroundJobEntity,
+  BackgroundJobType,
+  BackgroundJobStatus,
+} from '../../administration/entities/background-job.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { MEETING_WARNING_ERRORS } from '../constants/meeting-warning-error.constant.js';
@@ -38,25 +51,48 @@ export class MeetingWarningService {
   // ───────────────────────────────────────────────────────────
   private async readConflictBufferConfig(): Promise<number> {
     try {
-      const config = await this.dataSource.getRepository(SystemConfigEntity).findOne({
-        where: { configKey: 'meeting_warning_conflict_buffer_minutes' },
-      });
+      const config = await this.dataSource
+        .getRepository(SystemConfigEntity)
+        .findOne({
+          where: { configKey: 'meeting_warning_conflict_buffer_minutes' },
+        });
       if (!config) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID + '] Config key meeting_warning_conflict_buffer_minutes not found, using default 0');
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID +
+            '] Config key meeting_warning_conflict_buffer_minutes not found, using default 0',
+        );
         return 0;
       }
       const parsed = parseInt(config.configValue || '0', 10);
       if (isNaN(parsed)) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID + '] Config value not parseable: ' + config.configValue + ', using default 0');
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID +
+            '] Config value not parseable: ' +
+            config.configValue +
+            ', using default 0',
+        );
         return 0;
       }
       if (parsed < 0) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID + '] Config value negative: ' + parsed + ', using default 0');
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID +
+            '] Config value negative: ' +
+            parsed +
+            ', using default 0',
+        );
         return 0;
       }
       return parsed;
     } catch (error: unknown) {
-      this.logger.warn('[' + MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID + '] Error reading config: ' + (error as Error).message);
+      this.logger.warn(
+        '[' +
+          MEETING_WARNING_ERRORS.CONFLICT_BUFFER_CONFIG_INVALID +
+          '] Error reading config: ' +
+          (error as Error).message,
+      );
       return 0;
     }
   }
@@ -64,24 +100,34 @@ export class MeetingWarningService {
   // ───────────────────────────────────────────────────────────
   // T006: resolveHost
   // ───────────────────────────────────────────────────────────
-  private async resolveHost(meeting: MeetingEntity, meetingId: string): Promise<string | null> {
+  private async resolveHost(
+    meeting: MeetingEntity,
+    meetingId: string,
+  ): Promise<string | null> {
     if (meeting.hostId != null) {
       return meeting.hostId;
     }
     try {
-      const hostParticipant = await this.dataSource.getRepository(MeetingParticipantEntity).findOne({
-        where: {
-          meetingId,
-          participantRole: ParticipantRole.HOST,
-        },
-        select: { userId: true },
-      });
+      const hostParticipant = await this.dataSource
+        .getRepository(MeetingParticipantEntity)
+        .findOne({
+          where: {
+            meetingId,
+            participantRole: ParticipantRole.HOST,
+          },
+          select: { userId: true },
+        });
       if (hostParticipant) {
         return hostParticipant.userId;
       }
       return null;
     } catch (error: unknown) {
-      this.logger.warn('[' + MEETING_WARNING_ERRORS.HOST_NOT_RESOLVED + '] Query meeting_participants failed: ' + (error as Error).message);
+      this.logger.warn(
+        '[' +
+          MEETING_WARNING_ERRORS.HOST_NOT_RESOLVED +
+          '] Query meeting_participants failed: ' +
+          (error as Error).message,
+      );
       return null;
     }
   }
@@ -96,22 +142,31 @@ export class MeetingWarningService {
     bufferMinutes: number,
   ): Promise<RoomBookingEntity | null> {
     try {
-      const nextBooking = await this.dataSource.getRepository(RoomBookingEntity).findOne({
-        where: {
-          roomId,
-          meetingId: In([meetingId, null]), // This doesn't work for NOT EQUAL — need query builder
-        },
-        order: { reservedStartTime: 'ASC' },
-      });
+      const nextBooking = await this.dataSource
+        .getRepository(RoomBookingEntity)
+        .findOne({
+          where: {
+            roomId,
+            meetingId: In([meetingId, null]), // This doesn't work for NOT EQUAL — need query builder
+          },
+          order: { reservedStartTime: 'ASC' },
+        });
 
       // Use QueryBuilder for NOT EQUAL on meetingId
-      const qb = this.dataSource.getRepository(RoomBookingEntity)
+      const qb = this.dataSource
+        .getRepository(RoomBookingEntity)
         .createQueryBuilder('rb')
         .where('rb.room_id = :roomId', { roomId })
         .andWhere('rb.meeting_id != :meetingId', { meetingId })
-        .andWhere('rb.reserved_start_time >= :endTime', { endTime: meetingEndTime })
+        .andWhere('rb.reserved_start_time >= :endTime', {
+          endTime: meetingEndTime,
+        })
         .andWhere('rb.status IN (:...statuses)', {
-          statuses: [RoomBookingStatus.PENDING, RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE],
+          statuses: [
+            RoomBookingStatus.PENDING,
+            RoomBookingStatus.APPROVED,
+            RoomBookingStatus.ACTIVE,
+          ],
         })
         .orderBy('rb.reserved_start_time', 'ASC')
         .limit(1);
@@ -131,7 +186,12 @@ export class MeetingWarningService {
 
       return null;
     } catch (error) {
-      this.logger.error('[' + MEETING_WARNING_ERRORS.CONFLICT_DETECTION_FAILED + '] Query room_bookings failed: ' + (error as Error).message);
+      this.logger.error(
+        '[' +
+          MEETING_WARNING_ERRORS.CONFLICT_DETECTION_FAILED +
+          '] Query room_bookings failed: ' +
+          (error as Error).message,
+      );
       throw error;
     }
   }
@@ -151,9 +211,10 @@ export class MeetingWarningService {
     const now = new Date();
 
     if (branch === 'A') {
-      const subject = remainingMinutes > 0
-        ? 'Cuộc họp sắp kết thúc — còn ' + remainingMinutes + ' phút'
-        : 'Cuộc họp đã quá giờ kết thúc';
+      const subject =
+        remainingMinutes > 0
+          ? 'Cuộc họp sắp kết thúc — còn ' + remainingMinutes + ' phút'
+          : 'Cuộc họp đã quá giờ kết thúc';
 
       const payloadJson: Record<string, unknown> = {
         warningLevel,
@@ -180,19 +241,23 @@ export class MeetingWarningService {
         payloadJson,
         deliveryStatus: NotificationDeliveryStatus.SENT,
         sentAt: now,
-      } as Partial<NotificationEntity>;
+      };
     }
 
     // Branch B
-    const subject = remainingMinutes > 0
-      ? 'Cảnh báo: Phòng họp sắp bị xung đột — còn ' + remainingMinutes + ' phút'
-      : 'Cuộc họp đã quá giờ và có xung đột';
+    const subject =
+      remainingMinutes > 0
+        ? 'Cảnh báo: Phòng họp sắp bị xung đột — còn ' +
+          remainingMinutes +
+          ' phút'
+        : 'Cuộc họp đã quá giờ và có xung đột';
 
     const payloadJson: Record<string, unknown> = {
       warningLevel,
       remainingMinutes,
       extensionAllowed: false,
-      disableExtensionReason: 'Phòng đã có lịch cuộc họp kế tiếp. Không thể gia hạn.',
+      disableExtensionReason:
+        'Phòng đã có lịch cuộc họp kế tiếp. Không thể gia hạn.',
       conflictWithNextBooking: true,
       cta: null,
       nextBooking: nextBooking
@@ -216,7 +281,7 @@ export class MeetingWarningService {
       payloadJson,
       deliveryStatus: NotificationDeliveryStatus.SENT,
       sentAt: now,
-    } as Partial<NotificationEntity>;
+    };
   }
 
   // ───────────────────────────────────────────────────────────
@@ -289,36 +354,69 @@ export class MeetingWarningService {
         if (errorMessage) {
           updateData.errorMessage = errorMessage;
         }
-        await bgRepo.update(existing.id, updateData as any);
-        this.logger.log('[processWarningJob] Updated background_job ' + existing.id + ' to ' + status);
+        await bgRepo.update(existing.id, updateData);
+        this.logger.log(
+          '[processWarningJob] Updated background_job ' +
+            existing.id +
+            ' to ' +
+            status,
+        );
       } else {
-        this.logger.warn('[processWarningJob] No background_job found for meetingId=' + meetingId);
+        this.logger.warn(
+          '[processWarningJob] No background_job found for meetingId=' +
+            meetingId,
+        );
       }
     } catch (error: unknown) {
-      this.logger.error('[' + MEETING_WARNING_ERRORS.BACKGROUND_JOB_UPDATE_FAILED + '] meetingId=' + meetingId + ' error=' + (error as Error).message);
+      this.logger.error(
+        '[' +
+          MEETING_WARNING_ERRORS.BACKGROUND_JOB_UPDATE_FAILED +
+          '] meetingId=' +
+          meetingId +
+          ' error=' +
+          (error as Error).message,
+      );
     }
   }
 
   // ───────────────────────────────────────────────────────────
   // T010: processWarningJob — 13-step main workflow
   // ───────────────────────────────────────────────────────────
-  async processWarningJob(jobData: { meetingId: string; warningScheduledAt?: string; endTime?: string }): Promise<WarningProcessorResult> {
+  async processWarningJob(jobData: {
+    meetingId: string;
+    warningScheduledAt?: string;
+    endTime?: string;
+  }): Promise<WarningProcessorResult> {
     const meetingId = jobData.meetingId;
     this.logger.log('[processWarningJob] Starting for meetingId=' + meetingId);
 
     try {
       // STEP 1: Guard — Meeting tồn tại
-      const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
-        where: { id: meetingId },
-      });
+      const meeting = await this.dataSource
+        .getRepository(MeetingEntity)
+        .findOne({
+          where: { id: meetingId },
+        });
       if (!meeting || meeting.deletedAt) {
-        this.logger.error('[' + MEETING_WARNING_ERRORS.MEETING_NOT_FOUND_FOR_WARNING + '] meetingId=' + meetingId);
+        this.logger.error(
+          '[' +
+            MEETING_WARNING_ERRORS.MEETING_NOT_FOUND_FOR_WARNING +
+            '] meetingId=' +
+            meetingId,
+        );
         return { skipped: true, reason: 'meeting_not_found' };
       }
 
       // STEP 2: Guard — Meeting status
       if (meeting.status !== MeetingStatus.IN_PROGRESS) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.MEETING_NOT_IN_PROGRESS_FOR_WARNING + '] meetingId=' + meetingId + ' status=' + meeting.status);
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.MEETING_NOT_IN_PROGRESS_FOR_WARNING +
+            '] meetingId=' +
+            meetingId +
+            ' status=' +
+            meeting.status,
+        );
         return { skipped: true, reason: 'meeting_not_in_progress' };
       }
 
@@ -341,18 +439,31 @@ export class MeetingWarningService {
 
       if (existingEvent || existingNotification) {
         const source = existingEvent ? 'event' : 'notification';
-        this.logger.log('[processWarningJob] WARNING_ALREADY_SENT — meetingId=' + meetingId + ' source=' + source);
+        this.logger.log(
+          '[processWarningJob] WARNING_ALREADY_SENT — meetingId=' +
+            meetingId +
+            ' source=' +
+            source,
+        );
         return { skipped: true, reason: 'already_sent' };
       }
 
       // STEP 4: Tính remainingMinutes
       const endTime = meeting.endTime;
       const now = new Date();
-      const rawMinutes = Math.floor((endTime.getTime() - now.getTime()) / 60_000);
+      const rawMinutes = Math.floor(
+        (endTime.getTime() - now.getTime()) / 60_000,
+      );
       const remainingMinutes = Math.max(0, rawMinutes);
 
       if (rawMinutes < 0) {
-        this.logger.warn('[processWarningJob] Late job — meetingId=' + meetingId + ' delay=' + Math.abs(rawMinutes) + 'min');
+        this.logger.warn(
+          '[processWarningJob] Late job — meetingId=' +
+            meetingId +
+            ' delay=' +
+            Math.abs(rawMinutes) +
+            'min',
+        );
       }
 
       // STEP 5: Đọc conflictBufferConfig
@@ -361,7 +472,12 @@ export class MeetingWarningService {
       // STEP 6: Resolve Host
       const hostId = await this.resolveHost(meeting, meetingId);
       if (!hostId) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.HOST_NOT_RESOLVED + '] meetingId=' + meetingId);
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.HOST_NOT_RESOLVED +
+            '] meetingId=' +
+            meetingId,
+        );
         return { skipped: true, reason: 'host_not_found' };
       }
 
@@ -369,9 +485,21 @@ export class MeetingWarningService {
       let nextBooking: RoomBookingEntity | null = null;
       if (meeting.roomId != null) {
         try {
-          nextBooking = await this.detectConflict(meeting.roomId, endTime, meetingId, conflictBufferMinutes);
+          nextBooking = await this.detectConflict(
+            meeting.roomId,
+            endTime,
+            meetingId,
+            conflictBufferMinutes,
+          );
         } catch (error: unknown) {
-          this.logger.error('[' + MEETING_WARNING_ERRORS.CONFLICT_DETECTION_FAILED + '] meetingId=' + meetingId + ' error=' + (error as Error).message);
+          this.logger.error(
+            '[' +
+              MEETING_WARNING_ERRORS.CONFLICT_DETECTION_FAILED +
+              '] meetingId=' +
+              meetingId +
+              ' error=' +
+              (error as Error).message,
+          );
           nextBooking = null; // Fallback Branch A
         }
       }
@@ -387,27 +515,47 @@ export class MeetingWarningService {
       }
 
       const extensionAllowed = branch !== 'B';
-      const disableExtensionReason = branch === 'B'
-        ? 'Phòng đã có lịch cuộc họp kế tiếp. Không thể gia hạn.'
-        : null;
+      const disableExtensionReason =
+        branch === 'B'
+          ? 'Phòng đã có lịch cuộc họp kế tiếp. Không thể gia hạn.'
+          : null;
 
       // STEP 9: Build notification payload
       const notificationPayload = this.buildNotificationPayload(
-        branch, meeting, remainingMinutes, warningLevel, hostId, nextBooking ?? undefined,
+        branch,
+        meeting,
+        remainingMinutes,
+        warningLevel,
+        hostId,
+        nextBooking ?? undefined,
       );
 
       // STEP 10: Tạo notifications record
       let notificationId: string | undefined;
       try {
-        const saved = await this.dataSource.getRepository(NotificationEntity).save(
-          notificationPayload as NotificationEntity,
-        );
+        const saved = await this.dataSource
+          .getRepository(NotificationEntity)
+          .save(notificationPayload as NotificationEntity);
         notificationId = saved.id;
-        this.logger.log('[processWarningJob] Notification created: ' + notificationId);
+        this.logger.log(
+          '[processWarningJob] Notification created: ' + notificationId,
+        );
       } catch (error: unknown) {
-        this.logger.error('[' + MEETING_WARNING_ERRORS.WARNING_NOTIFICATION_CREATE_FAILED + '] meetingId=' + meetingId + ' error=' + (error as Error).message);
+        this.logger.error(
+          '[' +
+            MEETING_WARNING_ERRORS.WARNING_NOTIFICATION_CREATE_FAILED +
+            '] meetingId=' +
+            meetingId +
+            ' error=' +
+            (error as Error).message,
+        );
         // Best-effort update background_jobs to failed
-        await this.updateBackgroundJobStatus(meetingId, BackgroundJobStatus.FAILED, null, (error as Error).message).catch(() => {});
+        await this.updateBackgroundJobStatus(
+          meetingId,
+          BackgroundJobStatus.FAILED,
+          null,
+          (error as Error).message,
+        ).catch(() => {});
         throw error; // NACK → BullMQ retry
       }
 
@@ -417,24 +565,51 @@ export class MeetingWarningService {
 
         // Host payload (full)
         const hostPayload = this.buildHostWsPayload(
-          branch, warningLevel, remainingMinutes, extensionAllowed,
-          disableExtensionReason, meetingId, endTime,
-          nextBooking ? {
-            bookingId: nextBooking.id,
-            reservedStartTime: nextBooking.reservedStartTime.toISOString(),
-          } : undefined,
+          branch,
+          warningLevel,
+          remainingMinutes,
+          extensionAllowed,
+          disableExtensionReason,
+          meetingId,
+          endTime,
+          nextBooking
+            ? {
+                bookingId: nextBooking.id,
+                reservedStartTime: nextBooking.reservedStartTime.toISOString(),
+              }
+            : undefined,
         );
-        this.websocketService.emitToUser(hostId, 'meeting.time.warning', hostPayload);
+        this.websocketService.emitToUser(
+          hostId,
+          'meeting.time.warning',
+          hostPayload,
+        );
 
         // Participant payload (safe)
         const participantPayload = this.buildParticipantWsPayload(
-          warningType, remainingMinutes, meetingId, endTime,
+          warningType,
+          remainingMinutes,
+          meetingId,
+          endTime,
         );
-        this.websocketService.emitToRoom('meeting:' + meetingId, 'meeting.time.warning', participantPayload);
+        this.websocketService.emitToRoom(
+          'meeting:' + meetingId,
+          'meeting.time.warning',
+          participantPayload,
+        );
 
-        this.logger.log('[processWarningJob] WebSocket pushed for meetingId=' + meetingId);
+        this.logger.log(
+          '[processWarningJob] WebSocket pushed for meetingId=' + meetingId,
+        );
       } catch (error: unknown) {
-        this.logger.warn('[' + MEETING_WARNING_ERRORS.WARNING_WEBSOCKET_PUSH_FAILED + '] meetingId=' + meetingId + ' error=' + (error as Error).message);
+        this.logger.warn(
+          '[' +
+            MEETING_WARNING_ERRORS.WARNING_WEBSOCKET_PUSH_FAILED +
+            '] meetingId=' +
+            meetingId +
+            ' error=' +
+            (error as Error).message,
+        );
         // Non-critical — continue
       }
 
@@ -446,7 +621,12 @@ export class MeetingWarningService {
         remainingMinutes,
         branch,
       };
-      await this.updateBackgroundJobStatus(meetingId, BackgroundJobStatus.COMPLETED, outputJson, null).catch(() => {});
+      await this.updateBackgroundJobStatus(
+        meetingId,
+        BackgroundJobStatus.COMPLETED,
+        outputJson,
+        null,
+      ).catch(() => {});
 
       // STEP 13: Ghi meeting_events
       try {
@@ -468,18 +648,41 @@ export class MeetingWarningService {
           eventTime: new Date(),
           actorUserId: null,
           sourceType: MeetingEventSourceType.SCHEDULER,
-          description: 'Warning sent — branch=' + branch + ' warningLevel=' + warningLevel + ' remainingMinutes=' + remainingMinutes,
+          description:
+            'Warning sent — branch=' +
+            branch +
+            ' warningLevel=' +
+            warningLevel +
+            ' remainingMinutes=' +
+            remainingMinutes,
           metadataJson: eventMetadata,
         });
         await this.dataSource.getRepository(MeetingEventEntity).save(event);
-        this.logger.log('[processWarningJob] meeting_events warning_sent created for meetingId=' + meetingId);
+        this.logger.log(
+          '[processWarningJob] meeting_events warning_sent created for meetingId=' +
+            meetingId,
+        );
       } catch (error: unknown) {
-        this.logger.error('[' + MEETING_WARNING_ERRORS.MEETING_EVENT_CREATE_FAILED + '] meetingId=' + meetingId + ' error=' + (error as Error).message);
+        this.logger.error(
+          '[' +
+            MEETING_WARNING_ERRORS.MEETING_EVENT_CREATE_FAILED +
+            '] meetingId=' +
+            meetingId +
+            ' error=' +
+            (error as Error).message,
+        );
         // Non-critical — continue
       }
 
       // Done
-      this.logger.log('[processWarningJob] DONE — meetingId=' + meetingId + ' branch=' + branch + ' warningLevel=' + warningLevel);
+      this.logger.log(
+        '[processWarningJob] DONE — meetingId=' +
+          meetingId +
+          ' branch=' +
+          branch +
+          ' warningLevel=' +
+          warningLevel,
+      );
       return {
         skipped: false,
         branch,
@@ -489,7 +692,12 @@ export class MeetingWarningService {
       };
     } catch (error: unknown) {
       // Outer catch — notification failure already logged + thrown
-      this.logger.error('[processWarningJob] Unexpected error for meetingId=' + meetingId + ' error=' + (error as Error).message);
+      this.logger.error(
+        '[processWarningJob] Unexpected error for meetingId=' +
+          meetingId +
+          ' error=' +
+          (error as Error).message,
+      );
       throw error;
     }
   }

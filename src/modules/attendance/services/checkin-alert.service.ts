@@ -1,20 +1,40 @@
-import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, IsNull } from 'typeorm';
 
-import { MeetingEntity, MeetingStatus } from '../../meetings/entities/meeting.entity.js';
+import {
+  MeetingEntity,
+  MeetingStatus,
+} from '../../meetings/entities/meeting.entity.js';
 import { InvitationStatus } from '../../meetings/entities/meeting-participant.entity.js';
-import { MeetingEventEntity, MeetingEventType, MeetingEventSourceType } from '../../meetings/entities/meeting-event.entity.js';
+import {
+  MeetingEventEntity,
+  MeetingEventType,
+  MeetingEventSourceType,
+} from '../../meetings/entities/meeting-event.entity.js';
 
-
-import { UserEntity, AccountStatus } from '../../accounts/entities/user.entity.js';
+import {
+  UserEntity,
+  AccountStatus,
+} from '../../accounts/entities/user.entity.js';
 
 import { RedisService } from '../../redis/redis.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
-import { NotificationType, NotificationChannel } from '../../notifications/entities/notification.entity.js';
+import {
+  NotificationType,
+  NotificationChannel,
+} from '../../notifications/entities/notification.entity.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
-import { LateCheckinAlertResponseDto, PartialFailureItem } from '../dto/late-checkin-alert-response.dto.js';
+import {
+  LateCheckinAlertResponseDto,
+  PartialFailureItem,
+} from '../dto/late-checkin-alert-response.dto.js';
 
 interface CheckinAlertConfig {
   enabled: boolean;
@@ -103,10 +123,22 @@ export class CheckInAlertService {
     };
 
     const enabledRaw = getValue('attendance.checkin_alert.enabled', 'true');
-    const graceMinutesRaw = getValue('attendance.checkin_alert.grace_minutes', '5');
-    const channelsRaw = getValue('attendance.checkin_alert.channels', '["email"]');
-    const notifyHostRaw = getValue('attendance.checkin_alert.notify_host_enabled', 'true');
-    const maxRetryRaw = getValue('attendance.checkin_alert.max_retry_attempts', '3');
+    const graceMinutesRaw = getValue(
+      'attendance.checkin_alert.grace_minutes',
+      '5',
+    );
+    const channelsRaw = getValue(
+      'attendance.checkin_alert.channels',
+      '["email"]',
+    );
+    const notifyHostRaw = getValue(
+      'attendance.checkin_alert.notify_host_enabled',
+      'true',
+    );
+    const maxRetryRaw = getValue(
+      'attendance.checkin_alert.max_retry_attempts',
+      '3',
+    );
 
     return {
       enabled: parseBool(enabledRaw, true),
@@ -123,7 +155,9 @@ export class CheckInAlertService {
     const config = await this.loadConfig();
 
     if (!config.enabled) {
-      this.logger.log('[CheckInAlert] Feature disabled by config — skipping scan');
+      this.logger.log(
+        '[CheckInAlert] Feature disabled by config — skipping scan',
+      );
       return;
     }
 
@@ -149,13 +183,14 @@ export class CheckInAlertService {
       [MeetingStatus.IN_PROGRESS, checkTime],
     );
 
-
     if (meetings.length === 0) {
       this.logger.log('[CheckInAlert] No eligible meetings found');
       return;
     }
 
-    this.logger.log(`[CheckInAlert] Found ${meetings.length} eligible meeting(s) to process`);
+    this.logger.log(
+      `[CheckInAlert] Found ${meetings.length} eligible meeting(s) to process`,
+    );
 
     let totalAlertsSent = 0;
     let totalMeetingsProcessed = 0;
@@ -171,17 +206,18 @@ export class CheckInAlertService {
         roomName: raw.room_name ?? null,
       };
 
-
       try {
         const result = await this.processMeeting(meeting, config);
         totalAlertsSent += result.alertsSent;
         totalMeetingsProcessed++;
         this.logger.log(
           `[CheckInAlert] Meeting ${result.meetingId}: ${result.alertsSent} alert(s) sent, ` +
-          `${result.partialFailures.length} partial failure(s), hostAlerted=${result.hostAlertSent}`,
+            `${result.partialFailures.length} partial failure(s), hostAlerted=${result.hostAlertSent}`,
         );
       } catch (error) {
-        this.logger.error(`[CheckInAlert] Failed to process meeting ${meeting.id}: ${(error as Error).message}`);
+        this.logger.error(
+          `[CheckInAlert] Failed to process meeting ${meeting.id}: ${(error as Error).message}`,
+        );
       }
     }
 
@@ -203,7 +239,10 @@ export class CheckInAlertService {
       .getRepository(MeetingEntity)
       .findOne({ where: { id: meeting.id } });
 
-    if (!currentMeeting || currentMeeting.status !== MeetingStatus.IN_PROGRESS) {
+    if (
+      !currentMeeting ||
+      currentMeeting.status !== MeetingStatus.IN_PROGRESS
+    ) {
       return {
         meetingId: meeting.id,
         totalParticipantsChecked: 0,
@@ -217,15 +256,21 @@ export class CheckInAlertService {
     const lockKey = `${this.redisLockPrefix}:${meeting.id}`;
     let lockAcquired = false;
     try {
-      const lockSet = await this.redisService.getClient().set(lockKey, this.instanceId, 'EX', cfg.graceMinutes * 120, 'NX');
+      const lockSet = await this.redisService
+        .getClient()
+        .set(lockKey, this.instanceId, 'EX', cfg.graceMinutes * 120, 'NX');
       lockAcquired = lockSet === 'OK';
     } catch {
-      this.logger.warn(`[CheckInAlert] Redis unavailable for lock, proceeding without lock for meeting ${meeting.id}`);
+      this.logger.warn(
+        `[CheckInAlert] Redis unavailable for lock, proceeding without lock for meeting ${meeting.id}`,
+      );
       lockAcquired = true; // proceed without lock if Redis down
     }
 
     if (!lockAcquired) {
-      this.logger.log(`[CheckInAlert] Meeting ${meeting.id} is being processed by another instance — skip`);
+      this.logger.log(
+        `[CheckInAlert] Meeting ${meeting.id} is being processed by another instance — skip`,
+      );
       return {
         meetingId: meeting.id,
         totalParticipantsChecked: 0,
@@ -271,7 +316,9 @@ export class CheckInAlertService {
       // Grace period in minutes for the email template
       const graceMinutes = cfg.graceMinutes;
       const lateMinutes = Math.ceil(
-        (Date.now() - new Date(meeting.actualStartTime ?? meeting.startTime).getTime()) / 60000,
+        (Date.now() -
+          new Date(meeting.actualStartTime ?? meeting.startTime).getTime()) /
+          60000,
       );
 
       for (const participant of participants) {
@@ -280,29 +327,46 @@ export class CheckInAlertService {
         try {
           const alreadySent = await this.redisService.exists(idempotencyKey);
           if (alreadySent) {
-            this.logger.debug(`[CheckInAlert] Skipping participant ${participant.userId} — already alerted (idempotency)`);
+            this.logger.debug(
+              `[CheckInAlert] Skipping participant ${participant.userId} — already alerted (idempotency)`,
+            );
             continue;
           }
         } catch {
           // Redis unavailable — skip idempotency check, proceed with DB fallback
-          this.logger.warn(`[CheckInAlert] Redis unavailable for idempotency check, falling back to DB for meeting ${meeting.id}`);
-          const alreadySentDb = await this.hasExistingAlert(meeting.id, participant.userId, graceMinutes);
+          this.logger.warn(
+            `[CheckInAlert] Redis unavailable for idempotency check, falling back to DB for meeting ${meeting.id}`,
+          );
+          const alreadySentDb = await this.hasExistingAlert(
+            meeting.id,
+            participant.userId,
+            graceMinutes,
+          );
           if (alreadySentDb) {
             continue;
           }
         }
 
         // Step 2: Re-check attendance before sending
-        const hasCheckIn = await this.hasValidCheckIn(meeting.id, participant.userId);
+        const hasCheckIn = await this.hasValidCheckIn(
+          meeting.id,
+          participant.userId,
+        );
         if (hasCheckIn) {
-          this.logger.debug(`[CheckInAlert] Skipping participant ${participant.userId} — just checked in`);
+          this.logger.debug(
+            `[CheckInAlert] Skipping participant ${participant.userId} — just checked in`,
+          );
           continue;
         }
 
         // Step 3: Check email validity
         if (!participant.email || !participant.isActive) {
-          const reason = !participant.email ? 'missing_email' : 'account_inactive';
-          this.logger.debug(`[CheckInAlert] Skipping participant ${participant.userId} — ${reason}`);
+          const reason = !participant.email
+            ? 'missing_email'
+            : 'account_inactive';
+          this.logger.debug(
+            `[CheckInAlert] Skipping participant ${participant.userId} — ${reason}`,
+          );
           result.partialFailures.push({ userId: participant.userId, reason });
           continue;
         }
@@ -352,7 +416,9 @@ export class CheckInAlertService {
         try {
           await this.redisService.setWithTtl(idempotencyKey, '1', 86400);
         } catch {
-          this.logger.warn(`[CheckInAlert] Failed to set Redis idempotency key for ${participant.userId}`);
+          this.logger.warn(
+            `[CheckInAlert] Failed to set Redis idempotency key for ${participant.userId}`,
+          );
         }
       }
 
@@ -362,10 +428,17 @@ export class CheckInAlertService {
         let sendHostSummary = true;
 
         try {
-          sendHostSummary = !(await this.redisService.exists(hostIdempotencyKey));
+          sendHostSummary =
+            !(await this.redisService.exists(hostIdempotencyKey));
         } catch {
-          this.logger.warn(`[CheckInAlert] Redis unavailable for host idempotency check`);
-          const alreadySentDb = await this.hasExistingHostAlert(meeting.id, meeting.hostId, graceMinutes);
+          this.logger.warn(
+            `[CheckInAlert] Redis unavailable for host idempotency check`,
+          );
+          const alreadySentDb = await this.hasExistingHostAlert(
+            meeting.id,
+            meeting.hostId,
+            graceMinutes,
+          );
           if (alreadySentDb) sendHostSummary = false;
         }
 
@@ -376,16 +449,23 @@ export class CheckInAlertService {
               .getRepository(UserEntity)
               .findOne({ where: { id: meeting.hostId } });
 
-            if (hostUser?.email && hostUser.accountStatus === AccountStatus.ACTIVE) {
+            if (
+              hostUser?.email &&
+              hostUser.accountStatus === AccountStatus.ACTIVE
+            ) {
               const alertedNames = participants
-                .filter((p) => !result.partialFailures.some((f) => f.userId === p.userId))
+                .filter(
+                  (p) =>
+                    !result.partialFailures.some((f) => f.userId === p.userId),
+                )
                 .map((p) => p.fullName);
 
               const hostSubject = `[Tổng hợp] Danh sách người chưa check-in cuộc họp "${meeting.title}"`;
               const hostContent =
                 `Xin chào Host,\n\n` +
                 `Cuộc họp "${meeting.title}" đã bắt đầu nhưng có ${alertedNames.length} người chưa check-in:\n\n` +
-                alertedNames.map((name) => `  - ${name}`).join('\n') + '\n\n' +
+                alertedNames.map((name) => `  - ${name}`).join('\n') +
+                '\n\n' +
                 `Vui lòng kiểm tra và nhắc nhở người tham dự.\n\n` +
                 `-- Hệ thống quản lý cuộc họp`;
 
@@ -418,7 +498,7 @@ export class CheckInAlertService {
               `[CheckInAlert] Failed to send host summary for meeting ${meeting.id}: ${(error as Error).message}`,
             );
             result.partialFailures.push({
-              userId: meeting.hostId!,
+              userId: meeting.hostId,
               reason: 'host_summary_failed',
             });
           }
@@ -427,7 +507,9 @@ export class CheckInAlertService {
           try {
             await this.redisService.setWithTtl(hostIdempotencyKey, '1', 86400);
           } catch {
-            this.logger.warn(`[CheckInAlert] Failed to set Redis host idempotency key`);
+            this.logger.warn(
+              `[CheckInAlert] Failed to set Redis host idempotency key`,
+            );
           }
         }
       }
@@ -447,13 +529,16 @@ export class CheckInAlertService {
               meetingId: meeting.id,
               graceMinutes,
               participantsAlerted: participants
-                .filter((p) => !result.partialFailures.some((f) => f.userId === p.userId))
+                .filter(
+                  (p) =>
+                    !result.partialFailures.some((f) => f.userId === p.userId),
+                )
                 .map((p) => p.userId),
               hostAlerted: result.hostAlertSent,
               partialFailures: result.partialFailures,
               totalFound: participants.length,
               totalAlerted: result.alertsSent,
-            } as any,
+            },
           })
           .execute();
       }
@@ -470,7 +555,7 @@ export class CheckInAlertService {
             participantsAlerted: result.alertsSent,
             hostAlerted: result.hostAlertSent,
             partialFailures: result.partialFailures,
-          } as unknown as Record<string, unknown>,
+          },
         });
       } else if (result.partialFailures.length > 0) {
         await this.auditLogsService.logAction({
@@ -481,7 +566,7 @@ export class CheckInAlertService {
             meetingId: meeting.id,
             reason: 'all_participants_skipped_or_failed',
             partialFailures: result.partialFailures,
-          } as unknown as Record<string, unknown>,
+          },
         });
       }
 
@@ -498,7 +583,9 @@ export class CheckInAlertService {
 
   // ───── T010: triggerForMeeting ─────
 
-  async triggerForMeeting(meetingId: string): Promise<LateCheckinAlertResponseDto> {
+  async triggerForMeeting(
+    meetingId: string,
+  ): Promise<LateCheckinAlertResponseDto> {
     const meeting = await this.dataSource
       .getRepository(MeetingEntity)
       .findOne({ where: { id: meetingId, deletedAt: IsNull() } });
@@ -536,7 +623,8 @@ export class CheckInAlertService {
       totalParticipantsChecked: result.totalParticipantsChecked,
       alertsSent: result.alertsSent,
       hostAlertSent: result.hostAlertSent,
-      partialFailures: result.partialFailures.length > 0 ? result.partialFailures : undefined,
+      partialFailures:
+        result.partialFailures.length > 0 ? result.partialFailures : undefined,
     };
   }
 
@@ -554,7 +642,11 @@ export class CheckInAlertService {
            AND event_type = $2
            AND metadata_json->>'participantsAlerted' LIKE $3
          LIMIT 1`,
-        [meetingId, MeetingEventType.ATTENDANCE_CHECKIN_ALERT_SENT, `%${userId}%`],
+        [
+          meetingId,
+          MeetingEventType.ATTENDANCE_CHECKIN_ALERT_SENT,
+          `%${userId}%`,
+        ],
       );
       return result.length > 0;
     } catch {
@@ -582,7 +674,10 @@ export class CheckInAlertService {
     }
   }
 
-  private async hasValidCheckIn(meetingId: string, userId: string): Promise<boolean> {
+  private async hasValidCheckIn(
+    meetingId: string,
+    userId: string,
+  ): Promise<boolean> {
     try {
       const result = await this.dataSource.query(
         `SELECT 1 FROM attendance_records
@@ -616,5 +711,3 @@ export class CheckInAlertService {
     return false;
   }
 }
-
-
