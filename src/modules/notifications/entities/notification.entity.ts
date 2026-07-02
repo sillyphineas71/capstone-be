@@ -28,6 +28,8 @@ export enum NotificationType {
   MEETING_TIME_WARNING = 'meeting_time_warning',
   MEETING_TIME_CONFLICT_WARNING = 'meeting_time_conflict_warning',
   AVATAR_REJECTED = 'avatar_rejected',
+  // T029: transcript (draft) đã sẵn sàng cho Host review.
+  TRANSCRIPT_READY = 'transcript_ready',
 }
 
 export enum NotificationChannel {

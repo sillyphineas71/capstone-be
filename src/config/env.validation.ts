@@ -19,7 +19,9 @@ export const envValidationSchema = Joi.object({
   APP_URL: Joi.string().uri().default('http://localhost:3000'),
   API_PREFIX: Joi.string().default('api'),
   APP_TIMEZONE: Joi.string().default('Asia/Ho_Chi_Minh'),
-  CORS_ORIGIN: Joi.string().default('http://localhost:5173,http://localhost:3000'),
+  CORS_ORIGIN: Joi.string().default(
+    'http://localhost:5173,http://localhost:3000',
+  ),
 
   // ─── B. Database ─────────────────────────────────────────────────────────────
   DB_HOST: Joi.string().required(),
@@ -53,7 +55,11 @@ export const envValidationSchema = Joi.object({
 
   // --- D1. Signed Download Token ---
   MEDIA_DOWNLOAD_TOKEN_SECRET: Joi.string().min(16).required(),
-  MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS: Joi.number().integer().min(60).max(3600).default(600),
+  MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(3600)
+    .default(600),
   API_PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
 
   // ─── E. OTP ──────────────────────────────────────────────────────────────────
@@ -69,9 +75,13 @@ export const envValidationSchema = Joi.object({
   AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: Joi.number().integer().default(5),
   AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: Joi.number().integer().default(300),
   AUTH_OTP_REQUEST_RATE_LIMIT_MAX_ATTEMPTS: Joi.number().integer().default(3),
-  AUTH_OTP_REQUEST_RATE_LIMIT_WINDOW_SECONDS: Joi.number().integer().default(300),
+  AUTH_OTP_REQUEST_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .default(300),
   AUTH_OTP_VERIFY_RATE_LIMIT_MAX_ATTEMPTS: Joi.number().integer().default(5),
-  AUTH_OTP_VERIFY_RATE_LIMIT_WINDOW_SECONDS: Joi.number().integer().default(300),
+  AUTH_OTP_VERIFY_RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .default(300),
 
   // ─── G. BullMQ Queue ─────────────────────────────────────────────────────────
   BULL_REDIS_HOST: Joi.string().default('localhost'),
@@ -102,7 +112,9 @@ export const envValidationSchema = Joi.object({
   // ─── I. Storage ──────────────────────────────────────────────────────────────
   STORAGE_DRIVER: Joi.string().valid('local', 's3').default('local'),
   STORAGE_LOCAL_PATH: Joi.string().default('./uploads'),
-  STORAGE_PUBLIC_BASE_URL: Joi.string().default('http://localhost:3000/uploads'),
+  STORAGE_PUBLIC_BASE_URL: Joi.string().default(
+    'http://localhost:3000/uploads',
+  ),
   STORAGE_MAX_FILE_SIZE: Joi.number().integer().default(52428800),
   // S3/MinIO: chỉ bắt buộc khi STORAGE_DRIVER=s3
   STORAGE_S3_REGION: Joi.when('STORAGE_DRIVER', {
@@ -126,12 +138,24 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().optional(),
   }),
   STORAGE_S3_ENDPOINT: Joi.string().optional(),
+  STORAGE_S3_PORT: Joi.number().integer().default(9000),
+  STORAGE_S3_USE_SSL: Joi.boolean().default(false),
   STORAGE_S3_FORCE_PATH_STYLE: Joi.boolean().default(false),
+
+  // ─── AI Worker (offline transcription pipeline) ───────────────────────────────
+  AI_WORKER_JOB_RUNNER_PATH: Joi.string().default(
+    './workers/ai-transcription/dist/transcription-job-runner.js',
+  ),
+  AI_WORKER_JOB_TIMEOUT_MS: Joi.number()
+    .integer()
+    .default(15 * 60 * 1000),
 
   // ─── J. WebSocket ────────────────────────────────────────────────────────────
   WS_ENABLED: Joi.boolean().default(true),
   WS_PATH: Joi.string().default('/ws'),
-  WS_CORS_ORIGIN: Joi.string().default('http://localhost:5173,http://localhost:3000'),
+  WS_CORS_ORIGIN: Joi.string().default(
+    'http://localhost:5173,http://localhost:3000',
+  ),
   WS_HEARTBEAT_INTERVAL_MS: Joi.number().integer().default(30000),
   WS_AUTH_REQUIRED: Joi.boolean().default(true),
 
@@ -194,7 +218,11 @@ export const envValidationSchema = Joi.object({
   // (WS hiện vô danh — bật khi chưa auth = rò vị trí cá nhân).
   IVSS_REALTIME_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
-  FACEGATE_TIMEOUT_MS: Joi.number().integer().min(1000).max(30000).default(8000),
+  FACEGATE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(30000)
+    .default(8000),
   FACEGATE_TZ: Joi.string().default('Asia/Ho_Chi_Minh'),
   FACEGATE_UPLOAD_FIELD: Joi.string().default('vfileselector'),
   // FPE-001 (Face-access D): giới hạn kích thước ảnh chân dung enroll.
@@ -233,16 +261,24 @@ export const envValidationSchema = Joi.object({
   HEALTH_CHECK_REDIS: Joi.boolean().default(true),
   HEALTH_CHECK_QUEUE: Joi.boolean().default(true),
   HEALTH_CHECK_STORAGE: Joi.boolean().default(true),
-  HEALTH_DISK_THRESHOLD_PERCENT: Joi.number().integer().min(1).max(100).default(90),
+  HEALTH_DISK_THRESHOLD_PERCENT: Joi.number()
+    .integer()
+    .min(1)
+    .max(100)
+    .default(90),
 
   // ─── O. Seed ─────────────────────────────────────────────────────────────────
   SEED_RUN_ON_STARTUP: Joi.boolean().default(false),
-  SEED_ADMIN_EMAIL: Joi.string().email({ tlds: { allow: false } }).default('admin@capstone.local'),
+  SEED_ADMIN_EMAIL: Joi.string()
+    .email({ tlds: { allow: false } })
+    .default('admin@capstone.local'),
   SEED_ADMIN_PASSWORD: Joi.string().optional(),
   SEED_ADMIN_FULL_NAME: Joi.string().optional(),
 
   // ─── P. Logging ──────────────────────────────────────────────────────────────
-  LOG_LEVEL: Joi.string().valid('error', 'warn', 'log', 'debug', 'verbose').default('log'),
+  LOG_LEVEL: Joi.string()
+    .valid('error', 'warn', 'log', 'debug', 'verbose')
+    .default('log'),
   LOG_FORMAT: Joi.string().valid('text', 'json').default('text'),
   REQUEST_ID_HEADER: Joi.string().default('x-request-id'),
 
@@ -263,7 +299,9 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().allow('').optional(),
   }),
   MAIL_FROM_NAME: Joi.string().default('CAPSTONE System'),
-  MAIL_FROM: Joi.string().email({ tlds: { allow: false } }).default('noreply@capstone.local'),
+  MAIL_FROM: Joi.string()
+    .email({ tlds: { allow: false } })
+    .default('noreply@capstone.local'),
   MAIL_TIMEOUT_MS: Joi.number().integer().default(10000),
 })
   .unknown(true) // cho phép các env chưa định nghĩa (tránh strict-mode phá build)

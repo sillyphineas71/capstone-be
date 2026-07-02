@@ -16,6 +16,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IVSS_MEETING_ROOM = (meetingId: string): string =>
   `ivss:meeting:${meetingId}`;
+const MEETING_ROOM = (meetingId: string): string => `meeting:${meetingId}`;
 
 /**
  * EventsGateway — Basic Socket.IO gateway skeleton.
@@ -32,7 +33,10 @@ const IVSS_MEETING_ROOM = (meetingId: string): string =>
 @WebSocketGateway({
   path: process.env['WS_PATH'] ?? '/ws',
   cors: {
-    origin: (process.env['WS_CORS_ORIGIN'] ?? 'http://localhost:5173,http://localhost:3000')
+    origin: (
+      process.env['WS_CORS_ORIGIN'] ??
+      'http://localhost:5173,http://localhost:3000'
+    )
       .split(',')
       .map((o: string) => o.trim()),
     credentials: true,
@@ -51,7 +55,9 @@ export class EventsGateway
   afterInit(server: Server): void {
     const wsEnabled = this.configService.get<boolean>('WS_ENABLED', true);
     if (!wsEnabled) {
-      this.logger.warn('WS_ENABLED=false — WebSocket gateway initialized but disabled.');
+      this.logger.warn(
+        'WS_ENABLED=false — WebSocket gateway initialized but disabled.',
+      );
     } else {
       this.logger.log('EventsGateway initialized — WebSocket server ready.');
     }
@@ -98,6 +104,34 @@ export class EventsGateway
       return { ok: false };
     }
     const room = IVSS_MEETING_ROOM(meetingId);
+    void client.leave(room);
+    return { ok: true, room };
+  }
+
+  @SubscribeMessage('meeting:subscribe')
+  handleMeetingSubscribe(
+    @MessageBody() body: { meetingId?: string },
+    @ConnectedSocket() client: Socket,
+  ): { ok: boolean; room?: string } {
+    const meetingId = body?.meetingId;
+    if (typeof meetingId !== 'string' || !UUID_RE.test(meetingId)) {
+      return { ok: false };
+    }
+    const room = MEETING_ROOM(meetingId);
+    void client.join(room);
+    return { ok: true, room };
+  }
+
+  @SubscribeMessage('meeting:unsubscribe')
+  handleMeetingUnsubscribe(
+    @MessageBody() body: { meetingId?: string },
+    @ConnectedSocket() client: Socket,
+  ): { ok: boolean; room?: string } {
+    const meetingId = body?.meetingId;
+    if (typeof meetingId !== 'string' || !UUID_RE.test(meetingId)) {
+      return { ok: false };
+    }
+    const room = MEETING_ROOM(meetingId);
     void client.leave(room);
     return { ok: true, room };
   }

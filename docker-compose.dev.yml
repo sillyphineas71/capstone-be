@@ -6,6 +6,26 @@
 #       Uncomment the postgres section if you want a containerised database.
 # NOTE: MQTT/Mosquitto is intentionally excluded (not used in v1).
 # =============================================================================
+# T025 — AI WORKER NETWORK ISOLATION (offline-only) — TRIỂN KHAI KHI CONTAINER HOÁ
+# -----------------------------------------------------------------------------
+# Kiến trúc hiện tại: AI worker KHÔNG phải service riêng — backend (NestJS)
+# consume BullMQ rồi spawn Python pipeline (faster-whisper/pyannote) như child
+# process. Vì vậy ranh giới cô lập mạng là CONTAINER BACKEND.
+#
+# Khi đóng gói backend thành container, để đảm bảo "no outbound internet" (T025):
+#   1. Tạo network nội bộ: `networks: { internal-net: { internal: true } }`
+#      (internal: true -> Docker KHÔNG cấp route ra ngoài Internet).
+#   2. Gắn backend + redis + minio (+ postgres) vào `internal-net`; KHÔNG publish
+#      port public cho backend nếu không cần.
+#   3. Set env offline cho backend: TRANSCRIPTION_PROVIDER=local_faster_whisper,
+#      WHISPER_LOCAL_FILES_ONLY=true, PYANNOTE_LOCAL_FILES_ONLY=true, và mount
+#      model volume read-only (preload qua T-HF-001, KHÔNG tải runtime).
+#   4. Verify: `docker exec <backend> curl -m5 https://huggingface.co` PHẢI fail,
+#      `curl -m5 http://minio:9000` PHẢI pass (xem quickstart.md mục Security).
+#
+# Hiện redis/minio publish port ra host để backend chạy `npm run start:dev` trên
+# host kết nối được (dev). Khi backend vào container chung network, bỏ publish.
+# =============================================================================
 
 services:
   # ─── Redis ──────────────────────────────────────────────────────────────────
