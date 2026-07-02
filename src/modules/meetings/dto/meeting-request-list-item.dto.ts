@@ -49,7 +49,12 @@ export class MeetingRequestListItemDto {
   decisionBy: UserSummaryDto | null;
 
   @Expose()
-  meeting: { id: string; title: string; roomId: string | null; hostId: string | null } | null;
+  meeting: {
+    id: string;
+    title: string;
+    roomId: string | null;
+    hostId: string | null;
+  } | null;
 
   constructor(
     id: string,
@@ -66,7 +71,12 @@ export class MeetingRequestListItemDto {
     requestedBy: UserSummaryDto,
     targetRoom: RoomSummaryDto | null,
     decisionBy: UserSummaryDto | null,
-    meeting: { id: string; title: string; roomId: string | null; hostId: string | null } | null,
+    meeting: {
+      id: string;
+      title: string;
+      roomId: string | null;
+      hostId: string | null;
+    } | null,
   ) {
     this.id = id;
     this.requestCode = requestCode;

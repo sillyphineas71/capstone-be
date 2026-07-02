@@ -12,7 +12,10 @@ export class RateLimitService {
     private readonly redisService: RedisService,
   ) {}
 
-  async checkOrThrow(ipAddress: string | undefined, email: string): Promise<void> {
+  async checkOrThrow(
+    ipAddress: string | undefined,
+    email: string,
+  ): Promise<void> {
     const maxAttempts = this.authConfigService.getRateLimitMaxAttempts();
     const windowSeconds = this.authConfigService.getRateLimitWindowSeconds();
     const key = `${this.PREFIX}${ipAddress ?? 'unknown'}:${email}`;

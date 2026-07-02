@@ -1006,7 +1006,10 @@ describe('IotDevicesService', () => {
       expect(fsc.revoked_reason).toBe('token leaked');
       expect(auditRepoMock.logRevokeFaceServerToken).toHaveBeenCalledTimes(1);
       const auditArg = auditRepoMock.logRevokeFaceServerToken.mock.calls[0][1];
-      expect(auditArg).toMatchObject({ deviceId: 'test-id', reason: 'token leaked' });
+      expect(auditArg).toMatchObject({
+        deviceId: 'test-id',
+        reason: 'token leaked',
+      });
       // SEC: audit KHÔNG chứa token/hash
       expect(JSON.stringify(auditArg)).not.toContain(HASH);
     });

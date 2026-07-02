@@ -25,7 +25,9 @@ describe('VerifyShortDeviceCallbacksController', () => {
       ],
     }).compile();
 
-    controller = module.get<VerifyShortDeviceCallbacksController>(VerifyShortDeviceCallbacksController);
+    controller = module.get<VerifyShortDeviceCallbacksController>(
+      VerifyShortDeviceCallbacksController,
+    );
     service = module.get<IotDevicesService>(IotDevicesService);
   });
 

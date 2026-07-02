@@ -21,18 +21,26 @@ describe('AuthEmailService', () => {
   });
 
   it('should send OTP email via MailService', async () => {
-    mailService.sendMail.mockResolvedValue({ success: true, messageId: 'mock-id' });
+    mailService.sendMail.mockResolvedValue({
+      success: true,
+      messageId: 'mock-id',
+    });
 
-    await expect(service.sendOtp('user@example.com', '123456')).resolves.toBeUndefined();
+    await expect(
+      service.sendOtp('user@example.com', '123456'),
+    ).resolves.toBeUndefined();
     expect(mailService.sendMail).toHaveBeenCalledWith({
       to: 'user@example.com',
-      subject: expect.stringContaining('Khôi ph?c m?t kh?u'),
+      subject: expect.stringContaining('Khï¿½i ph?c m?t kh?u'),
       text: expect.stringContaining('123456'),
     });
   });
 
   it('should throw AUTH_EMAIL_DISPATCH_FAILED when MailService returns failure', async () => {
-    mailService.sendMail.mockResolvedValue({ success: false, error: 'SMTP error' });
+    mailService.sendMail.mockResolvedValue({
+      success: false,
+      error: 'SMTP error',
+    });
 
     await expect(service.sendOtp('user@example.com', '123456')).rejects.toThrow(
       InternalServerErrorException,

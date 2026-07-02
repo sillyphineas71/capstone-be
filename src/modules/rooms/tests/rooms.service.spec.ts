@@ -76,22 +76,26 @@ describe('RoomsService', () => {
       (roomRepo.createQueryBuilder as jest.Mock).mockReturnValue(mockQb);
 
       // First transaction (create room) succeeds
-      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: any) => {
-        const mockEm = {
-          create: jest.fn().mockReturnValue(mockRoom),
-          save: jest.fn().mockResolvedValue(mockRoom),
-        };
-        return cb(mockEm);
-      });
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn().mockReturnValue(mockRoom),
+            save: jest.fn().mockResolvedValue(mockRoom),
+          };
+          return cb(mockEm);
+        },
+      );
 
       // Second transaction (audit log — fail-safe) succeeds
-      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: any) => {
-        const mockEm = {
-          create: jest.fn(),
-          save: jest.fn().mockResolvedValue({}),
-        };
-        return cb(mockEm);
-      });
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn(),
+            save: jest.fn().mockResolvedValue({}),
+          };
+          return cb(mockEm);
+        },
+      );
 
       const result = await service.create(validDto, mockUserId);
 
@@ -106,7 +110,9 @@ describe('RoomsService', () => {
     it('should throw ConflictException when roomCode already exists', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoom);
 
-      await expect(service.create(validDto, mockUserId)).rejects.toThrow(ConflictException);
+      await expect(service.create(validDto, mockUserId)).rejects.toThrow(
+        ConflictException,
+      );
       // Transaction should NOT be called
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
@@ -123,7 +129,9 @@ describe('RoomsService', () => {
       };
       (roomRepo.createQueryBuilder as jest.Mock).mockReturnValue(mockQb);
 
-      await expect(service.create(validDto, mockUserId)).rejects.toThrow(ConflictException);
+      await expect(service.create(validDto, mockUserId)).rejects.toThrow(
+        ConflictException,
+      );
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
@@ -137,13 +145,15 @@ describe('RoomsService', () => {
       (roomRepo.createQueryBuilder as jest.Mock).mockReturnValue(mockQb);
 
       // First transaction (create room) succeeds
-      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: any) => {
-        const mockEm = {
-          create: jest.fn().mockReturnValue(mockRoom),
-          save: jest.fn().mockResolvedValue(mockRoom),
-        };
-        return cb(mockEm);
-      });
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn().mockReturnValue(mockRoom),
+            save: jest.fn().mockResolvedValue(mockRoom),
+          };
+          return cb(mockEm);
+        },
+      );
 
       // Second transaction (audit log) FAILS — but room creation still returns
       (dataSource.transaction as jest.Mock).mockImplementationOnce(async () => {
@@ -165,26 +175,29 @@ describe('RoomsService', () => {
       (roomRepo.createQueryBuilder as jest.Mock).mockReturnValue(mockQb);
 
       let savedRoomCode = '';
-      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: any) => {
-        const mockEm = {
-          create: jest.fn((entity, data) => ({ ...data, id: mockRoomId })),
-          save: jest.fn().mockImplementation((entity, data) => {
-            savedRoomCode = data.roomCode;
-            return Promise.resolve({ ...mockRoom, roomCode: data.roomCode });
-          }),
-        };
-        return cb(mockEm);
-      });
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn((entity, data) => ({ ...data, id: mockRoomId })),
+            save: jest.fn().mockImplementation((entity, data) => {
+              savedRoomCode = data.roomCode;
+              return Promise.resolve({ ...mockRoom, roomCode: data.roomCode });
+            }),
+          };
+          return cb(mockEm);
+        },
+      );
 
       // Audit ok
-      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: any) => {
-        const mockEm = { create: jest.fn(), save: jest.fn() };
-        return cb(mockEm);
-      });
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = { create: jest.fn(), save: jest.fn() };
+          return cb(mockEm);
+        },
+      );
 
       await service.create({ ...validDto, roomCode: 'r301' }, mockUserId);
       expect(savedRoomCode).toBe('R301');
     });
   });
 });
-

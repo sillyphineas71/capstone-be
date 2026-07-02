@@ -4,7 +4,6 @@ import Redis from 'ioredis';
 import { RedisService } from './redis.service.js';
 import { REDIS_CLIENT } from './redis.constants.js';
 
-
 /**
  * RedisModule — Global module cung cấp Redis client (ioredis) dùng chung.
  *
@@ -26,7 +25,10 @@ import { REDIS_CLIENT } from './redis.constants.js';
         const port = configService.get<number>('REDIS_PORT', 6379);
         const password = configService.get<string>('REDIS_PASSWORD', '');
         const db = configService.get<number>('REDIS_DB', 0);
-        const keyPrefix = configService.get<string>('REDIS_KEY_PREFIX', 'capstone:');
+        const keyPrefix = configService.get<string>(
+          'REDIS_KEY_PREFIX',
+          'capstone:',
+        );
 
         return new Redis({
           host,

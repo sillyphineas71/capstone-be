@@ -12,52 +12,81 @@ describe('CreatePermissionDto Validation', () => {
 
   describe('permissionCode', () => {
     it('should accept valid dot-format codes', async () => {
-      const validCodes = ['meetings.create', 'rooms.read', 'admin.manage_permissions', 'attendance.check_in', 'a.b'];
+      const validCodes = [
+        'meetings.create',
+        'rooms.read',
+        'admin.manage_permissions',
+        'attendance.check_in',
+        'a.b',
+      ];
       for (const code of validCodes) {
-        const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: code });
+        const dto = plainToInstance(CreatePermissionDto, {
+          ...validDto,
+          permissionCode: code,
+        });
         const errors = await validate(dto);
-        const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
+        const fieldErrors = errors.filter(
+          (e) => e.property === 'permissionCode',
+        );
         expect(fieldErrors.length).toBe(0);
       }
     });
 
     it('should reject codes without a dot', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: 'invalid' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: 'invalid',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should reject codes with uppercase letters', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: 'Meetings.Create' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: 'Meetings.Create',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should reject codes with spaces', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: 'meetings. create' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: 'meetings. create',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should reject codes with colons', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: 'meetings:create' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: 'meetings:create',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should accept codes with underscores', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: 'meetings.check_in' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: 'meetings.check_in',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBe(0);
     });
 
     it('should reject empty string', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionCode: '' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionCode: '',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -72,7 +101,10 @@ describe('CreatePermissionDto Validation', () => {
     });
 
     it('should reject empty name', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, permissionName: '' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        permissionName: '',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'permissionName');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -81,9 +113,18 @@ describe('CreatePermissionDto Validation', () => {
 
   describe('moduleCode', () => {
     it('should accept valid module codes from allowlist', async () => {
-      const validModules = ['meetings', 'rooms', 'admin', 'accounts', 'attendance'];
+      const validModules = [
+        'meetings',
+        'rooms',
+        'admin',
+        'accounts',
+        'attendance',
+      ];
       for (const mod of validModules) {
-        const dto = plainToInstance(CreatePermissionDto, { ...validDto, moduleCode: mod });
+        const dto = plainToInstance(CreatePermissionDto, {
+          ...validDto,
+          moduleCode: mod,
+        });
         const errors = await validate(dto);
         const fieldErrors = errors.filter((e) => e.property === 'moduleCode');
         expect(fieldErrors.length).toBe(0);
@@ -91,7 +132,10 @@ describe('CreatePermissionDto Validation', () => {
     });
 
     it('should reject invalid module codes', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, moduleCode: 'nonexistent' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        moduleCode: 'nonexistent',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'moduleCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -106,7 +150,10 @@ describe('CreatePermissionDto Validation', () => {
     });
 
     it('should reject empty action', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, actionCode: '' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        actionCode: '',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'actionCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -115,13 +162,19 @@ describe('CreatePermissionDto Validation', () => {
 
   describe('description (optional)', () => {
     it('should accept null description', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, description: null });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        description: null,
+      });
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     });
 
     it('should accept valid description', async () => {
-      const dto = plainToInstance(CreatePermissionDto, { ...validDto, description: 'Test permission' });
+      const dto = plainToInstance(CreatePermissionDto, {
+        ...validDto,
+        description: 'Test permission',
+      });
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     });

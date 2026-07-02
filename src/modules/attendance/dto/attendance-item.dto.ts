@@ -22,16 +22,31 @@ export class AttendanceItemDto {
   @ApiProperty({ enum: ['host', 'attendee', 'approver', 'note_taker'] })
   participantRole: string;
 
-  @ApiProperty({ enum: ['present', 'late', 'absent', 'left_early', 'not_checked_in', 'pending_review'] })
+  @ApiProperty({
+    enum: [
+      'present',
+      'late',
+      'absent',
+      'left_early',
+      'not_checked_in',
+      'pending_review',
+    ],
+  })
   attendanceStatus: string;
 
   @ApiPropertyOptional({ nullable: true, format: 'date-time' })
   checkInTime: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Only returned if user has permission' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Only returned if user has permission',
+  })
   attendanceSource: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Only returned if user has permission' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Only returned if user has permission',
+  })
   checkInMethod: string | null;
 
   @ApiProperty()

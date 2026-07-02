@@ -17,11 +17,17 @@ import { RoomType } from '../../rooms/entities/room.entity.js';
  */
 export class RoomSuggestionQueryDto {
   @IsNotEmpty({ message: 'startTime là bắt buộc' })
-  @IsISO8601({ strict: true }, { message: 'startTime phải đúng định dạng ISO-8601 có timezone' })
+  @IsISO8601(
+    { strict: true },
+    { message: 'startTime phải đúng định dạng ISO-8601 có timezone' },
+  )
   startTime: string;
 
   @IsNotEmpty({ message: 'endTime là bắt buộc' })
-  @IsISO8601({ strict: true }, { message: 'endTime phải đúng định dạng ISO-8601 có timezone' })
+  @IsISO8601(
+    { strict: true },
+    { message: 'endTime phải đúng định dạng ISO-8601 có timezone' },
+  )
   endTime: string;
 
   @Type(() => Number)

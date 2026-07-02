@@ -16,11 +16,17 @@
  */
 export class CheckParticipantConflictDto {
   @IsNotEmpty({ message: 'startTime là bắt buộc' })
-  @IsISO8601({ strict: true }, { message: 'startTime phải đúng định dạng ISO-8601 có timezone' })
+  @IsISO8601(
+    { strict: true },
+    { message: 'startTime phải đúng định dạng ISO-8601 có timezone' },
+  )
   startTime: string;
 
   @IsNotEmpty({ message: 'endTime là bắt buộc' })
-  @IsISO8601({ strict: true }, { message: 'endTime phải đúng định dạng ISO-8601 có timezone' })
+  @IsISO8601(
+    { strict: true },
+    { message: 'endTime phải đúng định dạng ISO-8601 có timezone' },
+  )
   endTime: string;
 
   @IsOptional()
@@ -29,8 +35,13 @@ export class CheckParticipantConflictDto {
 
   @IsArray()
   @ArrayNotEmpty({ message: 'participantUserIds không được để trống' })
-  @IsUUID('4', { each: true, message: 'Mỗi participantUserId phải là UUID hợp lệ' })
-  @ArrayMaxSize(50, { message: 'Số lượng participantUserIds không được vượt quá 50' })
+  @IsUUID('4', {
+    each: true,
+    message: 'Mỗi participantUserId phải là UUID hợp lệ',
+  })
+  @ArrayMaxSize(50, {
+    message: 'Số lượng participantUserIds không được vượt quá 50',
+  })
   participantUserIds: string[];
 
   @IsOptional()
@@ -39,6 +50,9 @@ export class CheckParticipantConflictDto {
 
   @IsOptional()
   @IsArray()
-  @IsEmail({}, { each: true, message: 'Mỗi external email phải đúng định dạng email' })
+  @IsEmail(
+    {},
+    { each: true, message: 'Mỗi external email phải đúng định dạng email' },
+  )
   externalParticipantEmails?: string[];
 }

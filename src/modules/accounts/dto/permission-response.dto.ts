@@ -25,6 +25,9 @@ export class PermissionResponseDto {
   @ApiProperty({ description: 'Thời điểm tạo', format: 'date-time' })
   createdAt: Date;
 
-  @ApiProperty({ description: 'Thời điểm cập nhật gần nhất', format: 'date-time' })
+  @ApiProperty({
+    description: 'Thời điểm cập nhật gần nhất',
+    format: 'date-time',
+  })
   updatedAt: Date;
 }

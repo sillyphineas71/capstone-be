@@ -42,7 +42,10 @@ export class ParticipantConflictService {
     const uniqueUserIds = [...new Set(dto.participantUserIds)];
 
     if (dto.excludeMeetingId) {
-      await this.validateExcludeMeetingAccess(dto.excludeMeetingId, requestingUserId);
+      await this.validateExcludeMeetingAccess(
+        dto.excludeMeetingId,
+        requestingUserId,
+      );
     }
 
     const startTime = new Date(dto.startTime);
@@ -50,7 +53,10 @@ export class ParticipantConflictService {
     const checkedAt = new Date().toISOString();
 
     const busyUserIds = await this.findConflictingUserIds(
-      uniqueUserIds, startTime, endTime, dto.excludeMeetingId ?? null,
+      uniqueUserIds,
+      startTime,
+      endTime,
+      dto.excludeMeetingId ?? null,
     );
     const busyUserSet = new Set(busyUserIds);
 
@@ -59,7 +65,10 @@ export class ParticipantConflictService {
     for (const userId of uniqueUserIds) {
       if (busyUserSet.has(userId)) {
         const rawSlots = await this.findBusySlots(
-          userId, startTime, endTime, dto.excludeMeetingId ?? null,
+          userId,
+          startTime,
+          endTime,
+          dto.excludeMeetingId ?? null,
         );
         const mergedSlots = this.mergeBusySlots(rawSlots);
         const busySlots = mergedSlots.map((s) => ({
@@ -85,7 +94,9 @@ export class ParticipantConflictService {
       }
     }
 
-    const externalParticipants: ExternalParticipantDto[] = (dto.externalParticipantEmails ?? []).map((email) => ({
+    const externalParticipants: ExternalParticipantDto[] = (
+      dto.externalParticipantEmails ?? []
+    ).map((email) => ({
       email,
       status: 'unknown' as const,
       warningMessage: 'Kh$1u00f4ng r$1u00f5 l$1u1ecbch tr$1u00ecnh',
@@ -143,7 +154,8 @@ export class ParticipantConflictService {
     if (foundCount !== uniqueIds.length) {
       throw new BadRequestException({
         statusCode: 400,
-        message: 'Mot hoac nhieu participantUserId khong ton tai hoac da bi xoa',
+        message:
+          'Mot hoac nhieu participantUserId khong ton tai hoac da bi xoa',
         error: { code: 'VALIDATION_ERROR', details: {} },
         timestamp: new Date().toISOString(),
       });
@@ -254,7 +266,11 @@ export class ParticipantConflictService {
 
     const formatTime = (iso) => {
       const d = new Date(iso);
-      return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      return d.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
     };
 
     if (slots.length === 1) {

@@ -62,7 +62,10 @@ describe('SchedulingController', () => {
     it('[CTRL-1] should return success response with rooms', async () => {
       mockService.getRoomSuggestions.mockResolvedValue(mockResult);
 
-      const result = await controller.getRoomSuggestions(validDto, mockRequest());
+      const result = await controller.getRoomSuggestions(
+        validDto,
+        mockRequest(),
+      );
 
       expect(result.success).toBe(true);
       expect(result.message).toBe('Danh sách phòng họp đề xuất');
@@ -82,7 +85,10 @@ describe('SchedulingController', () => {
     it('[CTRL-3] should return empty message when no rooms', async () => {
       mockService.getRoomSuggestions.mockResolvedValue(emptyResult);
 
-      const result = await controller.getRoomSuggestions(validDto, mockRequest());
+      const result = await controller.getRoomSuggestions(
+        validDto,
+        mockRequest(),
+      );
 
       expect(result.success).toBe(true);
       expect(result.message).toBe(
@@ -113,4 +119,3 @@ describe('SchedulingController', () => {
     });
   });
 });
-

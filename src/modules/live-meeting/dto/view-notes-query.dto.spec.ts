@@ -25,7 +25,12 @@ describe('ViewNotesQueryDto', () => {
   });
 
   it('should accept valid visibility values', async () => {
-    for (const val of ['private', 'participants', 'public_internal', 'department']) {
+    for (const val of [
+      'private',
+      'participants',
+      'public_internal',
+      'department',
+    ]) {
       const dto = new ViewNotesQueryDto();
       dto.visibility = val;
       const errors = await validate(dto);

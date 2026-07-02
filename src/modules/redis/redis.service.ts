@@ -50,14 +50,22 @@ export class RedisService {
   /**
    * Set giá trị với TTL (giây).
    */
-  async setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void> {
+  async setWithTtl(
+    key: string,
+    value: string,
+    ttlSeconds: number,
+  ): Promise<void> {
     await this.client.set(key, value, 'EX', ttlSeconds);
   }
 
   /**
    * Set JSON object với TTL (giây).
    */
-  async setJsonWithTtl<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
+  async setJsonWithTtl<T>(
+    key: string,
+    value: T,
+    ttlSeconds: number,
+  ): Promise<void> {
     await this.client.set(key, JSON.stringify(value), 'EX', ttlSeconds);
   }
 

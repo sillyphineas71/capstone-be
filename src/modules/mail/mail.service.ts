@@ -28,13 +28,21 @@ export class MailService implements OnModuleInit {
 
   constructor(private readonly configService: ConfigService) {
     this.mailEnabled = this.configService.get<boolean>('MAIL_ENABLED', false);
-    this.fromAddress = this.configService.get<string>('MAIL_FROM', 'noreply@capstone.local');
-    this.fromName = this.configService.get<string>('MAIL_FROM_NAME', 'CAPSTONE System');
+    this.fromAddress = this.configService.get<string>(
+      'MAIL_FROM',
+      'noreply@capstone.local',
+    );
+    this.fromName = this.configService.get<string>(
+      'MAIL_FROM_NAME',
+      'CAPSTONE System',
+    );
   }
 
   onModuleInit(): void {
     if (!this.mailEnabled) {
-      this.logger.warn('MAIL_ENABLED=false — MailService initialized in dry-run mode (no emails will be sent).');
+      this.logger.warn(
+        'MAIL_ENABLED=false — MailService initialized in dry-run mode (no emails will be sent).',
+      );
       return;
     }
 
@@ -54,7 +62,9 @@ export class MailService implements OnModuleInit {
       socketTimeout: timeout,
     });
 
-    this.logger.log(`MailService initialized — SMTP: ${host}:${port} (secure=${secure})`);
+    this.logger.log(
+      `MailService initialized — SMTP: ${host}:${port} (secure=${secure})`,
+    );
   }
 
   /**
@@ -81,9 +91,13 @@ export class MailService implements OnModuleInit {
    * Nếu MAIL_ENABLED=false: skip và log cảnh báo.
    * Không throw lỗi nếu không gửi được — caller cần xử lý kết quả.
    */
-  async sendMail(options: SendMailOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  async sendMail(
+    options: SendMailOptions,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
     if (!this.mailEnabled || !this.transporter) {
-      this.logger.warn(`[MailService] MAIL_ENABLED=false — skipping email to: ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`);
+      this.logger.warn(
+        `[MailService] MAIL_ENABLED=false — skipping email to: ${Array.isArray(options.to) ? options.to.join(', ') : options.to}`,
+      );
       return { success: false, error: 'Mail is disabled (MAIL_ENABLED=false)' };
     }
 
@@ -97,7 +111,9 @@ export class MailService implements OnModuleInit {
         replyTo: options.replyTo,
       });
 
-      this.logger.log(`[MailService] Email sent — messageId: ${result.messageId}`);
+      this.logger.log(
+        `[MailService] Email sent — messageId: ${result.messageId}`,
+      );
       return { success: true, messageId: result.messageId as string };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';

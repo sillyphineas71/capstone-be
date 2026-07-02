@@ -1,4 +1,12 @@
-﻿import { IsUUID, IsString, IsNumber, IsBoolean, IsArray, ValidateNested, IsOptional } from 'class-validator';
+﻿import {
+  IsUUID,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  ValidateNested,
+  IsOptional,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class PartialFailureItem {

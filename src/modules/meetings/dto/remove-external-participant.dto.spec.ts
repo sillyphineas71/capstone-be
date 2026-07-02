@@ -30,7 +30,9 @@ describe('RemoveExternalParticipantParamsDto Validation', () => {
       externalParticipantId: 'not-a-uuid',
     });
     const errors = await validate(dto);
-    const idErrors = errors.filter((e) => e.property === 'externalParticipantId');
+    const idErrors = errors.filter(
+      (e) => e.property === 'externalParticipantId',
+    );
     expect(idErrors.length).toBeGreaterThan(0);
   });
 });

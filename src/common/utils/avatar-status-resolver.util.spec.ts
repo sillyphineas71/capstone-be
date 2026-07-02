@@ -51,9 +51,9 @@ describe('resolveAvatarReviewStatus (BR-004)', () => {
   });
 
   it('chỉ disabled → rejected, popup=true (AC-016)', () => {
-    expect(resolveAvatarReviewStatus([row('disabled')]).avatarReviewStatus).toBe(
-      'rejected',
-    );
+    expect(
+      resolveAvatarReviewStatus([row('disabled')]).avatarReviewStatus,
+    ).toBe('rejected');
     expect(
       resolveAvatarReviewStatus([row('disabled')]).shouldShowAvatarPopup,
     ).toBe(true);

@@ -2,8 +2,16 @@
 import { InjectEntityManager } from '@nestjs/typeorm';
 import { EntityManager } from 'typeorm';
 import { RoomEntity, RoomType } from '../../rooms/entities/room.entity.js';
-import { RoomBookingEntity, RoomBookingStatus } from '../../rooms/entities/room-booking.entity.js';
-import { EquipmentEntity, EquipmentType, AssetStatus, HealthStatus } from '../../equipment/entities/equipment.entity.js';
+import {
+  RoomBookingEntity,
+  RoomBookingStatus,
+} from '../../rooms/entities/room-booking.entity.js';
+import {
+  EquipmentEntity,
+  EquipmentType,
+  AssetStatus,
+  HealthStatus,
+} from '../../equipment/entities/equipment.entity.js';
 import { RoomSuggestionQueryDto } from '../dto/room-suggestion-query.dto.js';
 import { RoomSuggestionItemDto } from '../dto/room-suggestion-item.dto.js';
 
@@ -64,7 +72,9 @@ export class SchedulingService {
 
     // Chỉ filter allow_recording khi giá trị là true (FR-012)
     if (dto.allowRecording === true) {
-      query.andWhere('room.allow_recording = :allowRecording', { allowRecording: true });
+      query.andWhere('room.allow_recording = :allowRecording', {
+        allowRecording: true,
+      });
     }
 
     // ──────────────────────────────────────────────
@@ -72,24 +82,25 @@ export class SchedulingService {
     // Chỉ tính conflict với pending/approved/active
     // Back-to-back booking OK (không buffer time) (FR-023, AC-016)
     // ──────────────────────────────────────────────
-    query.andWhere((qb) => {
-      const subQuery = qb
-        .subQuery()
-        .select('1')
-        .from(RoomBookingEntity, 'booking')
-        .where('booking.room_id = room.id')
-        .andWhere('booking.reserved_start_time < :endTime')
-        .andWhere('booking.reserved_end_time > :startTime')
-        .andWhere('booking.status IN (:...conflictingStatuses)', {
-          conflictingStatuses: [
-            RoomBookingStatus.PENDING,
-            RoomBookingStatus.APPROVED,
-            RoomBookingStatus.ACTIVE,
-          ],
-        })
-        .getQuery();
-      return 'NOT EXISTS (' + subQuery + ')';
-    })
+    query
+      .andWhere((qb) => {
+        const subQuery = qb
+          .subQuery()
+          .select('1')
+          .from(RoomBookingEntity, 'booking')
+          .where('booking.room_id = room.id')
+          .andWhere('booking.reserved_start_time < :endTime')
+          .andWhere('booking.reserved_end_time > :startTime')
+          .andWhere('booking.status IN (:...conflictingStatuses)', {
+            conflictingStatuses: [
+              RoomBookingStatus.PENDING,
+              RoomBookingStatus.APPROVED,
+              RoomBookingStatus.ACTIVE,
+            ],
+          })
+          .getQuery();
+        return 'NOT EXISTS (' + subQuery + ')';
+      })
       .setParameter('startTime', startTime)
       .setParameter('endTime', endTime);
 
@@ -103,19 +114,20 @@ export class SchedulingService {
       const value = (dto as unknown as Record<string, unknown>)[param];
       if (value === true) {
         requestedEquipment.push(eqType);
-        query.andWhere((qb) => {
-          const sub = qb
-            .subQuery()
-            .select('1')
-            .from(EquipmentEntity, 'eq')
-            .where('eq.current_room_id = room.id')
-            .andWhere('eq.equipment_type = :eqType')
-            .andWhere('eq.asset_status = :assetStatus')
-            .andWhere('eq.health_status = :healthStatus')
-            .andWhere('eq.deleted_at IS NULL')
-            .getQuery();
-          return 'EXISTS (' + sub + ')';
-        })
+        query
+          .andWhere((qb) => {
+            const sub = qb
+              .subQuery()
+              .select('1')
+              .from(EquipmentEntity, 'eq')
+              .where('eq.current_room_id = room.id')
+              .andWhere('eq.equipment_type = :eqType')
+              .andWhere('eq.asset_status = :assetStatus')
+              .andWhere('eq.health_status = :healthStatus')
+              .andWhere('eq.deleted_at IS NULL')
+              .getQuery();
+            return 'EXISTS (' + sub + ')';
+          })
           .setParameter('eqType', eqType)
           .setParameter('assetStatus', AssetStatus.ASSIGNED)
           .setParameter('healthStatus', HealthStatus.HEALTHY);
@@ -151,8 +163,12 @@ export class SchedulingService {
         .createQueryBuilder(EquipmentEntity, 'eq')
         .select(['eq.current_room_id', 'eq.equipment_type'])
         .where('eq.current_room_id IN (:...roomIds)', { roomIds })
-        .andWhere('eq.asset_status = :assetStatus', { assetStatus: AssetStatus.ASSIGNED })
-        .andWhere('eq.health_status = :healthStatus', { healthStatus: HealthStatus.HEALTHY })
+        .andWhere('eq.asset_status = :assetStatus', {
+          assetStatus: AssetStatus.ASSIGNED,
+        })
+        .andWhere('eq.health_status = :healthStatus', {
+          healthStatus: HealthStatus.HEALTHY,
+        })
         .andWhere('eq.deleted_at IS NULL');
 
       const equipmentList = await eqQuery.getMany();
@@ -177,9 +193,9 @@ export class SchedulingService {
       const score = this.calculateScore(room.capacity, attendeeCount);
 
       // matchedFeatures: intersection of requested equipment + actual healthy equipment
-      const matchedFeatures = requestedEquipment.filter((reqType) =>
-        roomEquipment.includes(reqType),
-      ).map((t) => t.toString());
+      const matchedFeatures = requestedEquipment
+        .filter((reqType) => roomEquipment.includes(reqType))
+        .map((t) => t.toString());
 
       // warnings: requested equipment but not found healthy in this room
       const warnings = requestedEquipment
@@ -262,4 +278,3 @@ export class SchedulingService {
     return Math.max(0, Math.round((100 - (diff / capacity) * 100) * 100) / 100);
   }
 }
-

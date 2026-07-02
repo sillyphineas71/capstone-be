@@ -258,7 +258,9 @@ export class SchedulerService {
     try {
       await this.checkInAlertService.processMeetings();
     } catch (error) {
-      this.logger.error(`[Scheduler] checkCheckinAlerts() failed: ${(error as Error).message}`);
+      this.logger.error(
+        `[Scheduler] checkCheckinAlerts() failed: ${(error as Error).message}`,
+      );
     }
   }
 }

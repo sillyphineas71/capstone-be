@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { AuditLogEntity, AuditLogSeverity } from '../entities/audit-log.entity.js';
+import {
+  AuditLogEntity,
+  AuditLogSeverity,
+} from '../entities/audit-log.entity.js';
 
 export interface LogActionDto {
   userId?: string;
@@ -67,7 +70,10 @@ export class AuditLogsService {
     private readonly configService: ConfigService,
   ) {
     this.enabled = this.configService.get<boolean>('AUDIT_LOG_ENABLED', true);
-    this.failSafe = this.configService.get<boolean>('AUDIT_LOG_FAIL_SAFE', true);
+    this.failSafe = this.configService.get<boolean>(
+      'AUDIT_LOG_FAIL_SAFE',
+      true,
+    );
   }
 
   /**
@@ -144,7 +150,9 @@ export class AuditLogsService {
       const message = error instanceof Error ? error.message : 'Unknown error';
       if (this.failSafe) {
         // Log lỗi nhưng không throw — không làm fail business flow
-        this.logger.error(`[AuditLogs] Failed to write audit log (fail-safe mode): ${message}`);
+        this.logger.error(
+          `[AuditLogs] Failed to write audit log (fail-safe mode): ${message}`,
+        );
       } else {
         throw error;
       }

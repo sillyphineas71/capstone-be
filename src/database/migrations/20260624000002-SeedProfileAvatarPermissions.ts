@@ -15,9 +15,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (cùng lệch code-vs-spec đã ghi ở spec.md mục 20.2 cho permission khác).
  * Migration dùng 'EMPLOYEE' để khớp đúng dữ liệu thật.
  */
-export class SeedProfileAvatarPermissions20260624000002
-  implements MigrationInterface
-{
+export class SeedProfileAvatarPermissions20260624000002 implements MigrationInterface {
   name = 'SeedProfileAvatarPermissions20260624000002';
 
   private readonly permissions = [
@@ -25,7 +23,8 @@ export class SeedProfileAvatarPermissions20260624000002
       code: 'profile.avatar.read_status',
       name: 'Xem trạng thái avatar của chính mình',
       action: 'avatar_read_status',
-      description: 'Cho phép user xem trạng thái avatar/face profile của chính mình',
+      description:
+        'Cho phép user xem trạng thái avatar/face profile của chính mình',
     },
     {
       code: 'profile.avatar.submit',
@@ -49,7 +48,12 @@ export class SeedProfileAvatarPermissions20260624000002
          VALUES ($1, $2, 'accounts', $3, $4, true)
          ON CONFLICT (permission_code) DO NOTHING
          RETURNING id;`,
-        [permission.code, permission.name, permission.action, permission.description],
+        [
+          permission.code,
+          permission.name,
+          permission.action,
+          permission.description,
+        ],
       );
 
       // ON CONFLICT DO NOTHING không trả row khi permission đã tồn tại → SELECT lại.

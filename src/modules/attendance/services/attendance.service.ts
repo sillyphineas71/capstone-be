@@ -8,7 +8,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not, LessThanOrEqual, MoreThan } from 'typeorm';
-import { MeetingEntity, MeetingStatus } from '../../../modules/meetings/entities/meeting.entity.js';
+import {
+  MeetingEntity,
+  MeetingStatus,
+} from '../../../modules/meetings/entities/meeting.entity.js';
 import {
   MeetingParticipantEntity,
   ParticipantRole,
@@ -20,7 +23,10 @@ import {
   AttendanceRecordEntity,
   AttendanceRecordStatus,
 } from '../entities/attendance-record.entity.js';
-import { QueryAttendanceDto, AttendanceQueryStatusList } from '../dto/query-attendance.dto.js';
+import {
+  QueryAttendanceDto,
+  AttendanceQueryStatusList,
+} from '../dto/query-attendance.dto.js';
 import { AttendanceItemDto } from '../dto/attendance-item.dto.js';
 
 interface ParticipantWithUser {
@@ -73,7 +79,8 @@ export class AttendanceService {
     const now = new Date();
     if (now < meeting.startTime) {
       throw new ConflictException({
-        message: 'Attendance list is not open yet. Please come back when the meeting starts.',
+        message:
+          'Attendance list is not open yet. Please come back when the meeting starts.',
         error: 'ATTENDANCE_NOT_OPEN_YET',
       });
     }
@@ -98,15 +105,24 @@ export class AttendanceService {
   async checkAccess(
     meeting: MeetingEntity,
     currentUserId: string,
-  ): Promise<{ canViewAttendanceSource: boolean; isManagerOfParticipantIds: Set<string> }> {
+  ): Promise<{
+    canViewAttendanceSource: boolean;
+    isManagerOfParticipantIds: Set<string>;
+  }> {
     // Check 1: Organizer
     if (meeting.organizerId === currentUserId) {
-      return { canViewAttendanceSource: true, isManagerOfParticipantIds: new Set() };
+      return {
+        canViewAttendanceSource: true,
+        isManagerOfParticipantIds: new Set(),
+      };
     }
 
     // Check 2: Host
     if (meeting.hostId === currentUserId) {
-      return { canViewAttendanceSource: true, isManagerOfParticipantIds: new Set() };
+      return {
+        canViewAttendanceSource: true,
+        isManagerOfParticipantIds: new Set(),
+      };
     }
 
     // Check 3-4: Participant (including host role)
@@ -115,28 +131,43 @@ export class AttendanceService {
         meetingId: meeting.id,
         userId: currentUserId,
         invitationStatus: Not(InvitationStatus.DECLINED),
-        },
+      },
     });
 
     if (participant) {
       if (participant.participantRole === ParticipantRole.HOST) {
-        return { canViewAttendanceSource: true, isManagerOfParticipantIds: new Set() };
+        return {
+          canViewAttendanceSource: true,
+          isManagerOfParticipantIds: new Set(),
+        };
       }
       // Basic participant access - check for manager scope
-      const managedIds = await this.getDirectReportIds(currentUserId, meeting.id);
-      return { canViewAttendanceSource: managedIds.size > 0, isManagerOfParticipantIds: managedIds };
+      const managedIds = await this.getDirectReportIds(
+        currentUserId,
+        meeting.id,
+      );
+      return {
+        canViewAttendanceSource: managedIds.size > 0,
+        isManagerOfParticipantIds: managedIds,
+      };
     }
 
     // Check 5: Admin roles (simplified - check user_roles)
     const isAdmin = await this.checkIsAdmin(currentUserId);
     if (isAdmin) {
-      return { canViewAttendanceSource: true, isManagerOfParticipantIds: new Set() };
+      return {
+        canViewAttendanceSource: true,
+        isManagerOfParticipantIds: new Set(),
+      };
     }
 
     // Check 6: Direct manager (1 level)
     const managedIds = await this.getDirectReportIds(currentUserId, meeting.id);
     if (managedIds.size > 0) {
-      return { canViewAttendanceSource: true, isManagerOfParticipantIds: managedIds };
+      return {
+        canViewAttendanceSource: true,
+        isManagerOfParticipantIds: managedIds,
+      };
     }
 
     // No access
@@ -171,8 +202,10 @@ export class AttendanceService {
     // Simplified check: query user_roles for admin role
     // In production, this should check permissions via permission service
     try {
-      const { UserRoleEntity } = await import('../../accounts/entities/user-role.entity.js');
-      const { RoleEntity } = await import('../../accounts/entities/role.entity.js');
+      const { UserRoleEntity } =
+        await import('../../accounts/entities/user-role.entity.js');
+      const { RoleEntity } =
+        await import('../../accounts/entities/role.entity.js');
       const { DataSource } = await import('typeorm');
       // Use fallback: check if user has business_admin or system_admin role
       const adminRoleCodes = ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
@@ -184,7 +217,9 @@ export class AttendanceService {
   }
 
   // ===== T014: getParticipantsWithAttendance =====
-  async getParticipantsWithAttendance(meetingId: string): Promise<ParticipantWithUser[]> {
+  async getParticipantsWithAttendance(
+    meetingId: string,
+  ): Promise<ParticipantWithUser[]> {
     const participants = await this.participantRepo.find({
       where: {
         meetingId,
@@ -248,7 +283,10 @@ export class AttendanceService {
     }
 
     // 2. left_early
-    if (record.leftEarly || record.attendanceStatus === AttendanceRecordStatus.LEFT_EARLY) {
+    if (
+      record.leftEarly ||
+      record.attendanceStatus === AttendanceRecordStatus.LEFT_EARLY
+    ) {
       return {
         attendanceStatus: 'left_early',
         isLate: record.isLate,
@@ -337,7 +375,9 @@ export class AttendanceService {
 
     const checkedInCount = presentCount + lateCount + leftEarlyCount;
     const attendanceRate =
-      totalParticipants > 0 ? Math.round((checkedInCount / totalParticipants) * 100) : 0;
+      totalParticipants > 0
+        ? Math.round((checkedInCount / totalParticipants) * 100)
+        : 0;
 
     return {
       scope: 'internal_participants_only',
@@ -345,8 +385,12 @@ export class AttendanceService {
       checkedInCount,
       presentCount,
       lateCount,
-      absentCount: meetingStatus === MeetingStatus.COMPLETED ? absentCount + notCheckedInCount : 0,
-      notCheckedInCount: meetingStatus !== MeetingStatus.COMPLETED ? notCheckedInCount : 0,
+      absentCount:
+        meetingStatus === MeetingStatus.COMPLETED
+          ? absentCount + notCheckedInCount
+          : 0,
+      notCheckedInCount:
+        meetingStatus !== MeetingStatus.COMPLETED ? notCheckedInCount : 0,
       attendanceRate,
     };
   }
@@ -387,7 +431,9 @@ export class AttendanceService {
     let filtered = [...items];
 
     if (query.status && query.status !== 'all') {
-      filtered = filtered.filter((item) => item.attendanceStatus === query.status);
+      filtered = filtered.filter(
+        (item) => item.attendanceStatus === query.status,
+      );
     }
 
     if (query.search) {
@@ -487,7 +533,11 @@ export class AttendanceService {
       // Step 8: Apply pagination
       const page = query.page ?? 1;
       const pageSize = query.pageSize ?? 20;
-      const { items: pagedItems, meta } = this.applyPagination(items, page, pageSize);
+      const { items: pagedItems, meta } = this.applyPagination(
+        items,
+        page,
+        pageSize,
+      );
 
       // Build response
       return {
@@ -518,7 +568,10 @@ export class AttendanceService {
       ) {
         throw error;
       }
-      this.logger.error('Failed to get attendance list', (error as Error).stack);
+      this.logger.error(
+        'Failed to get attendance list',
+        (error as Error).stack,
+      );
       throw new InternalServerErrorException({
         message: 'An internal error occurred while retrieving attendance list',
         error: 'INTERNAL_ERROR',

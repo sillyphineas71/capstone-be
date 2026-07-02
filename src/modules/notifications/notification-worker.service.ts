@@ -5,8 +5,14 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { MailService } from '../mail/mail.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
-import { BackgroundJobEntity, BackgroundJobStatus } from '../administration/entities/background-job.entity.js';
-import { NotificationEntity, NotificationDeliveryStatus } from './entities/notification.entity.js';
+import {
+  BackgroundJobEntity,
+  BackgroundJobStatus,
+} from '../administration/entities/background-job.entity.js';
+import {
+  NotificationEntity,
+  NotificationDeliveryStatus,
+} from './entities/notification.entity.js';
 
 interface SendEmailJobData {
   notificationId: string;
@@ -33,18 +39,25 @@ export class NotificationWorkerService extends WorkerHost {
     super();
   }
 
-  async process(job: Job<SendEmailJobData>): Promise<{ sent: boolean; notificationId: string }> {
+  async process(
+    job: Job<SendEmailJobData>,
+  ): Promise<{ sent: boolean; notificationId: string }> {
     if (job.name !== 'send-email') {
-      this.logger.warn(`[Worker] Unknown job type "${job.name}" — skipping`);
+      this.logger.warn(`[Worker] Unknown job type "${job.name}" ï¿½ skipping`);
       return { sent: false, notificationId: '' };
     }
 
-    const { notificationId, backgroundJobId, toEmails, subject, content } = job.data;
+    const { notificationId, backgroundJobId, toEmails, subject, content } =
+      job.data;
 
-    const notification = await this.notificationRepo.findOne({ where: { id: notificationId } });
+    const notification = await this.notificationRepo.findOne({
+      where: { id: notificationId },
+    });
 
     if (!notification) {
-      this.logger.warn(`[Worker] Notification ${notificationId} not found — discarding job ${job.id}`);
+      this.logger.warn(
+        `[Worker] Notification ${notificationId} not found ï¿½ discarding job ${job.id}`,
+      );
       await this.backgroundJobsService.markCompleted(backgroundJobId);
       return { sent: false, notificationId };
     }
@@ -54,7 +67,9 @@ export class NotificationWorkerService extends WorkerHost {
       notification.deliveryStatus === NotificationDeliveryStatus.FAILED ||
       notification.deliveryStatus === NotificationDeliveryStatus.CANCELLED
     ) {
-      this.logger.warn(`[Worker] Notification ${notificationId} already ${notification.deliveryStatus} — skipping`);
+      this.logger.warn(
+        `[Worker] Notification ${notificationId} already ${notification.deliveryStatus} ï¿½ skipping`,
+      );
       await this.backgroundJobsService.markCompleted(backgroundJobId);
       return { sent: false, notificationId };
     }
@@ -80,10 +95,14 @@ export class NotificationWorkerService extends WorkerHost {
     await this.notificationRepo.update(notificationId, {
       deliveryStatus: NotificationDeliveryStatus.SENT,
       sentAt: new Date(),
-      deliveryResultJson: result.messageId ? { messageId: result.messageId } : null,
+      deliveryResultJson: result.messageId
+        ? { messageId: result.messageId }
+        : null,
     });
 
-    this.logger.log(`[Worker] Email sent — notification ${notificationId}, job ${job.id}`);
+    this.logger.log(
+      `[Worker] Email sent ï¿½ notification ${notificationId}, job ${job.id}`,
+    );
     return { sent: true, notificationId };
   }
 
@@ -96,7 +115,10 @@ export class NotificationWorkerService extends WorkerHost {
   }
 
   @OnWorkerEvent('failed')
-  async onJobFailed(job: Job<SendEmailJobData> | undefined, error: Error): Promise<void> {
+  async onJobFailed(
+    job: Job<SendEmailJobData> | undefined,
+    error: Error,
+  ): Promise<void> {
     if (!job || job.name !== 'send-email') return;
     const { notificationId, backgroundJobId } = job.data;
     const maxAttempts = job.opts.attempts || 3;
@@ -107,12 +129,21 @@ export class NotificationWorkerService extends WorkerHost {
         deliveryStatus: NotificationDeliveryStatus.FAILED,
         failureReason: error.message,
       });
-      await this.backgroundJobsService.markFailed(backgroundJobId, error.message);
-      this.logger.error(`[Worker] Job ${job.id} FAILED after ${job.attemptsMade} attempts — notification ${notificationId}: ${error.message}`);
+      await this.backgroundJobsService.markFailed(
+        backgroundJobId,
+        error.message,
+      );
+      this.logger.error(
+        `[Worker] Job ${job.id} FAILED after ${job.attemptsMade} attempts ï¿½ notification ${notificationId}: ${error.message}`,
+      );
     } else {
       await this.backgroundJobsService.markRetrying(backgroundJobId);
-      await this.bgJobRepo.update(backgroundJobId, { errorMessage: error.message });
-      this.logger.warn(`[Worker] Job ${job.id} failed (attempt ${job.attemptsMade}/${maxAttempts}) — will retry: ${error.message}`);
+      await this.bgJobRepo.update(backgroundJobId, {
+        errorMessage: error.message,
+      });
+      this.logger.warn(
+        `[Worker] Job ${job.id} failed (attempt ${job.attemptsMade}/${maxAttempts}) ï¿½ will retry: ${error.message}`,
+      );
     }
   }
 }

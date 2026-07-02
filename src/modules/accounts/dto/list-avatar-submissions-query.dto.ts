@@ -1,9 +1,23 @@
-﻿import { IsIn, IsOptional, IsInt, Min, Max, IsUUID, MinLength, MaxLength, Matches } from 'class-validator';
+﻿import {
+  IsIn,
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+  IsUUID,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 const SORT_BY_WHITELIST = [
-  'submittedAt', 'userFullName', 'employeeCode',
-  'departmentName', 'status', 'qualityScore',
+  'submittedAt',
+  'userFullName',
+  'employeeCode',
+  'departmentName',
+  'status',
+  'qualityScore',
 ] as const;
 
 const STATUS_FILTER_VALUES = ['pending_review', 'rejected', 'active'] as const;
@@ -32,7 +46,8 @@ export class ListAvatarSubmissionsQueryDto {
 
   @IsOptional()
   @IsIn(SORT_BY_WHITELIST, {
-    message: 'sortBy must be one of: submittedAt, userFullName, employeeCode, departmentName, status, qualityScore',
+    message:
+      'sortBy must be one of: submittedAt, userFullName, employeeCode, departmentName, status, qualityScore',
   })
   sortBy?: string;
 

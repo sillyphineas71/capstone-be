@@ -493,14 +493,23 @@ describe('MeetingsController', () => {
     it('[T039] should return 200 with correct response structure', async () => {
       const mockResponse = {
         items: [],
-        range: { view: 'week', from: '2026-06-08T00:00:00.000Z', to: '2026-06-15T00:00:00.000Z', timezone: 'Asia/Ho_Chi_Minh' },
+        range: {
+          view: 'week',
+          from: '2026-06-08T00:00:00.000Z',
+          to: '2026-06-15T00:00:00.000Z',
+          timezone: 'Asia/Ho_Chi_Minh',
+        },
         empty: true,
       };
       service.getMySchedule.mockResolvedValue(mockResponse);
 
       const result = await controller.getMySchedule(
         { userId: 'auth-user-uuid' },
-        { view: 'week', from: '2026-06-08T00:00:00+07:00', to: '2026-06-15T00:00:00+07:00' } as any,
+        {
+          view: 'week',
+          from: '2026-06-08T00:00:00+07:00',
+          to: '2026-06-15T00:00:00+07:00',
+        } as any,
       );
 
       expect(result.success).toBe(true);
@@ -516,11 +525,13 @@ describe('MeetingsController', () => {
 
     it('[T041] should throw 403 for non-participant', async () => {
       const meetingId = '550e8400-e29b-41d4-a716-446655440000';
-      const forbiddenError = new (require('@nestjs/common').ForbiddenException)({
-        success: false,
-        message: 'Ban khong co quyen xem cuoc hop nay',
-        error: { code: 'FORBIDDEN_NOT_PARTICIPANT', details: { meetingId } },
-      });
+      const forbiddenError = new (require('@nestjs/common').ForbiddenException)(
+        {
+          success: false,
+          message: 'Ban khong co quyen xem cuoc hop nay',
+          error: { code: 'FORBIDDEN_NOT_PARTICIPANT', details: { meetingId } },
+        },
+      );
       service.getMyScheduleDetail.mockRejectedValue(forbiddenError);
 
       await expect(
@@ -541,10 +552,7 @@ describe('MeetingsController', () => {
       service.getMyScheduleDetail.mockRejectedValue(notFoundError);
 
       await expect(
-        controller.getMyScheduleDetail(
-          { userId: 'auth-user-uuid' },
-          meetingId,
-        ),
+        controller.getMyScheduleDetail({ userId: 'auth-user-uuid' }, meetingId),
       ).rejects.toThrow(require('@nestjs/common').NotFoundException);
     });
   });

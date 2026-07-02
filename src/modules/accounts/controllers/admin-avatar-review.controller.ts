@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Param, Query, Body, Req, UseGuards, UseFilters, UsePipes, ValidationPipe, HttpCode } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Query,
+  Body,
+  Req,
+  UseGuards,
+  UseFilters,
+  UsePipes,
+  ValidationPipe,
+  HttpCode,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../auth/guards/roles.guard.js';
@@ -27,15 +40,25 @@ export class AdminAvatarReviewController {
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(@Query() query: ListAvatarSubmissionsQueryDto) {
     const result = await this.service.listAvatarSubmissions(query);
-    return { success: true, message: 'Avatar submissions retrieved successfully', ...result };
+    return {
+      success: true,
+      message: 'Avatar submissions retrieved successfully',
+      ...result,
+    };
   }
 
   @Get(':faceProfileId')
   @RequireRoles('SYSTEM_ADMIN')
   @RequirePermissions('account.avatar.review')
-  async detail(@Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string) {
+  async detail(
+    @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
+  ) {
     const data = await this.service.getAvatarSubmissionDetail(faceProfileId);
-    return { success: true, message: 'Avatar submission detail retrieved successfully', data };
+    return {
+      success: true,
+      message: 'Avatar submission detail retrieved successfully',
+      data,
+    };
   }
 
   @Get(':faceProfileId/download-url')
@@ -45,8 +68,15 @@ export class AdminAvatarReviewController {
     @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
     @Req() request: AuthenticatedRequest,
   ) {
-    const data = await this.service.getAvatarDownloadUrl(faceProfileId, request.user.userId);
-    return { success: true, message: 'Download URL generated successfully', data };
+    const data = await this.service.getAvatarDownloadUrl(
+      faceProfileId,
+      request.user.userId,
+    );
+    return {
+      success: true,
+      message: 'Download URL generated successfully',
+      data,
+    };
   }
 
   @Post(':faceProfileId/approve')
@@ -57,7 +87,10 @@ export class AdminAvatarReviewController {
     @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
     @Req() request: AuthenticatedRequest,
   ) {
-    const data = await this.service.approveAvatarSubmission(faceProfileId, request.user.userId);
+    const data = await this.service.approveAvatarSubmission(
+      faceProfileId,
+      request.user.userId,
+    );
     return { success: true, message: 'Avatar da duoc duyet thanh cong', data };
   }
 
@@ -71,7 +104,11 @@ export class AdminAvatarReviewController {
     @Body() dto: RejectAvatarSubmissionDto,
     @Req() request: AuthenticatedRequest,
   ) {
-    const data = await this.service.rejectAvatarSubmission(faceProfileId, dto.reason, request.user.userId);
+    const data = await this.service.rejectAvatarSubmission(
+      faceProfileId,
+      dto.reason,
+      request.user.userId,
+    );
     return { success: true, message: 'Avatar da bi tu choi', data };
   }
 }

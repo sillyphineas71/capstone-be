@@ -19,8 +19,13 @@ import { StorageModule } from '../storage/storage.module.js';
  * Không trả về secret hoặc config chi tiết trong response.
  */
 @Module({
-  imports: [TerminusModule, ConfigModule, TypeOrmModule, RedisModule, StorageModule],
+  imports: [
+    TerminusModule,
+    ConfigModule,
+    TypeOrmModule,
+    RedisModule,
+    StorageModule,
+  ],
   controllers: [HealthController],
 })
 export class HealthModule {}
-

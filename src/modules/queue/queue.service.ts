@@ -37,27 +37,69 @@ export class QueueService {
   constructor(
     private readonly configService: ConfigService,
     @InjectQueue('QUEUE_AUTH_NAME') private readonly authQueue: Queue,
-    @InjectQueue('QUEUE_NOTIFICATION_NAME') private readonly notificationQueue: Queue,
-    @InjectQueue('QUEUE_ACCOUNT_IMPORT_NAME') private readonly accountImportQueue: Queue,
-    @InjectQueue('QUEUE_MEDIA_PROCESSING_NAME') private readonly mediaProcessingQueue: Queue,
-    @InjectQueue('QUEUE_TRANSCRIPTION_NAME') private readonly transcriptionQueue: Queue,
-    @InjectQueue('QUEUE_REPORT_EXPORT_NAME') private readonly reportExportQueue: Queue,
-    @InjectQueue('QUEUE_MINUTES_EXPORT_NAME') private readonly minutesExportQueue: Queue,
+    @InjectQueue('QUEUE_NOTIFICATION_NAME')
+    private readonly notificationQueue: Queue,
+    @InjectQueue('QUEUE_ACCOUNT_IMPORT_NAME')
+    private readonly accountImportQueue: Queue,
+    @InjectQueue('QUEUE_MEDIA_PROCESSING_NAME')
+    private readonly mediaProcessingQueue: Queue,
+    @InjectQueue('QUEUE_TRANSCRIPTION_NAME')
+    private readonly transcriptionQueue: Queue,
+    @InjectQueue('QUEUE_REPORT_EXPORT_NAME')
+    private readonly reportExportQueue: Queue,
+    @InjectQueue('QUEUE_MINUTES_EXPORT_NAME')
+    private readonly minutesExportQueue: Queue,
     @InjectQueue('QUEUE_SCHEDULER_NAME') private readonly schedulerQueue: Queue,
   ) {
-    this.defaultAttempts = this.configService.get<number>('BULL_DEFAULT_ATTEMPTS', 3);
-    this.defaultBackoffDelay = this.configService.get<number>('BULL_DEFAULT_BACKOFF_DELAY_MS', 5000);
+    this.defaultAttempts = this.configService.get<number>(
+      'BULL_DEFAULT_ATTEMPTS',
+      3,
+    );
+    this.defaultBackoffDelay = this.configService.get<number>(
+      'BULL_DEFAULT_BACKOFF_DELAY_MS',
+      5000,
+    );
 
     // Build map từ env queue name → Queue instance
     this.queueMap = new Map<string, Queue>([
       [this.configService.get<string>('QUEUE_AUTH', 'auth'), this.authQueue],
-      [this.configService.get<string>('QUEUE_NOTIFICATION', 'notification'), this.notificationQueue],
-      [this.configService.get<string>('QUEUE_ACCOUNT_IMPORT', 'account-import'), this.accountImportQueue],
-      [this.configService.get<string>('QUEUE_MEDIA_PROCESSING', 'media-processing'), this.mediaProcessingQueue],
-      [this.configService.get<string>('QUEUE_TRANSCRIPTION', 'transcription'), this.transcriptionQueue],
-      [this.configService.get<string>('QUEUE_REPORT_EXPORT', 'report-export'), this.reportExportQueue],
-      [this.configService.get<string>('QUEUE_MINUTES_EXPORT', 'minutes-export'), this.minutesExportQueue],
-      [this.configService.get<string>('QUEUE_SCHEDULER', 'scheduler'), this.schedulerQueue],
+      [
+        this.configService.get<string>('QUEUE_NOTIFICATION', 'notification'),
+        this.notificationQueue,
+      ],
+      [
+        this.configService.get<string>(
+          'QUEUE_ACCOUNT_IMPORT',
+          'account-import',
+        ),
+        this.accountImportQueue,
+      ],
+      [
+        this.configService.get<string>(
+          'QUEUE_MEDIA_PROCESSING',
+          'media-processing',
+        ),
+        this.mediaProcessingQueue,
+      ],
+      [
+        this.configService.get<string>('QUEUE_TRANSCRIPTION', 'transcription'),
+        this.transcriptionQueue,
+      ],
+      [
+        this.configService.get<string>('QUEUE_REPORT_EXPORT', 'report-export'),
+        this.reportExportQueue,
+      ],
+      [
+        this.configService.get<string>(
+          'QUEUE_MINUTES_EXPORT',
+          'minutes-export',
+        ),
+        this.minutesExportQueue,
+      ],
+      [
+        this.configService.get<string>('QUEUE_SCHEDULER', 'scheduler'),
+        this.schedulerQueue,
+      ],
     ]);
   }
 
@@ -77,7 +119,9 @@ export class QueueService {
   ): Promise<string | undefined> {
     const queue = this.queueMap.get(queueName);
     if (!queue) {
-      this.logger.error(`QueueService.addJob: queue "${queueName}" not found. Available: ${Array.from(this.queueMap.keys()).join(', ')}`);
+      this.logger.error(
+        `QueueService.addJob: queue "${queueName}" not found. Available: ${Array.from(this.queueMap.keys()).join(', ')}`,
+      );
       throw new Error(`Queue "${queueName}" is not registered.`);
     }
 
@@ -91,7 +135,9 @@ export class QueueService {
     };
 
     const job = await queue.add(jobName, data, jobOptions);
-    this.logger.debug(`[QueueService] Enqueued job "${jobName}" on queue "${queueName}" — jobId: ${job.id}`);
+    this.logger.debug(
+      `[QueueService] Enqueued job "${jobName}" on queue "${queueName}" — jobId: ${job.id}`,
+    );
     return job.id;
   }
 

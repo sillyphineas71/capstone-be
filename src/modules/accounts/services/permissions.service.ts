@@ -129,7 +129,13 @@ export class PermissionsService {
       actionType: 'UPDATE_PERMISSION',
       entityType: 'permission',
       entityId: saved.id,
-      metadataJson: { oldValue, newValue: { permissionName: saved.permissionName, description: saved.description } },
+      metadataJson: {
+        oldValue,
+        newValue: {
+          permissionName: saved.permissionName,
+          description: saved.description,
+        },
+      },
     });
 
     return this.toResponse(saved);

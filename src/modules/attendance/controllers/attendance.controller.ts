@@ -40,11 +40,19 @@ export class AttendanceController {
   )
   @ApiOperation({ summary: 'Get meeting attendance list (UC-APM-02)' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
-  @ApiQuery({ name: 'status', required: false, enum: ['all', 'present', 'late', 'absent', 'not_checked_in', 'left_early'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['all', 'present', 'late', 'absent', 'not_checked_in', 'left_early'],
+  })
   @ApiQuery({ name: 'search', required: false, type: 'string' })
   @ApiQuery({ name: 'page', required: false, type: 'number' })
   @ApiQuery({ name: 'pageSize', required: false, type: 'number' })
-  @ApiResponse({ status: 200, description: 'Attendance list retrieved successfully', type: AttendanceListResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Attendance list retrieved successfully',
+    type: AttendanceListResponseDto,
+  })
   @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'PERMISSION_DENIED' })

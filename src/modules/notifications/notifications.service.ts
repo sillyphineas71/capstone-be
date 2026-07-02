@@ -60,13 +60,18 @@ export class NotificationsService {
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
   ) {
-    this.notificationQueueName = this.configService.get<string>('QUEUE_NOTIFICATION', 'notification');
+    this.notificationQueueName = this.configService.get<string>(
+      'QUEUE_NOTIFICATION',
+      'notification',
+    );
   }
 
   /**
    * Tạo notification record với status=draft.
    */
-  async createNotification(dto: CreateNotificationDto): Promise<NotificationEntity> {
+  async createNotification(
+    dto: CreateNotificationDto,
+  ): Promise<NotificationEntity> {
     const notification = this.repo.create({
       notificationType: dto.notificationType,
       channel: dto.channel,
@@ -87,7 +92,9 @@ export class NotificationsService {
       readCount: 0,
     });
     const saved = await this.repo.save(notification);
-    this.logger.debug(`[Notifications] Created notification ${saved.id} — type: ${saved.notificationType}`);
+    this.logger.debug(
+      `[Notifications] Created notification ${saved.id} — type: ${saved.notificationType}`,
+    );
     return saved;
   }
 
@@ -143,15 +150,22 @@ export class NotificationsService {
       // Nếu enqueue thất bại, mark notification và background job là failed
       const message = error instanceof Error ? error.message : 'Unknown error';
       await this.markFailed(notification.id, `Failed to enqueue: ${message}`);
-      await this.backgroundJobsService.markFailed(bgJob.id, `Failed to enqueue: ${message}`);
-      this.logger.error(`[Notifications] Failed to enqueue email notification: ${message}`);
+      await this.backgroundJobsService.markFailed(
+        bgJob.id,
+        `Failed to enqueue: ${message}`,
+      );
+      this.logger.error(
+        `[Notifications] Failed to enqueue email notification: ${message}`,
+      );
       return { notification };
     }
 
     // 4. Update notification status=queued
     await this.markQueued(notification.id);
 
-    this.logger.log(`[Notifications] Enqueued email notification ${notification.id} → BullMQ job ${bullJobId}`);
+    this.logger.log(
+      `[Notifications] Enqueued email notification ${notification.id} → BullMQ job ${bullJobId}`,
+    );
     return { notification, jobId: bullJobId };
   }
 
@@ -159,7 +173,9 @@ export class NotificationsService {
    * Cập nhật trạng thái notification → queued.
    */
   async markQueued(id: string): Promise<void> {
-    await this.repo.update(id, { deliveryStatus: NotificationDeliveryStatus.QUEUED });
+    await this.repo.update(id, {
+      deliveryStatus: NotificationDeliveryStatus.QUEUED,
+    });
   }
 
   /**

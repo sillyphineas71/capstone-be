@@ -67,7 +67,9 @@ describe('CheckParticipantConflictDto', () => {
   it('should fail when participantUserIds exceeds 50', async () => {
     const dto = Object.assign(new CheckParticipantConflictDto(), {
       ...validDto,
-      participantUserIds: Array(51).fill('550e8400-e29b-41d4-a716-446655440000'),
+      participantUserIds: Array(51).fill(
+        '550e8400-e29b-41d4-a716-446655440000',
+      ),
     });
     const errors = await validate(dto);
     expect(errors.length).toBeGreaterThan(0);

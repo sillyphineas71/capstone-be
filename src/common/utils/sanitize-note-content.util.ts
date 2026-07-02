@@ -11,20 +11,32 @@ export function sanitizeNoteContent(input: string): string {
   let result = input;
 
   // Remove <script> tags (including content)
-  result = result.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  result = result.replace(
+    /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+    '',
+  );
 
   // Remove <iframe> tags (including content)
-  result = result.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+  result = result.replace(
+    /<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi,
+    '',
+  );
 
   // Remove event handlers: on{event}=...
   result = result.replace(/\s+on\w+\s*=\s*["\'][^"\']*["\']/gi, '');
   result = result.replace(/\s+on\w+\s*=\s*\S+/gi, '');
 
   // Remove javascript: data: vbscript: from href/src by removing the entire attribute
-  result = result.replace(/\s+(?:href|src|action)\s*=\s*["\']\s*(?:javascript|data|vbscript)\s*:[^"\']*["\']/gi, '');
+  result = result.replace(
+    /\s+(?:href|src|action)\s*=\s*["\']\s*(?:javascript|data|vbscript)\s*:[^"\']*["\']/gi,
+    '',
+  );
 
   // Remove <style> tags (including content)
-  result = result.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+  result = result.replace(
+    /<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi,
+    '',
+  );
 
   return result.trim();
 }

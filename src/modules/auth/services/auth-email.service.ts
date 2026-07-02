@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { MailService } from '../../mail/mail.service';
 
 @Injectable()
@@ -27,7 +31,11 @@ export class AuthEmailService {
       'He thong Smart Meeting Management',
     ].join('\n');
 
-    const result = await this.mailService.sendMail({ to: email, subject, text });
+    const result = await this.mailService.sendMail({
+      to: email,
+      subject,
+      text,
+    });
 
     if (!result.success) {
       this.logger.error(

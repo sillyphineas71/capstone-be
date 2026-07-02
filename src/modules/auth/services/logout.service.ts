@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { RedisService } from '../../redis/redis.service';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { Request } from 'express';

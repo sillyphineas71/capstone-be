@@ -21,7 +21,11 @@ export class AdminAvatarReviewHttpExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
     const status = exception.getStatus();
     const body = exception.getResponse() as
-      | { code?: string; message?: string; error?: { code?: string; details?: Record<string, unknown> } }
+      | {
+          code?: string;
+          message?: string;
+          error?: { code?: string; details?: Record<string, unknown> };
+        }
       | string;
 
     let message: string;

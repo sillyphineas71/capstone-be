@@ -30,28 +30,40 @@ describe('CreateRoomDto Validation', () => {
     });
 
     it('should reject roomCode with lowercase letters', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomCode: 'r301' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomCode: 'r301',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should reject roomCode with special characters', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomCode: 'ROOM_101' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomCode: 'ROOM_101',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should accept hyphenated roomCode', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomCode: 'A-B-C' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomCode: 'A-B-C',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomCode');
       expect(fieldErrors.length).toBe(0);
     });
 
     it('should reject roomCode shorter than 3 chars', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomCode: 'AB' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomCode: 'AB',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomCode');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -107,14 +119,20 @@ describe('CreateRoomDto Validation', () => {
     });
 
     it('should reject capacity > 1000', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, capacity: 1001 });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        capacity: 1001,
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'capacity');
       expect(fieldErrors.length).toBeGreaterThan(0);
     });
 
     it('should reject non-integer capacity', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, capacity: 12.5 });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        capacity: 12.5,
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'capacity');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -137,7 +155,10 @@ describe('CreateRoomDto Validation', () => {
     });
 
     it('should accept capacity = 1000 (edge)', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, capacity: 1000 });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        capacity: 1000,
+      });
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     });
@@ -145,14 +166,20 @@ describe('CreateRoomDto Validation', () => {
 
   describe('roomType', () => {
     it('should accept valid roomType', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomType: 'board_room' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomType: 'board_room',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomType');
       expect(fieldErrors.length).toBe(0);
     });
 
     it('should reject invalid roomType', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, roomType: 'invalid_type' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        roomType: 'invalid_type',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'roomType');
       expect(fieldErrors.length).toBeGreaterThan(0);
@@ -182,7 +209,10 @@ describe('CreateRoomDto Validation', () => {
     });
 
     it('should reject non-boolean hasCamera', async () => {
-      const dto = plainToInstance(CreateRoomDto, { ...validDto, hasCamera: 'yes' });
+      const dto = plainToInstance(CreateRoomDto, {
+        ...validDto,
+        hasCamera: 'yes',
+      });
       const errors = await validate(dto);
       const fieldErrors = errors.filter((e) => e.property === 'hasCamera');
       expect(fieldErrors.length).toBeGreaterThan(0);

@@ -18,7 +18,8 @@ export class CreateRoomDto {
   @IsNotEmpty({ message: 'roomCode khong duoc de trong' })
   @Length(3, 80, { message: 'roomCode phai tu 3 den 80 ky tu' })
   @Matches(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/, {
-    message: 'roomCode chi chap nhan ky tu A-Z, 0-9 va dau gach ngang (-), viet hoa',
+    message:
+      'roomCode chi chap nhan ky tu A-Z, 0-9 va dau gach ngang (-), viet hoa',
   })
   @MaxLength(80, { message: 'roomCode toi da 80 ky tu' })
   roomCode: string;
@@ -48,7 +49,10 @@ export class CreateRoomDto {
   capacity: number;
 
   @IsOptional()
-  @IsEnum(RoomType, { message: 'roomType khong hop le. Gia tri: meeting_room, training_room, board_room, open_space' })
+  @IsEnum(RoomType, {
+    message:
+      'roomType khong hop le. Gia tri: meeting_room, training_room, board_room, open_space',
+  })
   roomType?: RoomType;
 
   @IsOptional()
@@ -67,6 +71,3 @@ export class CreateRoomDto {
   @IsBoolean({ message: 'allowRecording phai la boolean' })
   allowRecording?: boolean;
 }
-
-
-

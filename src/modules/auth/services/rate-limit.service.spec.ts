@@ -14,7 +14,10 @@ describe('RateLimitService', () => {
       get: jest.fn((key: string, defaultValue: number) => defaultValue),
     } as unknown as ConfigService);
 
-    service = new RateLimitService(authConfigService, redisService as unknown as RedisService);
+    service = new RateLimitService(
+      authConfigService,
+      redisService as unknown as RedisService,
+    );
   });
 
   it('allows attempts below threshold', async () => {

@@ -1,4 +1,7 @@
-import { AttendanceStatus, ParticipantState } from '../types/attendance-participant.type.js';
+import {
+  AttendanceStatus,
+  ParticipantState,
+} from '../types/attendance-participant.type.js';
 
 export class AttendanceParticipantDto {
   userId: string;

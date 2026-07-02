@@ -3,7 +3,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { AdminAvatarReviewService } from './admin-avatar-review.service.js';
-import { FaceProfileEntity, FaceProfileStatus } from '../entities/face-profile.entity.js';
+import {
+  FaceProfileEntity,
+  FaceProfileStatus,
+} from '../entities/face-profile.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 describe('AdminAvatarReviewService', () => {
@@ -72,7 +75,9 @@ describe('AdminAvatarReviewService', () => {
     }).compile();
 
     service = module.get<AdminAvatarReviewService>(AdminAvatarReviewService);
-    faceProfileRepo = module.get<Repository<FaceProfileEntity>>(getRepositoryToken(FaceProfileEntity));
+    faceProfileRepo = module.get<Repository<FaceProfileEntity>>(
+      getRepositoryToken(FaceProfileEntity),
+    );
     dataSource = module.get<DataSource>(DataSource);
   });
 

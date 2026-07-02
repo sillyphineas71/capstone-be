@@ -82,7 +82,9 @@ describe('MeetingsService.removeParticipant', () => {
       ...overrides,
     }) as MeetingParticipantEntity;
 
-  const mockAgenda = (overrides: Partial<MeetingAgendaEntity> = {}): MeetingAgendaEntity =>
+  const mockAgenda = (
+    overrides: Partial<MeetingAgendaEntity> = {},
+  ): MeetingAgendaEntity =>
     ({
       id: 'agenda-uuid',
       meetingId: 'meeting-uuid',
@@ -94,7 +96,11 @@ describe('MeetingsService.removeParticipant', () => {
   beforeAll(async () => {
     em = {
       findOne: jest.fn(),
-      find: jest.fn().mockResolvedValue([{ id: targetUser.userId, email: 'target@example.com' }]),
+      find: jest
+        .fn()
+        .mockResolvedValue([
+          { id: targetUser.userId, email: 'target@example.com' },
+        ]),
       create: jest.fn(),
       save: jest.fn(),
       delete: jest.fn(),
@@ -108,11 +114,15 @@ describe('MeetingsService.removeParticipant', () => {
 
     const mockNotificationsService = {
       createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
-      enqueueEmailNotification: jest.fn().mockResolvedValue({ notification: { id: 'notif-1' } }),
+      enqueueEmailNotification: jest
+        .fn()
+        .mockResolvedValue({ notification: { id: 'notif-1' } }),
     };
 
     const mockAuthzReadRepository = {
-      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: [], permissions: [] }),
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -351,14 +361,21 @@ describe('MeetingsService.removeParticipant', () => {
   });
 
   it('T028: should throw 409 when target is Host', async () => {
-    const meeting = mockMeeting({ hostId: hostUser.userId, organizerId: authUser.userId });
+    const meeting = mockMeeting({
+      hostId: hostUser.userId,
+      organizerId: authUser.userId,
+    });
 
     dataSource.getRepository.mockImplementation((entity) => {
       if (entity === MeetingEntity) {
         return { findOne: jest.fn().mockResolvedValue(meeting) };
       }
       if (entity === MeetingParticipantEntity) {
-        return { findOne: jest.fn().mockResolvedValue(mockParticipant({ userId: hostUser.userId })) };
+        return {
+          findOne: jest
+            .fn()
+            .mockResolvedValue(mockParticipant({ userId: hostUser.userId })),
+        };
       }
       if (entity === MeetingAgendaEntity) {
         return { find: jest.fn().mockResolvedValue([]) };
@@ -385,7 +402,13 @@ describe('MeetingsService.removeParticipant', () => {
         return { findOne: jest.fn().mockResolvedValue(meeting) };
       }
       if (entity === MeetingParticipantEntity) {
-        return { findOne: jest.fn().mockResolvedValue(mockParticipant({ userId: organizerUser.userId })) };
+        return {
+          findOne: jest
+            .fn()
+            .mockResolvedValue(
+              mockParticipant({ userId: organizerUser.userId }),
+            ),
+        };
       }
       if (entity === MeetingAgendaEntity) {
         return { find: jest.fn().mockResolvedValue([]) };
@@ -483,7 +506,9 @@ describe('MeetingsService.removeParticipant', () => {
       }
       if (entity === MeetingParticipantEntity) {
         return {
-          findOne: jest.fn().mockResolvedValue(mockParticipant({ userId: hostUser.userId })),
+          findOne: jest
+            .fn()
+            .mockResolvedValue(mockParticipant({ userId: hostUser.userId })),
         };
       }
       if (entity === MeetingAgendaEntity) {

@@ -21,7 +21,8 @@ export async function seedCheckinAlertConfig(
         configValue: '5',
         valueType: 'number',
         configGroup: 'attendance',
-        description: 'Số phút dung sai sau meeting start trước khi gửi cảnh báo',
+        description:
+          'Số phút dung sai sau meeting start trước khi gửi cảnh báo',
       },
       {
         configKey: 'attendance.checkin_alert.scan_interval_seconds',
@@ -58,7 +59,13 @@ export async function seedCheckinAlertConfig(
         `INSERT INTO system_configs (config_key, config_value, value_type, config_group, description, is_active, version_no)
          VALUES ($1, $2, $3, $4, $5, true, 1)
          ON CONFLICT (config_key) DO NOTHING;`,
-        [cfg.configKey, cfg.configValue, cfg.valueType, cfg.configGroup, cfg.description],
+        [
+          cfg.configKey,
+          cfg.configValue,
+          cfg.valueType,
+          cfg.configGroup,
+          cfg.description,
+        ],
       );
     }
 

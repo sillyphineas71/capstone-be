@@ -31,7 +31,12 @@ export async function seedMeetingSessionStartPermission(
     }
 
     // Gán permission cho system roles: INTERNAL_USER, MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN
-    const roleCodes = ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
+    const roleCodes = [
+      'INTERNAL_USER',
+      'MANAGER',
+      'BUSINESS_ADMIN',
+      'SYSTEM_ADMIN',
+    ];
 
     for (const roleCode of roleCodes) {
       const roleResult = await queryRunner.query(

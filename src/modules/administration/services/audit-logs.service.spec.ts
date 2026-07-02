@@ -1,8 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { AuditLogsService, LogActionDto, LogEntityChangeDto } from './audit-logs.service.js';
-import { AuditLogEntity, AuditLogSeverity } from '../entities/audit-log.entity.js';
+import {
+  AuditLogsService,
+  LogActionDto,
+  LogEntityChangeDto,
+} from './audit-logs.service.js';
+import {
+  AuditLogEntity,
+  AuditLogSeverity,
+} from '../entities/audit-log.entity.js';
 
 describe('AuditLogsService', () => {
   let service: AuditLogsService;
@@ -22,12 +29,18 @@ describe('AuditLogsService', () => {
     }),
   });
 
-  const buildModule = async (enabled: boolean, failSafe: boolean): Promise<TestingModule> => {
+  const buildModule = async (
+    enabled: boolean,
+    failSafe: boolean,
+  ): Promise<TestingModule> => {
     return Test.createTestingModule({
       providers: [
         AuditLogsService,
         { provide: getRepositoryToken(AuditLogEntity), useValue: mockRepo },
-        { provide: ConfigService, useValue: mockConfigService(enabled, failSafe) },
+        {
+          provide: ConfigService,
+          useValue: mockConfigService(enabled, failSafe),
+        },
       ],
     }).compile();
   };

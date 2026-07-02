@@ -32,7 +32,12 @@ export async function seedMeetingNotePermissions(
 
     const createPermId = createResult[0]?.id;
     if (createPermId) {
-      const createRoleCodes = ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
+      const createRoleCodes = [
+        'INTERNAL_USER',
+        'MANAGER',
+        'BUSINESS_ADMIN',
+        'SYSTEM_ADMIN',
+      ];
       for (const roleCode of createRoleCodes) {
         const roleResult = await queryRunner.query(
           `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,
@@ -65,7 +70,12 @@ export async function seedMeetingNotePermissions(
 
     const readPermId = readResult[0]?.id;
     if (readPermId) {
-      const readRoleCodes = ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
+      const readRoleCodes = [
+        'INTERNAL_USER',
+        'MANAGER',
+        'BUSINESS_ADMIN',
+        'SYSTEM_ADMIN',
+      ];
       for (const roleCode of readRoleCodes) {
         const roleResult = await queryRunner.query(
           `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,

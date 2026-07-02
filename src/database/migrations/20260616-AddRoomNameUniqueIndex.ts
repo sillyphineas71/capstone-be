@@ -10,6 +10,8 @@ export class AddRoomNameUniqueIndex20260616 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query('DROP INDEX IF EXISTS ux_rooms_room_name_not_deleted;');
+    await queryRunner.query(
+      'DROP INDEX IF EXISTS ux_rooms_room_name_not_deleted;',
+    );
   }
 }

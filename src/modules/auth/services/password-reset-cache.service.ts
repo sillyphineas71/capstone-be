@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { PasswordResetOtpSession } from '../types/password-reset.types';
 import { RedisService } from '../../redis/redis.service';
 

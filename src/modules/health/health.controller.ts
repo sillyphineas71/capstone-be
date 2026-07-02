@@ -33,7 +33,10 @@ export class HealthController {
     private readonly configService: ConfigService,
     @InjectDataSource() private readonly dataSource: DataSource,
   ) {
-    const bullEnabled = this.configService.get<boolean>('HEALTH_CHECK_QUEUE', true);
+    const bullEnabled = this.configService.get<boolean>(
+      'HEALTH_CHECK_QUEUE',
+      true,
+    );
     if (bullEnabled) {
       this.initBullRedisClient();
     }
@@ -61,7 +64,9 @@ export class HealthController {
 
     // ─── DB check ──────────────────────────────────────────────────────────────
     if (this.configService.get<boolean>('HEALTH_CHECK_DB', true)) {
-      checks.push(() => this.typeOrm.pingCheck('database', { connection: this.dataSource }));
+      checks.push(() =>
+        this.typeOrm.pingCheck('database', { connection: this.dataSource }),
+      );
     }
 
     // ─── Redis check ───────────────────────────────────────────────────────────
@@ -77,7 +82,10 @@ export class HealthController {
     }
 
     // ─── BullMQ Redis check ────────────────────────────────────────────────────
-    if (this.configService.get<boolean>('HEALTH_CHECK_QUEUE', true) && this.bullRedisClient) {
+    if (
+      this.configService.get<boolean>('HEALTH_CHECK_QUEUE', true) &&
+      this.bullRedisClient
+    ) {
       checks.push(async () => {
         const pong = await this.bullRedisClient!.ping();
         return {

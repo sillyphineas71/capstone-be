@@ -4,7 +4,9 @@ import { probeTcp } from './rtsp-probe.util.js';
 describe('probeTcp (IOT-014)', () => {
   it('online: connect thành công tới server đang listen', async () => {
     const server = net.createServer();
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
     const port = (server.address() as net.AddressInfo).port;
 
     const result = await probeTcp('127.0.0.1', port, 2000);
@@ -16,7 +18,9 @@ describe('probeTcp (IOT-014)', () => {
   it('offline: cổng đóng (refuse) → offline', async () => {
     // Lấy 1 cổng rồi đóng ngay để chắc chắn không ai listen.
     const server = net.createServer();
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
     const port = (server.address() as net.AddressInfo).port;
     await new Promise<void>((resolve) => server.close(() => resolve()));
 

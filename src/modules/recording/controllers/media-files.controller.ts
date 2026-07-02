@@ -172,7 +172,6 @@ export class MediaFilesController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    
     const result = this.storageService.verifySignedDownloadToken(token);
     if (!result || result.mediaFileId !== fileId) {
       res.status(403).json({
@@ -193,12 +192,17 @@ export class MediaFilesController {
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', m.mimeType);
     const filename = m.path.split(/[\\/]/).pop();
-    res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="' + filename + '"',
+    );
     res.writeHead(200, { 'Content-Length': m.size });
     const { createReadStream } = require('fs');
     const stream = createReadStream(m.path);
-    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); });
+    stream.on('error', () => {
+      if (!res.headersSent) res.status(500).end();
+      else res.end();
+    });
     stream.pipe(res);
   }
 }
-

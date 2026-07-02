@@ -90,7 +90,10 @@ export class PermissionsController {
       throw new BadRequestException({
         success: false,
         message: 'permissionCode không thể thay đổi sau khi tạo.',
-        error: { code: 'VALIDATION_ERROR', details: { field: 'permissionCode' } },
+        error: {
+          code: 'VALIDATION_ERROR',
+          details: { field: 'permissionCode' },
+        },
       });
     }
 

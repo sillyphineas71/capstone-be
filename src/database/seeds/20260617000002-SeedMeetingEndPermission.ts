@@ -31,7 +31,12 @@ export async function seedMeetingEndPermission(
     }
 
     // Gan permission cho INTERNAL_USER, MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN
-    const roleCodes = ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
+    const roleCodes = [
+      'INTERNAL_USER',
+      'MANAGER',
+      'BUSINESS_ADMIN',
+      'SYSTEM_ADMIN',
+    ];
 
     for (const roleCode of roleCodes) {
       const roleResult = await queryRunner.query(
@@ -52,7 +57,8 @@ export async function seedMeetingEndPermission(
     const overrideCode = 'meeting.session.end.any';
     const overrideName = 'Ket thuc phien hop - tat ca';
     const overrideAction = 'session.end.any';
-    const overrideDesc = 'Cho phep Business Admin/SYSTEM_ADMIN ket thuc bat ky phien hop nao';
+    const overrideDesc =
+      'Cho phep Business Admin/SYSTEM_ADMIN ket thuc bat ky phien hop nao';
 
     const overrideResult = await queryRunner.query(
       `INSERT INTO permissions (permission_code, permission_name, module_code, action_code, description, is_active)

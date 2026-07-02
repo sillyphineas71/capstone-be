@@ -23,7 +23,8 @@ import { QueueService } from './queue.service.js';
         connection: {
           host: configService.get<string>('BULL_REDIS_HOST', 'localhost'),
           port: configService.get<number>('BULL_REDIS_PORT', 6379),
-          password: configService.get<string>('BULL_REDIS_PASSWORD', '') || undefined,
+          password:
+            configService.get<string>('BULL_REDIS_PASSWORD', '') || undefined,
           db: configService.get<number>('BULL_REDIS_DB', 1),
         },
         prefix: configService.get<string>('BULL_QUEUE_PREFIX', 'capstone'),
@@ -31,10 +32,19 @@ import { QueueService } from './queue.service.js';
           attempts: configService.get<number>('BULL_DEFAULT_ATTEMPTS', 3),
           backoff: {
             type: 'exponential',
-            delay: configService.get<number>('BULL_DEFAULT_BACKOFF_DELAY_MS', 5000),
+            delay: configService.get<number>(
+              'BULL_DEFAULT_BACKOFF_DELAY_MS',
+              5000,
+            ),
           },
-          removeOnComplete: configService.get<boolean>('BULL_REMOVE_ON_COMPLETE', true),
-          removeOnFail: configService.get<boolean>('BULL_REMOVE_ON_FAIL', false),
+          removeOnComplete: configService.get<boolean>(
+            'BULL_REMOVE_ON_COMPLETE',
+            true,
+          ),
+          removeOnFail: configService.get<boolean>(
+            'BULL_REMOVE_ON_FAIL',
+            false,
+          ),
         },
       }),
     }),
@@ -44,42 +54,58 @@ import { QueueService } from './queue.service.js';
       {
         name: 'QUEUE_AUTH_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_AUTH', 'auth') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_AUTH', 'auth'),
+        }),
       },
       {
         name: 'QUEUE_NOTIFICATION_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_NOTIFICATION', 'notification') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_NOTIFICATION', 'notification'),
+        }),
       },
       {
         name: 'QUEUE_ACCOUNT_IMPORT_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_ACCOUNT_IMPORT', 'account-import') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_ACCOUNT_IMPORT', 'account-import'),
+        }),
       },
       {
         name: 'QUEUE_MEDIA_PROCESSING_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_MEDIA_PROCESSING', 'media-processing') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_MEDIA_PROCESSING', 'media-processing'),
+        }),
       },
       {
         name: 'QUEUE_TRANSCRIPTION_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_TRANSCRIPTION', 'transcription') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_TRANSCRIPTION', 'transcription'),
+        }),
       },
       {
         name: 'QUEUE_REPORT_EXPORT_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_REPORT_EXPORT', 'report-export') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_REPORT_EXPORT', 'report-export'),
+        }),
       },
       {
         name: 'QUEUE_MINUTES_EXPORT_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_MINUTES_EXPORT', 'minutes-export') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_MINUTES_EXPORT', 'minutes-export'),
+        }),
       },
       {
         name: 'QUEUE_SCHEDULER_NAME',
         inject: [ConfigService],
-        useFactory: (cs: ConfigService) => ({ name: cs.get<string>('QUEUE_SCHEDULER', 'scheduler') }),
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>('QUEUE_SCHEDULER', 'scheduler'),
+        }),
       },
     ),
   ],

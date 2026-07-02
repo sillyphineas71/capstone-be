@@ -8,7 +8,16 @@ class MeetingSummaryDto {
   @ApiProperty()
   title: string;
 
-  @ApiProperty({ enum: ['draft', 'pending_approval', 'scheduled', 'in_progress', 'completed', 'cancelled'] })
+  @ApiProperty({
+    enum: [
+      'draft',
+      'pending_approval',
+      'scheduled',
+      'in_progress',
+      'completed',
+      'cancelled',
+    ],
+  })
   status: string;
 
   @ApiProperty({ format: 'date-time' })

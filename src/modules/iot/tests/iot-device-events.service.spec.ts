@@ -27,7 +27,10 @@ describe('IotDeviceEventsService (Normalization)', () => {
     service = module.get<IotDeviceEventsService>(IotDeviceEventsService);
   });
 
-  const getBaseEvent = (eventType = 'face_verify', processedStatus = 'received'): Partial<IoTDeviceEventEntity> => {
+  const getBaseEvent = (
+    eventType = 'face_verify',
+    processedStatus = 'received',
+  ): Partial<IoTDeviceEventEntity> => {
     return {
       id: 'mock-event-id',
       deviceId: 'mock-device-id',
@@ -58,12 +61,16 @@ describe('IotDeviceEventsService (Normalization)', () => {
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    
+
     expect(result.processedStatus).toBe('processed');
     expect(result.errorMessage).toBeNull();
     expect(result.payloadJson.normalized_event).toBeDefined();
-    expect(result.payloadJson.normalized_event.recognition_result).toBe('recognized');
-    expect(result.payloadJson.normalized_event.person.device_person_id).toBe('EMP123');
+    expect(result.payloadJson.normalized_event.recognition_result).toBe(
+      'recognized',
+    );
+    expect(result.payloadJson.normalized_event.person.device_person_id).toBe(
+      'EMP123',
+    );
   });
 
   it('2. Test normalize face_stranger thành công dù thiếu person id/name', async () => {
@@ -72,10 +79,14 @@ describe('IotDeviceEventsService (Normalization)', () => {
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    
+
     expect(result.processedStatus).toBe('processed');
-    expect(result.payloadJson.normalized_event.recognition_result).toBe('stranger');
-    expect(result.payloadJson.normalized_event.person.device_person_id).toBeNull();
+    expect(result.payloadJson.normalized_event.recognition_result).toBe(
+      'stranger',
+    );
+    expect(
+      result.payloadJson.normalized_event.person.device_person_id,
+    ).toBeNull();
   });
 
   it('3. Test processedStatus = received đổi thành processed', async () => {
@@ -92,7 +103,9 @@ describe('IotDeviceEventsService (Normalization)', () => {
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
     expect(result.payloadJson.normalized_event).toBeDefined();
-    expect(result.payloadJson.normalized_event.normalized_event_version).toBe(1);
+    expect(result.payloadJson.normalized_event.normalized_event_version).toBe(
+      1,
+    );
   });
 
   it('5. Test raw fields không bị sửa', async () => {
@@ -113,25 +126,34 @@ describe('IotDeviceEventsService (Normalization)', () => {
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    expect(result.payloadJson.normalized_event.person.device_person_id).toBe('ID123');
+    expect(result.payloadJson.normalized_event.person.device_person_id).toBe(
+      'ID123',
+    );
   });
 
   it('7. Test tolerant alias extraction với nested object', async () => {
     const rawEvent = getBaseEvent();
-    rawEvent.payloadJson.raw_payload_sample = { data: { person_id: 'NESTED123' } };
+    rawEvent.payloadJson.raw_payload_sample = {
+      data: { person_id: 'NESTED123' },
+    };
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    expect(result.payloadJson.normalized_event.person.device_person_id).toBe('NESTED123');
+    expect(result.payloadJson.normalized_event.person.device_person_id).toBe(
+      'NESTED123',
+    );
   });
 
   it('8. Test date parsing với ISO string', async () => {
     const rawEvent = getBaseEvent();
-    rawEvent.payloadJson.raw_payload_sample.timestamp = '2026-06-03T10:00:00.000Z';
+    rawEvent.payloadJson.raw_payload_sample.timestamp =
+      '2026-06-03T10:00:00.000Z';
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    expect(result.payloadJson.normalized_event.event_time).toBe('2026-06-03T10:00:00.000Z');
+    expect(result.payloadJson.normalized_event.event_time).toBe(
+      '2026-06-03T10:00:00.000Z',
+    );
   });
 
   it('9. Test date parsing với Unix milliseconds', async () => {
@@ -141,7 +163,9 @@ describe('IotDeviceEventsService (Normalization)', () => {
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    expect(result.payloadJson.normalized_event.event_time).toBe(new Date(timeMs).toISOString());
+    expect(result.payloadJson.normalized_event.event_time).toBe(
+      new Date(timeMs).toISOString(),
+    );
   });
 
   it('10. Test invalid timestamp fallback về eventTime', async () => {
@@ -150,7 +174,9 @@ describe('IotDeviceEventsService (Normalization)', () => {
     mockRepo.findOne.mockResolvedValue(rawEvent);
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
-    expect(result.payloadJson.normalized_event.event_time).toBe(rawEvent.eventTime.toISOString());
+    expect(result.payloadJson.normalized_event.event_time).toBe(
+      rawEvent.eventTime.toISOString(),
+    );
   });
 
   it('11. Test unsupported event type chuyển thành ignored', async () => {
@@ -159,7 +185,9 @@ describe('IotDeviceEventsService (Normalization)', () => {
 
     const result: any = await service.normalizeRawEvent('mock-event-id');
     expect(result.processedStatus).toBe('ignored');
-    expect(result.errorMessage).toBe('Unsupported event type for normalization');
+    expect(result.errorMessage).toBe(
+      'Unsupported event type for normalization',
+    );
   });
 
   it('12. Test technical error chuyển thành failed, errorMessage được sanitize', async () => {
@@ -178,12 +206,15 @@ describe('IotDeviceEventsService (Normalization)', () => {
   });
 
   it('13. Test batch normalize xử lý từng event độc lập, không làm dừng batch', async () => {
-    const ev1 = getBaseEvent('face_verify'); ev1.id = '1';
-    const ev2 = getBaseEvent('heartbeat'); ev2.id = '2'; // unsupported directly
-    const ev3 = getBaseEvent('face_verify'); ev3.id = '3';
-    
+    const ev1 = getBaseEvent('face_verify');
+    ev1.id = '1';
+    const ev2 = getBaseEvent('heartbeat');
+    ev2.id = '2'; // unsupported directly
+    const ev3 = getBaseEvent('face_verify');
+    ev3.id = '3';
+
     mockRepo.find.mockResolvedValue([ev1, ev2, ev3]);
-    
+
     mockRepo.findOne.mockImplementation(({ where: { id } }: any) => {
       if (id === '1') return Promise.resolve(ev1);
       if (id === '2') return Promise.resolve(ev2);
@@ -192,7 +223,8 @@ describe('IotDeviceEventsService (Normalization)', () => {
     });
 
     mockRepo.save.mockImplementation((ev: any) => {
-      if (ev.id === '3' && ev.processedStatus === 'processed') throw new Error('DB error');
+      if (ev.id === '3' && ev.processedStatus === 'processed')
+        throw new Error('DB error');
       return Promise.resolve(ev);
     });
 

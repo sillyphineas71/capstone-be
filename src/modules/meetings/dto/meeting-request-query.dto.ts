@@ -22,7 +22,14 @@ export class MeetingRequestQueryDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['create_meeting', 'update_time', 'update_room', 'cancel_meeting', 'extend_meeting', 'book_room'])
+  @IsIn([
+    'create_meeting',
+    'update_time',
+    'update_room',
+    'cancel_meeting',
+    'extend_meeting',
+    'book_room',
+  ])
   requestType?: string;
 
   @IsOptional()

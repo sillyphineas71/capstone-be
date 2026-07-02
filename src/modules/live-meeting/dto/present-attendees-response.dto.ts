@@ -1,4 +1,7 @@
-﻿import { PresentAttendeeItem, PresenceStatus } from '../types/present-attendee.type.js';
+﻿import {
+  PresentAttendeeItem,
+  PresenceStatus,
+} from '../types/present-attendee.type.js';
 
 export class PresentAttendeesResponseDto {
   meetingId: string;

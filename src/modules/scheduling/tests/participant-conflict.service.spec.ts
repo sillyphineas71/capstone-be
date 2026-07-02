@@ -1,4 +1,8 @@
-﻿import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+﻿import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getEntityManagerToken } from '@nestjs/typeorm';
 import { EntityManager } from 'typeorm';
@@ -28,7 +32,9 @@ describe('ParticipantConflictService', () => {
       ],
     }).compile();
 
-    service = module.get<ParticipantConflictService>(ParticipantConflictService);
+    service = module.get<ParticipantConflictService>(
+      ParticipantConflictService,
+    );
   });
 
   const validDto: CheckParticipantConflictDto = {
@@ -40,10 +46,14 @@ describe('ParticipantConflictService', () => {
   describe('AC-001: Participant busy detection', () => {
     it('should return busy when participant has overlapping meeting', async () => {
       mockQuery
-        .mockResolvedValueOnce([{ cnt: 1 }])  // users exist
-        .mockResolvedValueOnce([{ user_id: validDto.participantUserIds[0] }])  // conflict found
-        .mockResolvedValueOnce([  // busy slots
-          { start_time: '2026-06-16T14:00:00+07:00', end_time: '2026-06-16T15:30:00+07:00' },
+        .mockResolvedValueOnce([{ cnt: 1 }]) // users exist
+        .mockResolvedValueOnce([{ user_id: validDto.participantUserIds[0] }]) // conflict found
+        .mockResolvedValueOnce([
+          // busy slots
+          {
+            start_time: '2026-06-16T14:00:00+07:00',
+            end_time: '2026-06-16T15:30:00+07:00',
+          },
         ]);
 
       const result = await service.checkConflicts(validDto);
@@ -59,8 +69,8 @@ describe('ParticipantConflictService', () => {
   describe('AC-002: Participant free detection', () => {
     it('should return free when participant has no overlapping meeting', async () => {
       mockQuery
-        .mockResolvedValueOnce([{ cnt: 1 }])  // users exist
-        .mockResolvedValueOnce([]);  // no conflict
+        .mockResolvedValueOnce([{ cnt: 1 }]) // users exist
+        .mockResolvedValueOnce([]); // no conflict
 
       const result = await service.checkConflicts(validDto);
 
@@ -80,14 +90,16 @@ describe('ParticipantConflictService', () => {
       };
 
       mockQuery
-        .mockResolvedValueOnce([{ cnt: 1 }])  // users exist
-        .mockResolvedValueOnce([]);  // no conflict
+        .mockResolvedValueOnce([{ cnt: 1 }]) // users exist
+        .mockResolvedValueOnce([]); // no conflict
 
       const result = await service.checkConflicts(dtoWithExternal);
 
       expect(result.externalParticipants).toHaveLength(1);
       expect(result.externalParticipants[0].status).toBe('unknown');
-      expect(result.externalParticipants[0].warningMessage).toBe('Không rõ lịch trình');
+      expect(result.externalParticipants[0].warningMessage).toBe(
+        'Không rõ lịch trình',
+      );
     });
   });
 
@@ -97,7 +109,10 @@ describe('ParticipantConflictService', () => {
         .mockResolvedValueOnce([{ cnt: 1 }])
         .mockResolvedValueOnce([{ user_id: validDto.participantUserIds[0] }])
         .mockResolvedValueOnce([
-          { start_time: '2026-06-16T14:00:00+07:00', end_time: '2026-06-16T15:30:00+07:00' },
+          {
+            start_time: '2026-06-16T14:00:00+07:00',
+            end_time: '2026-06-16T15:30:00+07:00',
+          },
         ]);
 
       const result = await service.checkConflicts(validDto);
@@ -116,7 +131,10 @@ describe('ParticipantConflictService', () => {
         .mockResolvedValueOnce([{ cnt: 1 }])
         .mockResolvedValueOnce([{ user_id: validDto.participantUserIds[0] }])
         .mockResolvedValueOnce([
-          { start_time: '2026-06-16T13:00:00+07:00', end_time: '2026-06-16T15:00:00+07:00' },
+          {
+            start_time: '2026-06-16T13:00:00+07:00',
+            end_time: '2026-06-16T15:00:00+07:00',
+          },
         ]);
 
       const result = await service.checkConflicts(validDto);
@@ -136,10 +154,18 @@ describe('ParticipantConflictService', () => {
       // users exist, meeting exists, no participant conflict (because excluded)
       mockQuery
         .mockResolvedValueOnce([{ cnt: 1 }])
-        .mockResolvedValueOnce([{ id: '550e8400-e29b-41d4-a716-446655440099', organizer_id: '550e8400-e29b-41d4-a716-446655440000' }])
+        .mockResolvedValueOnce([
+          {
+            id: '550e8400-e29b-41d4-a716-446655440099',
+            organizer_id: '550e8400-e29b-41d4-a716-446655440000',
+          },
+        ])
         .mockResolvedValueOnce([]);
 
-      const result = await service.checkConflicts(dtoWithExclude, '550e8400-e29b-41d4-a716-446655440000');
+      const result = await service.checkConflicts(
+        dtoWithExclude,
+        '550e8400-e29b-41d4-a716-446655440000',
+      );
 
       expect(result.hasConflict).toBe(false);
       expect(result.participants[0].status).toBe('free');
@@ -148,10 +174,11 @@ describe('ParticipantConflictService', () => {
 
   describe('AC-011: User not found', () => {
     it('should throw BadRequestException when participant does not exist', async () => {
-      mockQuery
-        .mockResolvedValueOnce([{ cnt: 0 }]);  // user not found
+      mockQuery.mockResolvedValueOnce([{ cnt: 0 }]); // user not found
 
-      await expect(service.checkConflicts(validDto)).rejects.toThrow(BadRequestException);
+      await expect(service.checkConflicts(validDto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -161,9 +188,18 @@ describe('ParticipantConflictService', () => {
         .mockResolvedValueOnce([{ cnt: 1 }])
         .mockResolvedValueOnce([{ user_id: validDto.participantUserIds[0] }])
         .mockResolvedValueOnce([
-          { start_time: '2026-06-16T14:00:00+07:00', end_time: '2026-06-16T15:00:00+07:00' },
-          { start_time: '2026-06-16T14:30:00+07:00', end_time: '2026-06-16T15:30:00+07:00' },
-          { start_time: '2026-06-16T15:30:00+07:00', end_time: '2026-06-16T16:00:00+07:00' },
+          {
+            start_time: '2026-06-16T14:00:00+07:00',
+            end_time: '2026-06-16T15:00:00+07:00',
+          },
+          {
+            start_time: '2026-06-16T14:30:00+07:00',
+            end_time: '2026-06-16T15:30:00+07:00',
+          },
+          {
+            start_time: '2026-06-16T15:30:00+07:00',
+            end_time: '2026-06-16T16:00:00+07:00',
+          },
         ]);
 
       const result = await service.checkConflicts(validDto);
@@ -184,11 +220,20 @@ describe('ParticipantConflictService', () => {
       // Meeting exists but user is not organizer and not participant
       mockQuery
         .mockResolvedValueOnce([{ cnt: 1 }])
-        .mockResolvedValueOnce([{ id: '550e8400-e29b-41d4-a716-446655440099', organizer_id: 'other-user-id' }])
-        .mockResolvedValueOnce([]);  // not a participant
+        .mockResolvedValueOnce([
+          {
+            id: '550e8400-e29b-41d4-a716-446655440099',
+            organizer_id: 'other-user-id',
+          },
+        ])
+        .mockResolvedValueOnce([]); // not a participant
 
-      await expect(service.checkConflicts(dtoWithExclude, '550e8400-e29b-41d4-a716-446655440000'))
-        .rejects.toThrow(ForbiddenException);
+      await expect(
+        service.checkConflicts(
+          dtoWithExclude,
+          '550e8400-e29b-41d4-a716-446655440000',
+        ),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -200,7 +245,9 @@ describe('ParticipantConflictService', () => {
         endTime: '2026-06-16T14:00:00+07:00',
       };
 
-      await expect(service.checkConflicts(invalidDto)).rejects.toThrow(BadRequestException);
+      await expect(service.checkConflicts(invalidDto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 });

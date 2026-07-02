@@ -22,12 +22,19 @@ export class MeetingRequestsController {
   @RequirePermissions('meeting_request.read')
   async findAll(
     @Query(
-      new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
     )
     query: MeetingRequestQueryDto,
     @Req() req: Request,
   ) {
-    const result = await this.meetingsService.findMeetingRequests(query, (req as any).user);
+    const result = await this.meetingsService.findMeetingRequests(
+      query,
+      (req as any).user,
+    );
 
     return {
       success: true,

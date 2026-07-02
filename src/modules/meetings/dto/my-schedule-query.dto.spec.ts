@@ -17,7 +17,9 @@ describe('MyScheduleQueryDto Validation', () => {
         q: 'sprint',
       });
       const errors = await validate(dto);
-      const nonDateErrors = errors.filter(e => e.property !== 'from' && e.property !== 'to');
+      const nonDateErrors = errors.filter(
+        (e) => e.property !== 'from' && e.property !== 'to',
+      );
       expect(nonDateErrors.length).toBe(0);
     });
   });

@@ -50,8 +50,12 @@ describe('RedisService', () => {
 
   describe('getJson()', () => {
     it('should parse JSON and return typed object', async () => {
-      mockRedisClient.get.mockResolvedValue(JSON.stringify({ id: '123', name: 'test' }));
-      const result = await service.getJson<{ id: string; name: string }>('my-json-key');
+      mockRedisClient.get.mockResolvedValue(
+        JSON.stringify({ id: '123', name: 'test' }),
+      );
+      const result = await service.getJson<{ id: string; name: string }>(
+        'my-json-key',
+      );
       expect(result).toEqual({ id: '123', name: 'test' });
     });
 
@@ -80,7 +84,12 @@ describe('RedisService', () => {
     it('should call redis set with EX', async () => {
       mockRedisClient.set.mockResolvedValue('OK');
       await service.setWithTtl('my-key', 'my-value', 300);
-      expect(mockRedisClient.set).toHaveBeenCalledWith('my-key', 'my-value', 'EX', 300);
+      expect(mockRedisClient.set).toHaveBeenCalledWith(
+        'my-key',
+        'my-value',
+        'EX',
+        300,
+      );
     });
   });
 

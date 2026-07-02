@@ -19,26 +19,51 @@ import { MeetingWarningService } from '../services/meeting-warning.service.js';
 export class MeetingWarningProcessor extends WorkerHost {
   private readonly logger = new Logger(MeetingWarningProcessor.name);
 
-  constructor(
-    private readonly meetingWarningService: MeetingWarningService,
-  ) {
+  constructor(private readonly meetingWarningService: MeetingWarningService) {
     super();
   }
 
   async process(job: Job<any>): Promise<any> {
     if (job.name !== 'meeting-time-warning') {
-      this.logger.warn('[MeetingWarningProcessor] Unknown job name=' + job.name + ' - ACK');
+      this.logger.warn(
+        '[MeetingWarningProcessor] Unknown job name=' + job.name + ' - ACK',
+      );
       return;
     }
 
-    this.logger.log('[MeetingWarningProcessor] Processing job ' + job.id + ' name=' + job.name + ' meetingId=' + job.data?.meetingId);
+    this.logger.log(
+      '[MeetingWarningProcessor] Processing job ' +
+        job.id +
+        ' name=' +
+        job.name +
+        ' meetingId=' +
+        job.data?.meetingId,
+    );
 
     try {
-      const result = await this.meetingWarningService.processWarningJob(job.data);
-      this.logger.log('[MeetingWarningProcessor] Job ' + job.id + ' completed - skipped=' + result.skipped + ' branch=' + (result.branch || 'N/A') + ' warningLevel=' + (result.warningLevel || 'N/A'));
+      const result = await this.meetingWarningService.processWarningJob(
+        job.data,
+      );
+      this.logger.log(
+        '[MeetingWarningProcessor] Job ' +
+          job.id +
+          ' completed - skipped=' +
+          result.skipped +
+          ' branch=' +
+          (result.branch || 'N/A') +
+          ' warningLevel=' +
+          (result.warningLevel || 'N/A'),
+      );
       return result;
     } catch (error: unknown) {
-      this.logger.error('[MeetingWarningProcessor] Job ' + job.id + ' failed - error=' + (error as Error).message + ' meetingId=' + job.data?.meetingId);
+      this.logger.error(
+        '[MeetingWarningProcessor] Job ' +
+          job.id +
+          ' failed - error=' +
+          (error as Error).message +
+          ' meetingId=' +
+          job.data?.meetingId,
+      );
       throw error; // NACK -> BullMQ retry
     }
   }

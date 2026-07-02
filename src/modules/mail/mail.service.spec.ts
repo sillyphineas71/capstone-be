@@ -47,7 +47,9 @@ describe('MailService', () => {
         verify: jest.fn().mockResolvedValue(true),
       };
 
-      (nodemailer.createTransport as jest.Mock).mockReturnValue(mockTransporter);
+      (nodemailer.createTransport as jest.Mock).mockReturnValue(
+        mockTransporter,
+      );
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -89,7 +91,9 @@ describe('MailService', () => {
     });
 
     it('should return failure on SMTP error without throwing', async () => {
-      mockTransporter.sendMail.mockRejectedValue(new Error('Connection refused'));
+      mockTransporter.sendMail.mockRejectedValue(
+        new Error('Connection refused'),
+      );
 
       const result = await service.sendMail({
         to: 'user@test.com',
@@ -114,11 +118,16 @@ describe('MailService', () => {
 
     it('should NOT log MAIL_PASS or MAIL_USER in error messages', async () => {
       mockTransporter.sendMail.mockRejectedValue(new Error('Some error'));
-      const loggerErrorSpy = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
+      const loggerErrorSpy = jest.spyOn(
+        (service as unknown as { logger: { error: jest.Mock } }).logger,
+        'error',
+      );
 
       await service.sendMail({ to: 'x@x.com', subject: 'Test' });
 
-      const errorCalls = loggerErrorSpy.mock.calls.map((args) => String(args[0]));
+      const errorCalls = loggerErrorSpy.mock.calls.map((args) =>
+        String(args[0]),
+      );
       for (const call of errorCalls) {
         expect(call).not.toContain('testpassword');
         expect(call).not.toContain('test@test.com');

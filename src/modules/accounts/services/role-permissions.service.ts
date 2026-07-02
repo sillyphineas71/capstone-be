@@ -88,7 +88,9 @@ export class RolePermissionsService {
           )
         : [];
 
-    const permissions = await this.permissionRepo.find({ where: { id: In(permissionIds) } });
+    const permissions = await this.permissionRepo.find({
+      where: { id: In(permissionIds) },
+    });
     if (permissions.length !== permissionIds.length) {
       const foundIds = permissions.map((p) => p.id);
       const missingIds = permissionIds.filter((id) => !foundIds.includes(id));
@@ -104,7 +106,10 @@ export class RolePermissionsService {
       throw new UnprocessableEntityException({
         success: false,
         message: `Permission '${inactivePerm.permissionCode}' đang ở trạng thái inactive, không thể gán.`,
-        error: { code: 'PERMISSION_INACTIVE', details: { permissionId: inactivePerm.id } },
+        error: {
+          code: 'PERMISSION_INACTIVE',
+          details: { permissionId: inactivePerm.id },
+        },
       });
     }
 

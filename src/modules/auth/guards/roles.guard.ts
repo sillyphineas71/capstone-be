@@ -37,8 +37,9 @@ export class RolesGuard implements CanActivate {
       });
     }
 
-    const { roles } =
-      await this.authzRepo.getEffectiveRolesAndPermissions(user.userId);
+    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(
+      user.userId,
+    );
 
     const hasRequiredRole = roles.some((role) => requiredRoles.includes(role));
 

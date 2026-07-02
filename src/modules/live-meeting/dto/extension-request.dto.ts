@@ -1,4 +1,11 @@
-﻿import { IsNotEmpty, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+﻿import {
+  IsNotEmpty,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
  * Request DTO cho UC-IMM-02 Yêu cầu gia hạn phiên họp.

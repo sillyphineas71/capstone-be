@@ -1,4 +1,4 @@
-import { DataSource } from "typeorm";
+import { DataSource } from 'typeorm';
 
 export async function seedMeetingRequestReadPermission(
   dataSource: DataSource,
@@ -9,11 +9,11 @@ export async function seedMeetingRequestReadPermission(
 
   try {
     const permission = {
-      code: "meeting_request.read",
-      name: "Xem yêu cầu cuộc họp",
-      module: "meetings",
-      action: "read",
-      description: "Cho phép xem danh sách yêu cầu cuộc họp",
+      code: 'meeting_request.read',
+      name: 'Xem yêu cầu cuộc họp',
+      module: 'meetings',
+      action: 'read',
+      description: 'Cho phép xem danh sách yêu cầu cuộc họp',
     };
 
     const permResult = await queryRunner.query(
@@ -21,7 +21,13 @@ export async function seedMeetingRequestReadPermission(
        VALUES ($1, $2, $3, $4, $5, true)
        ON CONFLICT (permission_code) DO NOTHING
        RETURNING id;`,
-      [permission.code, permission.name, permission.module, permission.action, permission.description],
+      [
+        permission.code,
+        permission.name,
+        permission.module,
+        permission.action,
+        permission.description,
+      ],
     );
 
     const permissionId = permResult[0]?.id;
@@ -29,7 +35,7 @@ export async function seedMeetingRequestReadPermission(
     if (permissionId) {
       const adminRole = await queryRunner.query(
         `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,
-        ["ADMIN"],
+        ['ADMIN'],
       );
 
       if (adminRole[0]?.id) {
@@ -43,7 +49,7 @@ export async function seedMeetingRequestReadPermission(
 
       const managerRole = await queryRunner.query(
         `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,
-        ["MANAGER"],
+        ['MANAGER'],
       );
 
       if (managerRole[0]?.id) {
@@ -57,7 +63,7 @@ export async function seedMeetingRequestReadPermission(
 
       const businessAdminRole = await queryRunner.query(
         `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,
-        ["BUSINESS_ADMIN"],
+        ['BUSINESS_ADMIN'],
       );
 
       if (businessAdminRole[0]?.id) {
@@ -71,7 +77,7 @@ export async function seedMeetingRequestReadPermission(
 
       const systemAdminRole = await queryRunner.query(
         `SELECT id FROM roles WHERE role_code = $1 AND is_active = true;`,
-        ["SYSTEM_ADMIN"],
+        ['SYSTEM_ADMIN'],
       );
 
       if (systemAdminRole[0]?.id) {

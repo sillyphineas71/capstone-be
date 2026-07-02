@@ -20,7 +20,11 @@ export enum SortOrder {
   DESC = 'desc',
 }
 
-const ALLOWED_SORT_BY = ['full_name', 'attendance_status', 'check_in_time'] as const;
+const ALLOWED_SORT_BY = [
+  'full_name',
+  'attendance_status',
+  'check_in_time',
+] as const;
 type AllowedSortBy = (typeof ALLOWED_SORT_BY)[number];
 
 export class AttendanceQueryDto {

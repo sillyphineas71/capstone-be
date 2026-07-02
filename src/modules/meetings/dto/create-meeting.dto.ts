@@ -29,7 +29,9 @@ export class CreateMeetingDto {
   @IsOptional()
   description?: string;
 
-  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, { message: 'host_id phải là định dạng UUID' })
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
+    message: 'host_id phải là định dạng UUID',
+  })
   @IsOptional()
   hostId?: string;
 
@@ -51,7 +53,9 @@ export class CreateMeetingDto {
   })
   endTime: string;
 
-  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, { message: 'room_id phải là định dạng UUID' })
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
+    message: 'room_id phải là định dạng UUID',
+  })
   @IsNotEmpty({ message: 'room_id không được để trống' })
   roomId: string;
 

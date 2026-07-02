@@ -8,6 +8,8 @@ export class RemoveExternalParticipantBodyDto {
   reason?: string;
 
   @IsOptional()
-  @IsEnum(RemoveScope, { message: 'scope chỉ nhận giá trị instance hoặc series' })
+  @IsEnum(RemoveScope, {
+    message: 'scope chỉ nhận giá trị instance hoặc series',
+  })
   scope?: RemoveScope;
 }

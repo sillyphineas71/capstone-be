@@ -1,12 +1,11 @@
-﻿import {
-  Injectable,
-  Logger,
-  ConflictException,
-} from '@nestjs/common';
+﻿import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { RoomEntity, RoomStatus } from '../entities/room.entity.js';
-import { AuditLogEntity, AuditLogSeverity } from '../../administration/entities/audit-log.entity.js';
+import {
+  AuditLogEntity,
+  AuditLogSeverity,
+} from '../../administration/entities/audit-log.entity.js';
 import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 
@@ -32,7 +31,10 @@ export class RoomsService {
       throw new ConflictException({
         success: false,
         message: 'Ma phong da ton tai',
-        error: { code: 'ROOM_CODE_ALREADY_EXISTS', details: { roomCode: code } },
+        error: {
+          code: 'ROOM_CODE_ALREADY_EXISTS',
+          details: { roomCode: code },
+        },
         timestamp: new Date().toISOString(),
         path: '/api/v1/rooms',
       });
@@ -53,7 +55,10 @@ export class RoomsService {
       throw new ConflictException({
         success: false,
         message: 'Ten phong da ton tai',
-        error: { code: 'ROOM_NAME_ALREADY_EXISTS', details: { roomName: name } },
+        error: {
+          code: 'ROOM_NAME_ALREADY_EXISTS',
+          details: { roomName: name },
+        },
         timestamp: new Date().toISOString(),
         path: '/api/v1/rooms',
       });
@@ -65,7 +70,11 @@ export class RoomsService {
    * Transaction: tao room trong transaction, audit log ben ngoai
    * de dam bao FR-019: audit log fail khong rollback room.
    */
-  async create(dto: CreateRoomDto, userId: string, ipAddress?: string): Promise<CreateRoomResponseDto> {
+  async create(
+    dto: CreateRoomDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<CreateRoomResponseDto> {
     // Normalize input
     const roomCode = dto.roomCode.toUpperCase().trim();
     const roomName = dto.roomName.trim();
@@ -119,7 +128,9 @@ export class RoomsService {
       });
     } catch (err) {
       // FR-019: audit log fail KHONG rollback room creation
-      this.logger.error(`Failed to write audit log for room ${saved.id}: ${err instanceof Error ? err.message : "Unknown"}`);
+      this.logger.error(
+        `Failed to write audit log for room ${saved.id}: ${err instanceof Error ? err.message : 'Unknown'}`,
+      );
     }
 
     return new CreateRoomResponseDto({
@@ -133,4 +144,3 @@ export class RoomsService {
     });
   }
 }
-
