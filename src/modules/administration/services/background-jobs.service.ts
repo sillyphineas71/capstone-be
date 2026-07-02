@@ -1,11 +1,17 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import {
   BackgroundJobEntity,
   BackgroundJobStatus,
   BackgroundJobType,
 } from '../entities/background-job.entity.js';
+import { BackgroundJobStatusResponseDto } from '../dto/background-job-status-response.dto.js';
 
 export interface CreateQueuedJobDto {
   jobType: BackgroundJobType;
@@ -37,6 +43,7 @@ export class BackgroundJobsService {
   constructor(
     @InjectRepository(BackgroundJobEntity)
     private readonly repo: Repository<BackgroundJobEntity>,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -57,7 +64,9 @@ export class BackgroundJobsService {
       retryCount: 0,
     });
     const saved = await this.repo.save(job);
-    this.logger.debug(`[BackgroundJobs] Created job ${saved.id} — type: ${saved.jobType}`);
+    this.logger.debug(
+      `[BackgroundJobs] Created job ${saved.id} — type: ${saved.jobType}`,
+    );
     return saved;
   }
 
@@ -74,7 +83,10 @@ export class BackgroundJobsService {
   /**
    * Đánh dấu job hoàn thành.
    */
-  async markCompleted(id: string, outputJson?: Record<string, unknown>): Promise<void> {
+  async markCompleted(
+    id: string,
+    outputJson?: Record<string, unknown>,
+  ): Promise<void> {
     const updatePayload: Partial<BackgroundJobEntity> = {
       status: BackgroundJobStatus.COMPLETED,
       completedAt: new Date(),
@@ -83,7 +95,10 @@ export class BackgroundJobsService {
     if (outputJson !== undefined) {
       updatePayload.outputJson = outputJson;
     }
-    await this.repo.update(id, updatePayload as Parameters<typeof this.repo.update>[1]);
+    await this.repo.update(
+      id,
+      updatePayload as Parameters<typeof this.repo.update>[1],
+    );
   }
 
   /**
@@ -132,5 +147,93 @@ export class BackgroundJobsService {
    */
   async findByIdOrNull(id: string): Promise<BackgroundJobEntity | null> {
     return this.repo.findOne({ where: { id } });
+  }
+
+  /**
+   * T007 — Lấy trạng thái 1 background job cho client poll
+   * (GET /api/v1/background-jobs/:id). Dùng chung cho mọi loại job async
+   * (transcription, export report...), KHÔNG tạo route riêng cho transcription
+   * (theo CLAUDE.md mục 22.13 + contract `transcription-api.md`).
+   *
+   * Authorization (KHÔNG dùng permission node vì chưa seed `background_job.*` —
+   * dùng sẽ luôn 403, đúng bug đã ghi ở T-PERM-001): chỉ
+   *   - người tạo job (`requested_by` = userId), HOẶC
+   *   - role BUSINESS_ADMIN/SYSTEM_ADMIN
+   * mới được xem. Tránh leak job/dữ liệu nội bộ giữa các user (CLAUDE.md mục 20).
+   *
+   * @throws NotFoundException  job không tồn tại (`BACKGROUND_JOB_NOT_FOUND`)
+   * @throws ForbiddenException không phải owner và không phải admin (`PERMISSION_DENIED`)
+   */
+  async getJobStatusForUser(
+    jobId: string,
+    userId: string,
+  ): Promise<BackgroundJobStatusResponseDto> {
+    const job = await this.repo.findOne({ where: { id: jobId } });
+    if (!job) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay background job.',
+        error: { code: 'BACKGROUND_JOB_NOT_FOUND', details: {} },
+      });
+    }
+
+    const isOwner = !!job.requestedBy && job.requestedBy === userId;
+    if (!isOwner) {
+      const isAdmin = await this.userHasAdminRole(userId);
+      if (!isAdmin) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Ban khong co quyen xem job nay.',
+          error: { code: 'PERMISSION_DENIED', details: {} },
+        });
+      }
+    }
+
+    return this.toStatusView(job);
+  }
+
+  /**
+   * Map entity -> view tối giản. Chỉ expose `errorMessage` khi failed và
+   * `result` (outputJson) khi completed — tránh trả field nội bộ
+   * (inputJson/metadataJson/requestedBy) ra ngoài.
+   */
+  private toStatusView(
+    job: BackgroundJobEntity,
+  ): BackgroundJobStatusResponseDto {
+    return {
+      jobId: job.id,
+      jobType: job.jobType,
+      status: job.status,
+      relatedEntityType: job.relatedEntityType,
+      relatedEntityId: job.relatedEntityId,
+      retryCount: job.retryCount,
+      scheduledAt: job.scheduledAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      errorMessage:
+        job.status === BackgroundJobStatus.FAILED ? job.errorMessage : null,
+      result:
+        job.status === BackgroundJobStatus.COMPLETED ? job.outputJson : null,
+      outputFileId: job.outputFileId,
+    };
+  }
+
+  /**
+   * Check role admin theo role_code thật trong DB (BUSINESS_ADMIN/SYSTEM_ADMIN)
+   * — nhất quán với `TranscriptionService.isAdminRole`. KHÔNG check theo
+   * permission code vì `admin.*` không được seed.
+   */
+  private async userHasAdminRole(userId: string): Promise<boolean> {
+    const rows = await this.dataSource.query(
+      `SELECT r.role_code
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = $1
+          AND r.is_active = true
+          AND r.role_code = ANY($2)
+        LIMIT 1`,
+      [userId, ['BUSINESS_ADMIN', 'SYSTEM_ADMIN']],
+    );
+    return rows.length > 0;
   }
 }
