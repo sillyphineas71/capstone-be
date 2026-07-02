@@ -6,6 +6,7 @@ import {
   FaceProfileEntity,
   FaceProfileStatus,
 } from '../entities/face-profile.entity.js';
+import { StorageProvider } from '../../recording/entities/media-file.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
 
@@ -69,16 +70,18 @@ export class FaceProfileService {
       originalName: file.originalname,
       folder: 'face-profiles',
     });
+    const storageProvider = this.resolveStorageProvider();
 
     const insert: Array<{ id: string }> = await this.dataSource.manager.query(
       `INSERT INTO media_files
          (file_name, file_type, mime_type, storage_provider, storage_key,
           file_size_bytes, uploaded_by, related_entity_type, related_entity_id)
-       VALUES ($1,'image',$2,'local',$3,$4,$5,'face_profile',$6)
+       VALUES ($1,'image',$2,$3,$4,$5,$6,'face_profile',$7)
        RETURNING id`,
       [
         saved.storageKey.split('/').pop() ?? saved.storageKey,
         file.mimetype,
+        storageProvider,
         saved.storageKey,
         String(file.size),
         enrolledBy,
@@ -119,6 +122,17 @@ export class FaceProfileService {
       mediaFileId,
       status: FaceProfileStatus.PENDING_REVIEW,
     };
+  }
+
+  /** Map StorageService.getDriver() (env STORAGE_DRIVER) → đúng enum StorageProvider lưu DB. */
+  private resolveStorageProvider(): StorageProvider {
+    switch (this.storageService.getDriver()) {
+      case 's3':
+        return StorageProvider.S3;
+      case 'local':
+      default:
+        return StorageProvider.LOCAL;
+    }
   }
 
   /** Ticket B: đọc bytes portrait của user (local). null nếu không có. */

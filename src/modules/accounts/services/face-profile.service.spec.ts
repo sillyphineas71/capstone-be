@@ -39,6 +39,7 @@ describe('FaceProfileService (FPE-001 / UC-17)', () => {
         .fn()
         .mockResolvedValue({ storageKey: 'face-profiles/x.jpg' }),
       getFile: jest.fn().mockReturnValue(Buffer.from('PORTRAIT')),
+      getDriver: jest.fn().mockReturnValue('local'),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -77,6 +78,15 @@ describe('FaceProfileService (FPE-001 / UC-17)', () => {
       mediaFileId: 'media-1',
       status: 'pending_review',
     });
+  });
+
+  it('driver s3 → storage_provider lưu DB là s3, không hardcode local', async () => {
+    storageMock.getDriver.mockReturnValue('s3');
+    await service.enrollPortrait('u1', file(), 'admin');
+    const insertSql = String(dsMock.manager.query.mock.calls[0][0]);
+    const insertParams = dsMock.manager.query.mock.calls[0][1];
+    expect(insertSql).not.toContain("'local'");
+    expect(insertParams).toContain('s3');
   });
 
   it('mime sai → 400 INVALID_FILE_TYPE, KHÔNG saveFile', async () => {
