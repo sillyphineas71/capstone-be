@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
   Get,
@@ -8,18 +7,10 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { StrangerAlertService } from '../services/stranger-alert.service.js';
 import { ListStrangerAlertsQueryDto } from '../dto/list-stranger-alerts.query.dto.js';
-
-// Mock PermissionsGuard — nhất quán iot/recording/no-show/UMR controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: unknown, key?: unknown, descriptor?: unknown): void => {};
 
 /**
  * StrangerAlertController (SAL-001 / #20) — admin xem stranger gần đây.
@@ -30,8 +21,8 @@ export class StrangerAlertController {
   constructor(private readonly strangerAlertService: StrangerAlertService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('face.stranger.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('face.stranger.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(@Query() query: ListStrangerAlertsQueryDto) {
     const result = await this.strangerAlertService.list(query);

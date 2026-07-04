@@ -34,16 +34,6 @@ import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 import { RealtimeStatusQueryDto } from '../dto/realtime-status-query.dto.js';
 
-// Mock PermissionsGuard — nhất quán recording/iot controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
-
 @ApiTags('Rooms')
 @Controller('rooms')
 @UseGuards(JwtAuthGuard)
@@ -101,8 +91,8 @@ export class RoomsController {
   // Khai TRƯỚC :roomId/status để route param không nuốt.
   @Get('realtime-status')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.utilization.read')
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.utilization.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async realtimeStatus(@Query() query: RealtimeStatusQueryDto) {
     const data = await this.roomStatusService.getRealtimeStatus(query);
@@ -116,8 +106,8 @@ export class RoomsController {
   // RMS-001 (UC-38): chi tiết trạng thái 1 phòng.
   @Get(':roomId/status')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.utilization.read')
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.utilization.read')
   async roomStatus(@Param('roomId', ParseUUIDPipe) roomId: string) {
     const data = await this.roomStatusService.getRoomStatus(roomId);
     return {

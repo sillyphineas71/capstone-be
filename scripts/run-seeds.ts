@@ -43,6 +43,8 @@ import { seedAnalyticsAttendanceReadPermission } from '../src/database/seeds/202
 import { seedAnalyticsRoomReadPermission } from '../src/database/seeds/20260702070000-SeedAnalyticsRoomReadPermission';
 import { seedReportMeetingActivityExportPermission } from '../src/database/seeds/20260703000001-SeedReportMeetingActivityExportPermission';
 import { seedDepartmentReadPermission } from '../src/database/seeds/20260704000001-SeedDepartmentReadPermission';
+import { seedCameraDomainRbacPermissions } from '../src/database/seeds/20260704000002-SeedCameraDomainRbacPermissions';
+import { seedNoShowReadPermission } from '../src/database/seeds/20260705000001-SeedNoShowReadPermission';
 
 // ── Danh sách seeds theo thứ tự ─────────────────────────────────────────────
 const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<void> }> = [
@@ -82,6 +84,8 @@ const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<voi
   { name: '20260702070000 - SeedAnalyticsRoomReadPermission', fn: seedAnalyticsRoomReadPermission },
   { name: '20260703000001 - SeedReportMeetingActivityExportPermission', fn: seedReportMeetingActivityExportPermission },
   { name: '20260704000001 - SeedDepartmentReadPermission', fn: seedDepartmentReadPermission },
+  { name: '20260704000002 - SeedCameraDomainRbacPermissions', fn: seedCameraDomainRbacPermissions },
+  { name: '20260705000001 - SeedNoShowReadPermission', fn: seedNoShowReadPermission },
 ];
 
 // ── Main runner ──────────────────────────────────────────────────────────────

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
   Get,
@@ -10,18 +9,10 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { IvssPresenceQueryService } from '../services/ivss-presence-query.service.js';
 import { IvssPresenceReportService } from '../services/ivss-presence-report.service.js';
-
-// Mock PermissionsGuard — nhất quán stranger-alert/no-show-config controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any): void => {};
 
 /**
  * IvssPresenceController (IPD-001 #41+#42) — READ-ONLY admin xem duration + timeline per-person.
@@ -36,8 +27,8 @@ export class IvssPresenceController {
 
   // #41 + #42 chi tiết 1 người trong 1 họp.
   @Get(':meetingId/presence/:userId')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('ivss.presence.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('ivss.presence.read')
   async userPresence(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -57,8 +48,8 @@ export class IvssPresenceController {
 
   // Summary mọi participant trong 1 họp.
   @Get(':meetingId/presence')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('ivss.presence.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('ivss.presence.read')
   async meetingPresence(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
     const data = await this.presenceQueryService.getMeetingPresence(meetingId);
     if (!data) {
@@ -72,8 +63,8 @@ export class IvssPresenceController {
 
   // #43 (IPR-001): tải PDF báo cáo hiện diện cả họp. C2: @Res() file, KHÔNG envelope.
   @Get(':meetingId/presence/report')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('ivss.presence.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('ivss.presence.read')
   async report(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Res() res: Response,

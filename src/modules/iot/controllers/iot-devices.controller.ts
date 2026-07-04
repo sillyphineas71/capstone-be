@@ -28,24 +28,14 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 
-// Mocks for PermissionsGuard since it's not implemented in auth module yet
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
-
 @Controller('iot-devices')
 export class IotDevicesController {
   constructor(private readonly iotDevicesService: IotDevicesService) {}
 
   // IOT-013: liệt kê thiết bị (filter + phân trang). Read-only, query whitelist-only.
   @Get()
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(@Query() query: ListIotDevicesQueryDto) {
     const { items, meta } = await this.iotDevicesService.findAll(query);
@@ -58,10 +48,25 @@ export class IotDevicesController {
     };
   }
 
+  // Tổng hợp trạng thái thiết bị (dashboard). Route STATIC — khai trước @Get(':id')
+  // để không bị route động nuốt.
+  @Get('status-summary')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.read')
+  async statusSummary() {
+    const data = await this.iotDevicesService.getStatusSummary();
+
+    return {
+      success: true,
+      message: 'Device status summary retrieved successfully',
+      data,
+    };
+  }
+
   // IOT-013: chi tiết thiết bị. Read-only.
   @Get(':id')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.read')
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const data = await this.iotDevicesService.findOne(id);
 
@@ -73,8 +78,8 @@ export class IotDevicesController {
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot_devices:create')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:create')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -102,8 +107,8 @@ export class IotDevicesController {
   // Route static 'probe-status' — khai báo trước các route động @Post(':id/...').
   @Post('probe-status')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.probe')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.probe')
   async probeStatus(@Req() req: any) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
 
@@ -117,8 +122,8 @@ export class IotDevicesController {
   }
 
   @Post(':id/assign-room')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot_devices:assign_room')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:assign_room')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -145,8 +150,8 @@ export class IotDevicesController {
   // IOT-011: cập nhật thông tin mô tả/kết nối (allowlist 4 field). Pipe route-level
   // bật forbidNonWhitelisted=true để field ngoài allowlist => 400.
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.update')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.update')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -174,8 +179,8 @@ export class IotDevicesController {
   // response mask rtsp_password_encrypted. Route 2-segment ':id/rtsp-config' không
   // đụng ':id'. Pipe forbidNonWhitelisted=false để bỏ qua field thừa (giống assign-room).
   @Patch(':id/rtsp-config')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot_devices:configure_rtsp')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:configure_rtsp')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -202,8 +207,8 @@ export class IotDevicesController {
   // TKR-001 (#11): thu hồi callback token face-server. POST action 200, body reason optional.
   @Post(':id/face-server/revoke')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot_devices:configure_face_server')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:configure_face_server')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -235,8 +240,8 @@ export class IotDevicesController {
   // Trả one_time_callback_token (plaintext 1 lần).
   @Post(':id/face-server/rotate')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot_devices:configure_face_server')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:configure_face_server')
   async rotateFaceServerToken(
     @Req() req: any,
     @Param('id', ParseUUIDPipe) id: string,
@@ -262,8 +267,8 @@ export class IotDevicesController {
   // @HttpCode(200) vì POST mặc định trả 201.
   @Post(':id/disable')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.disable')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.disable')
   async disable(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
 
@@ -279,8 +284,8 @@ export class IotDevicesController {
   // IOT-012: kích hoạt lại thiết bị (disabled -> offline). POST action, không body.
   @Post(':id/enable')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('iot.device.enable')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.enable')
   async enable(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
 
@@ -294,7 +299,6 @@ export class IotDevicesController {
   }
 
   // A5 (IOT-005): chẩn đoán khả dụng camera (runtime RTSP probe / heartbeat).
-  // Guard auth THẬT (mirror B21) — KHÔNG dùng MockPermissionsGuard.
   @Post(':id/check-availability')
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, PermissionsGuard)

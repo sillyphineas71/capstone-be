@@ -16,16 +16,8 @@ import { RecordingConfigService } from '../services/recording-config.service.js'
 import { CreateRecordingConfigDto } from '../dto/create-recording-config.dto.js';
 import { UpdateRecordingConfigDto } from '../dto/update-recording-config.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard (chưa implement ở auth module) — nhất quán IOT controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 @Controller()
 export class RecordingConfigController {
@@ -35,8 +27,8 @@ export class RecordingConfigController {
 
   // REC-001: tạo cấu hình recording cho cuộc họp (1:1).
   @Post('meetings/:meetingId/recording-config')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.config.create')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.config.create')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -65,8 +57,8 @@ export class RecordingConfigController {
   // REC-001: đọc cấu hình recording.
   @Get('meetings/:meetingId/recording-config')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.config.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.config.read')
   async findOne(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
     const data = await this.recordingConfigService.findOne(meetingId);
     return {
@@ -79,8 +71,8 @@ export class RecordingConfigController {
   // REC-001: cập nhật một phần cấu hình recording.
   @Patch('meetings/:meetingId/recording-config')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.config.update')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.config.update')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,

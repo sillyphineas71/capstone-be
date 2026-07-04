@@ -1,9 +1,11 @@
 import {
   Controller,
+  Get,
   Post,
   Patch,
   Body,
   Param,
+  Query,
   Req,
   Res,
   HttpCode,
@@ -18,18 +20,11 @@ import { NoShowLifecycleService } from '../services/no-show-lifecycle.service.js
 import { CreateNoShowDto } from '../dto/create-no-show.dto.js';
 import { UpdateNoShowDto } from '../dto/update-no-show.dto.js';
 import { ReleaseNoShowDto } from '../dto/release-no-show.dto.js';
+import { ListNoShowCasesQueryDto } from '../dto/list-no-show-cases-query.dto.js';
 import { InternalTokenGuard } from '../guards/internal-token.guard.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard — nhất quán recording/iot controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 @Controller()
 export class NoShowController {
@@ -50,9 +45,7 @@ export class NoShowController {
     res.status(created ? 201 : 200);
     return {
       success: true,
-      message: created
-        ? 'No-show case created'
-        : 'No-show case already exists',
+      message: created ? 'No-show case created' : 'No-show case already exists',
       data: {
         noShowCaseId: c.id,
         bookingId: c.booking_id,
@@ -62,11 +55,26 @@ export class NoShowController {
     };
   }
 
+  // GET list no-show cases (bảng giám sát phòng) — phân trang + lọc status/roomId.
+  @Get('no-show-cases')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.noshow.read')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async list(@Query() query: ListNoShowCasesQueryDto) {
+    const { items, meta } = await this.noShowService.list(query);
+    return {
+      success: true,
+      message: 'No-show cases retrieved successfully',
+      data: items,
+      meta,
+    };
+  }
+
   // UC-42: cập nhật no-show case (user).
   @Patch('no-show-cases/:id')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.noshow.update')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.noshow.update')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -86,8 +94,8 @@ export class NoShowController {
   // Mã trả (A): 404 not-found · 400 dismissed/resolved · 200 released/no-op · 409 booking_changed.
   @Post('no-show-cases/:id/release')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.noshow.release')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.noshow.release')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async release(
     @Param('id', ParseUUIDPipe) id: string,

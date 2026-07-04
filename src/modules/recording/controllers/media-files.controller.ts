@@ -20,16 +20,8 @@ import { StorageService } from '../../storage/storage.service.js';
 import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
 import { VisibilityDto } from '../dto/visibility.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard — nhất quán IOT/REC controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 @Controller()
 export class MediaFilesController {
@@ -41,8 +33,8 @@ export class MediaFilesController {
   // REC-006 (UC-120): list media_files theo meeting.
   @Get('meetings/:meetingId/media-files')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.files.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.files.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
@@ -60,8 +52,8 @@ export class MediaFilesController {
   // REC-006 (UC-121): chi tiết media_file.
   @Get('media-files/:fileId')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.files.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.files.read')
   async detail(@Param('fileId', ParseUUIDPipe) fileId: string) {
     const data = await this.mediaFilesService.detail(fileId);
     return {
@@ -73,8 +65,8 @@ export class MediaFilesController {
 
   // REC-006 (UC-122 v1 local): stream playback + HTTP Range.
   @Get('media-files/:fileId/playback')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.files.play')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.files.play')
   async playback(
     @Param('fileId', ParseUUIDPipe) fileId: string,
     @Req() req: Request,
@@ -148,8 +140,8 @@ export class MediaFilesController {
   // REC-006 (UC-123): ẩn/xóa-mềm media_file.
   @Patch('media-files/:fileId/visibility')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.files.manage')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.files.manage')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async setVisibility(
     @Param('fileId', ParseUUIDPipe) fileId: string,

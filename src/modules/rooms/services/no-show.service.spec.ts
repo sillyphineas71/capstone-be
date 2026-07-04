@@ -171,4 +171,78 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
       NotFoundException,
     );
   });
+
+  // ─── LIST (GET no-show-cases) ───
+  const listRow = (over: any = {}) => ({
+    id: 'nsc-1',
+    room_id: 'rm-1',
+    room_name: 'Room A',
+    meeting_id: 'mt-1',
+    detection_status: 'risk',
+    detected_at: '2026-06-17T09:00:00Z',
+    warning_sent_at: null,
+    released_at: null,
+    ...over,
+  });
+
+  const mockList = (total: number, rows: any[]) => {
+    dsMock.manager.query = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('COUNT(*)')) return Promise.resolve([{ total }]);
+      if (sql.includes('LEFT JOIN rooms')) return Promise.resolve(rows);
+      return Promise.resolve([]);
+    });
+  };
+
+  it('list rỗng → data [] + meta total 0, totalPages 0', async () => {
+    mockList(0, []);
+    const r = await service.list({});
+    expect(r.items).toEqual([]);
+    expect(r.meta).toEqual({ page: 1, limit: 20, total: 0, totalPages: 0 });
+  });
+
+  it('list map đúng field FE (id/roomId/roomName/status/detectedAt...)', async () => {
+    mockList(1, [listRow()]);
+    const r = await service.list({});
+    expect(r.items[0]).toEqual({
+      id: 'nsc-1',
+      roomId: 'rm-1',
+      roomName: 'Room A',
+      meetingId: 'mt-1',
+      status: 'risk',
+      detectedAt: '2026-06-17T09:00:00Z',
+      warningSentAt: null,
+      releasedAt: null,
+    });
+  });
+
+  it('list phân trang page=2 limit=20 total=45 → totalPages 3 + OFFSET 20', async () => {
+    mockList(45, [listRow()]);
+    const r = await service.list({ page: 2, limit: 20 });
+    expect(r.meta).toEqual({ page: 2, limit: 20, total: 45, totalPages: 3 });
+    const dataCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('LEFT JOIN rooms'),
+    );
+    // params tail = [..., limit, offset]
+    expect(dataCall[1].slice(-2)).toEqual([20, 20]);
+  });
+
+  it('list lọc status → WHERE detection_status + param', async () => {
+    mockList(1, [listRow()]);
+    await service.list({ status: 'confirmed' });
+    const dataCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('LEFT JOIN rooms'),
+    );
+    expect(String(dataCall[0])).toContain('n.detection_status = $1');
+    expect(dataCall[1]).toContain('confirmed');
+  });
+
+  it('list lọc roomId → WHERE room_id + param', async () => {
+    mockList(1, [listRow()]);
+    await service.list({ roomId: 'rm-9' });
+    const dataCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('LEFT JOIN rooms'),
+    );
+    expect(String(dataCall[0])).toContain('n.room_id = $1');
+    expect(dataCall[1]).toContain('rm-9');
+  });
 });

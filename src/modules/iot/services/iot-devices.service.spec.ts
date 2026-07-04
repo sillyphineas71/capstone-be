@@ -1398,4 +1398,54 @@ describe('IotDevicesService', () => {
       expect(lac(r).reason_code).toBe('HEARTBEAT_NOT_SEEN');
     });
   });
+
+  describe('getStatusSummary', () => {
+    const makeQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+
+    it('tổng hợp total/online/offline/unknown + byType', async () => {
+      const statusQb = makeQb([
+        { status: 'online', count: '3' },
+        { status: 'offline', count: '2' },
+        { status: 'disabled', count: '1' },
+      ]);
+      const typeQb = makeQb([
+        { type: 'ip_camera', count: '4' },
+        { type: 'face_server', count: '2' },
+      ]);
+      (dataSourceMock.getRepository as jest.Mock).mockReturnValue({
+        createQueryBuilder: jest
+          .fn()
+          .mockReturnValueOnce(statusQb)
+          .mockReturnValueOnce(typeQb),
+      });
+
+      const r = await service.getStatusSummary();
+      expect(r).toEqual({
+        total: 6,
+        online: 3,
+        offline: 2,
+        unknown: 1, // disabled tính vào unknown (không online/offline)
+        byType: { ip_camera: 4, face_server: 2 },
+      });
+    });
+
+    it('DB rỗng → tất cả 0, byType {}', async () => {
+      (dataSourceMock.getRepository as jest.Mock).mockReturnValue({
+        createQueryBuilder: jest.fn().mockReturnValue(makeQb([])),
+      });
+      const r = await service.getStatusSummary();
+      expect(r).toEqual({
+        total: 0,
+        online: 0,
+        offline: 0,
+        unknown: 0,
+        byType: {},
+      });
+    });
+  });
 });

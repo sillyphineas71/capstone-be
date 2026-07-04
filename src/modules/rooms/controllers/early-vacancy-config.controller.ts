@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import {
   Controller,
   Get,
@@ -13,16 +13,8 @@ import {
 import { EarlyVacancyConfigService } from '../services/early-vacancy-config.service.js';
 import { UpdateEarlyVacancyConfigDto } from '../dto/update-early-vacancy-config.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard — nhất quán no-show-config/recording/iot controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any): void => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 /**
  * EarlyVacancyConfigController (EVD-001 #48) — admin đọc/ghi ngưỡng early-vacancy.
@@ -35,8 +27,8 @@ export class EarlyVacancyConfigController {
   ) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.early_vacancy.configure')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.early_vacancy.configure')
   async get() {
     const data = await this.earlyVacancyConfigService.getAll();
     return { success: true, message: 'Early-vacancy config retrieved', data };
@@ -44,8 +36,8 @@ export class EarlyVacancyConfigController {
 
   @Put()
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.early_vacancy.configure')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.early_vacancy.configure')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,

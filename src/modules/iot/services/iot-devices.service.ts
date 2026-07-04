@@ -327,6 +327,62 @@ export class IotDevicesService {
     };
   }
 
+  /**
+   * Tổng hợp trạng thái thiết bị cho dashboard giám sát (status-summary).
+   * online/offline lấy trực tiếp theo status; unknown = phần còn lại
+   * (disabled/maintenance/khác). byType đếm theo device_type.
+   */
+  async getStatusSummary(): Promise<{
+    total: number;
+    online: number;
+    offline: number;
+    unknown: number;
+    byType: Record<string, number>;
+  }> {
+    const repo = this.dataSource.getRepository(IoTDeviceEntity);
+
+    const statusRows: Array<{ status: IoTDeviceStatus; count: string }> =
+      await repo
+        .createQueryBuilder('d')
+        .select('d.status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('d.status')
+        .getRawMany();
+
+    const typeRows: Array<{ type: string; count: string }> = await repo
+      .createQueryBuilder('d')
+      .select('d.deviceType', 'type')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('d.deviceType')
+      .getRawMany();
+
+    let total = 0;
+    let online = 0;
+    let offline = 0;
+    for (const row of statusRows) {
+      const count = Number(row.count) || 0;
+      total += count;
+      if (row.status === IoTDeviceStatus.ONLINE) {
+        online = count;
+      } else if (row.status === IoTDeviceStatus.OFFLINE) {
+        offline = count;
+      }
+    }
+
+    const byType: Record<string, number> = {};
+    for (const row of typeRows) {
+      byType[row.type] = Number(row.count) || 0;
+    }
+
+    return {
+      total,
+      online,
+      offline,
+      unknown: total - online - offline,
+      byType,
+    };
+  }
+
   async findOne(deviceId: string): Promise<IotDeviceResponseDto> {
     const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
       where: { id: deviceId },

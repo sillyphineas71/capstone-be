@@ -108,6 +108,89 @@ export class NoShowService {
     return { case: existing[0], created: false };
   }
 
+  /**
+   * GET list no-show cases (phân trang + lọc status/roomId) cho bảng giám sát FE.
+   * SEC-03: raw SQL parameterized. LEFT JOIN rooms để lấy room_name (nullable-safe).
+   * Chỉ trả field có thật trong entity (no_show_cases KHÔNG có created_at → dùng detected_at).
+   */
+  async list(filter: {
+    status?: string;
+    roomId?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<Record<string, unknown>>;
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const page = filter.page && filter.page > 0 ? filter.page : 1;
+    const limit = filter.limit && filter.limit > 0 ? filter.limit : 20;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (filter.status) {
+      params.push(filter.status);
+      conditions.push(`n.detection_status = $${params.length}`);
+    }
+    if (filter.roomId) {
+      params.push(filter.roomId);
+      conditions.push(`n.room_id = $${params.length}`);
+    }
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(' AND ')}`
+      : '';
+
+    const countRows: Array<{ total: number }> =
+      await this.dataSource.manager.query(
+        `SELECT COUNT(*)::int AS total FROM no_show_cases n ${whereClause}`,
+        params,
+      );
+    const total = countRows[0]?.total ?? 0;
+
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
+    const rows: Array<{
+      id: string;
+      room_id: string;
+      room_name: string | null;
+      meeting_id: string;
+      detection_status: string;
+      detected_at: Date | string;
+      warning_sent_at: Date | string | null;
+      released_at: Date | string | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT n.id, n.room_id, r.room_name, n.meeting_id, n.detection_status,
+              n.detected_at, n.warning_sent_at, n.released_at
+       FROM no_show_cases n
+       LEFT JOIN rooms r ON r.id = n.room_id
+       ${whereClause}
+       ORDER BY n.detected_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, limit, offset],
+    );
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      roomId: row.room_id,
+      roomName: row.room_name,
+      meetingId: row.meeting_id,
+      status: row.detection_status,
+      detectedAt: row.detected_at,
+      warningSentAt: row.warning_sent_at,
+      releasedAt: row.released_at,
+    }));
+
+    return {
+      items,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    };
+  }
+
   /** UC-42: cập nhật case (transition hợp lệ, không re-open terminal). */
   async update(
     id: string,

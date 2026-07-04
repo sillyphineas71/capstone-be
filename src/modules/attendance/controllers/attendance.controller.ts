@@ -17,6 +17,8 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { AttendanceService } from '../services/attendance.service.js';
 import { QueryAttendanceDto } from '../dto/query-attendance.dto.js';
@@ -31,6 +33,8 @@ export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
   @Get()
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('attendance.read')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,

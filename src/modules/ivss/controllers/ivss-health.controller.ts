@@ -1,18 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { IVSS_BRIDGE } from '../ports/ivss-bridge.port.js';
 import type { IvssBridgePort } from '../ports/ivss-bridge.port.js';
-
-// Mock PermissionsGuard — nhất quán no-show-config/iot/recording controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any): void => {};
 
 /**
  * IvssHealthController (IVS-001 #36, OQ-6) — health passive: gọi bridge status().
@@ -26,8 +17,8 @@ export class IvssHealthController {
   ) {}
 
   @Get('health')
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('ivss.health.read')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('ivss.health.read')
   async health() {
     const r = await this.bridge.status();
     let bridge: 'up' | 'down' | 'degraded';

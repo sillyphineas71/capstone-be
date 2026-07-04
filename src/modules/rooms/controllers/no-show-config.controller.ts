@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import {
   Controller,
   Get,
@@ -13,16 +13,8 @@ import {
 import { NoShowConfigService } from '../services/no-show-config.service.js';
 import { UpdateNoShowConfigDto } from '../dto/update-no-show-config.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard — nhất quán no-show/recording/iot controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any): void => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 /**
  * NoShowConfigController (NSL-001 #35) — admin đọc/ghi ngưỡng no-show.
@@ -33,8 +25,8 @@ export class NoShowConfigController {
   constructor(private readonly noShowConfigService: NoShowConfigService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.noshow.configure')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.noshow.configure')
   async get() {
     const data = await this.noShowConfigService.getAll();
     return { success: true, message: 'No-show config retrieved', data };
@@ -42,8 +34,8 @@ export class NoShowConfigController {
 
   @Put()
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('room.noshow.configure')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('room.noshow.configure')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,

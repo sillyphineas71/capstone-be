@@ -23,16 +23,6 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 const AUDIO_UPLOAD_MAX_BYTES =
   Number(process.env.STORAGE_MAX_FILE_SIZE) || 50 * 1024 * 1024;
 
-// Mock PermissionsGuard — nhất quán IOT/REC controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
-
 @Controller()
 export class RecordingSessionController {
   constructor(
@@ -42,8 +32,8 @@ export class RecordingSessionController {
   // REC-002 (UC-111): bắt đầu ghi hình video từ IP camera.
   @Post('live-meetings/:meetingId/recording/start-video')
   @HttpCode(201)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.video.start')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.video.start')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async startVideo(
     @Req() req: any,
@@ -66,8 +56,8 @@ export class RecordingSessionController {
   // REC-003 (UC-116): dừng ghi hình video. v1 đồng bộ → 200.
   @Post('live-meetings/:meetingId/recording/:sessionId/stop-video')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.video.stop')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.video.stop')
   async stopVideo(
     @Req() req: any,
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
@@ -155,8 +145,8 @@ export class RecordingSessionController {
   // REC-004 (Phần A): đọc trạng thái phiên ghi (read-only).
   @Get('live-meetings/:meetingId/recording/:sessionId/status')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('recording.video.status')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.video.status')
   async getStatus(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Param('sessionId', ParseUUIDPipe) sessionId: string,

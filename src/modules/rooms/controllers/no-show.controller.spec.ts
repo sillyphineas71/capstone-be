@@ -18,6 +18,7 @@ describe('NoShowController (NSC-001)', () => {
     serviceMock = {
       create: jest.fn(),
       update: jest.fn(),
+      list: jest.fn(),
     };
     lifecycleMock = {
       manualRelease: jest.fn(),
@@ -52,6 +53,33 @@ describe('NoShowController (NSC-001)', () => {
     const res = { status: jest.fn() } as any;
     await controller.createInternal({ bookingId: 'bk-1' } as any, res);
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('list: envelope { success, message, data, meta } + truyền query xuống service', async () => {
+    const svcResult = {
+      items: [{ id: 'nsc-1', roomId: 'rm-1', status: 'risk' }],
+      meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    };
+    serviceMock.list.mockResolvedValue(svcResult);
+    const query = { status: 'risk', roomId: 'rm-1', page: 1, limit: 20 } as any;
+    const r = await controller.list(query);
+    expect(serviceMock.list).toHaveBeenCalledWith(query);
+    expect(r).toEqual({
+      success: true,
+      message: 'No-show cases retrieved successfully',
+      data: svcResult.items,
+      meta: svcResult.meta,
+    });
+  });
+
+  it('list rỗng → data [] + meta total 0', async () => {
+    serviceMock.list.mockResolvedValue({
+      items: [],
+      meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+    });
+    const r = await controller.list({});
+    expect(r.data).toEqual([]);
+    expect(r.meta.total).toBe(0);
   });
 
   it('update: passthrough envelope', async () => {
