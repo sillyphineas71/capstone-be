@@ -3,8 +3,9 @@ import { DataSource } from 'typeorm';
 /**
  * Seed: permission department.read (liệt kê phòng ban — GET /departments).
  *
- * Role-set (ĐỀ XUẤT): ADMIN, MANAGER, SYSTEM_ADMIN, BUSINESS_ADMIN — hợp của sibling
- * department.create (ADMIN/MANAGER) và yêu cầu "vai trò quản trị: System Admin, Business Admin".
+ * Role-set: SYSTEM_ADMIN, BUSINESS_ADMIN, MANAGER, EMPLOYEE — cả 4 role thật của hệ thống.
+ * Thêm EMPLOYEE để nhân viên xem được danh sách phòng ban (phục vụ dropdown/chọn phòng ban).
+ * Đã bỏ 'ADMIN' (role KHÔNG tồn tại trong hệ thống, chỉ gây nhiễu).
  * Mirror seedDepartmentPermission (20260608025436). Idempotent: ON CONFLICT DO NOTHING.
  */
 export async function seedDepartmentReadPermission(
@@ -47,7 +48,7 @@ async function assignPermissionToRoles(
   queryRunner: any,
   permissionId: string,
 ): Promise<void> {
-  const roles = ['ADMIN', 'MANAGER', 'SYSTEM_ADMIN', 'BUSINESS_ADMIN'];
+  const roles = ['SYSTEM_ADMIN', 'BUSINESS_ADMIN', 'MANAGER', 'EMPLOYEE'];
   for (const roleCode of roles) {
     const roleResult = await queryRunner.query(
       'SELECT id FROM roles WHERE role_code = $1 AND is_active = true;',
