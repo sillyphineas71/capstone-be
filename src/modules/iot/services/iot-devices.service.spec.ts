@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service.js';
 import { DataSource } from 'typeorm';
@@ -14,12 +14,21 @@ import {
 } from '@nestjs/common';
 import { IoTDeviceType } from '../entities/iot-device.entity.js';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
+import { probeRtspRuntime } from '../utils/rtsp-runtime-probe.util.js';
 import * as nodeCrypto from 'crypto';
 
 jest.mock('../utils/rtsp-probe.util.js', () => ({
   probeTcp: jest.fn(),
 }));
 const probeTcpMock = probeTcp as jest.MockedFunction<typeof probeTcp>;
+
+// A5: mock util runtime RTSP probe (không cần camera/ffprobe thật).
+jest.mock('../utils/rtsp-runtime-probe.util.js', () => ({
+  probeRtspRuntime: jest.fn(),
+}));
+const probeRtspRuntimeMock = probeRtspRuntime as jest.MockedFunction<
+  typeof probeRtspRuntime
+>;
 
 describe('IotDevicesService', () => {
   let service: IotDevicesService;
@@ -1188,6 +1197,205 @@ describe('IotDevicesService', () => {
       await expect(
         service.receiveStrangerEvent(input(newToken)),
       ).resolves.toBeDefined();
+    });
+  });
+
+  // ===== A5 (IOT-005): checkAvailability nhánh ip_camera (runtime probe) =====
+  describe('checkAvailability (A5)', () => {
+    const probeResult = (over: any = {}) => ({
+      group: 'alive',
+      reasonCode: null,
+      isAvailable: true,
+      runtimeVerified: true,
+      healthStatus: 'healthy',
+      statusAction: 'set_online',
+      ...over,
+    });
+
+    const camera = (over: any = {}) => ({
+      id: 'cam-1',
+      deviceType: IoTDeviceType.IP_CAMERA,
+      roomId: 'room-1',
+      streamUrl: 'rtsp://10.0.0.5:554/stream1',
+      status: 'offline',
+      healthStatus: 'unknown',
+      lastSeenAt: null,
+      metadataJson: {
+        vendor: 'dahua',
+        rtsp_config: { rtsp_enabled: true, rtsp_username: 'admin' },
+      },
+      ...over,
+    });
+
+    const lac = (result: any) => result.metadataJson.last_availability_check;
+
+    beforeEach(() => probeRtspRuntimeMock.mockReset());
+
+    it('AC-1: device không tồn tại → 404', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(null);
+      await expect(
+        service.checkAvailability('u1', 'missing'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('AC-2: device_type không phải camera → 409', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue({
+        id: 'd',
+        deviceType: 'gateway',
+      });
+      await expect(service.checkAvailability('u1', 'd')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    // ── Config-gate: KHÔNG probe ──
+    it('AC-6: thiếu room → DEVICE_ROOM_ASSIGNMENT_REQUIRED, không probe', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        camera({ roomId: null }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(lac(r).reason_code).toBe('DEVICE_ROOM_ASSIGNMENT_REQUIRED');
+      expect(lac(r).runtime_verified).toBe(false);
+      expect(probeRtspRuntimeMock).not.toHaveBeenCalled();
+    });
+
+    it('AC-7: thiếu rtsp_config → RTSP_CONFIG_MISSING, không probe', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        camera({ metadataJson: { vendor: 'dahua' } }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(lac(r).reason_code).toBe('RTSP_CONFIG_MISSING');
+      expect(probeRtspRuntimeMock).not.toHaveBeenCalled();
+    });
+
+    it('AC-8: rtsp disabled → RTSP_DISABLED, không probe', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        camera({
+          metadataJson: {
+            vendor: 'dahua',
+            rtsp_config: { rtsp_enabled: false, rtsp_username: 'admin' },
+          },
+        }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(lac(r).reason_code).toBe('RTSP_DISABLED');
+      expect(probeRtspRuntimeMock).not.toHaveBeenCalled();
+    });
+
+    // ── Probe taxonomy → entity mapping ──
+    it('AC-9: Alive → is_available, status online, check_type rtsp_runtime_probe', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(camera());
+      probeRtspRuntimeMock.mockResolvedValue(probeResult());
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(probeRtspRuntimeMock).toHaveBeenCalled();
+      expect(lac(r).is_available).toBe(true);
+      expect(lac(r).check_type).toBe('rtsp_runtime_probe');
+      expect(lac(r).runtime_verified).toBe(true);
+      expect(r.status).toBe('online');
+      expect(r.healthStatus).toBe('healthy');
+    });
+
+    it('AC-10/11: Unreachable/Timeout → status offline, health faulty', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(camera());
+      probeRtspRuntimeMock.mockResolvedValue(
+        probeResult({
+          group: 'unreachable',
+          reasonCode: 'RTSP_UNREACHABLE',
+          isAvailable: false,
+          healthStatus: 'faulty',
+          statusAction: 'set_offline',
+        }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(r.status).toBe('offline');
+      expect(r.healthStatus).toBe('faulty');
+      expect(lac(r).reason_code).toBe('RTSP_UNREACHABLE');
+    });
+
+    it('AC-12/13: Auth-fail/Not-a-stream → giữ status, health warning', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        camera({ status: 'offline' }),
+      );
+      probeRtspRuntimeMock.mockResolvedValue(
+        probeResult({
+          group: 'auth_fail',
+          reasonCode: 'RTSP_AUTH_FAILED',
+          isAvailable: false,
+          healthStatus: 'warning',
+          statusAction: 'keep',
+        }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(r.status).toBe('offline'); // keep — không đổi
+      expect(r.healthStatus).toBe('warning');
+      expect(lac(r).reason_code).toBe('RTSP_AUTH_FAILED');
+    });
+
+    it('AC-15: persist merge — block metadata cũ (vendor/rtsp_config) còn nguyên', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(camera());
+      probeRtspRuntimeMock.mockResolvedValue(probeResult());
+      const r = await service.checkAvailability('u1', 'cam-1');
+      expect(r.metadataJson.vendor).toBe('dahua');
+      expect(r.metadataJson.rtsp_config).toBeDefined();
+      expect(r.metadataJson.last_availability_check).toBeDefined();
+    });
+
+    it('AC-14: message cố định, KHÔNG chứa URL/credential/stderr', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(camera());
+      probeRtspRuntimeMock.mockResolvedValue(
+        probeResult({
+          group: 'auth_fail',
+          reasonCode: 'RTSP_AUTH_FAILED',
+          isAvailable: false,
+          healthStatus: 'warning',
+          statusAction: 'keep',
+        }),
+      );
+      const r = await service.checkAvailability('u1', 'cam-1');
+      const serialized = JSON.stringify(lac(r));
+      expect(serialized).not.toContain('rtsp://');
+      expect(serialized).not.toContain('10.0.0.5');
+      expect(lac(r).message).toBe(
+        'RTSP authentication failed. Check the configured username/password.',
+      );
+    });
+
+    // ── Không hồi quy face_server (AC-3,4,5) ──
+    const faceServer = (over: any = {}) => ({
+      id: 'fs-1',
+      deviceType: IoTDeviceType.FACE_SERVER,
+      status: 'offline',
+      healthStatus: 'unknown',
+      lastSeenAt: null,
+      metadataJson: {},
+      ...over,
+    });
+
+    it('AC-3: face online (heartbeat ≤5p) → status online, healthy — KHÔNG probe', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceServer({ lastSeenAt: new Date() }),
+      );
+      const r = await service.checkAvailability('u1', 'fs-1');
+      expect(r.status).toBe('online');
+      expect(r.healthStatus).toBe('healthy');
+      expect(lac(r).check_type).toBe('heartbeat_status');
+      expect(probeRtspRuntimeMock).not.toHaveBeenCalled();
+    });
+
+    it('AC-4: face offline (heartbeat >5p) → offline, faulty, HEARTBEAT_STALE', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceServer({ lastSeenAt: new Date(Date.now() - 10 * 60 * 1000) }),
+      );
+      const r = await service.checkAvailability('u1', 'fs-1');
+      expect(r.status).toBe('offline');
+      expect(r.healthStatus).toBe('faulty');
+      expect(lac(r).reason_code).toBe('HEARTBEAT_STALE');
+    });
+
+    it('AC-5: face chưa từng on → HEARTBEAT_NOT_SEEN', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(faceServer());
+      const r = await service.checkAvailability('u1', 'fs-1');
+      expect(lac(r).reason_code).toBe('HEARTBEAT_NOT_SEEN');
     });
   });
 });

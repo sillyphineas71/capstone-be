@@ -21,7 +21,12 @@ import {
   parseVerifyPayload,
   stripSanpPic,
 } from '../utils/face-verify-payload.util.js';
-import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
+import {
+  encryptSecret,
+  decryptSecret,
+} from '../../../common/utils/secret-crypto.util.js';
+import { probeRtspRuntime } from '../utils/rtsp-runtime-probe.util.js';
+import { redactUrl } from '../../recording/utils/ffmpeg.util.js';
 import {
   IoTDeviceEntity,
   IoTDeviceType,
@@ -1168,14 +1173,19 @@ export class IotDevicesService {
         device.healthStatus = IoTDeviceHealthStatus.UNKNOWN;
       }
     } else if (device.deviceType === IoTDeviceType.IP_CAMERA) {
-      check_type = 'rtsp_config_readiness';
+      // A5 (IOT-005): runtime RTSP probe thuần Nest (ffprobe) thay config-readiness.
+      check_type = 'rtsp_runtime_probe';
       runtime_verified = false;
 
-      const rtspConfig = device.metadataJson?.rtsp_config as any;
+      const rtspConfig = device.metadataJson?.rtsp_config as
+        | {
+            rtsp_enabled?: boolean;
+            rtsp_username?: string;
+            rtsp_password_encrypted?: string;
+          }
+        | undefined;
 
-      // Old value 'not_configured' has no equivalent in Tai's health enum; "config not
-      // ready" cases map to WARNING. Readiness is derived from the stream_url column
-      // (host/port/path live there, not in metadata).
+      // Config-gate (giữ pre-check): các trường hợp này KHÔNG probe, health=warning.
       if (!device.roomId) {
         is_available = false;
         reason_code = 'DEVICE_ROOM_ASSIGNMENT_REQUIRED';
@@ -1189,11 +1199,59 @@ export class IotDevicesService {
         reason_code = 'RTSP_DISABLED';
         device.healthStatus = IoTDeviceHealthStatus.WARNING;
       } else {
-        is_available = true;
-        reason_code = null;
-        message =
-          'RTSP configuration is ready. Runtime stream probing is not performed in this version.';
-        device.healthStatus = IoTDeviceHealthStatus.UNKNOWN;
+        // Message cố định theo group (spec §8.4 — KHÔNG nhúng stderr).
+        const RTSP_PROBE_MESSAGES: Record<string, string> = {
+          alive: 'RTSP stream is reachable and contains a video stream.',
+          unreachable:
+            'RTSP host is unreachable (connection refused or no route).',
+          timeout: 'RTSP probe timed out before the stream responded.',
+          auth_fail:
+            'RTSP authentication failed. Check the configured username/password.',
+          not_a_stream: 'RTSP URL did not return a valid video stream.',
+          tool_unavailable: 'Stream probing tool is unavailable on the server.',
+          default: 'RTSP probe failed for an unknown reason.',
+        };
+
+        // Dựng URL có credential IN-MEMORY (KHÔNG ghi DB/trả response/log thô).
+        const username = rtspConfig.rtsp_username;
+        const password = rtspConfig.rtsp_password_encrypted
+          ? decryptSecret(rtspConfig.rtsp_password_encrypted)
+          : '';
+        const probeUrl = username
+          ? device.streamUrl.replace(
+              /^rtsp:\/\//i,
+              `rtsp://${encodeURIComponent(username)}:${encodeURIComponent(
+                password,
+              )}@`,
+            )
+          : device.streamUrl;
+
+        const timeoutMs = this.configService.get<number>(
+          'RTSP_RUNTIME_PROBE_TIMEOUT_MS',
+          10000,
+        );
+        const probe = await probeRtspRuntime(probeUrl, timeoutMs);
+
+        // Map taxonomy §8.2 → entity.
+        is_available = probe.isAvailable;
+        runtime_verified = probe.runtimeVerified;
+        reason_code = probe.reasonCode;
+        message = RTSP_PROBE_MESSAGES[probe.group] ?? message;
+        device.healthStatus = probe.healthStatus as IoTDeviceHealthStatus;
+        if (probe.statusAction === 'set_online') {
+          device.status = IoTDeviceStatus.ONLINE;
+        } else if (probe.statusAction === 'set_offline') {
+          device.status = IoTDeviceStatus.OFFLINE;
+        }
+        // statusAction='keep' → giữ nguyên device.status.
+
+        if (probe.group === 'tool_unavailable') {
+          this.logger.warn(
+            `RTSP probe tool unavailable for device ${device.id} (${redactUrl(
+              probeUrl,
+            )})`,
+          );
+        }
       }
     }
 

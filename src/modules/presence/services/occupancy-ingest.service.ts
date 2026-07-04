@@ -8,8 +8,8 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { createHash } from 'crypto';
-import { WebsocketService } from '../../websocket/websocket.service.js';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
+import { OccupancyPersistenceService } from './occupancy-persistence.service.js';
 
 interface IngestInput {
   headers: Record<string, unknown>;
@@ -37,12 +37,11 @@ interface DeviceRow {
 @Injectable()
 export class OccupancyIngestService {
   private readonly logger = new Logger(OccupancyIngestService.name);
-  private static readonly MAX_OCCUPANCY = 1000; // chặn số vô lý.
   private static readonly TIME_SKEW_MS = 60 * 60 * 1000; // 1h.
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly websocketService: WebsocketService,
+    private readonly occupancyPersistence: OccupancyPersistenceService,
   ) {}
 
   async ingest(input: IngestInput): Promise<{ accepted: true }> {
@@ -140,130 +139,22 @@ export class OccupancyIngestService {
       ],
     );
 
-    // ── 3. VALIDATE occupancyCount ────────────────────────────────────────
+    // ── 3. PARSE occupancyCount + confidence (validate count → persist, LOCKED-A) ──
     const rawCount = body['occupancyCount'];
     const occupancyCount =
       typeof rawCount === 'number' ? rawCount : Number(rawCount);
-    if (
-      !Number.isInteger(occupancyCount) ||
-      occupancyCount < 0 ||
-      occupancyCount > OccupancyIngestService.MAX_OCCUPANCY
-    ) {
-      throw new BadRequestException({
-        code: 'INVALID_OCCUPANCY_PAYLOAD',
-        message: 'occupancyCount must be an integer between 0 and 1000.',
-      });
-    }
     const rawConfidence = body['confidence'];
     const confidence = typeof rawConfidence === 'number' ? rawConfidence : null;
 
-    // ── 4. TRANSACTION ────────────────────────────────────────────────────
-    let statusChangedToOccupied = false;
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-    try {
-      // a. room_events (LUÔN)
-      await queryRunner.query(
-        `INSERT INTO room_events
-           (room_id, meeting_id, event_type, event_time, occupancy_count, confidence_score, source_type)
-         VALUES ($1,$2,$3,$4,$5,$6,'camera')`,
-        [
-          roomId,
-          meetingId,
-          'occupancy_detected',
-          eventTime,
-          occupancyCount,
-          confidence,
-        ],
-      );
-
-      // b. booking active của room tại eventTime
-      const bookingRows = (await queryRunner.query(
-        `SELECT id AS booking_id, meeting_id FROM room_bookings
-           WHERE room_id = $1 AND reserved_start_time <= $2 AND reserved_end_time >= $2
-             AND status IN ('approved','active')
-           ORDER BY reserved_start_time ASC LIMIT 1`,
-        [roomId, eventTime],
-      )) as Array<{ booking_id: string; meeting_id: string }>;
-      const booking = bookingRows?.[0];
-
-      if (booking) {
-        // presence_snapshots (meeting_id NOT NULL → cần booking.meeting_id)
-        await queryRunner.query(
-          `INSERT INTO presence_snapshots
-             (meeting_id, room_id, occupancy_count, presence_status, snapshot_time, source_type, confidence_score)
-           VALUES ($1,$2,$3,'present',$4,'camera',$5)`,
-          [booking.meeting_id, roomId, occupancyCount, eventTime, confidence],
-        );
-
-        // room_booking_usages (nếu có)
-        await queryRunner.query(
-          `UPDATE room_booking_usages
-           SET first_presence_at = COALESCE(first_presence_at, $2),
-               last_presence_at = $2,
-               occupancy_source = 'camera',
-               usage_status = CASE
-                 WHEN usage_status = 'not_started' AND $3 > 0 THEN 'in_use'
-                 ELSE usage_status END
-           WHERE booking_id = $1`,
-          [booking.booking_id, eventTime, occupancyCount],
-        );
-      }
-
-      // c. status: count>0 → occupied (count==0 KHÔNG đổi — D-4).
-      //    RETURNING id để biết status THẬT SỰ đổi (RMS-001 #30 patch) → emit room.status.updated chỉ khi đổi.
-      if (occupancyCount > 0) {
-        const updateResult: unknown = await queryRunner.query(
-          `UPDATE rooms SET current_status = 'occupied'
-           WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
-           RETURNING id`,
-          [roomId],
-        );
-        // Postgres UPDATE...RETURNING qua TypeORM trả [rows, affectedCount] (đã verify DB thật);
-        // chuẩn hoá lấy rows để emit CHỈ khi thật sự có 1 row đổi.
-        const rows =
-          Array.isArray(updateResult) && Array.isArray(updateResult[0])
-            ? updateResult[0]
-            : updateResult;
-        statusChangedToOccupied = Array.isArray(rows) && rows.length > 0;
-      }
-
-      await queryRunner.commitTransaction();
-    } catch (e) {
-      await queryRunner.rollbackTransaction();
-      this.logger.error(
-        `occupancy ingest failed for room ${roomId}: ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-      throw e;
-    } finally {
-      await queryRunner.release();
-    }
-
-    // ── 5. WS best-effort (lỗi WS KHÔNG ảnh hưởng 202/DB) ─────────────────
-    try {
-      this.websocketService.emitToRoom(
-        `room:${roomId}`,
-        'room.occupancy.updated',
-        { roomId, occupancyCount, timestamp: eventTime.toISOString() },
-      );
-      // RMS-001 #30: chỉ phát room.status.updated khi status THẬT SỰ đổi (→occupied).
-      if (statusChangedToOccupied) {
-        this.websocketService.emitToRoom(
-          `room:${roomId}`,
-          'room.status.updated',
-          { roomId, status: 'occupied', timestamp: eventTime.toISOString() },
-        );
-      }
-    } catch (e) {
-      this.logger.warn(
-        `WS emit room.occupancy.updated failed: ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-    }
+    // ── 4. PERSIST (transaction + WS) — dùng chung OccupancyPersistenceService ──
+    //    Validate count + room_events/presence/usage/status + WS nằm trong persist (LOCKED-A).
+    await this.occupancyPersistence.persist({
+      roomId,
+      meetingId,
+      occupancyCount,
+      confidence,
+      eventTime,
+    });
 
     return { accepted: true };
   }

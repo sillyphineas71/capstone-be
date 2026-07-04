@@ -23,6 +23,10 @@ import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+// A5 (IOT-005): route check-availability dùng guard auth THẬT (mirror B21).
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 
 // Mocks for PermissionsGuard since it's not implemented in auth module yet
 const MockPermissionsGuard = class {
@@ -286,6 +290,37 @@ export class IotDevicesController {
       success: true,
       message: 'IoT device enabled successfully',
       data: toIotDeviceResponse(device),
+    };
+  }
+
+  // A5 (IOT-005): chẩn đoán khả dụng camera (runtime RTSP probe / heartbeat).
+  // Guard auth THẬT (mirror B21) — KHÔNG dùng MockPermissionsGuard.
+  @Post(':id/check-availability')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.check_availability')
+  async checkAvailability(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: { userId: string },
+  ) {
+    const device = await this.iotDevicesService.checkAvailability(
+      actor.userId,
+      id,
+    );
+
+    const data = toIotDeviceResponse(device);
+    // SEC (spec §8.4 / AC-14): checked_by chỉ lưu DB — KHÔNG trả ra response.
+    const availability = data.metadata_json?.['last_availability_check'] as
+      | Record<string, unknown>
+      | undefined;
+    if (availability) {
+      delete availability.checked_by;
+    }
+
+    return {
+      success: true,
+      message: 'Camera availability checked successfully',
+      data: { ...data, availability },
     };
   }
 }
