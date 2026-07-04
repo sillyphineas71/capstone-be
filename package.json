@@ -22,7 +22,8 @@
     "migration:generate": "npm run typeorm -- migration:generate -d src/database/data-source.ts",
     "migration:run": "npm run typeorm -- migration:run -d src/database/data-source.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d src/database/data-source.ts",
-    "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts"
+    "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
+    "migration:run:tsx": "tsx scripts/run-migrations.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.4",
@@ -44,6 +45,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cloudinary": "^2.10.0",
+    "exceljs": "^4.4.0",
     "ioredis": "^5.11.1",
     "joi": "^18.2.1",
     "minio": "^8.0.7",
@@ -79,6 +81,7 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.22.5",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },
