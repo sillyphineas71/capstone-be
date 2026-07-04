@@ -7,6 +7,7 @@
 - **Status**: Draft
 - **Source Documents**:
   - UC-MKM-02 "Xem danh sách biên bản họp" (use case gốc do team cung cấp)
+  - UC-MKM-06 "Lọc biên bản theo khoảng thời gian" (use case gốc do team cung cấp, 2026-07-02) — sau gap analysis, xác nhận UC này KHÔNG cần feature backend riêng vì đã được cover đầy đủ bởi FR-011/FR-029 của chính feature này (xem mục 1.6)
   - Thảo luận phân tích UC-MKM-02 với team (2026-07-02) — 2 quyết định đã chốt: (1) participant không thấy biên bản Nháp của người khác, chỉ Host tạo mới thấy; (2) SYSTEM_ADMIN được bổ sung ngang quyền BUSINESS_ADMIN ở AF2
   - `capstone-be/spec/features/minutes/feat-create-draft-meeting-minutes/spec.md` (UC-MKM-01, đã implement — nguồn cho FR-003 visibility_level=private)
   - `capstone-be/spec/features/meeting/feat-pending-meeting-requests/spec.md` (feature list tương tự dùng làm template)
@@ -21,6 +22,7 @@
 | :--- | :--- | :--- |
 | 2026-07-02 | Tạo mới spec cho feature feat-list-meeting-minutes (UC-MKM-02) | Toàn bộ file |
 | 2026-07-02 | Sửa 422 → 400 cho lỗi validation enum/sortBy, khớp hành vi thực tế của ValidationPipe mặc định (không có exceptionFactory tùy chỉnh trong dự án) | FR-027, FR-030, ERR-003, AC-014 |
+| 2026-07-02 | Bổ sung mục 1.6 (quan hệ với UC-MKM-06 "Lọc biên bản theo khoảng thời gian") và 1 dòng traceability mới sau gap analysis: UC-MKM-06 không cần feature backend riêng, đã được cover đầy đủ bởi FR-011 (filter from/to) + FR-029 (validate from>to) đã có sẵn trong feature này. Không có thay đổi hành vi/API nào | Source Documents, mục 1.6 (mới), mục 3.9 Traceability |
 
 ---
 
@@ -58,6 +60,20 @@ Mục tiêu của tính năng này là cho phép Internal Employee (Host/Partici
 - **[ĐÃ GIẢI QUYẾT]** AF2 (xem toàn bộ) áp dụng cho role nào? → Cả `BUSINESS_ADMIN` và `SYSTEM_ADMIN`, nhất quán với toàn bộ RBAC hiện có của dự án (transcription, background-jobs, meeting-end đều check chung 2 role này). Xem FR-016.
 - **[DEFER]** `visibility_level = department` / `public_internal`: chưa có feature nào produce 2 giá trị này (chỉ `private` được set qua feat-create-draft-meeting-minutes). Feature này xử lý an toàn (fail-closed): nếu gặp 2 giá trị này trên biên bản `published`/`archived`, áp dụng cùng rule như `participants` (chỉ host/participant thấy) cho đến khi có feature publish/chia sẻ định nghĩa rõ ràng hành vi mong muốn. Không tự phát minh rule mở rộng hơn.
 - **[DEFER]** Feature "Publish biên bản" (chuyển `draft` → `published`, cập nhật `visibility_level`) chưa tồn tại, nằm ngoài phạm vi feature này (xem mục 8).
+
+### 1.6 Quan hệ với UC-MKM-06 "Lọc biên bản theo khoảng thời gian"
+
+Sau khi UC-MKM-06 được đưa ra để lên spec, gap analysis cho thấy toàn bộ nghiệp vụ của UC đó đã được feature này cover 100%, không cần tạo feature backend riêng:
+
+| Yêu cầu trong UC-MKM-06 | Đã cover ở đâu trong feature này |
+| :--- | :--- |
+| Lọc theo khoảng thời gian `from`/`to` (Normal Flow bước 3-5) | **FR-011**: filter theo `meeting.actual_start_time` khi client truyền `from`/`to` |
+| Kết hợp với điều kiện phân quyền (Normal Flow bước 5) | Scope theo role (mục 2.2) luôn áp dụng TRƯỚC filter, filter chỉ AND thêm vào — đã đúng theo FR-007 |
+| Validate `from > to` là lỗi | **FR-029/ERR-005**: `400 Invalid date range` |
+| Không có kết quả → trả rỗng, không lỗi (EX2 của UC-MKM-06) | Cùng cơ chế **AC-013**: trả `200` với `data=[]`, `meta.total=0` |
+| Xóa filter, tải lại toàn bộ danh sách (AF2 của UC-MKM-06) | Chỉ cần FE không gửi `from`/`to` — code hiện tại (`if (queryDto.from && queryDto.to)`) tự động bỏ qua điều kiện filter khi thiếu tham số, không cần API riêng |
+
+Toàn bộ phần còn lại của UC-MKM-06 (Date Range Picker UI, nút "X" clear filter, dựng câu thông báo "Không tìm thấy biên bản... từ [ngày] đến [ngày]") là UI/UX thuần của FE, không cần thay đổi API/business logic ở BE. Xem thêm dòng traceability UC-MKM-06 ở mục 3.9.
 
 ---
 
@@ -181,6 +197,7 @@ FR-035: THE system SHALL không ghi audit_log cho hành động đọc dữ li�
 | FR-012 | Event-driven | UC-MKM-02 AF1 | Tìm theo tiêu đề/tên cuộc họp/tên host |
 | FR-013 | Event-driven | UC-MKM-02 (điểm cần làm rõ #4) | Xử lý meeting online không có phòng |
 | FR-022 | Response | UC-MKM-02 (điểm cần làm rõ #5) | Hiển thị meeting.host, không phải preparedBy |
+| FR-011, FR-029 | Event-driven / Validation | UC-MKM-06 "Lọc biên bản theo khoảng thời gian" | Date range filter (from/to) + validate from>to — cover đầy đủ UC-MKM-06, không cần feature riêng (xem mục 1.6) |
 
 ---
 

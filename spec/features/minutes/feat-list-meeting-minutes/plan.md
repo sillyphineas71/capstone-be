@@ -5,6 +5,7 @@
 | :--- | :--- | :--- |
 | 2026-07-02 | Tạo mới plan | Toàn bộ file |
 | 2026-07-02 | Sửa 422 → 400 cho lỗi validation enum, khớp hành vi ValidationPipe mặc định của dự án | Mục 9 Error Handling Plan |
+| 2026-07-02 | Bổ sung ghi chú: plan này cũng cover đầy đủ UC-MKM-06 "Lọc biên bản theo khoảng thời gian", không cần implementation mới (xem spec.md mục 1.6) | Mục 1 Feature Summary |
 
 - **Feature ID**: MINUTES-LIST-001
 - **Feature Name**: Xem danh sách biên bản họp
@@ -21,6 +22,8 @@ Feature này cung cấp API `GET /api/v1/meeting-minutes` cho Internal Employee 
 Scope: Business Admin/System Admin thấy toàn bộ (mọi status trừ deleted). Host/Participant/Manager chỉ thấy bản Nháp do chính mình tạo, và biên bản published/archived của các meeting mình là host hoặc participant.
 
 Hỗ trợ lọc theo: status, roomId, date range (from/to theo meeting.actual_start_time), tìm kiếm (q trên minutes.title/meeting.title/host.fullName). Phân trang tối đa 20/trang (BR2), sort theo allowlist.
+
+**Ghi chú bổ sung (2026-07-02)**: Phần date range filter (`from`/`to`, mục 5 "Business Logic Plan" bước d, và validator `FromToConstraint` ở mục 8) đã cover đầy đủ nghiệp vụ của UC-MKM-06 "Lọc biên bản theo khoảng thời gian" (bao gồm cả validate `from > to` và trường hợp không có kết quả trả về rỗng thay vì lỗi). Không cần implementation mới cho UC-MKM-06 — chỉ có phần Date Range Picker/nút Clear filter/thông báo rỗng là FE tự xây trên API đã có sẵn của plan này. Xem `feat-list-meeting-minutes/spec.md` mục 1.6.
 
 ---
 

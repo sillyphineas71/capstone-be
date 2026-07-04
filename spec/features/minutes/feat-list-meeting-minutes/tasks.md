@@ -1,5 +1,13 @@
 # Tasks: Xem danh sách biên bản họp
 
+## 📝 CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-07-02 | Tạo mới tasks (không có changelog header trước đó — bổ sung để tuân thủ RULE TỐI THƯỢNG 2 của CLAUDE.md) | Toàn bộ file |
+| 2026-07-02 | Bổ sung ghi chú traceability: T002/T005/T008 (đã hoàn thành trước đó) cũng chính là phần cover UC-MKM-06 "Lọc biên bản theo khoảng thời gian", không phát sinh task mới | Mục Requirements Coverage |
+
+---
+
 **Feature ID**: MINUTES-LIST-001
 **Input**: Design documents from `spec/features/minutes/feat-list-meeting-minutes/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/feat-list-meeting-minutes-api.md, quickstart.md
@@ -182,6 +190,18 @@
 | T010 | — | (quality) |
 | T011 | — | (contract verification) |
 | T012 | — | (documentation) |
+
+### UC-MKM-06 Traceability (bổ sung 2026-07-02)
+
+UC-MKM-06 "Lọc biên bản theo khoảng thời gian" **không phát sinh task mới** — đã được cover đầy đủ bởi các task sau (đã hoàn thành `[x]`):
+
+| Task | Phần liên quan tới UC-MKM-06 |
+| :--- | :--- |
+| T002 | `from`/`to` trong `MinutesQueryDto` + validator `FromToConstraint` (validate `from > to`) |
+| T005 | Date range filter trong `findMinutesList()` (`meeting.actualStartTime BETWEEN :from AND :to`) |
+| T008 | Test case "filter theo from/to" đã có trong danh sách test của service |
+
+Không cần chạy lại/triển khai thêm gì cho UC-MKM-06 ở phía backend. Phần Date Range Picker/nút Clear filter/thông báo rỗng thuộc về FE.
 
 ### Coverage Summary
 

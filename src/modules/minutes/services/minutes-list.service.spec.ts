@@ -90,6 +90,9 @@ describe('MinutesService.findMinutesList', () => {
       dataSource as unknown as DataSource,
       auditLogsService as unknown as AuditLogsService,
       authzRepo as unknown as AuthzReadRepository,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
     );
   });
 
