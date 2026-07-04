@@ -25,6 +25,7 @@ import { MustChangePasswordGuard } from './guards/must-change-password.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { GetMeService } from './services/get-me.service';
 
 @Module({
   imports: [JwtModule.register({}), CacheModule.register()],
@@ -55,6 +56,7 @@ import { RolesGuard } from './guards/roles.guard';
     JwtAuthGuard,
     PermissionsGuard,
     RolesGuard,
+    GetMeService,
   ],
   exports: [
     // Re-export JwtModule and CacheModule so importing modules can resolve
@@ -84,6 +86,7 @@ import { RolesGuard } from './guards/roles.guard';
     JwtAuthGuard,
     PermissionsGuard,
     RolesGuard,
+    GetMeService,
   ],
 })
 export class AuthModule {}

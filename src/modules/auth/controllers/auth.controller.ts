@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
@@ -34,6 +35,7 @@ import { LoginService } from '../services/login.service';
 import { LogoutService } from '../services/logout.service';
 import { PasswordResetService } from '../services/password-reset.service';
 import { ChangePasswordService } from '../services/change-password.service';
+import { GetMeService } from '../services/get-me.service';
 import { hasOnlyAllowedLoginFields } from '../utils/login-normalization.util';
 
 @ApiTags('Authentication')
@@ -45,6 +47,7 @@ export class AuthController {
     private readonly loginResponsePresenter: LoginResponsePresenter,
     private readonly passwordResetService: PasswordResetService,
     private readonly changePasswordService: ChangePasswordService,
+    private readonly getMeService: GetMeService,
   ) {}
 
   @Post('login')
@@ -245,5 +248,27 @@ export class AuthController {
       userAgent,
       requestId,
     });
+  }
+
+  @Get('me')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get current user profile',
+    description: 'Returns the profile of the currently authenticated user.',
+  })
+  @ApiResponse({ status: 200, description: 'User profile retrieved successfully' })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  async getMe(
+    @Req() request: Request,
+  ): Promise<{ success: boolean; message: string; data: object }> {
+    const user = (request as unknown as { user: { userId: string } }).user;
+    const data = await this.getMeService.getMe(user.userId);
+    return {
+      success: true,
+      message: 'Lấy thông tin tài khoản thành công',
+      data,
+    };
   }
 }
