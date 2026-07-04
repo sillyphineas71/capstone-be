@@ -42,6 +42,7 @@ import { seedAnalyticsOverviewPermission } from '../src/database/seeds/202607020
 import { seedAnalyticsAttendanceReadPermission } from '../src/database/seeds/20260702060000-SeedAnalyticsAttendanceReadPermission';
 import { seedAnalyticsRoomReadPermission } from '../src/database/seeds/20260702070000-SeedAnalyticsRoomReadPermission';
 import { seedReportMeetingActivityExportPermission } from '../src/database/seeds/20260703000001-SeedReportMeetingActivityExportPermission';
+import { seedDepartmentReadPermission } from '../src/database/seeds/20260704000001-SeedDepartmentReadPermission';
 
 // ── Danh sách seeds theo thứ tự ─────────────────────────────────────────────
 const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<void> }> = [
@@ -80,6 +81,7 @@ const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<voi
   { name: '20260702060000 - SeedAnalyticsAttendanceReadPermission', fn: seedAnalyticsAttendanceReadPermission },
   { name: '20260702070000 - SeedAnalyticsRoomReadPermission', fn: seedAnalyticsRoomReadPermission },
   { name: '20260703000001 - SeedReportMeetingActivityExportPermission', fn: seedReportMeetingActivityExportPermission },
+  { name: '20260704000001 - SeedDepartmentReadPermission', fn: seedDepartmentReadPermission },
 ];
 
 // ── Main runner ──────────────────────────────────────────────────────────────

@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
   Ip,
   Post,
+  Query,
   Req,
   UseGuards,
   UsePipes,
@@ -15,6 +17,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
   ApiUnauthorizedResponse,
@@ -29,6 +32,8 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 import { DepartmentsService } from '../services/departments.service.js';
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
+import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
+import { PaginationMeta } from '../dto/pagination-meta.dto.js';
 
 @ApiTags('Accounts')
 @Controller('departments')
@@ -94,6 +99,58 @@ export class DepartmentsController {
       success: true,
       message: 'Khởi tạo phòng ban thành công',
       data: result,
+    };
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('department.read')
+  @ApiBearerAuth()
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  @ApiOperation({
+    summary: 'Liệt kê phòng ban',
+    description:
+      'Trả về danh sách phòng ban (phục vụ dropdown FE). Hỗ trợ search (tên/mã), phân trang (page/limit), lọc theo parentId. Yêu cầu permission department.read.',
+  })
+  @ApiQuery({ name: 'search', required: false, type: 'string' })
+  @ApiQuery({ name: 'page', required: false, type: 'number' })
+  @ApiQuery({ name: 'limit', required: false, type: 'number' })
+  @ApiQuery({
+    name: 'parentId',
+    required: false,
+    type: 'string',
+    format: 'uuid',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Danh sách phòng ban.',
+    type: [DepartmentResponseDto],
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission department.read).',
+  })
+  async listDepartments(@Query() query: ListDepartmentsQueryDto): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto[];
+    meta: PaginationMeta;
+  }> {
+    const result = await this.departmentsService.listDepartments(query);
+
+    return {
+      success: true,
+      message: 'Lấy danh sách phòng ban thành công',
+      data: result.data,
+      meta: result.meta,
     };
   }
 }

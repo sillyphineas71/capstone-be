@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -16,6 +16,7 @@ describe('DepartmentsService', () => {
   let service: DepartmentsService;
   let dataSource: jest.Mocked<DataSource>;
   let em: jest.Mocked<EntityManager>;
+  let repo: { findAndCount: jest.Mock };
 
   const validDto: CreateDepartmentDto = {
     departmentCode: 'IT',
@@ -30,12 +31,14 @@ describe('DepartmentsService', () => {
       save: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
+    repo = { findAndCount: jest.fn() };
     dataSource = {
       transaction: jest
         .fn()
         .mockImplementation((cb: (manager: EntityManager) => unknown) =>
           cb(em),
         ),
+      getRepository: jest.fn().mockReturnValue(repo),
     } as unknown as jest.Mocked<DataSource>;
 
     const module: TestingModule = await Test.createTestingModule({
@@ -333,6 +336,74 @@ describe('DepartmentsService', () => {
 
       // Verify audit log was created (em.save called for both department + audit log)
       expect(em.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('listDepartments', () => {
+    const deptRow = (over: Partial<DepartmentEntity> = {}) =>
+      ({
+        id: 'd1',
+        departmentCode: 'IT',
+        departmentName: 'CNTT',
+        parentDepartmentId: null,
+        managerUserId: null,
+        description: null,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...over,
+      }) as DepartmentEntity;
+
+    it('list rỗng → data [], meta total 0 / totalPages 0', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      const r = await service.listDepartments({});
+      expect(r.data).toEqual([]);
+      expect(r.meta).toEqual({ page: 1, limit: 20, total: 0, totalPages: 0 });
+    });
+
+    it('phân trang: page=2 limit=5, total=12 → skip 5 take 5, totalPages 3', async () => {
+      repo.findAndCount.mockResolvedValue([[deptRow()], 12]);
+      const r = await service.listDepartments({ page: 2, limit: 5 });
+      const opts = repo.findAndCount.mock.calls[0][0];
+      expect(opts.skip).toBe(5);
+      expect(opts.take).toBe(5);
+      expect(r.meta).toEqual({ page: 2, limit: 5, total: 12, totalPages: 3 });
+      expect(r.data[0].departmentCode).toBe('IT');
+    });
+
+    it('search → where OR trên departmentName/departmentCode (ILIKE)', async () => {
+      repo.findAndCount.mockResolvedValue([[deptRow()], 1]);
+      await service.listDepartments({ search: 'cntt' });
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(Array.isArray(where)).toBe(true);
+      expect(where).toHaveLength(2);
+      // mỗi nhánh giữ deletedAt filter + 1 field ILike
+      expect(where[0]).toHaveProperty('departmentName');
+      expect(where[1]).toHaveProperty('departmentCode');
+    });
+
+    it('parentId → where lọc parentDepartmentId (không search → object đơn)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.listDepartments({ parentId: 'parent-uuid' });
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(Array.isArray(where)).toBe(false);
+      expect(where.parentDepartmentId).toBe('parent-uuid');
+    });
+
+    it('map entity → response đúng field (id/code/name/parentId/managerId/createdAt)', async () => {
+      repo.findAndCount.mockResolvedValue([
+        [deptRow({ managerUserId: 'm1', parentDepartmentId: 'p1' })],
+        1,
+      ]);
+      const r = await service.listDepartments({});
+      expect(r.data[0]).toMatchObject({
+        id: 'd1',
+        departmentCode: 'IT',
+        departmentName: 'CNTT',
+        parentDepartmentId: 'p1',
+        managerUserId: 'm1',
+      });
+      expect(r.data[0].createdAt).toBeInstanceOf(Date);
     });
   });
 });

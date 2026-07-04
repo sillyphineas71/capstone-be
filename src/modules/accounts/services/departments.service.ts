@@ -5,7 +5,7 @@
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DataSource, IsNull } from 'typeorm';
+import { DataSource, IsNull, ILike } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { UserEntity } from '../entities/user.entity.js';
@@ -16,6 +16,8 @@ import {
 
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
+import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
+import { PaginationMeta } from '../dto/pagination-meta.dto.js';
 
 export interface ClientContext {
   ipAddress?: string;
@@ -261,5 +263,64 @@ export class DepartmentsService {
     return (
       dto.departmentCode.trim().toUpperCase() + '::' + dto.departmentName.trim()
     );
+  }
+
+  /**
+   * Liệt kê phòng ban (đọc) — phục vụ dropdown FE.
+   * Lọc: search (theo departmentName/departmentCode), parentId (phòng ban cha).
+   * Phân trang page/limit (mặc định 1/20, limit ≤100). Loại bỏ bản ghi soft-deleted.
+   */
+  async listDepartments(
+    query: ListDepartmentsQueryDto,
+  ): Promise<{ data: DepartmentResponseDto[]; meta: PaginationMeta }> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 20;
+    const search = query.search?.trim();
+
+    const repo = this.dataSource.getRepository(DepartmentEntity);
+    const base: Record<string, unknown> = { deletedAt: IsNull() };
+    if (query.parentId) {
+      base.parentDepartmentId = query.parentId;
+    }
+
+    // search → OR trên departmentName / departmentCode (ILIKE, không phân biệt hoa thường).
+    const where = search
+      ? [
+          { ...base, departmentName: ILike(`%${search}%`) },
+          { ...base, departmentCode: ILike(`%${search}%`) },
+        ]
+      : base;
+
+    const [rows, total] = await repo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      data: rows.map((dept) => this.toResponse(dept)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /** Map DepartmentEntity → DepartmentResponseDto (dùng chung cho list). */
+  private toResponse(dept: DepartmentEntity): DepartmentResponseDto {
+    return {
+      id: dept.id,
+      departmentCode: dept.departmentCode,
+      departmentName: dept.departmentName,
+      parentDepartmentId: dept.parentDepartmentId,
+      managerUserId: dept.managerUserId,
+      description: dept.description,
+      isActive: dept.isActive,
+      createdAt: dept.createdAt,
+      updatedAt: dept.updatedAt,
+    };
   }
 }
