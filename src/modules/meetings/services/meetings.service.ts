@@ -2748,10 +2748,10 @@ export class MeetingsService {
       .createQueryBuilder('m')
       .select([
         'm.id',
-        'm.meeting_code',
+        'm.meetingCode',
         'm.title',
-        'm.start_time',
-        'm.end_time',
+        'm.startTime',
+        'm.endTime',
         'm.timezone',
         'm.status',
       ])
@@ -2793,9 +2793,6 @@ export class MeetingsService {
       .andWhere('m.start_time < :to', { to: toDate })
       .andWhere('m.end_time > :from', { from: fromDate })
       .andWhere('m.deleted_at IS NULL')
-      .groupBy('m.id')
-      .addGroupBy('r.id')
-      .addGroupBy('effective_user_role')
       .orderBy('m.start_time', 'ASC');
 
     // Optional: status filter
@@ -3026,6 +3023,7 @@ export class MeetingsService {
         (p) =>
           new DetailParticipantDto({
             id: p.id,
+            userId: p.userId,
             fullName: (p.user as any)?.fullName ?? '',
             email: (p.user as any)?.email ?? '',
             participantRole: p.participantRole,

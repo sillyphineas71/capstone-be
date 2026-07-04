@@ -2863,7 +2863,7 @@ export class LiveMeetingService {
       .createQueryBuilder(MeetingParticipantEntity, 'mp')
       .where('mp.meetingId = :meetingId', { meetingId })
       .andWhere('mp.userId = :userId', { userId })
-      .andWhere('mp.isHost = true')
+      .andWhere('mp.participantRole = :role', { role: 'host' })
       .getCount();
     return count > 0;
   }

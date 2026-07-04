@@ -1,4 +1,4 @@
-﻿// ── Meeting detail ──
+// ── Meeting detail ──
 export class DetailMeetingDto {
   meetingId: string;
   meetingCode: string;
@@ -60,6 +60,7 @@ export class DetailUserDto {
 // ── Participant ──
 export class DetailParticipantDto {
   id: string;
+  userId?: string;
   fullName: string;
   email: string;
   participantRole: string;
@@ -68,6 +69,7 @@ export class DetailParticipantDto {
 
   constructor(data: DetailParticipantDto) {
     this.id = data.id;
+    this.userId = data.userId;
     this.fullName = data.fullName;
     this.email = data.email;
     this.participantRole = data.participantRole;

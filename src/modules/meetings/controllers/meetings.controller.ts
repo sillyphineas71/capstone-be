@@ -212,6 +212,29 @@ export class MeetingsController {
     };
   }
 
+  @Get('meetings/:meetingId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Xem chi tiết cuộc họp' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Chi tiết cuộc họp' })
+  @ApiResponse({ status: 403, description: 'Không có quyền xem cuộc họp này' })
+  @ApiResponse({ status: 404, description: 'Không tìm thấy cuộc họp' })
+  async getMeetingById(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{ success: boolean; message: string; data: object }> {
+    const result = await this.meetingsService.getMyScheduleDetail(
+      currentUser.userId,
+      meetingId,
+    );
+    return {
+      success: true,
+      message: 'Chi tiết cuộc họp',
+      data: result,
+    };
+  }
+
   @Get('meetings/:meetingId/available-rooms')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)

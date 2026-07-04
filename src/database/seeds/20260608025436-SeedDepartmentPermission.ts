@@ -48,13 +48,13 @@ async function assignPermissionToRoles(
   const roles = ['ADMIN', 'MANAGER'];
   for (const roleCode of roles) {
     const roleResult = await queryRunner.query(
-      'SELECT id FROM roles WHERE role_code =  AND is_active = true;',
+      'SELECT id FROM roles WHERE role_code = $1 AND is_active = true;',
       [roleCode],
     );
 
     if (roleResult[0]?.id) {
       await queryRunner.query(
-        'INSERT INTO role_permissions (role_id, permission_id, granted_at) VALUES (, , NOW()) ON CONFLICT (role_id, permission_id) DO NOTHING;',
+        'INSERT INTO role_permissions (role_id, permission_id, granted_at) VALUES ($1, $2, NOW()) ON CONFLICT (role_id, permission_id) DO NOTHING;',
         [roleResult[0].id, permissionId],
       );
     }

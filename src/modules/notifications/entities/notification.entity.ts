@@ -30,6 +30,7 @@ export enum NotificationType {
   AVATAR_REJECTED = 'avatar_rejected',
   // T029: transcript (draft) đã sẵn sàng cho Host review.
   TRANSCRIPT_READY = 'transcript_ready',
+  MINUTES_DELETED_BY_ADMIN = 'minutes_deleted_by_admin',
 }
 
 export enum NotificationChannel {
@@ -158,3 +159,4 @@ export class NotificationEntity {
   @JoinColumn({ name: 'created_by' })
   createdByUser: UserEntity | null;
 }
+
