@@ -3,8 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
-| 2026-06-25 | Implement MEET-ADD-EXTERNAL-PARTICIPANT-001 "Thêm khách mời bên ngoài": MeetingEventType enum, seed permissions, DTOs, service method (addExternalParticipant with capacity/warning/transaction/notification), controller endpoint, unit tests (service/DTO/controller) | meeting-event.entity, seed 20260625000001, 2 DTO files, meetings.service, meetings.controller, spec files |
-| 2026-06-25 | Implement MEET-REMOVE-EXTERNAL-PARTICIPANT-001 "Gỡ bỏ khách mời bên ngoài": MeetingEventType enum, seed permissions, DTOs, service method (removeExternalParticipant with transaction/audit/notification), controller endpoint, unit tests | meeting-event.entity, seed 20260625000002, 3 DTO files, meetings.service, meetings.controller, spec files |
+
 | 2026-06-06 | Sửa lỗi review: thêm device_user_mappings, cập nhật tech stack MQTT, update notification convention, xóa endpoint bảng đã remove | Các mục 3.1, 5.2, 18, 22 |
 | 2026-06-06 | Cập nhật toàn diện đồng bộ DB v3.2 Compact: loại bỏ 10 bảng đã removed khỏi tài liệu hướng dẫn, thêm mapping compact, cập nhật chuẩn Auth/MQTT/TypeORM | Toàn bộ file |
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
