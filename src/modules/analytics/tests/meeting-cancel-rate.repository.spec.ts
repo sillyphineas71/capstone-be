@@ -40,7 +40,9 @@ describe('MeetingCancelRateRepository', () => {
       const result = await repo.findUserIdByEmail('TEST@company.com');
       expect(result).toBe('u1');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT id FROM users WHERE LOWER(email) = LOWER('),
+        expect.stringContaining(
+          'SELECT id FROM users WHERE LOWER(email) = LOWER(',
+        ),
         ['TEST@company.com'],
       );
     });
@@ -51,7 +53,9 @@ describe('MeetingCancelRateRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.getCancelRateSummary(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(');
+      expect(sql).not.toContain(
+        'organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(',
+      );
     });
 
     it('empty scopeDepartmentIds -> FALSE clause', async () => {
@@ -81,7 +85,9 @@ describe('MeetingCancelRateRepository', () => {
       };
       await repo.getCancelRateSummary(params);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(');
+      expect(sql).toContain(
+        'organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(',
+      );
     });
 
     it('roomId filter -> room_id clause', async () => {
@@ -118,7 +124,10 @@ describe('MeetingCancelRateRepository', () => {
         { period: '2026-W23', total_count: 5, cancelled_count: 1 },
       ]);
       const result = await repo.getCancelRateSeries(baseParams);
-      expect(result.get('2026-W23')).toEqual({ totalCount: 5, cancelledCount: 1 });
+      expect(result.get('2026-W23')).toEqual({
+        totalCount: 5,
+        cancelledCount: 1,
+      });
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toContain('GROUP BY period');
     });
@@ -137,7 +146,13 @@ describe('MeetingCancelRateRepository', () => {
   describe('getTopOrganizers', () => {
     it('returns top 10 organizers', async () => {
       mockQuery.mockResolvedValue([
-        { user_id: 'u1', email: 'o1@co.com', full_name: 'Org 1', organized_count: 5, cancelled_count: 3 },
+        {
+          user_id: 'u1',
+          email: 'o1@co.com',
+          full_name: 'Org 1',
+          organized_count: 5,
+          cancelled_count: 3,
+        },
       ]);
       const result = await repo.getTopOrganizers(baseParams);
       expect(result).toHaveLength(1);
@@ -159,7 +174,12 @@ describe('MeetingCancelRateRepository', () => {
   describe('getTopDepartments', () => {
     it('returns top 10 departments', async () => {
       mockQuery.mockResolvedValue([
-        { department_id: 'd1', department_name: 'Dept 1', organized_count: 6, cancelled_count: 4 },
+        {
+          department_id: 'd1',
+          department_name: 'Dept 1',
+          organized_count: 6,
+          cancelled_count: 4,
+        },
       ]);
       const result = await repo.getTopDepartments(baseParams);
       expect(result).toHaveLength(1);

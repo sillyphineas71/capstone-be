@@ -42,9 +42,15 @@ export class MeetingStatusBreakdownController {
     description: 'Thong ke trang thai cuoc hop duoc truy xuat thanh cong',
     type: MeetingStatusBreakdownResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getStatusBreakdown(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -57,7 +63,10 @@ export class MeetingStatusBreakdownController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getStatusBreakdown(currentUser, query);
+      const { data, message } = await this.service.getStatusBreakdown(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

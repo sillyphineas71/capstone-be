@@ -127,9 +127,7 @@ export class NoShowRateRepository {
     return { clause, values };
   }
 
-  async getKpiAggregate(
-    params: NoShowRateParams,
-  ): Promise<KpiAggregateResult> {
+  async getKpiAggregate(params: NoShowRateParams): Promise<KpiAggregateResult> {
     const scope = this.buildScopeWhere(params, 'rb', 'm');
     const pIdx = scope.values.length + 1;
 

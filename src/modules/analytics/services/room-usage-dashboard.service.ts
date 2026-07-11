@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
-import { RoomUsageDashboardRepository, RoomUsageQueryParams } from '../repositories/room-usage-dashboard.repository';
+import {
+  RoomUsageDashboardRepository,
+  RoomUsageQueryParams,
+} from '../repositories/room-usage-dashboard.repository';
 import { RoomUsageConfigService } from './room-usage-config.service';
 import { DashboardOverviewConfigService } from './dashboard-overview-config.service';
 import { QueryRoomUsageDashboardDto } from '../dto/query-room-usage-dashboard.dto';
@@ -47,7 +50,11 @@ export class RoomUsageDashboardService {
     query: QueryRoomUsageDashboardDto,
   ): Promise<{ data: RoomUsageDashboardResponseDto; message: string }> {
     // 1. Resolve date range
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days
     await this.validateMaxRange(from, to);
@@ -85,7 +92,10 @@ export class RoomUsageDashboardService {
     if (scope.scopeRoomIds !== null && scope.scopeRoomIds.length === 0) {
       const data = this.buildEmptyComparisonResponse(from, to);
       await logAction(0);
-      return { data, message: 'Thống kê sử dụng phòng họp được truy xuất thành công' };
+      return {
+        data,
+        message: 'Thống kê sử dụng phòng họp được truy xuất thành công',
+      };
     }
 
     const params: RoomUsageQueryParams = {
@@ -135,7 +145,11 @@ export class RoomUsageDashboardService {
     query: QueryRoomDetailDto,
   ): Promise<{ data: RoomDetailResponseDto; message: string }> {
     // 1. Resolve date range
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days
     await this.validateMaxRange(from, to);
@@ -230,13 +244,18 @@ export class RoomUsageDashboardService {
     from: string,
     to: string,
   ): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
       return { isAdmin: true, scopeRoomIds: null, viewerRole: 'SYSTEM_ADMIN' };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeRoomIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeRoomIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
       const scopeRoomIds = await this.repo.getManagerRoomIds(userId, from, to);
@@ -279,7 +298,8 @@ export class RoomUsageDashboardService {
 
     if (activePreset === 'week') {
       // Find Monday of the current week
-      const dayOfWeek = (new Date(Date.UTC(cy, cm - 1, cd)).getUTCDay() + 6) % 7; // Monday = 0
+      const dayOfWeek =
+        (new Date(Date.UTC(cy, cm - 1, cd)).getUTCDay() + 6) % 7; // Monday = 0
       const startOfWeek = new Date(Date.UTC(cy, cm - 1, cd - dayOfWeek));
       const endOfWeek = new Date(Date.UTC(cy, cm - 1, cd - dayOfWeek + 6));
       return {
@@ -380,7 +400,8 @@ export class RoomUsageDashboardService {
     const [ty, tm, td] = to.split('-').map(Number);
     const fromDate = new Date(Date.UTC(fy, fm - 1, fd));
     const toDate = new Date(Date.UTC(ty, tm - 1, td));
-    const days = Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+    const days =
+      Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
     const capacityHours = operatingHours * days;
 
     let totalBookedMinutes = 0;
@@ -430,7 +451,8 @@ export class RoomUsageDashboardService {
     });
 
     const totalBookedHours = Math.round((totalBookedMinutes / 60) * 10) / 10;
-    const totalActualUsedHours = Math.round((totalActualMinutes / 60) * 10) / 10;
+    const totalActualUsedHours =
+      Math.round((totalActualMinutes / 60) * 10) / 10;
 
     const totalCapacity = capacityHours * activeRooms.length;
     const summaryReservationRate =
@@ -439,10 +461,13 @@ export class RoomUsageDashboardService {
         : 0;
 
     // B3: Use booked hours of only rooms with actual data as denominator for occupancy rate
-    const totalBookedHoursForActual = Math.round((totalBookedMinutesForActual / 60) * 10) / 10;
+    const totalBookedHoursForActual =
+      Math.round((totalBookedMinutesForActual / 60) * 10) / 10;
     const summaryOccupancyRate =
       totalBookedHoursForActual > 0
-        ? Math.round((totalActualUsedHours / totalBookedHoursForActual) * 1000) / 10
+        ? Math.round(
+            (totalActualUsedHours / totalBookedHoursForActual) * 1000,
+          ) / 10
         : 0;
 
     const summary: RoomUsageSummaryDto = {
@@ -464,7 +489,13 @@ export class RoomUsageDashboardService {
    * Build single room detail response.
    */
   private buildDetailResponse(
-    room: { id: string; roomName: string; siteName: string | null; areaName: string | null; capacity: number },
+    room: {
+      id: string;
+      roomName: string;
+      siteName: string | null;
+      areaName: string | null;
+      capacity: number;
+    },
     bookedMinutes: number,
     actualObj: { actualMinutes: number; hasActualData: boolean } | undefined,
     heatmap: HeatmapBucketDto[],
@@ -478,7 +509,8 @@ export class RoomUsageDashboardService {
     const [ty, tm, td] = to.split('-').map(Number);
     const fromDate = new Date(Date.UTC(fy, fm - 1, fd));
     const toDate = new Date(Date.UTC(ty, tm - 1, td));
-    const days = Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+    const days =
+      Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
     const capacityHours = operatingHours * days;
 
     const bookedHours = Math.round((bookedMinutes / 60) * 10) / 10;
@@ -566,10 +598,15 @@ export class RoomUsageDashboardService {
         const overlapStartMs = Math.max(startMs, currentHourStartMs);
         const overlapEndMs = Math.min(endMs, currentHourEndMs);
 
-        const overlapMinutes = Math.max(0, (overlapEndMs - overlapStartMs) / 60000);
+        const overlapMinutes = Math.max(
+          0,
+          (overlapEndMs - overlapStartMs) / 60000,
+        );
 
         if (overlapMinutes > 0) {
-          const localHour = new Date(currentHourStartMs + tzOffset).getUTCHours();
+          const localHour = new Date(
+            currentHourStartMs + tzOffset,
+          ).getUTCHours();
           heatmap[localHour] += Math.round(overlapMinutes * 10) / 10;
         }
 

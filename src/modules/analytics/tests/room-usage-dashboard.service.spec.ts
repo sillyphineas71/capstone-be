@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { RoomUsageDashboardService } from '../services/room-usage-dashboard.service';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
@@ -54,7 +58,10 @@ describe('RoomUsageDashboardService', () => {
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: RoomUsageDashboardRepository, useValue: mockRepo },
         { provide: RoomUsageConfigService, useValue: mockConfigService },
-        { provide: DashboardOverviewConfigService, useValue: mockDashboardConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockDashboardConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
@@ -85,28 +92,32 @@ describe('RoomUsageDashboardService', () => {
     });
 
     it('preset=custom valid', () => {
-      const result = service.resolveDateRange('custom', '2026-06-01', '2026-06-15');
+      const result = service.resolveDateRange(
+        'custom',
+        '2026-06-01',
+        '2026-06-15',
+      );
       expect(result).toEqual({ from: '2026-06-01', to: '2026-06-15' });
     });
 
     it('preset=custom invalid (from > to) -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', '2026-06-15', '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', '2026-06-15', '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
 
     // T2: preset=custom with missing `to` -> BadRequestException (VALIDATION_ERROR)
     it('preset=custom missing to -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', '2026-06-01', undefined)).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', '2026-06-01', undefined),
+      ).toThrow(BadRequestException);
     });
 
     // T2: preset=custom with missing both dates -> BadRequestException
     it('preset=custom missing both from and to -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', undefined, undefined)).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', undefined, undefined),
+      ).toThrow(BadRequestException);
     });
   });
 
@@ -133,8 +144,16 @@ describe('RoomUsageDashboardService', () => {
         permissions: ['analytics.room.read'],
       });
 
-      const result = await service.resolveScope(mockUserId, '2026-06-01', '2026-06-30');
-      expect(result).toEqual({ isAdmin: true, scopeRoomIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      const result = await service.resolveScope(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeRoomIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('MANAGER -> queries room ids based on date range', async () => {
@@ -144,13 +163,21 @@ describe('RoomUsageDashboardService', () => {
       });
       mockRepo.getManagerRoomIds.mockResolvedValue(['r1']);
 
-      const result = await service.resolveScope(mockUserId, '2026-06-01', '2026-06-30');
+      const result = await service.resolveScope(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result).toEqual({
         isAdmin: false,
         scopeRoomIds: ['r1'],
         viewerRole: 'MANAGER',
       });
-      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(mockUserId, '2026-06-01', '2026-06-30');
+      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
     });
 
     // T1: MANAGER scope changes dynamically based on the period being queried
@@ -162,15 +189,31 @@ describe('RoomUsageDashboardService', () => {
 
       // Room R1 is booked by department in June
       mockRepo.getManagerRoomIds.mockResolvedValueOnce(['r1']);
-      const juneScope = await service.resolveScope(mockUserId, '2026-06-01', '2026-06-30');
+      const juneScope = await service.resolveScope(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(juneScope.scopeRoomIds).toContain('r1');
-      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(mockUserId, '2026-06-01', '2026-06-30');
+      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
 
       // No rooms booked by department in July (period boundary changes scope)
       mockRepo.getManagerRoomIds.mockResolvedValueOnce([]);
-      const julyScope = await service.resolveScope(mockUserId, '2026-07-01', '2026-07-31');
+      const julyScope = await service.resolveScope(
+        mockUserId,
+        '2026-07-01',
+        '2026-07-31',
+      );
       expect(julyScope.scopeRoomIds).toEqual([]);
-      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(mockUserId, '2026-07-01', '2026-07-31');
+      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(
+        mockUserId,
+        '2026-07-01',
+        '2026-07-31',
+      );
     });
 
     // T4: EMPLOYEE role -> ForbiddenException (PERMISSION_DENIED)
@@ -199,7 +242,9 @@ describe('RoomUsageDashboardService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getComparisonDashboard({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getComparisonDashboard({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('empty state (manager has 0 rooms in scope)', async () => {
@@ -216,7 +261,10 @@ describe('RoomUsageDashboardService', () => {
         to: '2026-06-05',
       };
 
-      const result = await service.getComparisonDashboard({ userId: mockUserId }, query);
+      const result = await service.getComparisonDashboard(
+        { userId: mockUserId },
+        query,
+      );
 
       expect(result.data.rooms).toEqual([]);
       expect(result.data.summary.totalBookedHours).toBe(0);
@@ -233,7 +281,10 @@ describe('RoomUsageDashboardService', () => {
 
       const bookedMap = new Map<string, number>();
       bookedMap.set(mockRoomId, 120); // 2 hours
-      const actualMap = new Map<string, { actualMinutes: number; hasActualData: boolean }>();
+      const actualMap = new Map<
+        string,
+        { actualMinutes: number; hasActualData: boolean }
+      >();
       actualMap.set(mockRoomId, { actualMinutes: 90, hasActualData: true }); // 1.5 hours
 
       mockRepo.getBookedAggregate.mockResolvedValue(bookedMap);
@@ -249,7 +300,10 @@ describe('RoomUsageDashboardService', () => {
         to: '2026-06-05', // 5 days, capacity = 8 * 5 = 40 hours
       };
 
-      const result = await service.getComparisonDashboard({ userId: mockUserId }, query);
+      const result = await service.getComparisonDashboard(
+        { userId: mockUserId },
+        query,
+      );
 
       expect(result.data.rooms.length).toBe(1);
       expect(result.data.rooms[0].bookedHours).toBe(2.0);
@@ -286,7 +340,13 @@ describe('RoomUsageDashboardService', () => {
       });
       mockRepo.getManagerRoomIds.mockResolvedValue(['different-room']);
       mockDashboardConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getRoom.mockResolvedValue({ id: mockRoomId, roomName: 'Room A', siteName: null, areaName: null, capacity: 10 });
+      mockRepo.getRoom.mockResolvedValue({
+        id: mockRoomId,
+        roomName: 'Room A',
+        siteName: null,
+        areaName: null,
+        capacity: 10,
+      });
 
       await expect(
         service.getRoomDetail({ userId: mockUserId }, mockRoomId, {}),
@@ -300,7 +360,13 @@ describe('RoomUsageDashboardService', () => {
       });
       mockDashboardConfigService.getMaxRangeDays.mockResolvedValue(366);
       mockConfigService.getOperatingHoursPerDay.mockResolvedValue(8);
-      mockRepo.getRoom.mockResolvedValue({ id: mockRoomId, roomName: 'Room A', siteName: 'HQ', areaName: 'Floor 1', capacity: 10 });
+      mockRepo.getRoom.mockResolvedValue({
+        id: mockRoomId,
+        roomName: 'Room A',
+        siteName: 'HQ',
+        areaName: 'Floor 1',
+        capacity: 10,
+      });
 
       const bookedMap = new Map<string, number>();
       bookedMap.set(mockRoomId, 120);
@@ -314,11 +380,15 @@ describe('RoomUsageDashboardService', () => {
         },
       ]);
 
-      const result = await service.getRoomDetail({ userId: mockUserId }, mockRoomId, {
-        preset: 'custom',
-        from: '2026-06-01',
-        to: '2026-06-05',
-      });
+      const result = await service.getRoomDetail(
+        { userId: mockUserId },
+        mockRoomId,
+        {
+          preset: 'custom',
+          from: '2026-06-01',
+          to: '2026-06-05',
+        },
+      );
 
       expect(result.data.room.roomName).toBe('Room A');
       expect(result.data.room.siteName).toBe('HQ');
@@ -339,7 +409,13 @@ describe('RoomUsageDashboardService', () => {
       });
       mockDashboardConfigService.getMaxRangeDays.mockResolvedValue(366);
       mockConfigService.getOperatingHoursPerDay.mockResolvedValue(8);
-      mockRepo.getRoom.mockResolvedValue({ id: mockRoomId, roomName: 'Room A', siteName: null, areaName: null, capacity: 10 });
+      mockRepo.getRoom.mockResolvedValue({
+        id: mockRoomId,
+        roomName: 'Room A',
+        siteName: null,
+        areaName: null,
+        capacity: 10,
+      });
 
       mockRepo.getBookedAggregate.mockResolvedValue(new Map());
       mockRepo.getActualAggregate.mockResolvedValue(new Map());
@@ -361,11 +437,15 @@ describe('RoomUsageDashboardService', () => {
         },
       ]);
 
-      const result = await service.getRoomDetail({ userId: mockUserId }, mockRoomId, {
-        preset: 'custom',
-        from: '2026-06-01',
-        to: '2026-06-05',
-      });
+      const result = await service.getRoomDetail(
+        { userId: mockUserId },
+        mockRoomId,
+        {
+          preset: 'custom',
+          from: '2026-06-01',
+          to: '2026-06-05',
+        },
+      );
 
       // Both sessions contribute to hour 9 -> cumulative 60 minutes
       expect(result.data.heatmap[9].actualMinutes).toBe(60);
@@ -395,8 +475,14 @@ describe('RoomUsageDashboardService', () => {
       bookedMap.set(roomWithActualId, 120); // 120 min = 2h
       bookedMap.set(roomNoActualId, 600); // 600 min = 10h
 
-      const actualMap = new Map<string, { actualMinutes: number; hasActualData: boolean }>();
-      actualMap.set(roomWithActualId, { actualMinutes: 60, hasActualData: true }); // 1h actual
+      const actualMap = new Map<
+        string,
+        { actualMinutes: number; hasActualData: boolean }
+      >();
+      actualMap.set(roomWithActualId, {
+        actualMinutes: 60,
+        hasActualData: true,
+      }); // 1h actual
 
       mockRepo.getBookedAggregate.mockResolvedValue(bookedMap);
       mockRepo.getActualAggregate.mockResolvedValue(actualMap);

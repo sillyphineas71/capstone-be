@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { RoomUtilizationRateController } from '../controllers/room-utilization-rate.controller';
 import { RoomUtilizationRateService } from '../services/room-utilization-rate.service';
 
@@ -28,8 +31,16 @@ describe('RoomUtilizationRateController', () => {
           comparisonPeriod: { from: '2026-05-02', to: '2026-06-01' },
           comparisonHasNoData: false,
           summary: {
-            reservationUtilizationRate: { current: 12.5, comparison: 6.3, deltaPercent: 100.0 },
-            roomOccupancyRate: { current: 75.0, comparison: 50.0, deltaPercent: 50.0 },
+            reservationUtilizationRate: {
+              current: 12.5,
+              comparison: 6.3,
+              deltaPercent: 100.0,
+            },
+            roomOccupancyRate: {
+              current: 75.0,
+              comparison: 50.0,
+              deltaPercent: 50.0,
+            },
             bookedHours: { current: 2.0, comparison: 1.0 },
             actualHours: { current: 1.5, comparison: 0.5 },
             availableHours: { current: 16.0, comparison: 16.0 },
@@ -46,12 +57,14 @@ describe('RoomUtilizationRateController', () => {
         preset: 'month',
       };
 
-      const result = await controller.getUtilizationRate(query as any, {
+      const result = await controller.getUtilizationRate(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê tỷ lệ sử dụng phòng được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ sử dụng phòng được truy xuất thành công',
+      );
       expect(result.data.summary.reservationUtilizationRate.current).toBe(12.5);
       expect(result.meta).toEqual({});
       expect(mockService.getUtilizationRate).toHaveBeenCalledWith(
@@ -75,7 +88,9 @@ describe('RoomUtilizationRateController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getUtilizationRate.mockRejectedValue(new Error('Unexpected error'));
+      mockService.getUtilizationRate.mockRejectedValue(
+        new Error('Unexpected error'),
+      );
 
       await expect(
         controller.getUtilizationRate({} as any, { userId: mockUserId }),

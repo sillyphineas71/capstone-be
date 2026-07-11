@@ -24,7 +24,10 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { OnTimeRateService } from '../services/on-time-rate.service';
 import { QueryOnTimeRateDto } from '../dto/query-on-time-rate.dto';
 import { QueryLateHistoryDto } from '../dto/query-late-history.dto';
-import { OnTimeRateResponseDto, LateHistoryResponseDto } from '../dto/on-time-rate-response.dto';
+import {
+  OnTimeRateResponseDto,
+  LateHistoryResponseDto,
+} from '../dto/on-time-rate-response.dto';
 
 @ApiTags('Analytics Attendance')
 @ApiBearerAuth()
@@ -45,9 +48,15 @@ export class OnTimeRateController {
     description: 'Thong ke ty le tham du dung gio duoc truy xuat thanh cong',
     type: OnTimeRateResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getOnTimeRate(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -60,7 +69,10 @@ export class OnTimeRateController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getOnTimeRate(currentUser, query);
+      const { data, message } = await this.service.getOnTimeRate(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,
@@ -89,9 +101,15 @@ export class OnTimeRateController {
     description: 'Lich su di muon cua nhan su duoc truy xuat thanh cong',
     type: LateHistoryResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / USER_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / USER_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 404, description: 'USER_NOT_FOUND' })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getLateHistory(
@@ -106,7 +124,11 @@ export class OnTimeRateController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getLateHistory(currentUser, userId, query);
+      const { data, message } = await this.service.getLateHistory(
+        currentUser,
+        userId,
+        query,
+      );
       return {
         success: true,
         message,

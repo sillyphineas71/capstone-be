@@ -37,7 +37,11 @@ describe('NoShowRateRepository', () => {
   describe('getManagerRoomIds', () => {
     it('queries room ids dynamically based on date range', async () => {
       mockQuery.mockResolvedValue([{ room_id: 'r1' }]);
-      const result = await repo.getManagerRoomIds('user-1', '2026-06-01', '2026-06-30');
+      const result = await repo.getManagerRoomIds(
+        'user-1',
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result).toEqual(['r1']);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('SELECT DISTINCT rb.room_id'),
@@ -59,7 +63,9 @@ describe('NoShowRateRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.getKpiAggregate(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(');
+      expect(sql).not.toContain(
+        'organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(',
+      );
     });
 
     it('empty scopeDepartmentIds -> FALSE clause', async () => {
@@ -83,7 +89,9 @@ describe('NoShowRateRepository', () => {
       const params = { ...baseParams, departmentIds: ['d1'] };
       await repo.getKpiAggregate(params);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(');
+      expect(sql).toContain(
+        'organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(',
+      );
     });
 
     it('roomId filter -> room_id clause', async () => {
@@ -110,7 +118,9 @@ describe('NoShowRateRepository', () => {
       expect(result).toEqual({ totalBookings: 15, noShowCount: 3 });
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain("status IN ('approved', 'active', 'completed', 'released')");
+      expect(sql).toContain(
+        "status IN ('approved', 'active', 'completed', 'released')",
+      );
       expect(sql).toContain("detection_status IN ('confirmed', 'released')");
       expect(sql).not.toContain("'risk'");
     });
@@ -119,7 +129,13 @@ describe('NoShowRateRepository', () => {
   describe('getRoomRanking', () => {
     it('queries room ranking sorting by noShowCount DESC', async () => {
       mockQuery.mockResolvedValue([
-        { id: 'r1', name: 'Room 1', total_bookings: 5, no_show_count: 3, full_count: 1 },
+        {
+          id: 'r1',
+          name: 'Room 1',
+          total_bookings: 5,
+          no_show_count: 3,
+          full_count: 1,
+        },
       ]);
       const result = await repo.getRoomRanking(baseParams, 1, 10);
       expect(result).toHaveLength(1);
@@ -135,22 +151,39 @@ describe('NoShowRateRepository', () => {
   describe('getDepartmentRanking', () => {
     it('queries department ranking sorting by noShowRate DESC', async () => {
       mockQuery.mockResolvedValue([
-        { id: 'd1', name: 'Dept 1', total_bookings: 5, no_show_count: 3, full_count: 1 },
+        {
+          id: 'd1',
+          name: 'Dept 1',
+          total_bookings: 5,
+          no_show_count: 3,
+          full_count: 1,
+        },
       ]);
       const result = await repo.getDepartmentRanking(baseParams, 1, 10);
       expect(result).toHaveLength(1);
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('INNER JOIN departments d ON d.id = u.department_id');
+      expect(sql).toContain(
+        'INNER JOIN departments d ON d.id = u.department_id',
+      );
       // Department sorts by rate DESC, then count DESC
-      expect(sql).toContain('ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN (\'confirmed\', \'released\'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, no_show_count DESC');
+      expect(sql).toContain(
+        "ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, no_show_count DESC",
+      );
     });
   });
 
   describe('getOrganizerRanking', () => {
     it('queries organizer ranking sorting by noShowCount DESC', async () => {
       mockQuery.mockResolvedValue([
-        { id: 'u1', name: 'User 1', email: 'u1@co.com', total_bookings: 5, no_show_count: 3, full_count: 1 },
+        {
+          id: 'u1',
+          name: 'User 1',
+          email: 'u1@co.com',
+          total_bookings: 5,
+          no_show_count: 3,
+          full_count: 1,
+        },
       ]);
       const result = await repo.getOrganizerRanking(baseParams, 1, 10);
       expect(result).toHaveLength(1);

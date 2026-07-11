@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { RoomUtilizationRateService } from '../services/room-utilization-rate.service';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
@@ -49,12 +53,17 @@ describe('RoomUtilizationRateService', () => {
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: RoomUtilizationRateRepository, useValue: mockRepo },
         { provide: RoomUsageConfigService, useValue: mockConfigService },
-        { provide: DashboardOverviewConfigService, useValue: mockDashboardConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockDashboardConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
 
-    service = module.get<RoomUtilizationRateService>(RoomUtilizationRateService);
+    service = module.get<RoomUtilizationRateService>(
+      RoomUtilizationRateService,
+    );
   });
 
   afterEach(() => {
@@ -75,7 +84,11 @@ describe('RoomUtilizationRateService', () => {
     });
 
     it('preset=custom checks from and to', () => {
-      const result = service.resolveCurrentPeriod('custom', '2026-06-01', '2026-06-15');
+      const result = service.resolveCurrentPeriod(
+        'custom',
+        '2026-06-01',
+        '2026-06-15',
+      );
       expect(result).toEqual({ from: '2026-06-01', to: '2026-06-15' });
     });
   });
@@ -92,7 +105,11 @@ describe('RoomUtilizationRateService', () => {
 
   describe('resolveComparisonPeriod', () => {
     it('previous_period calculates correct boundaries', () => {
-      const result = service.resolveComparisonPeriod('previous_period', '2026-06-05', '2026-06-09');
+      const result = service.resolveComparisonPeriod(
+        'previous_period',
+        '2026-06-05',
+        '2026-06-09',
+      );
       // 5 days: June 5, 6, 7, 8, 9
       // Comp should be: May 31, June 1, 2, 3, 4
       expect(result).toEqual({
@@ -102,7 +119,11 @@ describe('RoomUtilizationRateService', () => {
     });
 
     it('same_period_last_year shifts years back', () => {
-      const result = service.resolveComparisonPeriod('same_period_last_year', '2026-06-01', '2026-06-30');
+      const result = service.resolveComparisonPeriod(
+        'same_period_last_year',
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result).toEqual({
         from: '2025-06-01',
         to: '2025-06-30',
@@ -111,13 +132,25 @@ describe('RoomUtilizationRateService', () => {
 
     it('custom mode checks missing inputs', () => {
       expect(() =>
-        service.resolveComparisonPeriod('custom', '2026-06-01', '2026-06-05', undefined, undefined),
+        service.resolveComparisonPeriod(
+          'custom',
+          '2026-06-01',
+          '2026-06-05',
+          undefined,
+          undefined,
+        ),
       ).toThrow(BadRequestException);
     });
 
     it('custom mode throws if durations do not match', () => {
       expect(() =>
-        service.resolveComparisonPeriod('custom', '2026-06-01', '2026-06-05', '2026-05-01', '2026-05-02'),
+        service.resolveComparisonPeriod(
+          'custom',
+          '2026-06-01',
+          '2026-06-05',
+          '2026-05-01',
+          '2026-05-02',
+        ),
       ).toThrow(BadRequestException);
     });
   });
@@ -129,7 +162,11 @@ describe('RoomUtilizationRateService', () => {
         permissions: ['analytics.room.read'],
       });
 
-      const result = await service.resolveScope(mockUserId, '2026-06-01', '2026-06-30');
+      const result = await service.resolveScope(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result.scopeRoomIds).toBeNull();
     });
 
@@ -140,9 +177,17 @@ describe('RoomUtilizationRateService', () => {
       });
       mockRepo.getManagerRoomIds.mockResolvedValue(['r1']);
 
-      const result = await service.resolveScope(mockUserId, '2026-06-01', '2026-06-30');
+      const result = await service.resolveScope(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result.scopeRoomIds).toEqual(['r1']);
-      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(mockUserId, '2026-06-01', '2026-06-30');
+      expect(mockRepo.getManagerRoomIds).toHaveBeenCalledWith(
+        mockUserId,
+        '2026-06-01',
+        '2026-06-30',
+      );
     });
   });
 
@@ -159,7 +204,9 @@ describe('RoomUtilizationRateService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getUtilizationRate({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getUtilizationRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('throws NotFoundException if roomId does not exist', async () => {
@@ -174,7 +221,9 @@ describe('RoomUtilizationRateService', () => {
         roomId: mockRoomId,
       };
 
-      await expect(service.getUtilizationRate({ userId: mockUserId }, query)).rejects.toThrow(NotFoundException);
+      await expect(
+        service.getUtilizationRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('throws ForbiddenException if MANAGER filters on room out of scope', async () => {
@@ -184,13 +233,18 @@ describe('RoomUtilizationRateService', () => {
       });
       mockRepo.getManagerRoomIds.mockResolvedValue(['different-room']);
       mockDashboardConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getRoom.mockResolvedValue({ id: mockRoomId, roomName: 'Room A' });
+      mockRepo.getRoom.mockResolvedValue({
+        id: mockRoomId,
+        roomName: 'Room A',
+      });
 
       const query: QueryRoomUtilizationRateDto = {
         roomId: mockRoomId,
       };
 
-      await expect(service.getUtilizationRate({ userId: mockUserId }, query)).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.getUtilizationRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('calculates delta values correctly and handles comparison mode empty states', async () => {
@@ -232,14 +286,21 @@ describe('RoomUtilizationRateService', () => {
         comparisonMode: 'previous_period',
       };
 
-      const result = await service.getUtilizationRate({ userId: mockUserId }, query);
+      const result = await service.getUtilizationRate(
+        { userId: mockUserId },
+        query,
+      );
 
       // currentUtilRate = 2 / 16 = 12.5%
       // compUtilRate = 1 / 16 = 6.25%
       // deltaUtil = (12.5 - 6.25) / 6.25 = 100%
       expect(result.data.summary.reservationUtilizationRate.current).toBe(12.5);
-      expect(result.data.summary.reservationUtilizationRate.comparison).toBe(6.3);
-      expect(result.data.summary.reservationUtilizationRate.deltaPercent).toBe(100.0);
+      expect(result.data.summary.reservationUtilizationRate.comparison).toBe(
+        6.3,
+      );
+      expect(result.data.summary.reservationUtilizationRate.deltaPercent).toBe(
+        100.0,
+      );
 
       // currentOcc = 1.5 / 2 = 75%
       // compOcc = 0.5 / 1 = 50%
@@ -285,10 +346,15 @@ describe('RoomUtilizationRateService', () => {
         to: '2026-06-02',
       };
 
-      const result = await service.getUtilizationRate({ userId: mockUserId }, query);
+      const result = await service.getUtilizationRate(
+        { userId: mockUserId },
+        query,
+      );
 
       expect(result.data.comparisonHasNoData).toBe(true);
-      expect(result.message).toBe('Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ đối chiếu được chọn.');
+      expect(result.message).toBe(
+        'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ đối chiếu được chọn.',
+      );
     });
   });
 });

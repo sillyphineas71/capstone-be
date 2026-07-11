@@ -1,4 +1,14 @@
-import { IsOptional, IsEnum, IsDateString, IsUUID, IsArray, IsEmail, IsInt, Min, Max } from 'class-validator';
+import {
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsUUID,
+  IsArray,
+  IsEmail,
+  IsInt,
+  Min,
+  Max,
+} from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 
@@ -16,12 +26,18 @@ export class QueryNoShowRateDto {
 
   @IsOptional()
   @IsDateString({}, { message: 'from must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'Start date (ISO 8601) - only used if preset=custom', example: '2026-06-01' })
+  @ApiPropertyOptional({
+    description: 'Start date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-01',
+  })
   from?: string;
 
   @IsOptional()
   @IsDateString({}, { message: 'to must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'End date (ISO 8601) - only used if preset=custom', example: '2026-06-30' })
+  @ApiPropertyOptional({
+    description: 'End date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-30',
+  })
   to?: string;
 
   @IsOptional()
@@ -35,9 +51,13 @@ export class QueryNoShowRateDto {
     return value;
   })
   @IsArray({ message: 'departmentIds must be an array' })
-  @IsUUID('4', { each: true, message: 'departmentIds must contain valid UUID v4 elements' })
+  @IsUUID('4', {
+    each: true,
+    message: 'departmentIds must contain valid UUID v4 elements',
+  })
   @ApiPropertyOptional({
-    description: 'Filter by one or more department UUIDs (comma-separated or multiple parameters)',
+    description:
+      'Filter by one or more department UUIDs (comma-separated or multiple parameters)',
     type: [String],
   })
   departmentIds?: string[];
@@ -75,6 +95,9 @@ export class QueryNoShowRateDto {
   @IsInt({ message: 'limit must be an integer' })
   @Min(1, { message: 'limit must be at least 1' })
   @Max(100, { message: 'limit must not exceed 100' })
-  @ApiPropertyOptional({ description: 'Limit number of items per page', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Limit number of items per page',
+    default: 20,
+  })
   limit?: number;
 }

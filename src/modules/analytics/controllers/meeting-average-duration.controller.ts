@@ -39,12 +39,19 @@ export class MeetingAverageDurationController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Thong ke thoi luong trung binh cuoc hop duoc truy xuat thanh cong',
+    description:
+      'Thong ke thoi luong trung binh cuoc hop duoc truy xuat thanh cong',
     type: MeetingAverageDurationResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getAverageDuration(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -57,7 +64,10 @@ export class MeetingAverageDurationController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getAverageDuration(currentUser, query);
+      const { data, message } = await this.service.getAverageDuration(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

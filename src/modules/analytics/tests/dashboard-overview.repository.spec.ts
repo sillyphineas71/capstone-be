@@ -93,9 +93,7 @@ describe('DashboardOverviewRepository', () => {
 
   describe('getNoShowAggregate', () => {
     it('returns counts', async () => {
-      mockQuery.mockResolvedValue([
-        { no_show_count: 3, booking_count: 20 },
-      ]);
+      mockQuery.mockResolvedValue([{ no_show_count: 3, booking_count: 20 }]);
       const result = await repo.getNoShowAggregate(baseParams);
       expect(result).toEqual({ noShowCount: 3, bookingCount: 20 });
     });
@@ -103,9 +101,7 @@ describe('DashboardOverviewRepository', () => {
 
   describe('getAttendanceAggregate', () => {
     it('returns counts', async () => {
-      mockQuery.mockResolvedValue([
-        { total_count: 50, on_time_count: 42 },
-      ]);
+      mockQuery.mockResolvedValue([{ total_count: 50, on_time_count: 42 }]);
       const result = await repo.getAttendanceAggregate(baseParams);
       expect(result).toEqual({ onTimeCount: 42, totalCount: 50 });
     });
@@ -128,8 +124,18 @@ describe('DashboardOverviewRepository', () => {
   describe('getDailyTrend', () => {
     it('returns mapped rows', async () => {
       mockQuery.mockResolvedValue([
-        { date: '2026-06-01', meeting_count: 5, actual_minutes_sum: '300', reserved_minutes_sum: '500' },
-        { date: '2026-06-02', meeting_count: 0, actual_minutes_sum: '0', reserved_minutes_sum: '0' },
+        {
+          date: '2026-06-01',
+          meeting_count: 5,
+          actual_minutes_sum: '300',
+          reserved_minutes_sum: '500',
+        },
+        {
+          date: '2026-06-02',
+          meeting_count: 0,
+          actual_minutes_sum: '0',
+          reserved_minutes_sum: '0',
+        },
       ]);
       const result = await repo.getDailyTrend(baseParams);
       expect(result).toHaveLength(2);

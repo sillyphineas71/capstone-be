@@ -38,7 +38,9 @@ describe('MeetingStatusBreakdownRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.getStatusCounts(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(');
+      expect(sql).not.toContain(
+        'organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(',
+      );
     });
 
     it('empty scopeDepartmentIds -> FALSE clause', async () => {
@@ -68,7 +70,9 @@ describe('MeetingStatusBreakdownRepository', () => {
       };
       await repo.getStatusCounts(params);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(');
+      expect(sql).toContain(
+        'organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(',
+      );
     });
   });
 
@@ -104,10 +108,18 @@ describe('MeetingStatusBreakdownRepository', () => {
       const caseSql = sql.substring(caseStartIndex, caseEndIndex);
 
       // precedence order: cancelled -> no_show -> completed -> scheduled
-      const cancelledIndex = caseSql.indexOf("m.status = 'cancelled' THEN 'cancelled'");
-      const noShowIndex = caseSql.indexOf("detection_status IN ('confirmed', 'released')");
-      const completedIndex = caseSql.indexOf("m.status = 'completed' THEN 'completed'");
-      const scheduledIndex = caseSql.indexOf("m.status = 'scheduled' THEN 'scheduled'");
+      const cancelledIndex = caseSql.indexOf(
+        "m.status = 'cancelled' THEN 'cancelled'",
+      );
+      const noShowIndex = caseSql.indexOf(
+        "detection_status IN ('confirmed', 'released')",
+      );
+      const completedIndex = caseSql.indexOf(
+        "m.status = 'completed' THEN 'completed'",
+      );
+      const scheduledIndex = caseSql.indexOf(
+        "m.status = 'scheduled' THEN 'scheduled'",
+      );
 
       expect(cancelledIndex).toBeGreaterThan(-1);
       expect(noShowIndex).toBeGreaterThan(cancelledIndex);
@@ -115,7 +127,9 @@ describe('MeetingStatusBreakdownRepository', () => {
       expect(scheduledIndex).toBeGreaterThan(completedIndex);
 
       // Check detection status does not include 'risk'
-      expect(caseSql).toContain("nsc.detection_status IN ('confirmed', 'released')");
+      expect(caseSql).toContain(
+        "nsc.detection_status IN ('confirmed', 'released')",
+      );
     });
 
     it('maps query rows to Map including all statuses even if not present in SQL result', async () => {

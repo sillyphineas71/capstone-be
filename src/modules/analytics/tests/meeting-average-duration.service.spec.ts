@@ -40,12 +40,17 @@ describe('MeetingAverageDurationService', () => {
         MeetingAverageDurationService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: MeetingAverageDurationRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
 
-    service = module.get<MeetingAverageDurationService>(MeetingAverageDurationService);
+    service = module.get<MeetingAverageDurationService>(
+      MeetingAverageDurationService,
+    );
   });
 
   afterEach(() => {
@@ -60,7 +65,11 @@ describe('MeetingAverageDurationService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('BUSINESS_ADMIN -> isAdmin=true, scopeDepartmentIds=null', async () => {
@@ -70,7 +79,11 @@ describe('MeetingAverageDurationService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -97,7 +110,11 @@ describe('MeetingAverageDurationService', () => {
       mockRepo.getManagerDepartmentIds.mockResolvedValue([]);
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: false, scopeDepartmentIds: [], viewerRole: 'MANAGER' });
+      expect(result).toEqual({
+        isAdmin: false,
+        scopeDepartmentIds: [],
+        viewerRole: 'MANAGER',
+      });
     });
 
     it('no valid role -> ForbiddenException', async () => {
@@ -106,7 +123,9 @@ describe('MeetingAverageDurationService', () => {
         permissions: ['analytics.meeting.read'],
       });
 
-      await expect(service.resolveScope(mockUserId)).rejects.toThrow(ForbiddenException);
+      await expect(service.resolveScope(mockUserId)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -120,8 +139,12 @@ describe('MeetingAverageDurationService', () => {
       const localTime = new Date(now.getTime() + tzOffset * 60000);
       const year = localTime.getUTCFullYear();
       const month = localTime.getUTCMonth();
-      const firstDay = new Date(Date.UTC(year, month, 1)).toISOString().split('T')[0];
-      const lastDay = new Date(Date.UTC(year, month + 1, 0)).toISOString().split('T')[0];
+      const firstDay = new Date(Date.UTC(year, month, 1))
+        .toISOString()
+        .split('T')[0];
+      const lastDay = new Date(Date.UTC(year, month + 1, 0))
+        .toISOString()
+        .split('T')[0];
 
       expect(result.from).toBe(firstDay);
       expect(result.to).toBe(lastDay);
@@ -132,7 +155,9 @@ describe('MeetingAverageDurationService', () => {
         from: '2026-07-01',
         to: '2026-06-01',
       };
-      await expect(service.resolveDateRange(query)).rejects.toThrow(BadRequestException);
+      await expect(service.resolveDateRange(query)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('from = to -> passes', async () => {
@@ -199,12 +224,20 @@ describe('MeetingAverageDurationService', () => {
     });
 
     it('granularity=month', () => {
-      const result = service.generateBuckets('2026-05-15', '2026-07-10', 'month');
+      const result = service.generateBuckets(
+        '2026-05-15',
+        '2026-07-10',
+        'month',
+      );
       expect(result).toEqual(['2026-05', '2026-06', '2026-07']);
     });
 
     it('granularity=quarter', () => {
-      const result = service.generateBuckets('2026-05-15', '2026-10-10', 'quarter');
+      const result = service.generateBuckets(
+        '2026-05-15',
+        '2026-10-10',
+        'quarter',
+      );
       expect(result).toEqual(['2026-Q2', '2026-Q3', '2026-Q4']);
     });
 
@@ -212,7 +245,11 @@ describe('MeetingAverageDurationService', () => {
       // 2026-05-01 is Friday (week 18).
       // Week 18 Monday is 2026-04-27.
       // 2026-05-10 is Sunday (week 19).
-      const result = service.generateBuckets('2026-05-01', '2026-05-10', 'week');
+      const result = service.generateBuckets(
+        '2026-05-01',
+        '2026-05-10',
+        'week',
+      );
       expect(result).toEqual(['2026-W18', '2026-W19']);
     });
   });
@@ -237,9 +274,14 @@ describe('MeetingAverageDurationService', () => {
         granularity: 'day',
       };
 
-      const result = await service.getAverageDuration({ userId: mockUserId }, query);
+      const result = await service.getAverageDuration(
+        { userId: mockUserId },
+        query,
+      );
 
-      expect(result.message).toBe('Không có dữ liệu thời lượng cuộc họp nào cho bộ lọc hiện tại');
+      expect(result.message).toBe(
+        'Không có dữ liệu thời lượng cuộc họp nào cho bộ lọc hiện tại',
+      );
       expect(result.data.summary).toEqual({
         plannedAverageMinutes: null,
         actualAverageMinutes: null,
@@ -260,7 +302,11 @@ describe('MeetingAverageDurationService', () => {
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
 
       const bucketResults = new Map();
-      bucketResults.set('2026-06-01', { plannedAvg: 60.25, actualAvg: 55.44, count: 2 });
+      bucketResults.set('2026-06-01', {
+        plannedAvg: 60.25,
+        actualAvg: 55.44,
+        count: 2,
+      });
       mockRepo.getAverageDurationByBucket.mockResolvedValue(bucketResults);
       mockRepo.getAverageDurationSummary.mockResolvedValue({
         plannedAvg: 60.25,
@@ -274,9 +320,14 @@ describe('MeetingAverageDurationService', () => {
         granularity: 'day',
       };
 
-      const result = await service.getAverageDuration({ userId: mockUserId }, query);
+      const result = await service.getAverageDuration(
+        { userId: mockUserId },
+        query,
+      );
 
-      expect(result.message).toBe('Thống kê thời lượng trung bình cuộc họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê thời lượng trung bình cuộc họp được truy xuất thành công',
+      );
       expect(result.data.summary).toEqual({
         plannedAverageMinutes: 60.3,
         actualAverageMinutes: 55.4,
@@ -301,7 +352,9 @@ describe('MeetingAverageDurationService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getAverageDuration({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getAverageDuration({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

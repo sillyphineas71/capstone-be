@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { OnTimeRateService } from '../services/on-time-rate.service';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
@@ -46,7 +50,10 @@ describe('OnTimeRateService', () => {
         OnTimeRateService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: OnTimeRateRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
@@ -83,14 +90,18 @@ describe('OnTimeRateService', () => {
     });
 
     it('preset=custom valid', () => {
-      const result = service.resolveDateRange('custom', '2026-06-01', '2026-06-15');
+      const result = service.resolveDateRange(
+        'custom',
+        '2026-06-01',
+        '2026-06-15',
+      );
       expect(result).toEqual({ from: '2026-06-01', to: '2026-06-15' });
     });
 
     it('preset=custom invalid (from > to) -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', '2026-06-15', '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', '2026-06-15', '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
   });
 
@@ -118,7 +129,11 @@ describe('OnTimeRateService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -159,7 +174,9 @@ describe('OnTimeRateService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getOnTimeRate({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getOnTimeRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('empty state (totalRequiredParticipants = 0)', async () => {
@@ -223,7 +240,12 @@ describe('OnTimeRateService', () => {
       mockRepo.getTrendByWeek.mockResolvedValue(trendMap);
       mockRepo.getLateByHourOfDay.mockResolvedValue(hourMap);
       mockRepo.getLateByDepartment.mockResolvedValue([
-        { departmentId: 'd1', departmentName: 'Dept 1', lateCount: 10, totalRequiredParticipants: 50 },
+        {
+          departmentId: 'd1',
+          departmentName: 'Dept 1',
+          lateCount: 10,
+          totalRequiredParticipants: 50,
+        },
       ]);
 
       const query: QueryOnTimeRateDto = {
@@ -234,7 +256,9 @@ describe('OnTimeRateService', () => {
 
       const result = await service.getOnTimeRate({ userId: mockUserId }, query);
 
-      expect(result.message).toBe('Thống kê tỷ lệ tham dự đúng giờ được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ tham dự đúng giờ được truy xuất thành công',
+      );
       expect(result.data.totalRequiredParticipants).toBe(467);
       expect(result.data.onTimeRate).toBe(82.4); // 385 / 467 * 100 = 82.44
       expect(result.data.trend[0].onTimeRate).toBe(82.4);
@@ -309,9 +333,15 @@ describe('OnTimeRateService', () => {
         graceMinutes: 5,
       };
 
-      const result = await service.getLateHistory({ userId: mockUserId }, mockTargetId, query);
+      const result = await service.getLateHistory(
+        { userId: mockUserId },
+        mockTargetId,
+        query,
+      );
 
-      expect(result.message).toBe('Lịch sử đi muộn của nhân sự được truy xuất thành công');
+      expect(result.message).toBe(
+        'Lịch sử đi muộn của nhân sự được truy xuất thành công',
+      );
       expect(result.data.user.fullName).toBe('Target User');
       expect(result.data.lateMeetings.length).toBe(1);
       expect(result.data.lateMeetings[0].meetingTitle).toBe('Meeting 1');

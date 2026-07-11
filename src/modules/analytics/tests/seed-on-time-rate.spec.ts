@@ -32,7 +32,9 @@ describe('SeedAnalyticsAttendanceReadPermission', () => {
         .mockResolvedValueOnce([{ id: 'role-3' }]) // SELECT SYSTEM_ADMIN
         .mockResolvedValueOnce(undefined); // INSERT role_permission SYSTEM_ADMIN
 
-      await expect(seedAnalyticsAttendanceReadPermission(mockDataSource)).resolves.toBeUndefined();
+      await expect(
+        seedAnalyticsAttendanceReadPermission(mockDataSource),
+      ).resolves.toBeUndefined();
 
       expect(mockQueryRunner.connect).toHaveBeenCalled();
       expect(mockQueryRunner.startTransaction).toHaveBeenCalled();
@@ -46,7 +48,9 @@ describe('SeedAnalyticsAttendanceReadPermission', () => {
     it('rolls back on error', async () => {
       mockQueryRunner.query.mockRejectedValue(new Error('DB Error'));
 
-      await expect(seedAnalyticsAttendanceReadPermission(mockDataSource)).rejects.toThrow('DB Error');
+      await expect(
+        seedAnalyticsAttendanceReadPermission(mockDataSource),
+      ).rejects.toThrow('DB Error');
       expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
       expect(mockQueryRunner.release).toHaveBeenCalled();
     });

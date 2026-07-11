@@ -58,7 +58,13 @@ export class MeetingAverageDurationService {
       this.repo.getAverageDurationSummary(params),
     ]);
 
-    const data = this.buildResponse(from, to, buckets, bucketResults, summaryResult);
+    const data = this.buildResponse(
+      from,
+      to,
+      buckets,
+      bucketResults,
+      summaryResult,
+    );
 
     // Audit logging
     try {
@@ -97,22 +103,33 @@ export class MeetingAverageDurationService {
    * Resolve user scope based on role.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
     throw new ForbiddenException({
       success: false,
-      message: 'You do not have permission to view meeting average duration analytics',
+      message:
+        'You do not have permission to view meeting average duration analytics',
       error: { code: 'PERMISSION_DENIED', details: {} },
     });
   }
@@ -240,7 +257,9 @@ export class MeetingAverageDurationService {
   }
 
   private getISOWeekLabel(date: Date): string {
-    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const d = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
     const dayNum = (d.getUTCDay() + 6) % 7; // Monday is 0, Sunday is 6
     d.setUTCDate(d.getUTCDate() - dayNum + 3); // Set to Thursday of the same week
     const firstThursday = d.getTime();
@@ -260,8 +279,15 @@ export class MeetingAverageDurationService {
     from: string,
     to: string,
     buckets: string[],
-    bucketResults: Map<string, { plannedAvg: number | null; actualAvg: number | null; count: number }>,
-    summaryResult: { plannedAvg: number | null; actualAvg: number | null; count: number },
+    bucketResults: Map<
+      string,
+      { plannedAvg: number | null; actualAvg: number | null; count: number }
+    >,
+    summaryResult: {
+      plannedAvg: number | null;
+      actualAvg: number | null;
+      count: number;
+    },
   ): MeetingAverageDurationResponseDto {
     const series = buckets.map((bucketKey) => {
       const result = bucketResults.get(bucketKey);
@@ -276,18 +302,26 @@ export class MeetingAverageDurationService {
       return {
         period: bucketKey,
         plannedAverageMinutes:
-          result.plannedAvg !== null ? Math.round(result.plannedAvg * 10) / 10 : null,
+          result.plannedAvg !== null
+            ? Math.round(result.plannedAvg * 10) / 10
+            : null,
         actualAverageMinutes:
-          result.actualAvg !== null ? Math.round(result.actualAvg * 10) / 10 : null,
+          result.actualAvg !== null
+            ? Math.round(result.actualAvg * 10) / 10
+            : null,
         completedMeetingCount: result.count,
       };
     });
 
     const summary = {
       plannedAverageMinutes:
-        summaryResult.plannedAvg !== null ? Math.round(summaryResult.plannedAvg * 10) / 10 : null,
+        summaryResult.plannedAvg !== null
+          ? Math.round(summaryResult.plannedAvg * 10) / 10
+          : null,
       actualAverageMinutes:
-        summaryResult.actualAvg !== null ? Math.round(summaryResult.actualAvg * 10) / 10 : null,
+        summaryResult.actualAvg !== null
+          ? Math.round(summaryResult.actualAvg * 10) / 10
+          : null,
       completedMeetingCount: summaryResult.count,
     };
 

@@ -168,7 +168,10 @@ export class MeetingCancelRateRepository {
       params.to,
     ]);
 
-    const result = new Map<string, { totalCount: number; cancelledCount: number }>();
+    const result = new Map<
+      string,
+      { totalCount: number; cancelledCount: number }
+    >();
     for (const row of rows) {
       result.set(row.period, {
         totalCount: row.total_count ?? 0,

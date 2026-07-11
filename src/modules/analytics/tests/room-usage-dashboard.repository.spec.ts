@@ -24,7 +24,11 @@ describe('RoomUsageDashboardRepository', () => {
   describe('getManagerRoomIds', () => {
     it('queries room ids dynamically based on date range', async () => {
       mockQuery.mockResolvedValue([{ room_id: 'r1' }]);
-      const result = await repo.getManagerRoomIds('user-1', '2026-06-01', '2026-06-30');
+      const result = await repo.getManagerRoomIds(
+        'user-1',
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result).toEqual(['r1']);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('SELECT DISTINCT rb.room_id'),
@@ -89,8 +93,12 @@ describe('RoomUsageDashboardRepository', () => {
       expect(result.get('r1')).toBe(120);
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('SUM(EXTRACT(EPOCH FROM (rb.reserved_end_time - rb.reserved_start_time)) / 60)');
-      expect(sql).toContain("rb.status IN ('approved', 'active', 'completed', 'released')");
+      expect(sql).toContain(
+        'SUM(EXTRACT(EPOCH FROM (rb.reserved_end_time - rb.reserved_start_time)) / 60)',
+      );
+      expect(sql).toContain(
+        "rb.status IN ('approved', 'active', 'completed', 'released')",
+      );
     });
   });
 
@@ -98,14 +106,23 @@ describe('RoomUsageDashboardRepository', () => {
     it('queries SUM of actual/presence durations from room_booking_usages', async () => {
       mockQuery.mockResolvedValue([{ room_id: 'r1', actual_minutes: 90 }]);
       const result = await repo.getActualAggregate(baseParams);
-      expect(result.get('r1')).toEqual({ actualMinutes: 90, hasActualData: true });
+      expect(result.get('r1')).toEqual({
+        actualMinutes: 90,
+        hasActualData: true,
+      });
 
       const sql = mockQuery.mock.calls[0][0] as string;
       // L2: We now use CASE WHEN to enforce complete atomic pairs (not COALESCE which could cross-mix actual vs presence)
       expect(sql).toContain('CASE');
-      expect(sql).toContain('WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL');
-      expect(sql).toContain('EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60');
-      expect(sql).toContain('EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60');
+      expect(sql).toContain(
+        'WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL',
+      );
+      expect(sql).toContain(
+        'EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60',
+      );
+      expect(sql).toContain(
+        'EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60',
+      );
       expect(sql).toContain('rbu.actual_start_time IS NOT NULL');
     });
   });

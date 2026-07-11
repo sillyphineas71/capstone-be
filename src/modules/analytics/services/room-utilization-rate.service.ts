@@ -44,7 +44,11 @@ export class RoomUtilizationRateService {
     query: QueryRoomUtilizationRateDto,
   ): Promise<{ data: RoomUtilizationRateResponseDto; message: string }> {
     // 1. Resolve current period
-    const currentPeriod = this.resolveCurrentPeriod(query.preset, query.from, query.to);
+    const currentPeriod = this.resolveCurrentPeriod(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days on current period only
     await this.validateMaxRange(currentPeriod.from, currentPeriod.to);
@@ -59,7 +63,11 @@ export class RoomUtilizationRateService {
     );
 
     // 4. Resolve scope
-    const scope = await this.resolveScope(currentUser.userId, currentPeriod.from, currentPeriod.to);
+    const scope = await this.resolveScope(
+      currentUser.userId,
+      currentPeriod.from,
+      currentPeriod.to,
+    );
 
     // 5. Check roomId validity and ownership if roomId filter is provided
     if (query.roomId) {
@@ -108,9 +116,13 @@ export class RoomUtilizationRateService {
     // 6. Enforce granularity
     const currentFromDate = new Date(currentPeriod.from);
     const currentToDate = new Date(currentPeriod.to);
-    const days = Math.round((currentToDate.getTime() - currentFromDate.getTime()) / 86400000) + 1;
+    const days =
+      Math.round(
+        (currentToDate.getTime() - currentFromDate.getTime()) / 86400000,
+      ) + 1;
 
-    const activeGranularity: 'day' | 'week' = (query.granularity as 'day' | 'week') || (days <= 31 ? 'day' : 'week');
+    const activeGranularity: 'day' | 'week' =
+      (query.granularity as 'day' | 'week') || (days <= 31 ? 'day' : 'week');
 
     // Short-circuit if manager has no rooms in scope
     if (scope.scopeRoomIds !== null && scope.scopeRoomIds.length === 0) {
@@ -139,20 +151,35 @@ export class RoomUtilizationRateService {
 
     // 8. Compute summary metrics
     const operatingHours = await this.configService.getOperatingHoursPerDay();
-    const currentCapacityHours = operatingHours * days * currentAgg.activeRoomCount;
+    const currentCapacityHours =
+      operatingHours * days * currentAgg.activeRoomCount;
     const compCapacityHours = operatingHours * days * compAgg.activeRoomCount;
 
-    const currentBookedHours = Math.round((currentAgg.bookedMinutesSum / 60) * 10) / 10;
-    const compBookedHours = Math.round((compAgg.bookedMinutesSum / 60) * 10) / 10;
+    const currentBookedHours =
+      Math.round((currentAgg.bookedMinutesSum / 60) * 10) / 10;
+    const compBookedHours =
+      Math.round((compAgg.bookedMinutesSum / 60) * 10) / 10;
 
-    const currentActualHours = Math.round((currentAgg.actualMinutesSum / 60) * 10) / 10;
-    const compActualHours = Math.round((compAgg.actualMinutesSum / 60) * 10) / 10;
+    const currentActualHours =
+      Math.round((currentAgg.actualMinutesSum / 60) * 10) / 10;
+    const compActualHours =
+      Math.round((compAgg.actualMinutesSum / 60) * 10) / 10;
 
-    const currentUtilRate = currentCapacityHours > 0 ? (currentBookedHours / currentCapacityHours) * 100 : 0;
-    const compUtilRate = compCapacityHours > 0 ? (compBookedHours / compCapacityHours) * 100 : 0;
+    const currentUtilRate =
+      currentCapacityHours > 0
+        ? (currentBookedHours / currentCapacityHours) * 100
+        : 0;
+    const compUtilRate =
+      compCapacityHours > 0 ? (compBookedHours / compCapacityHours) * 100 : 0;
 
-    const currentOccupancyRate = currentAgg.hasActualData && currentBookedHours > 0 ? (currentActualHours / currentBookedHours) * 100 : null;
-    const compOccupancyRate = compAgg.hasActualData && compBookedHours > 0 ? (compActualHours / compBookedHours) * 100 : null;
+    const currentOccupancyRate =
+      currentAgg.hasActualData && currentBookedHours > 0
+        ? (currentActualHours / currentBookedHours) * 100
+        : null;
+    const compOccupancyRate =
+      compAgg.hasActualData && compBookedHours > 0
+        ? (compActualHours / compBookedHours) * 100
+        : null;
 
     const reservationUtilizationRate: MetricPairDto = {
       current: Math.round(currentUtilRate * 10) / 10,
@@ -161,9 +188,18 @@ export class RoomUtilizationRateService {
     };
 
     const roomOccupancyRate: MetricPairDto = {
-      current: currentOccupancyRate !== null ? Math.round(currentOccupancyRate * 10) / 10 : null,
-      comparison: compOccupancyRate !== null ? Math.round(compOccupancyRate * 10) / 10 : null,
-      deltaPercent: this.calculateDelta(currentOccupancyRate, compOccupancyRate),
+      current:
+        currentOccupancyRate !== null
+          ? Math.round(currentOccupancyRate * 10) / 10
+          : null,
+      comparison:
+        compOccupancyRate !== null
+          ? Math.round(compOccupancyRate * 10) / 10
+          : null,
+      deltaPercent: this.calculateDelta(
+        currentOccupancyRate,
+        compOccupancyRate,
+      ),
     };
 
     const bookedHours: HoursPairDto = {
@@ -196,9 +232,11 @@ export class RoomUtilizationRateService {
     // 10. Construct response messages
     let message = 'Thống kê tỷ lệ sử dụng phòng được truy xuất thành công';
     if (currentAgg.bookedMinutesSum === 0) {
-      message = 'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ hiện tại được chọn.';
+      message =
+        'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ hiện tại được chọn.';
     } else if (comparisonHasNoData) {
-      message = 'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ đối chiếu được chọn.';
+      message =
+        'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ đối chiếu được chọn.';
     }
 
     const data: RoomUtilizationRateResponseDto = {
@@ -227,13 +265,18 @@ export class RoomUtilizationRateService {
     from: string,
     to: string,
   ): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
       return { isAdmin: true, scopeRoomIds: null, viewerRole: 'SYSTEM_ADMIN' };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeRoomIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeRoomIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
       const scopeRoomIds = await this.repo.getManagerRoomIds(userId, from, to);
@@ -271,8 +314,12 @@ export class RoomUtilizationRateService {
 
     if (activePreset === 'week') {
       const dayOfWeek = (localTime.getUTCDay() + 6) % 7; // Monday = 0
-      const startOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek));
-      const endOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6));
+      const startOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek),
+      );
+      const endOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6),
+      );
       return {
         from: startOfWeek.toISOString().split('T')[0],
         to: endOfWeek.toISOString().split('T')[0],
@@ -354,7 +401,7 @@ export class RoomUtilizationRateService {
 
     let targetDay = day;
     if (month === 1 && day === 29) {
-      const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+      const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
       if (!isLeap) {
         targetDay = 28;
       }
@@ -385,7 +432,9 @@ export class RoomUtilizationRateService {
       const days = Math.round(diffMs / oneDayMs) + 1;
 
       const compToDate = new Date(currentFromDate.getTime() - oneDayMs);
-      const compFromDate = new Date(compToDate.getTime() - (days - 1) * oneDayMs);
+      const compFromDate = new Date(
+        compToDate.getTime() - (days - 1) * oneDayMs,
+      );
 
       return {
         from: compFromDate.toISOString().split('T')[0],
@@ -404,24 +453,36 @@ export class RoomUtilizationRateService {
       if (!comparisonFrom || !comparisonTo) {
         throw new BadRequestException({
           success: false,
-          message: 'Both comparisonFrom and comparisonTo dates are required for custom comparison mode',
+          message:
+            'Both comparisonFrom and comparisonTo dates are required for custom comparison mode',
           error: { code: 'VALIDATION_ERROR', details: {} },
         });
       }
       if (comparisonFrom > comparisonTo) {
         throw new BadRequestException({
           success: false,
-          message: 'comparisonFrom date must be before or equal to comparisonTo date',
+          message:
+            'comparisonFrom date must be before or equal to comparisonTo date',
           error: { code: 'VALIDATION_ERROR', details: {} },
         });
       }
 
-      const currentDays = Math.round((new Date(currentTo!).getTime() - new Date(currentFrom!).getTime()) / 86400000) + 1;
-      const compDays = Math.round((new Date(comparisonTo).getTime() - new Date(comparisonFrom).getTime()) / 86400000) + 1;
+      const currentDays =
+        Math.round(
+          (new Date(currentTo!).getTime() - new Date(currentFrom!).getTime()) /
+            86400000,
+        ) + 1;
+      const compDays =
+        Math.round(
+          (new Date(comparisonTo).getTime() -
+            new Date(comparisonFrom).getTime()) /
+            86400000,
+        ) + 1;
       if (currentDays !== compDays) {
         throw new BadRequestException({
           success: false,
-          message: 'Comparison period must have the same duration as the current period',
+          message:
+            'Comparison period must have the same duration as the current period',
           error: { code: 'VALIDATION_ERROR', details: {} },
         });
       }
@@ -439,7 +500,10 @@ export class RoomUtilizationRateService {
   /**
    * Helper to calculate delta percentage between current and comparison values.
    */
-  private calculateDelta(current: number | null, comparison: number | null): number | null {
+  private calculateDelta(
+    current: number | null,
+    comparison: number | null,
+  ): number | null {
     if (current === null || comparison === null || comparison === 0) {
       return null;
     }
@@ -454,20 +518,29 @@ export class RoomUtilizationRateService {
     currentPeriod: { from: string; to: string },
     comparisonPeriod: { from: string; to: string },
   ): RoomUtilizationRateResponseDto {
-    const emptyPair = () => ({ current: 0, comparison: 0, deltaPercent: null as number | null });
+    const emptyPair = () => ({
+      current: 0,
+      comparison: 0,
+      deltaPercent: null as number | null,
+    });
     return {
       currentPeriod,
       comparisonPeriod,
       comparisonHasNoData: true,
       summary: {
         reservationUtilizationRate: emptyPair(),
-        roomOccupancyRate: { current: null, comparison: null, deltaPercent: null },
+        roomOccupancyRate: {
+          current: null,
+          comparison: null,
+          deltaPercent: null,
+        },
         bookedHours: { current: 0, comparison: 0 },
         actualHours: { current: 0, comparison: 0 },
         availableHours: { current: 0, comparison: 0 },
       },
       trend: [],
-      message: 'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ hiện tại được chọn.',
+      message:
+        'Không tìm thấy dữ liệu vận hành hợp lệ của chu kỳ hiện tại được chọn.',
     };
   }
 
@@ -488,14 +561,28 @@ export class RoomUtilizationRateService {
 
     if (granularity === 'day') {
       for (let i = 0; i < days; i++) {
-        const curDate = new Date(new Date(currentFrom).getTime() + i * 86400000);
+        const curDate = new Date(
+          new Date(currentFrom).getTime() + i * 86400000,
+        );
         const curStr = curDate.toISOString().split('T')[0];
 
-        const compDate = new Date(new Date(comparisonFrom).getTime() + i * 86400000);
+        const compDate = new Date(
+          new Date(comparisonFrom).getTime() + i * 86400000,
+        );
         const compStr = compDate.toISOString().split('T')[0];
 
-        const curAgg = await this.repo.getPeriodAggregate(scopeRoomIds, roomIdFilter, curStr, curStr);
-        const compAgg = await this.repo.getPeriodAggregate(scopeRoomIds, roomIdFilter, compStr, compStr);
+        const curAgg = await this.repo.getPeriodAggregate(
+          scopeRoomIds,
+          roomIdFilter,
+          curStr,
+          curStr,
+        );
+        const compAgg = await this.repo.getPeriodAggregate(
+          scopeRoomIds,
+          roomIdFilter,
+          compStr,
+          compStr,
+        );
 
         const curCapacity = operatingHours * 1 * curAgg.activeRoomCount;
         const compCapacity = operatingHours * 1 * compAgg.activeRoomCount;
@@ -503,21 +590,36 @@ export class RoomUtilizationRateService {
         const curBookedHours = curAgg.bookedMinutesSum / 60;
         const compBookedHours = compAgg.bookedMinutesSum / 60;
 
-        const curUtil = curCapacity > 0 ? (curBookedHours / curCapacity) * 100 : 0;
-        const compUtil = compCapacity > 0 ? (compBookedHours / compCapacity) * 100 : 0;
+        const curUtil =
+          curCapacity > 0 ? (curBookedHours / curCapacity) * 100 : 0;
+        const compUtil =
+          compCapacity > 0 ? (compBookedHours / compCapacity) * 100 : 0;
 
-        const curOcc = curAgg.hasActualData && curBookedHours > 0 ? (curAgg.actualMinutesSum / 60 / curBookedHours) * 100 : null;
-        const compOcc = compAgg.hasActualData && compBookedHours > 0 ? (compAgg.actualMinutesSum / 60 / compBookedHours) * 100 : null;
+        const curOcc =
+          curAgg.hasActualData && curBookedHours > 0
+            ? (curAgg.actualMinutesSum / 60 / curBookedHours) * 100
+            : null;
+        const compOcc =
+          compAgg.hasActualData && compBookedHours > 0
+            ? (compAgg.actualMinutesSum / 60 / compBookedHours) * 100
+            : null;
 
         trend.push({
           index: `Ngày ${i + 1}`,
           current: {
             reservationUtilizationRate: Math.round(curUtil * 10) / 10,
-            roomOccupancyRate: curOcc !== null ? Math.round(curOcc * 10) / 10 : null,
+            roomOccupancyRate:
+              curOcc !== null ? Math.round(curOcc * 10) / 10 : null,
           },
           comparison: {
-            reservationUtilizationRate: comparisonHasNoData ? 0 : Math.round(compUtil * 10) / 10,
-            roomOccupancyRate: comparisonHasNoData ? 0 : (compOcc !== null ? Math.round(compOcc * 10) / 10 : null),
+            reservationUtilizationRate: comparisonHasNoData
+              ? 0
+              : Math.round(compUtil * 10) / 10,
+            roomOccupancyRate: comparisonHasNoData
+              ? 0
+              : compOcc !== null
+                ? Math.round(compOcc * 10) / 10
+                : null,
           },
         });
       }
@@ -528,40 +630,74 @@ export class RoomUtilizationRateService {
         const endOffset = Math.min(days - 1, (i + 1) * 7 - 1);
         const weekDays = endOffset - startOffset + 1;
 
-        const curFromDate = new Date(new Date(currentFrom).getTime() + startOffset * 86400000);
-        const curToDate = new Date(new Date(currentFrom).getTime() + endOffset * 86400000);
+        const curFromDate = new Date(
+          new Date(currentFrom).getTime() + startOffset * 86400000,
+        );
+        const curToDate = new Date(
+          new Date(currentFrom).getTime() + endOffset * 86400000,
+        );
         const curFromStr = curFromDate.toISOString().split('T')[0];
         const curToStr = curToDate.toISOString().split('T')[0];
 
-        const compFromDate = new Date(new Date(comparisonFrom).getTime() + startOffset * 86400000);
-        const compToDate = new Date(new Date(comparisonFrom).getTime() + endOffset * 86400000);
+        const compFromDate = new Date(
+          new Date(comparisonFrom).getTime() + startOffset * 86400000,
+        );
+        const compToDate = new Date(
+          new Date(comparisonFrom).getTime() + endOffset * 86400000,
+        );
         const compFromStr = compFromDate.toISOString().split('T')[0];
         const compToStr = compToDate.toISOString().split('T')[0];
 
-        const curAgg = await this.repo.getPeriodAggregate(scopeRoomIds, roomIdFilter, curFromStr, curToStr);
-        const compAgg = await this.repo.getPeriodAggregate(scopeRoomIds, roomIdFilter, compFromStr, compToStr);
+        const curAgg = await this.repo.getPeriodAggregate(
+          scopeRoomIds,
+          roomIdFilter,
+          curFromStr,
+          curToStr,
+        );
+        const compAgg = await this.repo.getPeriodAggregate(
+          scopeRoomIds,
+          roomIdFilter,
+          compFromStr,
+          compToStr,
+        );
 
         const curCapacity = operatingHours * weekDays * curAgg.activeRoomCount;
-        const compCapacity = operatingHours * weekDays * compAgg.activeRoomCount;
+        const compCapacity =
+          operatingHours * weekDays * compAgg.activeRoomCount;
 
         const curBookedHours = curAgg.bookedMinutesSum / 60;
         const compBookedHours = compAgg.bookedMinutesSum / 60;
 
-        const curUtil = curCapacity > 0 ? (curBookedHours / curCapacity) * 100 : 0;
-        const compUtil = compCapacity > 0 ? (compBookedHours / compCapacity) * 100 : 0;
+        const curUtil =
+          curCapacity > 0 ? (curBookedHours / curCapacity) * 100 : 0;
+        const compUtil =
+          compCapacity > 0 ? (compBookedHours / compCapacity) * 100 : 0;
 
-        const curOcc = curAgg.hasActualData && curBookedHours > 0 ? (curAgg.actualMinutesSum / 60 / curBookedHours) * 100 : null;
-        const compOcc = compAgg.hasActualData && compBookedHours > 0 ? (compAgg.actualMinutesSum / 60 / compBookedHours) * 100 : null;
+        const curOcc =
+          curAgg.hasActualData && curBookedHours > 0
+            ? (curAgg.actualMinutesSum / 60 / curBookedHours) * 100
+            : null;
+        const compOcc =
+          compAgg.hasActualData && compBookedHours > 0
+            ? (compAgg.actualMinutesSum / 60 / compBookedHours) * 100
+            : null;
 
         trend.push({
           index: `Tuần ${i + 1}`,
           current: {
             reservationUtilizationRate: Math.round(curUtil * 10) / 10,
-            roomOccupancyRate: curOcc !== null ? Math.round(curOcc * 10) / 10 : null,
+            roomOccupancyRate:
+              curOcc !== null ? Math.round(curOcc * 10) / 10 : null,
           },
           comparison: {
-            reservationUtilizationRate: comparisonHasNoData ? 0 : Math.round(compUtil * 10) / 10,
-            roomOccupancyRate: comparisonHasNoData ? 0 : (compOcc !== null ? Math.round(compOcc * 10) / 10 : null),
+            reservationUtilizationRate: comparisonHasNoData
+              ? 0
+              : Math.round(compUtil * 10) / 10,
+            roomOccupancyRate: comparisonHasNoData
+              ? 0
+              : compOcc !== null
+                ? Math.round(compOcc * 10) / 10
+                : null,
           },
         });
       }

@@ -47,7 +47,11 @@ export class OnTimeRateService {
     const graceMinutes = query.graceMinutes ?? 0;
 
     // 1. Resolve date range
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days
     await this.validateMaxRange(from, to);
@@ -87,7 +91,10 @@ export class OnTimeRateService {
     };
 
     // 5. Short-circuit if manager has no departments
-    if (scope.scopeDepartmentIds !== null && scope.scopeDepartmentIds.length === 0) {
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
       const data = this.buildEmptyResponse(from, to, graceMinutes);
       await logAction(0);
       return { data, message: data.message! };
@@ -142,7 +149,11 @@ export class OnTimeRateService {
     const graceMinutes = query.graceMinutes ?? 0;
 
     // 1. Resolve date range
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days
     await this.validateMaxRange(from, to);
@@ -171,7 +182,12 @@ export class OnTimeRateService {
     }
 
     // 5. Query late meetings history
-    const meetings = await this.repo.getLateHistory(targetUserId, from, to, graceMinutes);
+    const meetings = await this.repo.getLateHistory(
+      targetUserId,
+      from,
+      to,
+      graceMinutes,
+    );
 
     // Audit log
     try {
@@ -216,16 +232,26 @@ export class OnTimeRateService {
    * Resolve user scope based on roles.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
@@ -260,8 +286,12 @@ export class OnTimeRateService {
 
     if (activePreset === 'week') {
       const dayOfWeek = (localTime.getUTCDay() + 6) % 7; // Monday = 0
-      const startOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek));
-      const endOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6));
+      const startOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek),
+      );
+      const endOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6),
+      );
       return {
         from: startOfWeek.toISOString().split('T')[0],
         to: endOfWeek.toISOString().split('T')[0],
@@ -333,10 +363,7 @@ export class OnTimeRateService {
   /**
    * Validate departmentId is within scope for MANAGER.
    */
-  validateDepartmentOwnership(
-    scope: ScopeResult,
-    departmentId?: string,
-  ): void {
+  validateDepartmentOwnership(scope: ScopeResult, departmentId?: string): void {
     if (scope.isAdmin || !departmentId) return;
 
     if (!scope.scopeDepartmentIds?.includes(departmentId)) {
@@ -366,12 +393,15 @@ export class OnTimeRateService {
       onTimeRate: 0,
     }));
 
-    const lateByHourOfDay: HourBucketDto[] = Array.from({ length: 24 }, (_, i) => ({
-      hourOfDay: i,
-      lateCount: 0,
-      totalRequiredParticipants: 0,
-      lateRate: 0,
-    }));
+    const lateByHourOfDay: HourBucketDto[] = Array.from(
+      { length: 24 },
+      (_, i) => ({
+        hourOfDay: i,
+        lateCount: 0,
+        totalRequiredParticipants: 0,
+        lateRate: 0,
+      }),
+    );
 
     return {
       period: { from, to },
@@ -384,7 +414,8 @@ export class OnTimeRateService {
       trend,
       lateByHourOfDay,
       lateByDepartment: [],
-      message: 'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.',
+      message:
+        'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.',
     };
   }
 
@@ -407,7 +438,10 @@ export class OnTimeRateService {
         totalRequiredParticipants: number;
       }
     >,
-    hourMap: Map<number, { lateCount: number; totalRequiredParticipants: number }>,
+    hourMap: Map<
+      number,
+      { lateCount: number; totalRequiredParticipants: number }
+    >,
     deptRows: Array<{
       departmentId: string;
       departmentName: string;
@@ -420,7 +454,8 @@ export class OnTimeRateService {
   ): OnTimeRateResponseDto {
     const onTimeRate =
       kpi.totalRequiredParticipants > 0
-        ? Math.round((kpi.onTimeCount / kpi.totalRequiredParticipants) * 1000) / 10
+        ? Math.round((kpi.onTimeCount / kpi.totalRequiredParticipants) * 1000) /
+          10
         : 0;
 
     if (kpi.totalRequiredParticipants === 0) {
@@ -438,7 +473,8 @@ export class OnTimeRateService {
       };
       const rate =
         pt.totalRequiredParticipants > 0
-          ? Math.round((pt.onTimeCount / pt.totalRequiredParticipants) * 1000) / 10
+          ? Math.round((pt.onTimeCount / pt.totalRequiredParticipants) * 1000) /
+            10
           : 0;
       return {
         period: w,
@@ -448,25 +484,33 @@ export class OnTimeRateService {
     });
 
     // 2. Hour distribution buckets (0-23)
-    const lateByHourOfDay: HourBucketDto[] = Array.from({ length: 24 }, (_, i) => {
-      const pt = hourMap.get(i) || { lateCount: 0, totalRequiredParticipants: 0 };
-      const rate =
-        pt.totalRequiredParticipants > 0
-          ? Math.round((pt.lateCount / pt.totalRequiredParticipants) * 1000) / 10
-          : 0;
-      return {
-        hourOfDay: i,
-        lateCount: pt.lateCount,
-        totalRequiredParticipants: pt.totalRequiredParticipants,
-        lateRate: rate,
-      };
-    });
+    const lateByHourOfDay: HourBucketDto[] = Array.from(
+      { length: 24 },
+      (_, i) => {
+        const pt = hourMap.get(i) || {
+          lateCount: 0,
+          totalRequiredParticipants: 0,
+        };
+        const rate =
+          pt.totalRequiredParticipants > 0
+            ? Math.round((pt.lateCount / pt.totalRequiredParticipants) * 1000) /
+              10
+            : 0;
+        return {
+          hourOfDay: i,
+          lateCount: pt.lateCount,
+          totalRequiredParticipants: pt.totalRequiredParticipants,
+          lateRate: rate,
+        };
+      },
+    );
 
     // 3. Department breakdown ordered by lateRate DESC
     const lateByDepartment: DepartmentLateItemDto[] = deptRows.map((row) => {
       const rate =
         row.totalRequiredParticipants > 0
-          ? Math.round((row.lateCount / row.totalRequiredParticipants) * 1000) / 10
+          ? Math.round((row.lateCount / row.totalRequiredParticipants) * 1000) /
+            10
           : 0;
       return {
         departmentId: row.departmentId,
@@ -504,7 +548,9 @@ export class OnTimeRateService {
     const localFrom = new Date(Date.UTC(startYear, startMonth, startDay));
 
     const dayOfWeek = (localFrom.getUTCDay() + 6) % 7; // Monday = 0
-    const currentMonday = new Date(Date.UTC(startYear, startMonth, startDay - dayOfWeek));
+    const currentMonday = new Date(
+      Date.UTC(startYear, startMonth, startDay - dayOfWeek),
+    );
 
     const weeks: string[] = [];
     const toTime = new Date(toStr).getTime();

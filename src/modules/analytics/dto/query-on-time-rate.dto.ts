@@ -1,4 +1,13 @@
-import { IsOptional, IsEnum, IsDateString, IsUUID, IsString, MaxLength, IsInt, Min } from 'class-validator';
+import {
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsUUID,
+  IsString,
+  MaxLength,
+  IsInt,
+  Min,
+} from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -16,12 +25,18 @@ export class QueryOnTimeRateDto {
 
   @IsOptional()
   @IsDateString({}, { message: 'from must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'Start date (ISO 8601) - only used if preset=custom', example: '2026-06-01' })
+  @ApiPropertyOptional({
+    description: 'Start date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-01',
+  })
   from?: string;
 
   @IsOptional()
   @IsDateString({}, { message: 'to must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'End date (ISO 8601) - only used if preset=custom', example: '2026-06-30' })
+  @ApiPropertyOptional({
+    description: 'End date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-30',
+  })
   to?: string;
 
   @IsOptional()
@@ -37,7 +52,9 @@ export class QueryOnTimeRateDto {
   @IsOptional()
   @IsString({ message: 'search must be a string' })
   @MaxLength(150, { message: 'search must not exceed 150 characters' })
-  @ApiPropertyOptional({ description: 'Search by full name, email or employee code' })
+  @ApiPropertyOptional({
+    description: 'Search by full name, email or employee code',
+  })
   search?: string;
 
   @IsOptional()

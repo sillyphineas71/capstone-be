@@ -33,7 +33,8 @@ export class MeetingCountByPeriodController {
 
   @Get('count-by-period')
   @ApiOperation({
-    summary: 'Xem thong ke so luong cuoc hop theo khoang thoi gian (UC-AA-04 / UC-151)',
+    summary:
+      'Xem thong ke so luong cuoc hop theo khoang thoi gian (UC-AA-04 / UC-151)',
     description:
       'Tra ve thong ke so luong cuoc hop theo tuan hoac thang trong dải thoi gian.',
   })
@@ -42,9 +43,15 @@ export class MeetingCountByPeriodController {
     description: 'Thong ke so luong cuoc hop duoc truy xuat thanh cong',
     type: MeetingCountByPeriodResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getCountByPeriod(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -57,7 +64,10 @@ export class MeetingCountByPeriodController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getCountByPeriod(currentUser, query);
+      const { data, message } = await this.service.getCountByPeriod(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

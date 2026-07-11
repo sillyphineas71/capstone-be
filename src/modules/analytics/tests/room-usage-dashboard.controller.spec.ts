@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { RoomUsageDashboardController } from '../controllers/room-usage-dashboard.controller';
 import { RoomUsageDashboardService } from '../services/room-usage-dashboard.service';
 
@@ -45,12 +49,14 @@ describe('RoomUsageDashboardController', () => {
         preset: 'month',
       };
 
-      const result = await controller.getComparison(query as any, {
+      const result = await controller.getComparison(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê sử dụng phòng họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê sử dụng phòng họp được truy xuất thành công',
+      );
       expect(result.data.summary.reservationUtilizationRate).toBe(5.0);
       expect(result.meta).toEqual({});
       expect(mockService.getComparisonDashboard).toHaveBeenCalledWith(
@@ -88,7 +94,9 @@ describe('RoomUsageDashboardController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getComparisonDashboard.mockRejectedValue(new Error('DB Error'));
+      mockService.getComparisonDashboard.mockRejectedValue(
+        new Error('DB Error'),
+      );
 
       await expect(
         controller.getComparison({} as any, { userId: mockUserId }),
@@ -119,12 +127,14 @@ describe('RoomUsageDashboardController', () => {
         preset: 'month',
       };
 
-      const result = await controller.getDetail(mockRoomId, query as any, {
+      const result = await controller.getDetail(mockRoomId, query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thông tin chi tiết phòng họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thông tin chi tiết phòng họp được truy xuất thành công',
+      );
       expect(result.data.room.roomName).toBe('Room A');
       expect(mockService.getRoomDetail).toHaveBeenCalledWith(
         { userId: mockUserId },
@@ -134,7 +144,9 @@ describe('RoomUsageDashboardController', () => {
     });
 
     it('service throws NotFoundException -> re-thrown as-is', async () => {
-      mockService.getRoomDetail.mockRejectedValue(new NotFoundException({ success: false, message: 'Room not found' }));
+      mockService.getRoomDetail.mockRejectedValue(
+        new NotFoundException({ success: false, message: 'Room not found' }),
+      );
 
       await expect(
         controller.getDetail(mockRoomId, {} as any, { userId: mockUserId }),

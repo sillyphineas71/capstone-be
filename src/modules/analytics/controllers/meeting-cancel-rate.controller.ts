@@ -42,9 +42,15 @@ export class MeetingCancelRateController {
     description: 'Thong ke ty le cuoc hop bi huy duoc truy xuat thanh cong',
     type: MeetingCancelRateResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getCancelRate(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -57,7 +63,10 @@ export class MeetingCancelRateController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getCancelRate(currentUser, query);
+      const { data, message } = await this.service.getCancelRate(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

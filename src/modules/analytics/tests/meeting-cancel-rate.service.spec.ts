@@ -43,7 +43,10 @@ describe('MeetingCancelRateService', () => {
         MeetingCancelRateService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: MeetingCancelRateRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
@@ -63,7 +66,11 @@ describe('MeetingCancelRateService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('BUSINESS_ADMIN -> isAdmin=true, scopeDepartmentIds=null', async () => {
@@ -73,7 +80,11 @@ describe('MeetingCancelRateService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -98,7 +109,9 @@ describe('MeetingCancelRateService', () => {
         permissions: ['analytics.meeting.read'],
       });
 
-      await expect(service.resolveScope(mockUserId)).rejects.toThrow(ForbiddenException);
+      await expect(service.resolveScope(mockUserId)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -125,7 +138,11 @@ describe('MeetingCancelRateService', () => {
     });
 
     it('custom valid range -> returns unmodified range', () => {
-      const result = service.resolvePresetRange('custom', '2026-06-01', '2026-06-15');
+      const result = service.resolvePresetRange(
+        'custom',
+        '2026-06-01',
+        '2026-06-15',
+      );
       expect(result).toEqual({ from: '2026-06-01', to: '2026-06-15' });
     });
 
@@ -136,9 +153,9 @@ describe('MeetingCancelRateService', () => {
     });
 
     it('custom missing dates -> BadRequestException', () => {
-      expect(() => service.resolvePresetRange('custom', undefined, '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolvePresetRange('custom', undefined, '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
   });
 
@@ -183,12 +200,20 @@ describe('MeetingCancelRateService', () => {
 
   describe('generateBuckets', () => {
     it('granularity=month', () => {
-      const result = service.generateBuckets('2026-05-15', '2026-07-10', 'month');
+      const result = service.generateBuckets(
+        '2026-05-15',
+        '2026-07-10',
+        'month',
+      );
       expect(result).toEqual(['2026-05', '2026-06', '2026-07']);
     });
 
     it('granularity=week', () => {
-      const result = service.generateBuckets('2026-05-01', '2026-05-10', 'week');
+      const result = service.generateBuckets(
+        '2026-05-01',
+        '2026-05-10',
+        'week',
+      );
       expect(result).toEqual(['2026-W18', '2026-W19']);
     });
   });
@@ -206,7 +231,9 @@ describe('MeetingCancelRateService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getCancelRate({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getCancelRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('empty state (no meetings found)', async () => {
@@ -215,7 +242,10 @@ describe('MeetingCancelRateService', () => {
         permissions: ['analytics.meeting.read'],
       });
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getCancelRateSummary.mockResolvedValue({ totalMeetingCount: 0, cancelledCount: 0 });
+      mockRepo.getCancelRateSummary.mockResolvedValue({
+        totalMeetingCount: 0,
+        cancelledCount: 0,
+      });
       mockRepo.getCancelRateSeries.mockResolvedValue(new Map());
       mockRepo.getTopOrganizers.mockResolvedValue([]);
       mockRepo.getTopDepartments.mockResolvedValue([]);
@@ -229,7 +259,9 @@ describe('MeetingCancelRateService', () => {
 
       const result = await service.getCancelRate({ userId: mockUserId }, query);
 
-      expect(result.message).toBe('Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại');
+      expect(result.message).toBe(
+        'Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại',
+      );
       expect(result.data.totalMeetingCount).toBe(0);
       expect(result.data.cancelledCount).toBe(0);
       expect(result.data.cancelRate).toBe(0);
@@ -256,7 +288,9 @@ describe('MeetingCancelRateService', () => {
 
       const result = await service.getCancelRate({ userId: mockUserId }, query);
 
-      expect(result.message).toBe('Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại');
+      expect(result.message).toBe(
+        'Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại',
+      );
       expect(result.data.totalMeetingCount).toBe(0);
       expect(mockRepo.getCancelRateSummary).not.toHaveBeenCalled();
     });
@@ -268,7 +302,10 @@ describe('MeetingCancelRateService', () => {
       });
       mockRepo.getManagerDepartmentIds.mockResolvedValue(['dept-1']);
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getCancelRateSummary.mockResolvedValue({ totalMeetingCount: 10, cancelledCount: 2 });
+      mockRepo.getCancelRateSummary.mockResolvedValue({
+        totalMeetingCount: 10,
+        cancelledCount: 2,
+      });
       mockRepo.getCancelRateSeries.mockResolvedValue(new Map());
       mockRepo.getTopOrganizers.mockResolvedValue([]);
 
@@ -290,11 +327,19 @@ describe('MeetingCancelRateService', () => {
         permissions: ['analytics.meeting.read'],
       });
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getCancelRateSummary.mockResolvedValue({ totalMeetingCount: 10, cancelledCount: 2 });
+      mockRepo.getCancelRateSummary.mockResolvedValue({
+        totalMeetingCount: 10,
+        cancelledCount: 2,
+      });
       mockRepo.getCancelRateSeries.mockResolvedValue(new Map());
       mockRepo.getTopOrganizers.mockResolvedValue([]);
       mockRepo.getTopDepartments.mockResolvedValue([
-        { departmentId: 'dept-1', departmentName: 'Engineering', organizedCount: 5, cancelledCount: 2 },
+        {
+          departmentId: 'dept-1',
+          departmentName: 'Engineering',
+          organizedCount: 5,
+          cancelledCount: 2,
+        },
       ]);
 
       const query: QueryMeetingCancelRateDto = {

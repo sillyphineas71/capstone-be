@@ -127,18 +127,26 @@ export class DashboardOverviewService {
    * MANAGER -> query departments managed by user.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(
-      userId,
-    );
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
@@ -156,7 +164,9 @@ export class DashboardOverviewService {
     query: QueryDashboardOverviewDto,
   ): Promise<{ from: string; to: string }> {
     const now = new Date();
-    const from = query.from ?? new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
+    const from =
+      query.from ??
+      new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
     const to = query.to ?? now.toISOString().split('T')[0];
 
     if (from > to) {
@@ -191,10 +201,7 @@ export class DashboardOverviewService {
   /**
    * Validate departmentId is within scope for MANAGER role.
    */
-  validateDepartmentOwnership(
-    scope: ScopeResult,
-    departmentId?: string,
-  ): void {
+  validateDepartmentOwnership(scope: ScopeResult, departmentId?: string): void {
     if (scope.isAdmin || !departmentId) return;
 
     if (!scope.scopeDepartmentIds?.includes(departmentId)) {
@@ -248,7 +255,10 @@ export class DashboardOverviewService {
   ): DashboardOverviewResponseDto {
     const utilizationRate =
       utilization.reservedMinutesSum > 0
-        ? Math.round((utilization.actualMinutesSum / utilization.reservedMinutesSum) * 1000) / 10
+        ? Math.round(
+            (utilization.actualMinutesSum / utilization.reservedMinutesSum) *
+              1000,
+          ) / 10
         : 0;
     const noShowRate =
       noShow.bookingCount > 0
@@ -256,7 +266,8 @@ export class DashboardOverviewService {
         : 0;
     const onTimeRate =
       attendance.totalCount > 0
-        ? Math.round((attendance.onTimeCount / attendance.totalCount) * 1000) / 10
+        ? Math.round((attendance.onTimeCount / attendance.totalCount) * 1000) /
+          10
         : 0;
 
     const trendPoints: TrendPointDto[] = trend.map((t) => ({
@@ -281,4 +292,3 @@ export class DashboardOverviewService {
     };
   }
 }
-

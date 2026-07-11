@@ -6,10 +6,18 @@ import {
 } from '@nestjs/common';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
-import { NoShowRateRepository, KpiAggregateResult, RankingDbItem } from '../repositories/no-show-rate.repository';
+import {
+  NoShowRateRepository,
+  KpiAggregateResult,
+  RankingDbItem,
+} from '../repositories/no-show-rate.repository';
 import { DashboardOverviewConfigService } from './dashboard-overview-config.service';
 import { QueryNoShowRateDto } from '../dto/query-no-show-rate.dto';
-import { NoShowRateResponseDto, RankingDto, RankingItemDto } from '../dto/no-show-rate-response.dto';
+import {
+  NoShowRateResponseDto,
+  RankingDto,
+  RankingItemDto,
+} from '../dto/no-show-rate-response.dto';
 
 interface ScopeResult {
   isAdmin: boolean;
@@ -40,7 +48,11 @@ export class NoShowRateService {
     const rankBy = query.rankBy || 'room';
 
     // 1. Resolve date range
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate max range days
     await this.validateMaxRange(from, to);
@@ -54,7 +66,11 @@ export class NoShowRateService {
     // 5. Resolve room scope (only if MANAGER and rankBy=room or roomId is filtered)
     let scopeRoomIds: string[] | null = null;
     if (!scope.isAdmin && (rankBy === 'room' || query.roomId)) {
-      scopeRoomIds = await this.repo.getManagerRoomIds(currentUser.userId, from, to);
+      scopeRoomIds = await this.repo.getManagerRoomIds(
+        currentUser.userId,
+        from,
+        to,
+      );
     }
 
     // 6. Validate room ownership
@@ -91,7 +107,10 @@ export class NoShowRateService {
     };
 
     // 7. Short-circuit if manager has no departments
-    if (scope.scopeDepartmentIds !== null && scope.scopeDepartmentIds.length === 0) {
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
       const data = this.buildEmptyResponse(from, to, rankBy, page, limit);
       await logAction(0);
       return { data, message: data.message! };
@@ -100,7 +119,9 @@ export class NoShowRateService {
     // 8. Resolve organizer ID from email if provided
     let organizerId: string | undefined;
     if (query.organizerEmail) {
-      const resolvedId = await this.repo.findUserIdByEmail(query.organizerEmail);
+      const resolvedId = await this.repo.findUserIdByEmail(
+        query.organizerEmail,
+      );
       if (!resolvedId) {
         const data = this.buildEmptyResponse(from, to, rankBy, page, limit);
         await logAction(0);
@@ -134,7 +155,15 @@ export class NoShowRateService {
       }
     }
 
-    const data = this.buildResponse(kpi, dbItems, from, to, rankBy, page, limit);
+    const data = this.buildResponse(
+      kpi,
+      dbItems,
+      from,
+      to,
+      rankBy,
+      page,
+      limit,
+    );
 
     await logAction(kpi.noShowCount);
 
@@ -150,16 +179,26 @@ export class NoShowRateService {
    * Resolve user scope based on roles.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
@@ -194,8 +233,12 @@ export class NoShowRateService {
 
     if (activePreset === 'week') {
       const dayOfWeek = (localTime.getUTCDay() + 6) % 7; // Monday = 0
-      const startOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek));
-      const endOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6));
+      const startOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek),
+      );
+      const endOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6),
+      );
       return {
         from: startOfWeek.toISOString().split('T')[0],
         to: endOfWeek.toISOString().split('T')[0],
@@ -287,10 +330,7 @@ export class NoShowRateService {
   /**
    * Validate roomId is within scope for MANAGER.
    */
-  validateRoomOwnership(
-    scopeRoomIds: string[] | null,
-    roomId?: string,
-  ): void {
+  validateRoomOwnership(scopeRoomIds: string[] | null, roomId?: string): void {
     if (scopeRoomIds === null || !roomId) return;
 
     if (!scopeRoomIds.includes(roomId)) {
@@ -325,7 +365,8 @@ export class NoShowRateService {
         total: 0,
         totalPages: 0,
       },
-      message: 'Tuyệt vời! Không ghi nhận trường hợp lãng phí phòng họp nào trong khoảng thời gian này.',
+      message:
+        'Tuyệt vời! Không ghi nhận trường hợp lãng phí phòng họp nào trong khoảng thời gian này.',
     };
   }
 

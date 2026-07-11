@@ -9,7 +9,10 @@ import { AuditLogsService } from '../../administration/services/audit-logs.servi
 import { MeetingStatusBreakdownRepository } from '../repositories/meeting-status-breakdown.repository';
 import { DashboardOverviewConfigService } from './dashboard-overview-config.service';
 import { QueryMeetingStatusBreakdownDto } from '../dto/query-meeting-status-breakdown.dto';
-import { MeetingStatusBreakdownResponseDto, StatusBreakdownItemDto } from '../dto/meeting-status-breakdown-response.dto';
+import {
+  MeetingStatusBreakdownResponseDto,
+  StatusBreakdownItemDto,
+} from '../dto/meeting-status-breakdown-response.dto';
 
 interface ScopeResult {
   isAdmin: boolean;
@@ -36,7 +39,11 @@ export class MeetingStatusBreakdownService {
     query: QueryMeetingStatusBreakdownDto,
   ): Promise<{ data: MeetingStatusBreakdownResponseDto; message: string }> {
     // 1. Resolve Date Range from Preset
-    const { from, to } = this.resolveDateRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate Max Range Days
     await this.validateMaxRange(from, to);
@@ -73,7 +80,10 @@ export class MeetingStatusBreakdownService {
     };
 
     // 5. Short-circuit if manager has no departments
-    if (scope.scopeDepartmentIds !== null && scope.scopeDepartmentIds.length === 0) {
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
       const data = this.buildEmptyResponse(from, to);
       await logAction(0);
       return { data, message: data.message! };
@@ -105,22 +115,33 @@ export class MeetingStatusBreakdownService {
    * Resolve user scope based on role.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
     throw new ForbiddenException({
       success: false,
-      message: 'You do not have permission to view meeting status breakdown analytics',
+      message:
+        'You do not have permission to view meeting status breakdown analytics',
       error: { code: 'PERMISSION_DENIED', details: {} },
     });
   }
@@ -149,8 +170,12 @@ export class MeetingStatusBreakdownService {
 
     if (activePreset === 'week') {
       const dayOfWeek = (localTime.getUTCDay() + 6) % 7; // Monday = 0
-      const startOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek));
-      const endOfWeek = new Date(Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6));
+      const startOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek),
+      );
+      const endOfWeek = new Date(
+        Date.UTC(currentYear, currentMonth, currentDay - dayOfWeek + 6),
+      );
       return {
         from: startOfWeek.toISOString().split('T')[0],
         to: endOfWeek.toISOString().split('T')[0],
@@ -232,13 +257,12 @@ export class MeetingStatusBreakdownService {
   /**
    * Build empty response.
    */
-  private buildEmptyResponse(from: string, to: string): MeetingStatusBreakdownResponseDto {
-    const statuses: Array<'scheduled' | 'completed' | 'cancelled' | 'no_show'> = [
-      'scheduled',
-      'completed',
-      'cancelled',
-      'no_show',
-    ];
+  private buildEmptyResponse(
+    from: string,
+    to: string,
+  ): MeetingStatusBreakdownResponseDto {
+    const statuses: Array<'scheduled' | 'completed' | 'cancelled' | 'no_show'> =
+      ['scheduled', 'completed', 'cancelled', 'no_show'];
 
     const items = statuses.map((status) => ({
       status,
@@ -262,12 +286,8 @@ export class MeetingStatusBreakdownService {
     from: string,
     to: string,
   ): MeetingStatusBreakdownResponseDto {
-    const statuses: Array<'scheduled' | 'completed' | 'cancelled' | 'no_show'> = [
-      'scheduled',
-      'completed',
-      'cancelled',
-      'no_show',
-    ];
+    const statuses: Array<'scheduled' | 'completed' | 'cancelled' | 'no_show'> =
+      ['scheduled', 'completed', 'cancelled', 'no_show'];
 
     let total = 0;
     for (const status of statuses) {
@@ -288,7 +308,8 @@ export class MeetingStatusBreakdownService {
     };
 
     if (total === 0) {
-      response.message = 'Không có dữ liệu cuộc họp nào thỏa mãn bộ lọc hiện tại';
+      response.message =
+        'Không có dữ liệu cuộc họp nào thỏa mãn bộ lọc hiện tại';
     }
 
     return response;

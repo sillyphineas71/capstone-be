@@ -46,7 +46,10 @@ describe('DashboardOverviewService', () => {
         DashboardOverviewService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: DashboardOverviewRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
@@ -66,7 +69,11 @@ describe('DashboardOverviewService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('BUSINESS_ADMIN -> isAdmin=true, scopeDepartmentIds=null', async () => {
@@ -76,7 +83,11 @@ describe('DashboardOverviewService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -103,7 +114,11 @@ describe('DashboardOverviewService', () => {
       mockRepo.getManagerDepartmentIds.mockResolvedValue([]);
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: false, scopeDepartmentIds: [], viewerRole: 'MANAGER' });
+      expect(result).toEqual({
+        isAdmin: false,
+        scopeDepartmentIds: [],
+        viewerRole: 'MANAGER',
+      });
     });
 
     it('no valid role -> ForbiddenException', async () => {
@@ -193,9 +208,9 @@ describe('DashboardOverviewService', () => {
 
     it('MANAGER, departmentId out of scope -> ForbiddenException', () => {
       const scope = { isAdmin: false, scopeDepartmentIds: ['d1', 'd2'] };
-      expect(() =>
-        service.validateDepartmentOwnership(scope, 'd99'),
-      ).toThrow(ForbiddenException);
+      expect(() => service.validateDepartmentOwnership(scope, 'd99')).toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -241,8 +256,18 @@ describe('DashboardOverviewService', () => {
       mockRepo.countActiveUsers.mockResolvedValue(15);
       mockRepo.countRecordingSessions.mockResolvedValue(3);
       mockRepo.getDailyTrend.mockResolvedValue([
-        { date: '2026-06-01', meetingCount: 2, actualMinutesSum: 120, reservedMinutesSum: 200 },
-        { date: '2026-06-02', meetingCount: 3, actualMinutesSum: 180, reservedMinutesSum: 300 },
+        {
+          date: '2026-06-01',
+          meetingCount: 2,
+          actualMinutesSum: 120,
+          reservedMinutesSum: 200,
+        },
+        {
+          date: '2026-06-02',
+          meetingCount: 3,
+          actualMinutesSum: 180,
+          reservedMinutesSum: 300,
+        },
       ]);
 
       const result = await service.getOverview(

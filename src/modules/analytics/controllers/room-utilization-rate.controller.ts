@@ -34,16 +34,23 @@ export class RoomUtilizationRateController {
   @Get('utilization-rate')
   @ApiOperation({
     summary: 'Xem thong ke ty le su dung phong tong hop (UC-AA-08 / UC-155)',
-    description: 'Tra ve ty le su dung phong dat lich va thuc te cung voi bieu do so sanh hai chu ky.',
+    description:
+      'Tra ve ty le su dung phong dat lich va thuc te cung voi bieu do so sanh hai chu ky.',
   })
   @ApiResponse({
     status: 200,
     description: 'Thong ke ty le su dung phong duoc truy xuat thanh cong',
     type: RoomUtilizationRateResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / ROOM_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / ROOM_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 404, description: 'ROOM_NOT_FOUND' })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getUtilizationRate(
@@ -57,7 +64,10 @@ export class RoomUtilizationRateController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getUtilizationRate(currentUser, query);
+      const { data, message } = await this.service.getUtilizationRate(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

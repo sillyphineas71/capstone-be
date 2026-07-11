@@ -79,7 +79,10 @@ export class MeetingCountByPeriodService {
     };
 
     // 5. Short-circuit if manager has no departments
-    if (scope.scopeDepartmentIds !== null && scope.scopeDepartmentIds.length === 0) {
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
       const data = this.buildEmptyResponse(buckets);
       await logAction(0);
       return { data, message: data.message! };
@@ -114,22 +117,33 @@ export class MeetingCountByPeriodService {
    * Resolve user scope based on role.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
     throw new ForbiddenException({
       success: false,
-      message: 'You do not have permission to view meeting count by period analytics',
+      message:
+        'You do not have permission to view meeting count by period analytics',
       error: { code: 'PERMISSION_DENIED', details: {} },
     });
   }
@@ -194,10 +208,7 @@ export class MeetingCountByPeriodService {
   /**
    * Validate departmentId is within scope for MANAGER role.
    */
-  validateDepartmentOwnership(
-    scope: ScopeResult,
-    departmentId?: string,
-  ): void {
+  validateDepartmentOwnership(scope: ScopeResult, departmentId?: string): void {
     if (scope.isAdmin || !departmentId) return;
 
     if (!scope.scopeDepartmentIds?.includes(departmentId)) {
@@ -239,7 +250,9 @@ export class MeetingCountByPeriodService {
   }
 
   private getISOWeekLabel(date: Date): string {
-    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const d = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
     const dayNum = (d.getUTCDay() + 6) % 7;
     d.setUTCDate(d.getUTCDate() - dayNum + 3);
     const firstThursday = d.getTime();
@@ -255,11 +268,14 @@ export class MeetingCountByPeriodService {
   /**
    * Build empty response.
    */
-  private buildEmptyResponse(buckets: string[]): MeetingCountByPeriodResponseDto {
+  private buildEmptyResponse(
+    buckets: string[],
+  ): MeetingCountByPeriodResponseDto {
     return {
       total: 0,
       series: buckets.map((period) => ({ period, count: 0 })),
-      message: 'Không tìm thấy dữ liệu cuộc họp nào thỏa mãn các tiêu chí lọc hiện tại',
+      message:
+        'Không tìm thấy dữ liệu cuộc họp nào thỏa mãn các tiêu chí lọc hiện tại',
     };
   }
 
@@ -283,7 +299,8 @@ export class MeetingCountByPeriodService {
     };
 
     if (total === 0) {
-      response.message = 'Không tìm thấy dữ liệu cuộc họp nào thỏa mãn các tiêu chí lọc hiện tại';
+      response.message =
+        'Không tìm thấy dữ liệu cuộc họp nào thỏa mãn các tiêu chí lọc hiện tại';
     }
 
     return response;

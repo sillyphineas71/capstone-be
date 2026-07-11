@@ -32,7 +32,9 @@ describe('SeedAnalyticsRoomReadPermission', () => {
         .mockResolvedValueOnce([{ id: 'role-3' }]) // SELECT SYSTEM_ADMIN
         .mockResolvedValueOnce(undefined); // INSERT role_permission SYSTEM_ADMIN
 
-      await expect(seedAnalyticsRoomReadPermission(mockDataSource)).resolves.toBeUndefined();
+      await expect(
+        seedAnalyticsRoomReadPermission(mockDataSource),
+      ).resolves.toBeUndefined();
 
       expect(mockQueryRunner.connect).toHaveBeenCalled();
       expect(mockQueryRunner.startTransaction).toHaveBeenCalled();
@@ -64,7 +66,9 @@ describe('SeedAnalyticsRoomReadPermission', () => {
           typeof call[0] === 'string' &&
           call[0].includes('SELECT id FROM roles WHERE role_code'),
       );
-      const queriedRoleCodes = roleLookupCalls.map((call: [string, unknown[]]) => call[1][0]);
+      const queriedRoleCodes = roleLookupCalls.map(
+        (call: [string, unknown[]]) => call[1][0],
+      );
 
       expect(queriedRoleCodes).toContain('MANAGER');
       expect(queriedRoleCodes).toContain('BUSINESS_ADMIN');
@@ -83,7 +87,9 @@ describe('SeedAnalyticsRoomReadPermission', () => {
     it('rolls back on error', async () => {
       mockQueryRunner.query.mockRejectedValue(new Error('DB Error'));
 
-      await expect(seedAnalyticsRoomReadPermission(mockDataSource)).rejects.toThrow('DB Error');
+      await expect(
+        seedAnalyticsRoomReadPermission(mockDataSource),
+      ).rejects.toThrow('DB Error');
       expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
       expect(mockQueryRunner.release).toHaveBeenCalled();
     });

@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { NoShowRateController } from '../controllers/no-show-rate.controller';
 import { NoShowRateService } from '../services/no-show-rate.service';
 
@@ -56,12 +59,14 @@ describe('NoShowRateController', () => {
         rankBy: 'room',
       };
 
-      const result = await controller.getNoShowRate(query as any, {
+      const result = await controller.getNoShowRate(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê tỷ lệ no-show được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ no-show được truy xuất thành công',
+      );
       expect(result.data.noShowCount).toBe(5);
       expect(result.data.ranking.items[0]).toEqual({
         id: 'r1',
@@ -92,7 +97,9 @@ describe('NoShowRateController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getNoShowRate.mockRejectedValue(new Error('Database disconnect'));
+      mockService.getNoShowRate.mockRejectedValue(
+        new Error('Database disconnect'),
+      );
 
       await expect(
         controller.getNoShowRate({} as any, { userId: mockUserId }),

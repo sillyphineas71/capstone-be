@@ -54,6 +54,11 @@ import { RoomUtilizationRateController } from './controllers/room-utilization-ra
 import { RoomUtilizationRateService } from './services/room-utilization-rate.service';
 import { RoomUtilizationRateRepository } from './repositories/room-utilization-rate.repository';
 
+import { RoomUsageHistoryController } from './controllers/room-usage-history.controller.js';
+import { RoomUsageHistoryService } from './services/room-usage-history.service.js';
+import { RoomUsageHistoryConfigService } from './services/room-usage-history-config.service.js';
+import { RoomUsageHistoryRepository } from './repositories/room-usage-history.repository.js';
+
 @Module({
   imports: [
     ConfigModule,
@@ -82,6 +87,7 @@ import { RoomUtilizationRateRepository } from './repositories/room-utilization-r
     OnTimeRateController,
     RoomUsageDashboardController,
     RoomUtilizationRateController,
+    RoomUsageHistoryController,
   ],
   providers: [
     DashboardOverviewService,
@@ -104,6 +110,9 @@ import { RoomUtilizationRateRepository } from './repositories/room-utilization-r
     RoomUsageConfigService,
     RoomUtilizationRateService,
     RoomUtilizationRateRepository,
+    RoomUsageHistoryService,
+    RoomUsageHistoryConfigService,
+    RoomUsageHistoryRepository,
   ],
   exports: [TypeOrmModule, DashboardOverviewConfigService],
 })

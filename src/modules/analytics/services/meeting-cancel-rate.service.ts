@@ -6,7 +6,12 @@ import {
 } from '@nestjs/common';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
-import { MeetingCancelRateRepository, CancelRateSummaryResult, TopOrganizerResult, TopDepartmentResult } from '../repositories/meeting-cancel-rate.repository';
+import {
+  MeetingCancelRateRepository,
+  CancelRateSummaryResult,
+  TopOrganizerResult,
+  TopDepartmentResult,
+} from '../repositories/meeting-cancel-rate.repository';
 import { DashboardOverviewConfigService } from './dashboard-overview-config.service';
 import { QueryMeetingCancelRateDto } from '../dto/query-meeting-cancel-rate.dto';
 import { MeetingCancelRateResponseDto } from '../dto/meeting-cancel-rate-response.dto';
@@ -36,7 +41,11 @@ export class MeetingCancelRateService {
     query: QueryMeetingCancelRateDto,
   ): Promise<{ data: MeetingCancelRateResponseDto; message: string }> {
     // 1. Resolve Date Range from Preset
-    const { from, to } = this.resolvePresetRange(query.preset, query.from, query.to);
+    const { from, to } = this.resolvePresetRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
 
     // 2. Validate Max Range Days
     await this.validateMaxRange(from, to);
@@ -79,7 +88,10 @@ export class MeetingCancelRateService {
     };
 
     // 5. Short-circuit if manager has no departments
-    if (scope.scopeDepartmentIds !== null && scope.scopeDepartmentIds.length === 0) {
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
       const data = this.buildEmptyResponse(from, to, buckets);
       await logAction(0);
       return { data, message: data.message! };
@@ -88,7 +100,9 @@ export class MeetingCancelRateService {
     // 6. Resolve organizer ID from email if provided
     let organizerId: string | undefined;
     if (query.organizerEmail) {
-      const resolvedId = await this.repo.findUserIdByEmail(query.organizerEmail);
+      const resolvedId = await this.repo.findUserIdByEmail(
+        query.organizerEmail,
+      );
       if (!resolvedId) {
         // organizerEmail doesn't match any user -> return empty response (EX1/FR-015/FR-018)
         const data = this.buildEmptyResponse(from, to, buckets);
@@ -109,11 +123,12 @@ export class MeetingCancelRateService {
       granularity,
     };
 
-    const [summaryResult, seriesResult, topOrganizersResult] = await Promise.all([
-      this.repo.getCancelRateSummary(params),
-      this.repo.getCancelRateSeries(params),
-      this.repo.getTopOrganizers(params),
-    ]);
+    const [summaryResult, seriesResult, topOrganizersResult] =
+      await Promise.all([
+        this.repo.getCancelRateSummary(params),
+        this.repo.getCancelRateSeries(params),
+        this.repo.getTopOrganizers(params),
+      ]);
 
     // MANAGER role cannot view topDepartments (returns empty)
     let topDepartmentsResult: TopDepartmentResult[] = [];
@@ -145,22 +160,33 @@ export class MeetingCancelRateService {
    * Resolve user scope based on role.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
-    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
 
     if (roles.includes('SYSTEM_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
-      return { isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' };
+      return {
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      };
     }
     if (roles.includes('MANAGER')) {
-      const scopeDepartmentIds = await this.repo.getManagerDepartmentIds(userId);
+      const scopeDepartmentIds =
+        await this.repo.getManagerDepartmentIds(userId);
       return { isAdmin: false, scopeDepartmentIds, viewerRole: 'MANAGER' };
     }
 
     throw new ForbiddenException({
       success: false,
-      message: 'You do not have permission to view meeting cancel rate analytics',
+      message:
+        'You do not have permission to view meeting cancel rate analytics',
       error: { code: 'PERMISSION_DENIED', details: {} },
     });
   }
@@ -302,7 +328,9 @@ export class MeetingCancelRateService {
   }
 
   private getISOWeekLabel(date: Date): string {
-    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const d = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
     const dayNum = (d.getUTCDay() + 6) % 7;
     d.setUTCDate(d.getUTCDate() - dayNum + 3);
     const firstThursday = d.getTime();
@@ -376,7 +404,8 @@ export class MeetingCancelRateService {
         period: bucketKey,
         totalCount: result.totalCount,
         cancelledCount: result.cancelledCount,
-        cancelRate: Math.round((result.cancelledCount / result.totalCount) * 1000) / 10,
+        cancelRate:
+          Math.round((result.cancelledCount / result.totalCount) * 1000) / 10,
       };
     });
 
@@ -386,7 +415,10 @@ export class MeetingCancelRateService {
       fullName: o.fullName,
       organizedCount: o.organizedCount,
       cancelledCount: o.cancelledCount,
-      cancelRate: o.organizedCount > 0 ? Math.round((o.cancelledCount / o.organizedCount) * 1000) / 10 : 0,
+      cancelRate:
+        o.organizedCount > 0
+          ? Math.round((o.cancelledCount / o.organizedCount) * 1000) / 10
+          : 0,
     }));
 
     const topDepartments = topDepartmentsResult.map((d) => ({
@@ -394,7 +426,10 @@ export class MeetingCancelRateService {
       departmentName: d.departmentName,
       organizedCount: d.organizedCount,
       cancelledCount: d.cancelledCount,
-      cancelRate: d.organizedCount > 0 ? Math.round((d.cancelledCount / d.organizedCount) * 1000) / 10 : 0,
+      cancelRate:
+        d.organizedCount > 0
+          ? Math.round((d.cancelledCount / d.organizedCount) * 1000) / 10
+          : 0,
     }));
 
     const response: MeetingCancelRateResponseDto = {
@@ -408,7 +443,8 @@ export class MeetingCancelRateService {
     };
 
     if (totalMeetingCount === 0) {
-      response.message = 'Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại';
+      response.message =
+        'Không có dữ liệu thiết lập cuộc họp nào cho bộ lọc hiện tại';
     }
 
     return response;

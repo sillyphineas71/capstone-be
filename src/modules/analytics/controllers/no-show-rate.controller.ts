@@ -42,9 +42,16 @@ export class NoShowRateController {
     description: 'Thong ke ty le no-show duoc truy xuat thanh cong',
     type: NoShowRateResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
   @ApiResponse({ status: 401, description: 'Chua dang nhap' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE / ROOM_OUT_OF_SCOPE' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE / ROOM_OUT_OF_SCOPE',
+  })
   @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
   async getNoShowRate(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -57,7 +64,10 @@ export class NoShowRateController {
     meta: Record<string, any>;
   }> {
     try {
-      const { data, message } = await this.service.getNoShowRate(currentUser, query);
+      const { data, message } = await this.service.getNoShowRate(
+        currentUser,
+        query,
+      );
       return {
         success: true,
         message,

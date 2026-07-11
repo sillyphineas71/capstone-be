@@ -81,7 +81,12 @@ export class MeetingAverageDurationRepository {
 
   async getAverageDurationByBucket(
     params: AverageDurationParams,
-  ): Promise<Map<string, { plannedAvg: number | null; actualAvg: number | null; count: number }>> {
+  ): Promise<
+    Map<
+      string,
+      { plannedAvg: number | null; actualAvg: number | null; count: number }
+    >
+  > {
     const scope = this.buildScopeWhere(params, 'm');
     const pIdx = scope.values.length + 1;
     const formatPattern = this.getFormatPattern(params.granularity || 'week');
@@ -119,20 +124,31 @@ export class MeetingAverageDurationRepository {
       params.to,
     ]);
 
-    const result = new Map<string, { plannedAvg: number | null; actualAvg: number | null; count: number }>();
+    const result = new Map<
+      string,
+      { plannedAvg: number | null; actualAvg: number | null; count: number }
+    >();
     for (const row of rows) {
       result.set(row.period, {
-        plannedAvg: row.planned_avg !== null && row.planned_avg !== undefined ? Number(row.planned_avg) : null,
-        actualAvg: row.actual_avg !== null && row.actual_avg !== undefined ? Number(row.actual_avg) : null,
+        plannedAvg:
+          row.planned_avg !== null && row.planned_avg !== undefined
+            ? Number(row.planned_avg)
+            : null,
+        actualAvg:
+          row.actual_avg !== null && row.actual_avg !== undefined
+            ? Number(row.actual_avg)
+            : null,
         count: row.cnt,
       });
     }
     return result;
   }
 
-  async getAverageDurationSummary(
-    params: AverageDurationParams,
-  ): Promise<{ plannedAvg: number | null; actualAvg: number | null; count: number }> {
+  async getAverageDurationSummary(params: AverageDurationParams): Promise<{
+    plannedAvg: number | null;
+    actualAvg: number | null;
+    count: number;
+  }> {
     const scope = this.buildScopeWhere(params, 'm');
     const pIdx = scope.values.length + 1;
 
@@ -168,8 +184,14 @@ export class MeetingAverageDurationRepository {
 
     const row = rows?.[0];
     return {
-      plannedAvg: row?.planned_avg !== null && row?.planned_avg !== undefined ? Number(row.planned_avg) : null,
-      actualAvg: row?.actual_avg !== null && row?.actual_avg !== undefined ? Number(row.actual_avg) : null,
+      plannedAvg:
+        row?.planned_avg !== null && row?.planned_avg !== undefined
+          ? Number(row.planned_avg)
+          : null,
+      actualAvg:
+        row?.actual_avg !== null && row?.actual_avg !== undefined
+          ? Number(row.actual_avg)
+          : null,
       count: row?.cnt ?? 0,
     };
   }

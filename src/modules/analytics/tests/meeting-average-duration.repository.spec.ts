@@ -39,7 +39,9 @@ describe('MeetingAverageDurationRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.getAverageDurationByBucket(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(');
+      expect(sql).not.toContain(
+        'organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(',
+      );
     });
 
     it('empty scopeDepartmentIds -> FALSE clause', async () => {
@@ -69,7 +71,9 @@ describe('MeetingAverageDurationRepository', () => {
       };
       await repo.getAverageDurationByBucket(params);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(');
+      expect(sql).toContain(
+        'organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = ANY(',
+      );
       const values = mockQuery.mock.calls[0][1];
       expect(values).toContainEqual(['d3', 'd4']);
     });
@@ -101,13 +105,22 @@ describe('MeetingAverageDurationRepository', () => {
     it('uses correct date format patterns', async () => {
       mockQuery.mockResolvedValue([]);
 
-      await repo.getAverageDurationByBucket({ ...baseParams, granularity: 'day' });
+      await repo.getAverageDurationByBucket({
+        ...baseParams,
+        granularity: 'day',
+      });
       expect(mockQuery.mock.calls[0][0]).toContain('YYYY-MM-DD');
 
-      await repo.getAverageDurationByBucket({ ...baseParams, granularity: 'month' });
+      await repo.getAverageDurationByBucket({
+        ...baseParams,
+        granularity: 'month',
+      });
       expect(mockQuery.mock.calls[1][0]).toContain('YYYY-MM');
 
-      await repo.getAverageDurationByBucket({ ...baseParams, granularity: 'quarter' });
+      await repo.getAverageDurationByBucket({
+        ...baseParams,
+        granularity: 'quarter',
+      });
       expect(mockQuery.mock.calls[2][0]).toContain('YYYY-"Q"Q');
     });
 
@@ -148,7 +161,9 @@ describe('MeetingAverageDurationRepository', () => {
     });
 
     it('implements population-sync: filters out records missing both actual and presence times', async () => {
-      mockQuery.mockResolvedValue([{ planned_avg: null, actual_avg: null, cnt: 0 }]);
+      mockQuery.mockResolvedValue([
+        { planned_avg: null, actual_avg: null, cnt: 0 },
+      ]);
       await repo.getAverageDurationSummary(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toContain('actual_end_time IS NOT NULL');

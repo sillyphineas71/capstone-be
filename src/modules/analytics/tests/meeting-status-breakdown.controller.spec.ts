@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { MeetingStatusBreakdownController } from '../controllers/meeting-status-breakdown.controller';
 import { MeetingStatusBreakdownService } from '../services/meeting-status-breakdown.service';
 
@@ -43,14 +46,20 @@ describe('MeetingStatusBreakdownController', () => {
         preset: 'month',
       };
 
-      const result = await controller.getStatusBreakdown(query as any, {
+      const result = await controller.getStatusBreakdown(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê cuộc họp theo trạng thái được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê cuộc họp theo trạng thái được truy xuất thành công',
+      );
       expect(result.data.total).toBe(10);
-      expect(result.data.items[0]).toEqual({ status: 'scheduled', count: 10, percentage: 100.0 });
+      expect(result.data.items[0]).toEqual({
+        status: 'scheduled',
+        count: 10,
+        percentage: 100.0,
+      });
       expect(result.meta).toEqual({});
       expect(mockService.getStatusBreakdown).toHaveBeenCalledWith(
         { userId: mockUserId },
@@ -72,7 +81,9 @@ describe('MeetingStatusBreakdownController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getStatusBreakdown.mockRejectedValue(new Error('Database disconnect'));
+      mockService.getStatusBreakdown.mockRejectedValue(
+        new Error('Database disconnect'),
+      );
 
       await expect(
         controller.getStatusBreakdown({} as any, { userId: mockUserId }),

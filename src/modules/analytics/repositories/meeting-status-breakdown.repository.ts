@@ -95,7 +95,10 @@ export class MeetingStatusBreakdownRepository {
       params.to,
     ]);
 
-    const result = new Map<'scheduled' | 'completed' | 'cancelled' | 'no_show', number>();
+    const result = new Map<
+      'scheduled' | 'completed' | 'cancelled' | 'no_show',
+      number
+    >();
     // Pre-populate with 0 to ensure we have entries, though the service will do this too.
     result.set('scheduled', 0);
     result.set('completed', 0);

@@ -15,17 +15,24 @@ export class QueryRoomUtilizationRateDto {
 
   @IsOptional()
   @IsDateString({}, { message: 'from must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'Start date (ISO 8601) - only used if preset=custom', example: '2026-06-01' })
+  @ApiPropertyOptional({
+    description: 'Start date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-01',
+  })
   from?: string;
 
   @IsOptional()
   @IsDateString({}, { message: 'to must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'End date (ISO 8601) - only used if preset=custom', example: '2026-06-30' })
+  @ApiPropertyOptional({
+    description: 'End date (ISO 8601) - only used if preset=custom',
+    example: '2026-06-30',
+  })
   to?: string;
 
   @IsOptional()
   @IsEnum(['previous_period', 'same_period_last_year', 'custom'], {
-    message: 'comparisonMode must be: previous_period, same_period_last_year, custom',
+    message:
+      'comparisonMode must be: previous_period, same_period_last_year, custom',
   })
   @ApiPropertyOptional({
     description: 'Comparison period calculation mode',
@@ -35,13 +42,24 @@ export class QueryRoomUtilizationRateDto {
   comparisonMode?: string;
 
   @IsOptional()
-  @IsDateString({}, { message: 'comparisonFrom must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'Comparison start date (ISO 8601) - only used if comparisonMode=custom', example: '2026-05-01' })
+  @IsDateString(
+    {},
+    { message: 'comparisonFrom must be a valid ISO date string' },
+  )
+  @ApiPropertyOptional({
+    description:
+      'Comparison start date (ISO 8601) - only used if comparisonMode=custom',
+    example: '2026-05-01',
+  })
   comparisonFrom?: string;
 
   @IsOptional()
   @IsDateString({}, { message: 'comparisonTo must be a valid ISO date string' })
-  @ApiPropertyOptional({ description: 'Comparison end date (ISO 8601) - only used if comparisonMode=custom', example: '2026-05-30' })
+  @ApiPropertyOptional({
+    description:
+      'Comparison end date (ISO 8601) - only used if comparisonMode=custom',
+    example: '2026-05-30',
+  })
   comparisonTo?: string;
 
   @IsOptional()

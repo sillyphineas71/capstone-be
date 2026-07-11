@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { MeetingAverageDurationController } from '../controllers/meeting-average-duration.controller';
 import { MeetingAverageDurationService } from '../services/meeting-average-duration.service';
 
@@ -39,7 +42,8 @@ describe('MeetingAverageDurationController', () => {
             },
           ],
         },
-        message: 'Thống kê thời lượng trung bình cuộc họp được truy xuất thành công',
+        message:
+          'Thống kê thời lượng trung bình cuộc họp được truy xuất thành công',
       };
 
       mockService.getAverageDuration.mockResolvedValue(mockResult);
@@ -50,12 +54,14 @@ describe('MeetingAverageDurationController', () => {
         granularity: 'week',
       };
 
-      const result = await controller.getAverageDuration(query as any, {
+      const result = await controller.getAverageDuration(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê thời lượng trung bình cuộc họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê thời lượng trung bình cuộc họp được truy xuất thành công',
+      );
       expect(result.data.summary.plannedAverageMinutes).toBe(65.0);
       expect(result.data.summary.actualAverageMinutes).toBe(58.2);
       expect(result.meta).toEqual({});
@@ -80,7 +86,9 @@ describe('MeetingAverageDurationController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getAverageDuration.mockRejectedValue(new Error('DB connection lost'));
+      mockService.getAverageDuration.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
 
       await expect(
         controller.getAverageDuration({} as any, { userId: mockUserId }),

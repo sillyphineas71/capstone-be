@@ -18,7 +18,11 @@ describe('RoomUtilizationRateRepository', () => {
   describe('getManagerRoomIds', () => {
     it('queries room ids dynamically based on date range', async () => {
       mockQuery.mockResolvedValue([{ room_id: 'r1' }]);
-      const result = await repo.getManagerRoomIds('user-1', '2026-06-01', '2026-06-30');
+      const result = await repo.getManagerRoomIds(
+        'user-1',
+        '2026-06-01',
+        '2026-06-30',
+      );
       expect(result).toEqual(['r1']);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('SELECT DISTINCT rb.room_id'),
@@ -63,7 +67,12 @@ describe('RoomUtilizationRateRepository', () => {
         .mockResolvedValueOnce([{ booked_minutes: 120 }]) // booked minutes
         .mockResolvedValueOnce([{ actual_minutes: 90 }]); // actual minutes
 
-      const result = await repo.getPeriodAggregate(null, 'r1', '2026-06-01', '2026-06-30');
+      const result = await repo.getPeriodAggregate(
+        null,
+        'r1',
+        '2026-06-01',
+        '2026-06-30',
+      );
 
       expect(result.bookedMinutesSum).toBe(120);
       expect(result.actualMinutesSum).toBe(90);
@@ -71,8 +80,12 @@ describe('RoomUtilizationRateRepository', () => {
       expect(result.activeRoomCount).toBe(1);
 
       const bookedSql = mockQuery.mock.calls[1][0] as string;
-      expect(bookedSql).toContain('SUM(EXTRACT(EPOCH FROM (rb.reserved_end_time - rb.reserved_start_time)) / 60)');
-      expect(bookedSql).toContain("rb.status IN ('approved', 'active', 'completed', 'released')");
+      expect(bookedSql).toContain(
+        'SUM(EXTRACT(EPOCH FROM (rb.reserved_end_time - rb.reserved_start_time)) / 60)',
+      );
+      expect(bookedSql).toContain(
+        "rb.status IN ('approved', 'active', 'completed', 'released')",
+      );
     });
   });
 });

@@ -25,9 +25,12 @@ export class OnTimeRateRepository {
     return rows.map((r: { id: string }) => r.id);
   }
 
-  async getUserDetails(
-    userId: string,
-  ): Promise<{ id: string; fullName: string; email: string; departmentId: string } | null> {
+  async getUserDetails(userId: string): Promise<{
+    id: string;
+    fullName: string;
+    email: string;
+    departmentId: string;
+  } | null> {
     const rows = await this.dataSource.query(
       `SELECT id, full_name AS "fullName", email, department_id AS "departmentId" FROM users WHERE id = $1 LIMIT 1`,
       [userId],
@@ -36,9 +39,10 @@ export class OnTimeRateRepository {
     return rows[0];
   }
 
-  private buildScopeWhere(
-    params: OnTimeRateQueryParams,
-  ): { clause: string; values: unknown[] } {
+  private buildScopeWhere(params: OnTimeRateQueryParams): {
+    clause: string;
+    values: unknown[];
+  } {
     const values: unknown[] = [];
     let idx = 1;
     const conditions: string[] = [];
@@ -80,9 +84,7 @@ export class OnTimeRateRepository {
     return { clause, values };
   }
 
-  async getKpiTotals(
-    params: OnTimeRateQueryParams,
-  ): Promise<{
+  async getKpiTotals(params: OnTimeRateQueryParams): Promise<{
     onTimeCount: number;
     lateCount: number;
     absentCount: number;
@@ -138,9 +140,7 @@ export class OnTimeRateRepository {
     };
   }
 
-  async getTrendByWeek(
-    params: OnTimeRateQueryParams,
-  ): Promise<
+  async getTrendByWeek(params: OnTimeRateQueryParams): Promise<
     Map<
       string,
       {
@@ -219,7 +219,9 @@ export class OnTimeRateRepository {
 
   async getLateByHourOfDay(
     params: OnTimeRateQueryParams,
-  ): Promise<Map<number, { lateCount: number; totalRequiredParticipants: number }>> {
+  ): Promise<
+    Map<number, { lateCount: number; totalRequiredParticipants: number }>
+  > {
     const scope = this.buildScopeWhere(params);
     const graceIdx = scope.values.length + 1;
     const fromIdx = graceIdx + 1;
@@ -264,7 +266,10 @@ export class OnTimeRateRepository {
       params.to,
     ]);
 
-    const result = new Map<number, { lateCount: number; totalRequiredParticipants: number }>();
+    const result = new Map<
+      number,
+      { lateCount: number; totalRequiredParticipants: number }
+    >();
     for (const row of rows) {
       result.set(row.hour_of_day, {
         lateCount: row.late_count,
@@ -274,9 +279,7 @@ export class OnTimeRateRepository {
     return result;
   }
 
-  async getLateByDepartment(
-    params: OnTimeRateQueryParams,
-  ): Promise<
+  async getLateByDepartment(params: OnTimeRateQueryParams): Promise<
     Array<{
       departmentId: string;
       departmentName: string;

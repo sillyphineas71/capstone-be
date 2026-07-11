@@ -44,7 +44,10 @@ describe('NoShowRateService', () => {
         NoShowRateService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: NoShowRateRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
@@ -81,20 +84,24 @@ describe('NoShowRateService', () => {
     });
 
     it('preset=custom valid', () => {
-      const result = service.resolveDateRange('custom', '2026-06-01', '2026-06-15');
+      const result = service.resolveDateRange(
+        'custom',
+        '2026-06-01',
+        '2026-06-15',
+      );
       expect(result).toEqual({ from: '2026-06-01', to: '2026-06-15' });
     });
 
     it('preset=custom invalid (from > to) -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', '2026-06-15', '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', '2026-06-15', '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
 
     it('preset=custom missing date -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('custom', undefined, '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('custom', undefined, '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
   });
 
@@ -122,7 +129,11 @@ describe('NoShowRateService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -152,7 +163,9 @@ describe('NoShowRateService', () => {
 
   describe('validateRoomOwnership', () => {
     it('MANAGER, roomId out of scope -> ForbiddenException', () => {
-      expect(() => service.validateRoomOwnership(['r1'], 'r2')).toThrow(ForbiddenException);
+      expect(() => service.validateRoomOwnership(['r1'], 'r2')).toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -169,7 +182,9 @@ describe('NoShowRateService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getNoShowRate({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getNoShowRate({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('empty state (no-show count = 0)', async () => {
@@ -178,7 +193,10 @@ describe('NoShowRateService', () => {
         permissions: ['analytics.room.read'],
       });
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getKpiAggregate.mockResolvedValue({ totalBookings: 10, noShowCount: 0 });
+      mockRepo.getKpiAggregate.mockResolvedValue({
+        totalBookings: 10,
+        noShowCount: 0,
+      });
 
       const query: QueryNoShowRateDto = {
         preset: 'custom',
@@ -224,9 +242,18 @@ describe('NoShowRateService', () => {
         permissions: ['analytics.room.read'],
       });
       mockConfigService.getMaxRangeDays.mockResolvedValue(366);
-      mockRepo.getKpiAggregate.mockResolvedValue({ totalBookings: 20, noShowCount: 5 });
+      mockRepo.getKpiAggregate.mockResolvedValue({
+        totalBookings: 20,
+        noShowCount: 5,
+      });
       mockRepo.getRoomRanking.mockResolvedValue([
-        { id: 'r1', name: 'Room 1', totalBookings: 5, noShowCount: 3, fullCount: 1 },
+        {
+          id: 'r1',
+          name: 'Room 1',
+          totalBookings: 5,
+          noShowCount: 3,
+          fullCount: 1,
+        },
       ]);
 
       const query: QueryNoShowRateDto = {
@@ -240,7 +267,9 @@ describe('NoShowRateService', () => {
 
       const result = await service.getNoShowRate({ userId: mockUserId }, query);
 
-      expect(result.message).toBe('Thống kê tỷ lệ no-show được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ no-show được truy xuất thành công',
+      );
       expect(result.data.noShowCount).toBe(5);
       expect(result.data.totalBookings).toBe(20);
       expect(result.data.noShowRate).toBe(25.0);

@@ -36,9 +36,21 @@ describe('OnTimeRateRepository', () => {
 
   describe('getUserDetails', () => {
     it('queries user details', async () => {
-      mockQuery.mockResolvedValue([{ id: 'u1', fullName: 'User 1', email: 'u1@co.com', departmentId: 'd1' }]);
+      mockQuery.mockResolvedValue([
+        {
+          id: 'u1',
+          fullName: 'User 1',
+          email: 'u1@co.com',
+          departmentId: 'd1',
+        },
+      ]);
       const result = await repo.getUserDetails('user-1');
-      expect(result).toEqual({ id: 'u1', fullName: 'User 1', email: 'u1@co.com', departmentId: 'd1' });
+      expect(result).toEqual({
+        id: 'u1',
+        fullName: 'User 1',
+        email: 'u1@co.com',
+        departmentId: 'd1',
+      });
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('SELECT id, full_name'),
         ['user-1'],
@@ -106,61 +118,121 @@ describe('OnTimeRateRepository', () => {
 
   describe('getKpiTotals', () => {
     it('queries totals using CASE classification containing absent fallback and invalidated exclusion', async () => {
-      mockQuery.mockResolvedValue([{ on_time_count: 50, late_count: 10, absent_count: 5, total_count: 65 }]);
+      mockQuery.mockResolvedValue([
+        { on_time_count: 50, late_count: 10, absent_count: 5, total_count: 65 },
+      ]);
       const result = await repo.getKpiTotals(baseParams);
-      expect(result).toEqual({ onTimeCount: 50, lateCount: 10, absentCount: 5, totalRequiredParticipants: 65 });
+      expect(result).toEqual({
+        onTimeCount: 50,
+        lateCount: 10,
+        absentCount: 5,
+        totalRequiredParticipants: 65,
+      });
 
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toContain('WITH classified AS');
       expect(sql).toContain("m.status = 'completed'");
       expect(sql).toContain("mp.invitation_status <> 'declined'");
-      expect(sql).toContain("ar.attendance_status NOT IN ('invalidated', 'pending_review')");
-      expect(sql).toContain('CASE WHEN NOT ar.is_late THEN \'on_time\' ELSE \'late\' END');
+      expect(sql).toContain(
+        "ar.attendance_status NOT IN ('invalidated', 'pending_review')",
+      );
+      expect(sql).toContain(
+        "CASE WHEN NOT ar.is_late THEN 'on_time' ELSE 'late' END",
+      );
       expect(sql).toContain('ar.late_minutes <=');
     });
   });
 
   describe('getTrendByWeek', () => {
     it('queries trend grouped by week', async () => {
-      mockQuery.mockResolvedValue([{ week_key: '2026-06-01', on_time_count: 10, late_count: 2, absent_count: 1, total_count: 13 }]);
+      mockQuery.mockResolvedValue([
+        {
+          week_key: '2026-06-01',
+          on_time_count: 10,
+          late_count: 2,
+          absent_count: 1,
+          total_count: 13,
+        },
+      ]);
       const result = await repo.getTrendByWeek(baseParams);
-      expect(result.get('2026-06-01')).toEqual({ onTimeCount: 10, lateCount: 2, absentCount: 1, totalRequiredParticipants: 13 });
+      expect(result.get('2026-06-01')).toEqual({
+        onTimeCount: 10,
+        lateCount: 2,
+        absentCount: 1,
+        totalRequiredParticipants: 13,
+      });
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain("date_trunc('week', m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')");
+      expect(sql).toContain(
+        "date_trunc('week', m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')",
+      );
       expect(sql).toContain('GROUP BY week_start');
     });
   });
 
   describe('getLateByHourOfDay', () => {
     it('queries distribution grouped by hour', async () => {
-      mockQuery.mockResolvedValue([{ hour_of_day: 9, late_count: 2, total_count: 15 }]);
+      mockQuery.mockResolvedValue([
+        { hour_of_day: 9, late_count: 2, total_count: 15 },
+      ]);
       const result = await repo.getLateByHourOfDay(baseParams);
-      expect(result.get(9)).toEqual({ lateCount: 2, totalRequiredParticipants: 15 });
+      expect(result.get(9)).toEqual({
+        lateCount: 2,
+        totalRequiredParticipants: 15,
+      });
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain("EXTRACT(HOUR FROM m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')");
+      expect(sql).toContain(
+        "EXTRACT(HOUR FROM m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')",
+      );
       expect(sql).toContain('GROUP BY hour_of_day');
     });
   });
 
   describe('getLateByDepartment', () => {
     it('queries breakdown joined with departments', async () => {
-      mockQuery.mockResolvedValue([{ department_id: 'd1', department_name: 'Dept 1', late_count: 5, total_count: 30 }]);
+      mockQuery.mockResolvedValue([
+        {
+          department_id: 'd1',
+          department_name: 'Dept 1',
+          late_count: 5,
+          total_count: 30,
+        },
+      ]);
       const result = await repo.getLateByDepartment(baseParams);
       expect(result).toHaveLength(1);
-      expect(result[0]).toEqual({ departmentId: 'd1', departmentName: 'Dept 1', lateCount: 5, totalRequiredParticipants: 30 });
+      expect(result[0]).toEqual({
+        departmentId: 'd1',
+        departmentName: 'Dept 1',
+        lateCount: 5,
+        totalRequiredParticipants: 30,
+      });
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('INNER JOIN departments d ON d.id = c.department_id');
+      expect(sql).toContain(
+        'INNER JOIN departments d ON d.id = c.department_id',
+      );
       expect(sql).toContain('GROUP BY d.id, d.department_name');
     });
   });
 
   describe('getLateHistory', () => {
     it('queries user late records sorting by start_time DESC', async () => {
-      mockQuery.mockResolvedValue([{ meetingId: 'm1', meetingTitle: 'M1', scheduledStartTime: new Date(), checkInTime: new Date(), lateMinutes: 10 }]);
-      const result = await repo.getLateHistory('user-1', '2026-06-01', '2026-06-30', 5);
+      mockQuery.mockResolvedValue([
+        {
+          meetingId: 'm1',
+          meetingTitle: 'M1',
+          scheduledStartTime: new Date(),
+          checkInTime: new Date(),
+          lateMinutes: 10,
+        },
+      ]);
+      const result = await repo.getLateHistory(
+        'user-1',
+        '2026-06-01',
+        '2026-06-30',
+        5,
+      );
       expect(result).toHaveLength(1);
 
       const sql = mockQuery.mock.calls[0][0] as string;

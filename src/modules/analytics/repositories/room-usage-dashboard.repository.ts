@@ -38,9 +38,13 @@ export class RoomUsageDashboardRepository {
     return rows.map((r: { room_id: string }) => r.room_id);
   }
 
-  async getRoom(
-    roomId: string,
-  ): Promise<{ id: string; roomName: string; siteName: string | null; areaName: string | null; capacity: number } | null> {
+  async getRoom(roomId: string): Promise<{
+    id: string;
+    roomName: string;
+    siteName: string | null;
+    areaName: string | null;
+    capacity: number;
+  } | null> {
     const rows = await this.dataSource.query(
       `SELECT id, room_name AS "roomName", site_name AS "siteName", area_name AS "areaName", capacity
        FROM rooms WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
@@ -163,7 +167,10 @@ export class RoomUsageDashboardRepository {
       params.to,
     ]);
 
-    const result = new Map<string, { actualMinutes: number; hasActualData: boolean }>();
+    const result = new Map<
+      string,
+      { actualMinutes: number; hasActualData: boolean }
+    >();
     for (const row of rows) {
       result.set(row.room_id, {
         actualMinutes: row.actual_minutes,
@@ -269,8 +276,12 @@ export class RoomUsageDashboardRepository {
 
     const fromIdx = idx;
     const toIdx = idx + 1;
-    conditions.push(`rb.reserved_start_time >= ($${fromIdx} || ' 00:00:00+07')::timestamptz`);
-    conditions.push(`rb.reserved_start_time <= ($${toIdx} || ' 23:59:59.999+07')::timestamptz`);
+    conditions.push(
+      `rb.reserved_start_time >= ($${fromIdx} || ' 00:00:00+07')::timestamptz`,
+    );
+    conditions.push(
+      `rb.reserved_start_time <= ($${toIdx} || ' 23:59:59.999+07')::timestamptz`,
+    );
     values.push(from, to);
 
     const sql = `

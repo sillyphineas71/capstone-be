@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { MeetingCancelRateController } from '../controllers/meeting-cancel-rate.controller';
 import { MeetingCancelRateService } from '../services/meeting-cancel-rate.service';
 
@@ -66,12 +69,14 @@ describe('MeetingCancelRateController', () => {
         granularity: 'week',
       };
 
-      const result = await controller.getCancelRate(query as any, {
+      const result = await controller.getCancelRate(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê tỷ lệ cuộc họp bị hủy được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ cuộc họp bị hủy được truy xuất thành công',
+      );
       expect(result.data.totalMeetingCount).toBe(10);
       expect(result.data.cancelledCount).toBe(3);
       expect(result.data.cancelRate).toBe(30.0);
@@ -96,7 +101,9 @@ describe('MeetingCancelRateController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getCancelRate.mockRejectedValue(new Error('Database disconnect'));
+      mockService.getCancelRate.mockRejectedValue(
+        new Error('Database disconnect'),
+      );
 
       await expect(
         controller.getCancelRate({} as any, { userId: mockUserId }),

@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { OnTimeRateController } from '../controllers/on-time-rate.controller';
 import { OnTimeRateService } from '../services/on-time-rate.service';
 
@@ -47,12 +51,14 @@ describe('OnTimeRateController', () => {
         graceMinutes: 5,
       };
 
-      const result = await controller.getOnTimeRate(query as any, {
+      const result = await controller.getOnTimeRate(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê tỷ lệ tham dự đúng giờ được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ tham dự đúng giờ được truy xuất thành công',
+      );
       expect(result.data.onTimeRate).toBe(82.4);
       expect(result.meta).toEqual({});
       expect(mockService.getOnTimeRate).toHaveBeenCalledWith(
@@ -75,7 +81,9 @@ describe('OnTimeRateController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getOnTimeRate.mockRejectedValue(new Error('Database disconnect'));
+      mockService.getOnTimeRate.mockRejectedValue(
+        new Error('Database disconnect'),
+      );
 
       await expect(
         controller.getOnTimeRate({} as any, { userId: mockUserId }),
@@ -87,7 +95,11 @@ describe('OnTimeRateController', () => {
     it('valid request -> 200 with late history response', async () => {
       const mockResult = {
         data: {
-          user: { userId: mockTargetId, fullName: 'Target User', email: 't@co.com' },
+          user: {
+            userId: mockTargetId,
+            fullName: 'Target User',
+            email: 't@co.com',
+          },
           period: { from: '2026-06-01', to: '2026-06-30' },
           lateMeetings: [],
         },
@@ -100,12 +112,14 @@ describe('OnTimeRateController', () => {
         preset: 'month',
       };
 
-      const result = await controller.getLateHistory(mockTargetId, query as any, {
+      const result = await controller.getLateHistory(mockTargetId, query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Lịch sử đi muộn của nhân sự được truy xuất thành công');
+      expect(result.message).toBe(
+        'Lịch sử đi muộn của nhân sự được truy xuất thành công',
+      );
       expect(result.data.user.fullName).toBe('Target User');
       expect(mockService.getLateHistory).toHaveBeenCalledWith(
         { userId: mockUserId },
@@ -115,10 +129,14 @@ describe('OnTimeRateController', () => {
     });
 
     it('service throws NotFoundException -> re-thrown as-is', async () => {
-      mockService.getLateHistory.mockRejectedValue(new NotFoundException({ success: false, message: 'User not found' }));
+      mockService.getLateHistory.mockRejectedValue(
+        new NotFoundException({ success: false, message: 'User not found' }),
+      );
 
       await expect(
-        controller.getLateHistory(mockTargetId, {} as any, { userId: mockUserId }),
+        controller.getLateHistory(mockTargetId, {} as any, {
+          userId: mockUserId,
+        }),
       ).rejects.toThrow(NotFoundException);
     });
   });

@@ -39,7 +39,7 @@ describe('DashboardOverviewController', () => {
         to: '2026-06-30',
       };
 
-      const result = await controller.getOverview(query as any, {
+      const result = await controller.getOverview(query, {
         userId: mockUserId,
       });
 
@@ -66,7 +66,9 @@ describe('DashboardOverviewController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getOverview.mockRejectedValue(new Error('DB connection lost'));
+      mockService.getOverview.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
 
       await expect(
         controller.getOverview({} as any, { userId: mockUserId }),
@@ -87,7 +89,7 @@ describe('DashboardOverviewController', () => {
       });
 
       const result = await controller.getOverview(
-        { from: '2026-06-01', to: '2026-06-30' } as any,
+        { from: '2026-06-01', to: '2026-06-30' },
         { userId: mockUserId },
       );
 

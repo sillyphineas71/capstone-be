@@ -39,7 +39,9 @@ describe('MeetingCountByPeriodRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.countMeetingsByBucket(baseParams);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(');
+      expect(sql).not.toContain(
+        'organizer_id IN (SELECT u.id FROM users u WHERE u.department_id = ANY(',
+      );
     });
 
     it('empty scopeDepartmentIds -> FALSE clause', async () => {
@@ -69,7 +71,9 @@ describe('MeetingCountByPeriodRepository', () => {
       };
       await repo.countMeetingsByBucket(params);
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = $');
+      expect(sql).toContain(
+        'organizer_id IN (SELECT u2.id FROM users u2 WHERE u2.department_id = $',
+      );
     });
 
     it('roomId filter -> room_id clause', async () => {
@@ -91,9 +95,7 @@ describe('MeetingCountByPeriodRepository', () => {
 
   describe('countMeetingsByBucket', () => {
     it('returns counts map grouped by period', async () => {
-      mockQuery.mockResolvedValue([
-        { period: '2026-W23', cnt: 12 },
-      ]);
+      mockQuery.mockResolvedValue([{ period: '2026-W23', cnt: 12 }]);
       const result = await repo.countMeetingsByBucket(baseParams);
       expect(result.get('2026-W23')).toBe(12);
 

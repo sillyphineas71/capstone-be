@@ -39,12 +39,17 @@ describe('MeetingCountByPeriodService', () => {
         MeetingCountByPeriodService,
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: MeetingCountByPeriodRepository, useValue: mockRepo },
-        { provide: DashboardOverviewConfigService, useValue: mockConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
       ],
     }).compile();
 
-    service = module.get<MeetingCountByPeriodService>(MeetingCountByPeriodService);
+    service = module.get<MeetingCountByPeriodService>(
+      MeetingCountByPeriodService,
+    );
   });
 
   afterEach(() => {
@@ -65,9 +70,9 @@ describe('MeetingCountByPeriodService', () => {
     });
 
     it('custom invalid range (from > to) -> BadRequestException', () => {
-      expect(() => service.resolveDateRange('2026-06-15', '2026-06-01')).toThrow(
-        BadRequestException,
-      );
+      expect(() =>
+        service.resolveDateRange('2026-06-15', '2026-06-01'),
+      ).toThrow(BadRequestException);
     });
 
     it('custom missing one date -> BadRequestException', () => {
@@ -101,7 +106,11 @@ describe('MeetingCountByPeriodService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'SYSTEM_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'SYSTEM_ADMIN',
+      });
     });
 
     it('BUSINESS_ADMIN -> isAdmin=true, scopeDepartmentIds=null', async () => {
@@ -111,7 +120,11 @@ describe('MeetingCountByPeriodService', () => {
       });
 
       const result = await service.resolveScope(mockUserId);
-      expect(result).toEqual({ isAdmin: true, scopeDepartmentIds: null, viewerRole: 'BUSINESS_ADMIN' });
+      expect(result).toEqual({
+        isAdmin: true,
+        scopeDepartmentIds: null,
+        viewerRole: 'BUSINESS_ADMIN',
+      });
     });
 
     it('MANAGER -> queries departments', async () => {
@@ -136,19 +149,25 @@ describe('MeetingCountByPeriodService', () => {
         permissions: ['analytics.meeting.read'],
       });
 
-      await expect(service.resolveScope(mockUserId)).rejects.toThrow(ForbiddenException);
+      await expect(service.resolveScope(mockUserId)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
   describe('validateDepartmentOwnership', () => {
     it('admin -> passes', () => {
       const scope = { isAdmin: true, scopeDepartmentIds: null };
-      expect(() => service.validateDepartmentOwnership(scope, 'any-dept')).not.toThrow();
+      expect(() =>
+        service.validateDepartmentOwnership(scope, 'any-dept'),
+      ).not.toThrow();
     });
 
     it('MANAGER, departmentId in scope -> passes', () => {
       const scope = { isAdmin: false, scopeDepartmentIds: ['d1', 'd2'] };
-      expect(() => service.validateDepartmentOwnership(scope, 'd1')).not.toThrow();
+      expect(() =>
+        service.validateDepartmentOwnership(scope, 'd1'),
+      ).not.toThrow();
     });
 
     it('MANAGER, departmentId out of scope -> ForbiddenException', () => {
@@ -161,12 +180,20 @@ describe('MeetingCountByPeriodService', () => {
 
   describe('generateBuckets', () => {
     it('granularity=month', () => {
-      const result = service.generateBuckets('2026-05-15', '2026-07-10', 'month');
+      const result = service.generateBuckets(
+        '2026-05-15',
+        '2026-07-10',
+        'month',
+      );
       expect(result).toEqual(['2026-05', '2026-06', '2026-07']);
     });
 
     it('granularity=week', () => {
-      const result = service.generateBuckets('2026-05-01', '2026-05-10', 'week');
+      const result = service.generateBuckets(
+        '2026-05-01',
+        '2026-05-10',
+        'week',
+      );
       expect(result).toEqual(['2026-W18', '2026-W19']);
     });
   });
@@ -183,7 +210,9 @@ describe('MeetingCountByPeriodService', () => {
         to: '2026-06-01',
       };
 
-      await expect(service.getCountByPeriod({ userId: mockUserId }, query)).rejects.toThrow(BadRequestException);
+      await expect(
+        service.getCountByPeriod({ userId: mockUserId }, query),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('empty state', async () => {
@@ -200,7 +229,10 @@ describe('MeetingCountByPeriodService', () => {
         granularity: 'week',
       };
 
-      const result = await service.getCountByPeriod({ userId: mockUserId }, query);
+      const result = await service.getCountByPeriod(
+        { userId: mockUserId },
+        query,
+      );
 
       expect(result.message).toBe(
         'Không tìm thấy dữ liệu cuộc họp nào thỏa mãn các tiêu chí lọc hiện tại',
@@ -227,9 +259,14 @@ describe('MeetingCountByPeriodService', () => {
         granularity: 'month',
       };
 
-      const result = await service.getCountByPeriod({ userId: mockUserId }, query);
+      const result = await service.getCountByPeriod(
+        { userId: mockUserId },
+        query,
+      );
 
-      expect(result.message).toBe('Thống kê số lượng cuộc họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê số lượng cuộc họp được truy xuất thành công',
+      );
       expect(result.data.total).toBe(5);
       expect(result.data.series[0]).toEqual({ period: '2026-06', count: 5 });
       expect(mockAuditLogsService.logAction).toHaveBeenCalled();

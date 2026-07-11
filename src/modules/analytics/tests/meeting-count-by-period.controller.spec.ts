@@ -1,4 +1,7 @@
-import { ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { MeetingCountByPeriodController } from '../controllers/meeting-count-by-period.controller';
 import { MeetingCountByPeriodService } from '../services/meeting-count-by-period.service';
 
@@ -41,12 +44,14 @@ describe('MeetingCountByPeriodController', () => {
         granularity: 'week',
       };
 
-      const result = await controller.getCountByPeriod(query as any, {
+      const result = await controller.getCountByPeriod(query, {
         userId: mockUserId,
       });
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Thống kê số lượng cuộc họp được truy xuất thành công');
+      expect(result.message).toBe(
+        'Thống kê số lượng cuộc họp được truy xuất thành công',
+      );
       expect(result.data.total).toBe(10);
       expect(result.data.series[0]).toEqual({ period: '2026-W23', count: 10 });
       expect(result.meta).toEqual({});
@@ -70,7 +75,9 @@ describe('MeetingCountByPeriodController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getCountByPeriod.mockRejectedValue(new Error('Database disconnect'));
+      mockService.getCountByPeriod.mockRejectedValue(
+        new Error('Database disconnect'),
+      );
 
       await expect(
         controller.getCountByPeriod({} as any, { userId: mockUserId }),
