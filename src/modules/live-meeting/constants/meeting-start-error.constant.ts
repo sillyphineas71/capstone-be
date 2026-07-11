@@ -15,4 +15,5 @@ export const MEETING_START_ERRORS = {
   MEETING_START_AMBIGUOUS_DEVICE_MATCH: 'MEETING_START_AMBIGUOUS_DEVICE_MATCH',
 } as const;
 
-export type MeetingStartErrorCode = (typeof MEETING_START_ERRORS)[keyof typeof MEETING_START_ERRORS];
+export type MeetingStartErrorCode =
+  (typeof MEETING_START_ERRORS)[keyof typeof MEETING_START_ERRORS];

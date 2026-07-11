@@ -14,4 +14,5 @@ export const MEETING_NOTE_ERRORS = {
   INVALID_DATE_RANGE: 'INVALID_DATE_RANGE',
 } as const;
 
-export type MeetingNoteErrorCode = (typeof MEETING_NOTE_ERRORS)[keyof typeof MEETING_NOTE_ERRORS];
+export type MeetingNoteErrorCode =
+  (typeof MEETING_NOTE_ERRORS)[keyof typeof MEETING_NOTE_ERRORS];

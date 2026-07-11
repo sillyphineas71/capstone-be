@@ -9,4 +9,5 @@ export const PRESENT_ATTENDEES_ERRORS = {
   INVALID_QUERY: 'INVALID_QUERY',
 } as const;
 
-export type PresentAttendeesErrorCode = (typeof PRESENT_ATTENDEES_ERRORS)[keyof typeof PRESENT_ATTENDEES_ERRORS];
+export type PresentAttendeesErrorCode =
+  (typeof PRESENT_ATTENDEES_ERRORS)[keyof typeof PRESENT_ATTENDEES_ERRORS];

@@ -11,4 +11,5 @@ export const MEETING_END_ERRORS = {
   PERMISSION_DENIED: 'PERMISSION_DENIED',
 } as const;
 
-export type MeetingEndErrorCode = (typeof MEETING_END_ERRORS)[keyof typeof MEETING_END_ERRORS];
+export type MeetingEndErrorCode =
+  (typeof MEETING_END_ERRORS)[keyof typeof MEETING_END_ERRORS];

@@ -258,7 +258,10 @@ export class AuthController {
     summary: 'Get current user profile',
     description: 'Returns the profile of the currently authenticated user.',
   })
-  @ApiResponse({ status: 200, description: 'User profile retrieved successfully' })
+  @ApiResponse({
+    status: 200,
+    description: 'User profile retrieved successfully',
+  })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   async getMe(
     @Req() request: Request,

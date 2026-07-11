@@ -146,7 +146,8 @@ describe('JwtAuthGuard', () => {
 
     redisService.exists.mockResolvedValue(false);
     redisService.get.mockImplementation(async (key: string) => {
-      if (key === 'auth:user:user-1:invalid_after') return String(Date.now() - 10000);
+      if (key === 'auth:user:user-1:invalid_after')
+        return String(Date.now() - 10000);
       return null;
     });
 

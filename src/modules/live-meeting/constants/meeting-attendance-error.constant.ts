@@ -10,4 +10,5 @@ export const MEETING_ATTENDANCE_ERRORS = {
   VALIDATION_ERROR: 'VALIDATION_ERROR',
 } as const;
 
-export type MeetingAttendanceErrorCode = (typeof MEETING_ATTENDANCE_ERRORS)[keyof typeof MEETING_ATTENDANCE_ERRORS];
+export type MeetingAttendanceErrorCode =
+  (typeof MEETING_ATTENDANCE_ERRORS)[keyof typeof MEETING_ATTENDANCE_ERRORS];
