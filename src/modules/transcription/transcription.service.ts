@@ -336,10 +336,20 @@ export class TranscriptionService {
     if (includeSegments && transcript.speakerSegmentsJson) {
       const allSegments =
         (transcript.speakerSegmentsJson as any)?.segments || [];
-      segments = allSegments.slice(
-        (page - 1) * limit,
-        (page - 1) * limit + limit,
-      );
+      segments = allSegments
+        .slice((page - 1) * limit, (page - 1) * limit + limit)
+        .map((s: any) => ({
+          ...s,
+          // Gap fix — startMs/endMs chỉ là offset tương đối so với lúc bắt đầu
+          // ghi (actualStartTime), KHÔNG phải giờ đồng hồ thật. Quy đổi ra giờ
+          // Việt Nam (UTC+7) để FE hiển thị trực tiếp, không phải tự tính lại.
+          // null nếu meeting chưa từng start thật (actualStartTime chưa có).
+          absoluteStartAt: this.toVietnamIso(
+            meeting.actualStartTime,
+            s.startMs,
+          ),
+          absoluteEndAt: this.toVietnamIso(meeting.actualStartTime, s.endMs),
+        }));
     }
 
     return {
@@ -891,5 +901,32 @@ export class TranscriptionService {
     return roleCodes.some((code) =>
       ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'].includes(code),
     );
+  }
+
+  /**
+   * Gap fix — quy đổi (actualStartTime + offsetMs) sang ISO string giờ Việt
+   * Nam (UTC+7 cố định, VN không có DST nên không cần thư viện timezone).
+   * null nếu actualStartTime chưa có (meeting chưa từng start thật qua
+   * live-meeting) hoặc offsetMs không hợp lệ — KHÔNG throw, chỉ là field
+   * hiển thị tiện lợi cho FE, không được làm fail cả response transcript.
+   */
+  private toVietnamIso(
+    actualStartTime: Date | null,
+    offsetMs: unknown,
+  ): string | null {
+    if (!actualStartTime || typeof offsetMs !== 'number') return null;
+    const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+    const vnTime = new Date(
+      actualStartTime.getTime() + offsetMs + VN_OFFSET_MS,
+    );
+    const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+    const yyyy = vnTime.getUTCFullYear();
+    const mm = pad(vnTime.getUTCMonth() + 1);
+    const dd = pad(vnTime.getUTCDate());
+    const hh = pad(vnTime.getUTCHours());
+    const mi = pad(vnTime.getUTCMinutes());
+    const ss = pad(vnTime.getUTCSeconds());
+    const ms = pad(vnTime.getUTCMilliseconds(), 3);
+    return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}.${ms}+07:00`;
   }
 }

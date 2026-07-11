@@ -4,6 +4,7 @@
 | 2026-07-01 | Tạo tài liệu tổng hợp toàn bộ API endpoint của luồng transcription (recording-config → recording-session → media-files → transcription-jobs → transcript → segments), đối chiếu trực tiếp với source code controller/DTO hiện tại (không chỉ theo `contracts/transcription-api.md` cũ). Mục tiêu: dùng để test thủ công (Postman/curl). | Toàn bộ file (mới) |
 | 2026-07-11 | Gap fix: thêm endpoint mới `POST /meetings/{meetingId}/recording-sessions` (tạo audio session rỗng làm điểm neo cho N participant lần lượt upload audio-tracks vào cùng 1 sessionId — trước đây `audio-tracks` yêu cầu `sessionId` có sẵn nhưng không có API nào tạo được session rỗng cho luồng channel_zone thuần upload). Đánh số lại mục 2.4/2.5 → 2.5/2.6, cập nhật bảng tổng hợp mục 6. | Mục "Luồng test đề xuất", mục 2 (mới 2.4), mục 6 (bảng, dòng #7-9 renumber) |
 | 2026-07-11 | Nhóm A gap fix (sau chạy thử thật): (1) `GET media-files` nay trả thêm `channelUserId`; (2) thêm `GET /meetings/{meetingId}/recording-sessions` (mục 2.6 mới) để participant tự tìm sessionId thay vì chờ Host relay tay; (3) thêm `PATCH /transcripts/{transcriptId}/status` (mục 5.3 mới) để chuyển draft→reviewed→approved; (4) `endMeeting` nay tự gửi in-app notification `AUDIO_TRACK_UPLOAD_REQUESTED` cho participant khi recording_configs bật `channel_by_zone`. | Mục 2.4 (renumber →2.5), mục 2 (mới 2.7 status), mục 3.1 (channelUserId), mục 5 (mới 5.3), mục 6 (bảng renumber) |
+| 2026-07-11 | Gap fix (giờ đồng hồ thật cho từng segment): mỗi segment trong `GET transcript` (`includeSegments=true`) nay có thêm `absoluteStartAt`/`absoluteEndAt` — quy đổi `meeting.actualStartTime + startMs/endMs` sang ISO string giờ Việt Nam cố định UTC+7 (không phải giờ dự kiến `start_time`, vì meeting có thể start sớm/trễ tới 15 phút). `null` nếu meeting chưa từng start thật. | Mục 5.1 (response mẫu bổ sung 2 field) |
 
 # Tổng hợp API — Luồng Transcription (Recording → Transcription Job → Transcript)
 
@@ -536,6 +537,8 @@ Permission: `transcript.read` + business rule: Host/Organizer, participant hợp
         "segmentId": "seg-0001",
         "startMs": 5000,
         "endMs": 12000,
+        "absoluteStartAt": "2026-07-01T09:00:05.000+07:00",
+        "absoluteEndAt": "2026-07-01T09:00:12.000+07:00",
         "speakerLabel": "unknown",
         "userId": null,
         "channelId": null,
@@ -552,7 +555,9 @@ Permission: `transcript.read` + business rule: Host/Organizer, participant hợp
   "meta": { "page": 1, "limit": 50, "total": 39 }
 }
 ```
-`status`: `processing` (đang xử lý, chưa có nội dung) | `draft` (worker vừa xong, chưa review) | `failed`. `reviewed`/`approved`/`hidden` là state hiện có trong enum nhưng chưa có endpoint chuyển trạng thái nào (chỉ update qua sửa segment, không đổi status).
+`absoluteStartAt`/`absoluteEndAt` (gap fix) = `meeting.actualStartTime + startMs/endMs`, quy đổi sẵn ra giờ Việt Nam cố định UTC+7 (không dùng `start_time` dự kiến, vì meeting có thể start sớm/trễ tới 15 phút so với lịch). `null` nếu meeting chưa từng start thật qua `live-meetings/:id/start`. Dùng field này để hiển thị "ai nói lúc mấy giờ" mà không cần FE tự cộng offset.
+
+`status`: `processing` (đang xử lý, chưa có nội dung) | `draft` (worker vừa xong, chưa review) | `failed`. `reviewed`/`approved` chuyển qua mục 5.3 bên dưới; `hidden` chưa có endpoint set.
 
 **Lỗi**: `404 TRANSCRIPT_NOT_FOUND` (chưa có transcript nào cho meeting — cần tạo job ở bước 4.1 trước).
 

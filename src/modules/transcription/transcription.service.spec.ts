@@ -472,6 +472,75 @@ describe('TranscriptionService (T030)', () => {
         }),
       );
     });
+
+    it('Gap fix: includeSegments=true + meeting có actualStartTime → segment có absoluteStartAt/absoluteEndAt giờ VN (+7)', async () => {
+      participantRepo.findOne.mockResolvedValue({ meetingId, userId });
+      meetingRepo.findOne.mockResolvedValue({
+        id: meetingId,
+        actualStartTime: new Date('2026-07-11T02:00:00.000Z'), // 09:00 VN (UTC+7)
+      });
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+        versionNo: 1,
+        languageCode: 'vi-VN',
+        cleanedText: 'Xin chao',
+        confidenceScore: 0.9,
+        createdAt: new Date(),
+        speakerSegmentsJson: {
+          segments: [
+            {
+              segmentId: 'seg-0000',
+              startMs: 600000, // +10 phut -> 09:10 VN
+              endMs: 605000, // +10p05s -> 09:10:05 VN
+              text: 'Tinh hinh tai chinh cua cong ty quy nay nhu sau',
+            },
+          ],
+        },
+      });
+
+      const result = await service.getTranscript(meetingId, userId, {
+        includeSegments: true,
+      });
+
+      expect(result.segments[0].absoluteStartAt).toBe(
+        '2026-07-11T09:10:00.000+07:00',
+      );
+      expect(result.segments[0].absoluteEndAt).toBe(
+        '2026-07-11T09:10:05.000+07:00',
+      );
+    });
+
+    it('Gap fix: meeting chưa có actualStartTime (null) → absoluteStartAt/absoluteEndAt = null, KHÔNG throw', async () => {
+      participantRepo.findOne.mockResolvedValue({ meetingId, userId });
+      meetingRepo.findOne.mockResolvedValue({
+        id: meetingId,
+        actualStartTime: null,
+      });
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+        versionNo: 1,
+        languageCode: 'vi-VN',
+        cleanedText: 'Xin chao',
+        confidenceScore: 0.9,
+        createdAt: new Date(),
+        speakerSegmentsJson: {
+          segments: [
+            { segmentId: 'seg-0000', startMs: 1000, endMs: 2000, text: 'abc' },
+          ],
+        },
+      });
+
+      const result = await service.getTranscript(meetingId, userId, {
+        includeSegments: true,
+      });
+
+      expect(result.segments[0].absoluteStartAt).toBeNull();
+      expect(result.segments[0].absoluteEndAt).toBeNull();
+    });
   });
 
   describe('updateTranscriptResult (REGRESSION: lỗi "syntax error near {")', () => {
