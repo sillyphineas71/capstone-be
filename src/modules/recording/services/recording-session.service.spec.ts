@@ -846,3 +846,106 @@ describe('RecordingSessionService.createAudioSession', () => {
     expect(result.status).toBe('starting');
   });
 });
+
+describe('RecordingSessionService.listRecordingSessions', () => {
+  let service: RecordingSessionService;
+  let dataSourceMock: any;
+
+  const sessionRows = [
+    {
+      id: 'sess-2',
+      session_type: 'audio',
+      source_type: 'manual_upload',
+      status: 'starting',
+      started_at: new Date('2026-07-11T08:00:00Z'),
+      stopped_at: null,
+    },
+    {
+      id: 'sess-1',
+      session_type: 'video',
+      source_type: 'ip_camera',
+      status: 'stopped',
+      started_at: new Date('2026-07-11T07:00:00Z'),
+      stopped_at: new Date('2026-07-11T07:10:00Z'),
+    },
+  ];
+
+  // query() router theo SQL — meeting tồn tại + user là participant theo mặc định.
+  const makeQuery =
+    (opts: {
+      meeting?: any[];
+      participant?: any[];
+      roles?: any[];
+      sessions?: any[];
+    }) =>
+    (sql: string) => {
+      if (sql.includes('FROM meetings'))
+        return Promise.resolve(opts.meeting ?? [{ id: 'm1' }]);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(opts.participant ?? [{ id: 'mp-1' }]);
+      if (sql.includes('FROM user_roles'))
+        return Promise.resolve(opts.roles ?? []);
+      if (sql.includes('FROM recording_sessions'))
+        return Promise.resolve(opts.sessions ?? sessionRows);
+      return Promise.resolve([]);
+    };
+
+  beforeEach(async () => {
+    dataSourceMock = {
+      manager: { query: jest.fn().mockImplementation(makeQuery({})) },
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RecordingSessionService,
+        { provide: DataSource, useValue: dataSourceMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+        { provide: RecordingProcessManager, useValue: {} },
+        { provide: StorageService, useValue: {} },
+      ],
+    }).compile();
+    service = module.get(RecordingSessionService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('happy: participant xem được danh sách session, mới nhất trước', async () => {
+    const result = await service.listRecordingSessions('m1', 'u1');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      recordingSessionId: 'sess-2',
+      sessionType: 'audio',
+      sourceType: 'manual_upload',
+      status: 'starting',
+      startedAt: sessionRows[0].started_at,
+      stoppedAt: null,
+    });
+  });
+
+  it('404: meeting không tồn tại', async () => {
+    dataSourceMock.manager.query.mockImplementation(makeQuery({ meeting: [] }));
+    await expect(service.listRecordingSessions('m1', 'u1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('403: không phải participant và không phải admin', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ participant: [], roles: [{ role_code: 'EMPLOYEE' }] }),
+    );
+    await expect(service.listRecordingSessions('m1', 'u1')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('admin (không phải participant) vẫn xem được', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ participant: [], roles: [{ role_code: 'BUSINESS_ADMIN' }] }),
+    );
+    const result = await service.listRecordingSessions('m1', 'u1');
+    expect(result).toHaveLength(2);
+  });
+});

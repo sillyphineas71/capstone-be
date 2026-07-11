@@ -36,6 +36,7 @@ describe('MediaFilesService (REC-006)', () => {
     relatedEntityType: null,
     relatedEntityId: null,
     recordingSessionId: 'sess-1',
+    channelUserId: null,
     uploadedAt: new Date('2026-06-16T10:00:00Z'),
     metadataJson: { probe: { durationSeconds: 81, source: 'ffprobe' } },
     ...over,
@@ -93,6 +94,19 @@ describe('MediaFilesService (REC-006)', () => {
     // summary chỉ field gọn
     expect(r.items[0]).toHaveProperty('fileSizeBytes', '1048576');
     expect(r.items[0]).not.toHaveProperty('checksum');
+    // recordingSessionId/channelUserId cần thiết để FE lọc theo session và
+    // biết ai đã upload track nào (channel_zone progress UI).
+    expect(r.items[0]).toHaveProperty('recordingSessionId', 'sess-1');
+    expect(r.items[0]).toHaveProperty('channelUserId', null);
+  });
+
+  it('list: channelUserId trả đúng khi track thuộc về 1 participant cụ thể', async () => {
+    qbMock.getManyAndCount.mockResolvedValue([
+      [baseRow({ channelUserId: 'user-a' })],
+      1,
+    ]);
+    const r = await service.list('m1', {});
+    expect(r.items[0].channelUserId).toBe('user-a');
   });
 
   it('list: fileType csv → IN', async () => {

@@ -21,6 +21,8 @@ export interface MediaSummary {
   visibilityLevel: string;
   isActive: boolean;
   uploadedAt: Date;
+  recordingSessionId: string | null;
+  channelUserId: string | null;
 }
 
 /**
@@ -186,6 +188,8 @@ export class MediaFilesService {
       visibilityLevel: m.visibilityLevel,
       isActive: m.isActive,
       uploadedAt: m.uploadedAt,
+      recordingSessionId: m.recordingSessionId,
+      channelUserId: m.channelUserId,
     };
   }
 }

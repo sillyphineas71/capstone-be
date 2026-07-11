@@ -99,6 +99,14 @@ describe('LiveMeetingService', () => {
             transaction: jest.fn().mockImplementation(async (cb: Function) => {
               return cb(mockTransactionalEm);
             }),
+            // notifyAudioTrackUploadNeeded (Gap fix Nhóm A) dùng manager.query
+            // trực tiếp (ngoài transaction) — mặc định trả [] để mọi test
+            // endMeeting hiện có không bị ảnh hưởng (no config → bỏ qua).
+            manager: {
+              query: jest.fn().mockResolvedValue([]),
+              create: jest.fn((_entity: unknown, obj: any) => obj),
+              save: jest.fn().mockResolvedValue({}),
+            },
           },
         },
         {
@@ -597,6 +605,96 @@ describe('LiveMeetingService', () => {
           }),
         }),
       );
+    });
+
+    // ────────────────────────────────────────
+    //  Gap fix (Nhóm A) — notifyAudioTrackUploadNeeded best-effort
+    // ────────────────────────────────────────
+    it('T013-11: should create AUDIO_TRACK_UPLOAD_REQUESTED notification when channel_by_zone enabled', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      const queryMock = (dataSource.manager as any).query as jest.Mock;
+      queryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM recording_configs')) {
+          return Promise.resolve([
+            { enable_transcription: true, audio_source_mode: 'channel_by_zone' },
+          ]);
+        }
+        if (sql.includes('FROM meeting_participants')) {
+          return Promise.resolve([
+            { user_id: 'host-1' },
+            { user_id: 'attendee-1' },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const saveMock = (dataSource.manager as any).save as jest.Mock;
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(saveMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          notificationType: 'audio_track_upload_requested',
+          recipientUserIdsJson: ['host-1', 'attendee-1'],
+        }),
+      );
+    });
+
+    it('T013-12: should NOT create notification when recording_configs has no row', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+      // manager.query mặc định trả [] (setup ở beforeEach) → không config.
+
+      const saveMock = (dataSource.manager as any).save as jest.Mock;
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(saveMock).not.toHaveBeenCalled();
+    });
+
+    it('T013-13: should NOT create notification when audio_source_mode is room_mix', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      const queryMock = (dataSource.manager as any).query as jest.Mock;
+      queryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM recording_configs')) {
+          return Promise.resolve([
+            { enable_transcription: true, audio_source_mode: 'room_mix' },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+      const saveMock = (dataSource.manager as any).save as jest.Mock;
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(saveMock).not.toHaveBeenCalled();
+    });
+
+    it('T013-14: should not throw when notifyAudioTrackUploadNeeded query fails (best-effort)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      const queryMock = (dataSource.manager as any).query as jest.Mock;
+      queryMock.mockRejectedValue(new Error('db down'));
+
+      const result = await service.endMeeting(
+        'm-001',
+        { userId: 'host-1' },
+        {},
+      );
+
+      expect(result.status).toBe(MeetingStatus.COMPLETED);
     });
 
     it('T013-10: should not throw when WebSocket push fails', async () => {

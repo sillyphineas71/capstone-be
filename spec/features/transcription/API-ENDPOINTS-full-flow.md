@@ -3,6 +3,7 @@
 | :--- | :--- | :--- |
 | 2026-07-01 | Tạo tài liệu tổng hợp toàn bộ API endpoint của luồng transcription (recording-config → recording-session → media-files → transcription-jobs → transcript → segments), đối chiếu trực tiếp với source code controller/DTO hiện tại (không chỉ theo `contracts/transcription-api.md` cũ). Mục tiêu: dùng để test thủ công (Postman/curl). | Toàn bộ file (mới) |
 | 2026-07-11 | Gap fix: thêm endpoint mới `POST /meetings/{meetingId}/recording-sessions` (tạo audio session rỗng làm điểm neo cho N participant lần lượt upload audio-tracks vào cùng 1 sessionId — trước đây `audio-tracks` yêu cầu `sessionId` có sẵn nhưng không có API nào tạo được session rỗng cho luồng channel_zone thuần upload). Đánh số lại mục 2.4/2.5 → 2.5/2.6, cập nhật bảng tổng hợp mục 6. | Mục "Luồng test đề xuất", mục 2 (mới 2.4), mục 6 (bảng, dòng #7-9 renumber) |
+| 2026-07-11 | Nhóm A gap fix (sau chạy thử thật): (1) `GET media-files` nay trả thêm `channelUserId`; (2) thêm `GET /meetings/{meetingId}/recording-sessions` (mục 2.6 mới) để participant tự tìm sessionId thay vì chờ Host relay tay; (3) thêm `PATCH /transcripts/{transcriptId}/status` (mục 5.3 mới) để chuyển draft→reviewed→approved; (4) `endMeeting` nay tự gửi in-app notification `AUDIO_TRACK_UPLOAD_REQUESTED` cho participant khi recording_configs bật `channel_by_zone`. | Mục 2.4 (renumber →2.5), mục 2 (mới 2.7 status), mục 3.1 (channelUserId), mục 5 (mới 5.3), mục 6 (bảng renumber) |
 
 # Tổng hợp API — Luồng Transcription (Recording → Transcription Job → Transcript)
 
@@ -279,6 +280,35 @@ Permission: `recording.video.status`
 }
 ```
 
+### 2.7. Danh sách recording session của meeting (participant tự tìm sessionId)
+
+```http
+GET /api/v1/meetings/{meetingId}/recording-sessions
+Authorization: Bearer <access-token>
+```
+Permission: `transcript.read` (đã seed đủ 4 role gồm EMPLOYEE — `recording.video.status`/`recording.files.read` KHÔNG có cho EMPLOYEE nên không dùng được ở đây) | Bất kỳ participant nào của meeting hoặc Admin | Response: `200`
+
+**Mục đích**: gap fix — trước đây participant không có cách nào tự tìm `recordingSessionId` để gọi mục 2.5 (`audio-tracks`) ngoài việc Host relay tay. Trả TẤT CẢ session (mọi loại: audio/video), mới nhất trước.
+
+**Response 200 mẫu**:
+```json
+{
+  "success": true,
+  "message": "Danh sách recording session của meeting",
+  "data": [
+    {
+      "recordingSessionId": "9f1e...uuid",
+      "sessionType": "audio",
+      "sourceType": "manual_upload",
+      "status": "starting",
+      "startedAt": "2026-07-11T10:00:00.000Z",
+      "stoppedAt": null
+    }
+  ]
+}
+```
+Lỗi: `404 MEETING_NOT_FOUND`, `403 PERMISSION_DENIED` (không phải participant/Admin).
+
 ---
 
 ## 3. Media Files
@@ -290,6 +320,8 @@ GET /api/v1/meetings/{meetingId}/media-files?page=1&limit=20&fileType=audio,vide
 Authorization: Bearer <access-token>
 ```
 Permission: `recording.files.read`
+
+Mỗi item trong `data[]` nay có thêm `recordingSessionId` và `channelUserId` (gap fix) — dùng để FE lọc theo session và biết ai đã upload track nào (progress UI cho `channel_zone`). `channelUserId` là `null` với file không thuộc luồng multi-track (ví dụ video từ camera, hoặc audio-upload gộp 1 file).
 
 ### 3.2. Chi tiết 1 media file — (UC-121) **[MOCK GUARD]**
 
@@ -563,9 +595,42 @@ Chỉ `segmentId` bắt buộc trong mỗi item; `text`/`speakerLabel`/`speakerU
   }
 }
 ```
-Endpoint này **không** tự đổi `status` sang `reviewed`/`approved` — hiện chưa có API riêng cho việc approve transcript.
+Endpoint này **không** tự đổi `status` sang `reviewed`/`approved` — dùng mục 5.3 bên dưới cho việc đó.
 
 **Lỗi**: `400 VALIDATION_ERROR` (`segments[]` rỗng), `403 PERMISSION_DENIED`, `404 TRANSCRIPT_NOT_FOUND` / `SEGMENT_NOT_FOUND`.
+
+### 5.3. Chuyển trạng thái transcript (draft → reviewed → approved) — gap fix
+
+```http
+PATCH /api/v1/transcripts/{transcriptId}/status
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
+Permission: `transcript.update` + chỉ Host/Organizer của meeting liên quan hoặc Admin (giống UC-127).
+
+**Body mẫu**:
+```json
+{
+  "status": "approved",
+  "note": "Da review noi dung, chinh xac"
+}
+```
+`status` chỉ nhận `"reviewed"` hoặc `"approved"` (2 trạng thái còn lại — `processing`/`failed`/`hidden` — do hệ thống tự quản lý, không set qua endpoint này). Chỉ cho chuyển **tiến**: `draft → reviewed`, `draft → approved` (bỏ qua reviewed), `reviewed → approved`. Không cho lùi lại `draft`.
+
+**Response 200 mẫu**:
+```json
+{
+  "success": true,
+  "data": {
+    "transcriptId": "c3d4...uuid",
+    "status": "approved",
+    "updatedAt": "2026-07-11T12:00:00.000Z"
+  }
+}
+```
+Khi chuyển sang `approved`, backend tự set `approved_by`/`approved_at` (cột đã có sẵn trong entity).
+
+**Lỗi**: `400 VALIDATION_ERROR` (`status` không hợp lệ), `403 PERMISSION_DENIED`, `404 TRANSCRIPT_NOT_FOUND`, `409 INVALID_TRANSCRIPT_STATUS_TRANSITION` (ví dụ transcript đang `processing`, hoặc cố lùi từ `approved` về `reviewed`).
 
 ---
 
@@ -582,15 +647,17 @@ Endpoint này **không** tự đổi `status` sang `reviewed`/`approved` — hi�
 | 7 | POST | `/meetings/{meetingId}/recording-sessions/audio-upload` | `transcript.create` | ✅ Thật |
 | 8 | POST | `/meetings/{meetingId}/recording-sessions` | `transcript.create` | ✅ Thật |
 | 9 | POST | `/meetings/{meetingId}/recording-sessions/{sessionId}/audio-tracks` | `recording.upload_track` | ✅ Thật |
-| 10 | GET | `/meetings/{meetingId}/media-files` | `recording.files.read` | ❌ Mock |
-| 11 | GET | `/media-files/{fileId}` | `recording.files.read` | ❌ Mock |
-| 12 | GET | `/media-files/{fileId}/playback` | `recording.files.play` | ❌ Mock |
-| 13 | PATCH | `/media-files/{fileId}/visibility` | `recording.files.manage` | ❌ Mock |
-| 14 | GET | `/media-files/{fileId}/secure-download?token=` | (HMAC token, không JWT) | — |
-| 15 | POST | `/meetings/{meetingId}/transcription-jobs` | `transcript.create` | ✅ Thật |
-| 16 | GET | `/background-jobs/{jobId}` | (chỉ JwtAuthGuard) | ✅ Thật |
-| 17 | GET | `/meetings/{meetingId}/transcription-jobs` | `transcript.read` | ✅ Thật |
-| 18 | GET | `/meetings/{meetingId}/transcript` | `transcript.read` | ✅ Thật |
-| 19 | PATCH | `/transcripts/{transcriptId}/segments` | `transcript.update` | ✅ Thật |
+| 10 | GET | `/meetings/{meetingId}/recording-sessions` | `transcript.read` | ✅ Thật |
+| 11 | GET | `/meetings/{meetingId}/media-files` | `recording.files.read` | ❌ Mock |
+| 12 | GET | `/media-files/{fileId}` | `recording.files.read` | ❌ Mock |
+| 13 | GET | `/media-files/{fileId}/playback` | `recording.files.play` | ❌ Mock |
+| 14 | PATCH | `/media-files/{fileId}/visibility` | `recording.files.manage` | ❌ Mock |
+| 15 | GET | `/media-files/{fileId}/secure-download?token=` | (HMAC token, không JWT) | — |
+| 16 | POST | `/meetings/{meetingId}/transcription-jobs` | `transcript.create` | ✅ Thật |
+| 17 | GET | `/background-jobs/{jobId}` | (chỉ JwtAuthGuard) | ✅ Thật |
+| 18 | GET | `/meetings/{meetingId}/transcription-jobs` | `transcript.read` | ✅ Thật |
+| 19 | GET | `/meetings/{meetingId}/transcript` | `transcript.read` | ✅ Thật |
+| 20 | PATCH | `/transcripts/{transcriptId}/segments` | `transcript.update` | ✅ Thật |
+| 21 | PATCH | `/transcripts/{transcriptId}/status` | `transcript.update` | ✅ Thật |
 
 Tất cả path phía trên cần prefix `http://localhost:3000/api/v1` khi test.

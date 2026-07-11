@@ -137,6 +137,30 @@ export class RecordingSessionController {
     };
   }
 
+  // Gap fix (Nhóm A) — participant tự tìm recordingSessionId để upload track,
+  // không cần Host relay tay. Permission transcript.read (đã seed đủ 4 role,
+  // gồm EMPLOYEE) — recording.files.read/recording.video.status hiện KHÔNG có
+  // cho EMPLOYEE trong DB thật nên không dùng được ở đây.
+  @Get('meetings/:meetingId/recording-sessions')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('transcript.read')
+  async listRecordingSessions(
+    @Req() req: any,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id;
+    const data = await this.recordingSessionService.listRecordingSessions(
+      meetingId,
+      userId,
+    );
+    return {
+      success: true,
+      message: 'Danh sách recording session của meeting',
+      data,
+    };
+  }
+
   // Phase 1 — PLAN-transcription-completion: participant upload audio track riêng.
   @Post('meetings/:meetingId/recording-sessions/:sessionId/audio-tracks')
   @HttpCode(201)

@@ -31,6 +31,11 @@ export enum NotificationType {
   // T029: transcript (draft) đã sẵn sàng cho Host review.
   TRANSCRIPT_READY = 'transcript_ready',
   MINUTES_DELETED_BY_ADMIN = 'minutes_deleted_by_admin',
+  // UC-ROOM-03: phong hop cua cuoc hop da bi xoa, can chon lai dia diem.
+  MEETING_ROOM_REMOVED = 'meeting_room_removed',
+  // Gap fix (Nhóm A): nhắc participant upload audio track sau khi meeting
+  // completed, chỉ khi recording_configs bật channel_by_zone STT.
+  AUDIO_TRACK_UPLOAD_REQUESTED = 'audio_track_upload_requested',
 }
 
 export enum NotificationChannel {
@@ -159,4 +164,3 @@ export class NotificationEntity {
   @JoinColumn({ name: 'created_by' })
   createdByUser: UserEntity | null;
 }
-

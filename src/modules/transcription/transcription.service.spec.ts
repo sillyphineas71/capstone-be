@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -28,6 +30,7 @@ import { QueueService } from '../queue/queue.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { TRANSCRIPTION_ERROR_CODES } from './constants/transcription-error-codes.js';
+import { TranscriptStatusTransition } from './dto/update-transcript-status.dto.js';
 
 describe('TranscriptionService (T030)', () => {
   let service: TranscriptionService;
@@ -687,6 +690,248 @@ describe('TranscriptionService (T030)', () => {
         'admin-1',
       );
       expect(res.revisionNo).toBe(1);
+    });
+  });
+
+  describe('updateTranscriptContent (rawText/cleanedText override)', () => {
+    const transcriptId = 'tr-1';
+    const baseTranscript = {
+      id: transcriptId,
+      meetingId,
+      rawText: 'text cu',
+      cleanedText: 'text cu sach',
+    };
+
+    it('Host ghi đè được cleanedText → set editedBy, KHÔNG đổi status', async () => {
+      transcriptRepo.findOne.mockResolvedValue({ ...baseTranscript });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const res = await service.updateTranscriptContent(
+        transcriptId,
+        { cleanedText: 'noi dung dai tu soan de test AI summarize' },
+        userId,
+      );
+
+      expect(res.transcriptId).toBe(transcriptId);
+      expect(res.editedBy).toBe(userId);
+
+      const [, payload] = transcriptRepo.update.mock.calls[0];
+      expect(payload.editedBy).toBe(userId);
+      expect(payload.status).toBeUndefined();
+      expect(payload.cleanedText).toBe(
+        'noi dung dai tu soan de test AI summarize',
+      );
+      expect(payload.rawText).toBeUndefined();
+    });
+
+    it('không truyền rawText lẫn cleanedText → 400 BadRequest', async () => {
+      await expect(
+        service.updateTranscriptContent(transcriptId, {}, userId),
+      ).rejects.toThrow(BadRequestException);
+      expect(transcriptRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('transcript không tồn tại → 404 TRANSCRIPT_NOT_FOUND', async () => {
+      transcriptRepo.findOne.mockResolvedValue(null);
+      await expect(
+        service.updateTranscriptContent(transcriptId, { rawText: 'x' }, userId),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('không phải Host và không phải Admin → 403 PERMISSION_DENIED', async () => {
+      transcriptRepo.findOne.mockResolvedValue({ ...baseTranscript });
+      participantRepo.findOne.mockResolvedValue(null);
+      dataSource.query.mockResolvedValue([]);
+
+      await expect(
+        service.updateTranscriptContent(
+          transcriptId,
+          { rawText: 'x' },
+          'stranger',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('Admin (không phải Host) vẫn sửa được', async () => {
+      transcriptRepo.findOne.mockResolvedValue({ ...baseTranscript });
+      participantRepo.findOne.mockResolvedValue(null);
+      dataSource.query.mockResolvedValue([{ role_code: 'BUSINESS_ADMIN' }]);
+
+      const res = await service.updateTranscriptContent(
+        transcriptId,
+        { rawText: 'raw moi', cleanedText: 'cleaned moi' },
+        'admin-1',
+      );
+      expect(res.editedBy).toBe('admin-1');
+
+      const [, payload] = transcriptRepo.update.mock.calls[0];
+      expect(payload.rawText).toBe('raw moi');
+      expect(payload.cleanedText).toBe('cleaned moi');
+    });
+  });
+
+  describe('updateTranscriptStatus (Gap fix Nhóm A — draft/reviewed/approved)', () => {
+    const transcriptId = 'tr-1';
+
+    it('Host chuyển draft → reviewed thành công', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const res = await service.updateTranscriptStatus(
+        transcriptId,
+        { status: TranscriptStatusTransition.REVIEWED },
+        userId,
+      );
+
+      expect(res.status).toBe(TranscriptStatus.REVIEWED);
+      const [, payload] = transcriptRepo.update.mock.calls[0];
+      expect(payload.status).toBe(TranscriptStatus.REVIEWED);
+      expect(payload.approvedBy).toBeUndefined();
+    });
+
+    it('Host chuyển draft → approved thành công, set approvedBy/approvedAt', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const res = await service.updateTranscriptStatus(
+        transcriptId,
+        { status: TranscriptStatusTransition.APPROVED },
+        userId,
+      );
+
+      expect(res.status).toBe(TranscriptStatus.APPROVED);
+      const [, payload] = transcriptRepo.update.mock.calls[0];
+      expect(payload.status).toBe(TranscriptStatus.APPROVED);
+      expect(payload.approvedBy).toBe(userId);
+      expect(payload.approvedAt).toBeInstanceOf(Date);
+    });
+
+    it('Host chuyển reviewed → approved thành công', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.REVIEWED,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const res = await service.updateTranscriptStatus(
+        transcriptId,
+        { status: TranscriptStatusTransition.APPROVED },
+        userId,
+      );
+      expect(res.status).toBe(TranscriptStatus.APPROVED);
+    });
+
+    it('transcript không tồn tại → 404 TRANSCRIPT_NOT_FOUND', async () => {
+      transcriptRepo.findOne.mockResolvedValue(null);
+      await expect(
+        service.updateTranscriptStatus(
+          transcriptId,
+          { status: TranscriptStatusTransition.REVIEWED },
+          userId,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('không phải Host và không phải Admin → 403 PERMISSION_DENIED', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue(null);
+      dataSource.query.mockResolvedValue([]);
+
+      await expect(
+        service.updateTranscriptStatus(
+          transcriptId,
+          { status: TranscriptStatusTransition.REVIEWED },
+          'stranger',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('Admin (không phải Host) vẫn chuyển được', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue(null);
+      dataSource.query.mockResolvedValue([{ role_code: 'BUSINESS_ADMIN' }]);
+
+      const res = await service.updateTranscriptStatus(
+        transcriptId,
+        { status: TranscriptStatusTransition.APPROVED },
+        'admin-1',
+      );
+      expect(res.status).toBe(TranscriptStatus.APPROVED);
+    });
+
+    it('approved → reviewed (lùi trạng thái) → 409 INVALID_TRANSCRIPT_STATUS_TRANSITION', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.APPROVED,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      await expect(
+        service.updateTranscriptStatus(
+          transcriptId,
+          { status: TranscriptStatusTransition.REVIEWED },
+          userId,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('processing → reviewed (trạng thái hệ thống quản lý) → 409', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: transcriptId,
+        meetingId,
+        status: TranscriptStatus.PROCESSING,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      await expect(
+        service.updateTranscriptStatus(
+          transcriptId,
+          { status: TranscriptStatusTransition.REVIEWED },
+          userId,
+        ),
+      ).rejects.toThrow(ConflictException);
     });
   });
 });

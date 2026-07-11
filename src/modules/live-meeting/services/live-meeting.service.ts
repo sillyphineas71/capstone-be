@@ -1983,6 +1983,9 @@ export class LiveMeetingService {
       );
     }
 
+    // ── Step 9: Nhắc participant upload audio track (best-effort, Gap fix Nhóm A) ──
+    await this.notifyAudioTrackUploadNeeded(meetingId, meeting.title);
+
     return new EndMeetingResponseDto({
       meetingId: meeting.id,
       status: MeetingStatus.COMPLETED,
@@ -4292,6 +4295,78 @@ export class LiveMeetingService {
           MEETING_WARNING_ERRORS.WARNING_CANCEL_FAILED +
           ' error=' +
           (error as Error).message,
+      );
+    }
+  }
+
+  /**
+   * Gap fix (Nhóm A) — nhắc participant upload audio track sau khi meeting
+   * completed, CHỈ khi recording_configs bật enable_transcription VÀ
+   * audio_source_mode = channel_by_zone (chế độ multi-track per-participant
+   * mà uploadAudioTrack()/createAudioSession() hỗ trợ). Không có config hoặc
+   * config dùng mode khác (room_mix/single_microphone) → bỏ qua, tránh spam
+   * notification cho meeting không dùng luồng này.
+   * Best-effort — lỗi KHÔNG được làm fail endMeeting.
+   */
+  private async notifyAudioTrackUploadNeeded(
+    meetingId: string,
+    meetingTitle: string,
+  ): Promise<void> {
+    try {
+      const configRows: Array<{
+        enable_transcription: boolean;
+        audio_source_mode: string | null;
+      }> = await this.dataSource.manager.query(
+        `SELECT enable_transcription, audio_source_mode
+         FROM recording_configs WHERE meeting_id = $1`,
+        [meetingId],
+      );
+      const config = configRows?.[0];
+      if (
+        !config ||
+        !config.enable_transcription ||
+        config.audio_source_mode !== 'channel_by_zone'
+      ) {
+        return;
+      }
+
+      const participantRows: Array<{ user_id: string }> =
+        await this.dataSource.manager.query(
+          'SELECT user_id FROM meeting_participants WHERE meeting_id = $1',
+          [meetingId],
+        );
+      const userIds = participantRows.map((r) => r.user_id);
+      if (userIds.length === 0) return;
+
+      const notifEntity = this.dataSource.manager.create(NotificationEntity, {
+        notificationType: NotificationType.AUDIO_TRACK_UPLOAD_REQUESTED,
+        channel: NotificationChannel.IN_APP,
+        subject: 'Vui long upload ghi am cuoc hop',
+        content:
+          'Cuoc hop "' +
+          meetingTitle +
+          '" da ket thuc. Vui long upload file ghi am (audio) cua ban de he thong tao ban ghi loi noi tu dong.',
+        relatedEntityType: 'meeting',
+        relatedEntityId: meetingId,
+        recipientScope: 'user_list',
+        recipientUserIdsJson: userIds,
+        priority: NotificationPriority.NORMAL,
+        payloadJson: { meetingId },
+        deliveryStatus: 'draft' as any,
+        retryCount: 0,
+        readCount: 0,
+      });
+      await this.dataSource.manager.save(NotificationEntity, notifEntity);
+      this.logger.log(
+        '[endMeeting] notifyAudioTrackUploadNeeded: da tao notification cho ' +
+          userIds.length +
+          ' participant cua meeting ' +
+          meetingId,
+      );
+    } catch (error: unknown) {
+      this.logger.warn(
+        '[endMeeting] notifyAudioTrackUploadNeeded FAILED (best-effort, bo qua): ' +
+          (error instanceof Error ? error.message : 'unknown'),
       );
     }
   }

@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
@@ -37,6 +38,11 @@ import {
 import { CreateTranscriptionJobDto } from './dto/create-transcription-job.dto.js';
 import { QueryTranscriptDto } from './dto/query-transcript.dto.js';
 import { UpdateTranscriptSegmentsDto } from './dto/update-transcript-segments.dto.js';
+import { UpdateTranscriptContentDto } from './dto/update-transcript-content.dto.js';
+import {
+  UpdateTranscriptStatusDto,
+  TranscriptStatusTransition,
+} from './dto/update-transcript-status.dto.js';
 import { TRANSCRIPTION_ERROR_CODES } from './constants/transcription-error-codes.js';
 import { TRANSCRIPTION_QUEUE_NAME } from './constants/transcription-job.constants.js';
 import { TranscriptionResult } from './types/transcript-segment.type.js';
@@ -583,6 +589,195 @@ export class TranscriptionService {
       editedBy: userId,
       updatedAt: editedAt,
     };
+  }
+
+  /**
+   * Ghi đè trực tiếp `rawText`/`cleanedText` — nguồn text thật sự mà
+   * `minutes-ai-draft.processor` dùng (`cleanedText || rawText`). Dùng để
+   * test chất lượng AI summarize với input tự soạn, hoặc sửa tay khi STT
+   * sai nhiều. Cùng authz với UC-127 (Host/Admin), KHÔNG đổi status.
+   */
+  async updateTranscriptContent(
+    transcriptId: string,
+    dto: UpdateTranscriptContentDto,
+    userId: string,
+  ): Promise<{
+    transcriptId: string;
+    editedBy: string;
+    updatedAt: Date;
+  }> {
+    if (dto.rawText === undefined && dto.cleanedText === undefined) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Phai truyen it nhat rawText hoac cleanedText.',
+        error: { code: 'VALIDATION_ERROR', details: {} },
+      });
+    }
+
+    const transcript = await this.transcriptRepo.findOne({
+      where: { id: transcriptId },
+    });
+    if (!transcript) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay transcript.',
+        error: {
+          code: TRANSCRIPTION_ERROR_CODES.TRANSCRIPT_NOT_FOUND,
+          details: {},
+        },
+      });
+    }
+
+    // Authz: Host của meeting hoặc Admin — giống updateTranscriptSegments.
+    const isHost = await this.participantRepo.findOne({
+      where: {
+        meetingId: transcript.meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      },
+    });
+    if (!isHost) {
+      const { roleCodes } = await this.getEffectiveRolesAndPermissions(userId);
+      if (!this.isAdminRole(roleCodes)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Chi Host hoac Admin duoc sua transcript.',
+          error: { code: 'PERMISSION_DENIED', details: {} },
+        });
+      }
+    }
+
+    const editedAt = new Date();
+    const updatePayload: Partial<TranscriptEntity> = {
+      editedBy: userId,
+      editedAt,
+    };
+    if (dto.rawText !== undefined) updatePayload.rawText = dto.rawText;
+    if (dto.cleanedText !== undefined)
+      updatePayload.cleanedText = dto.cleanedText;
+
+    // KHÔNG đổi status — giữ nguyên (draft) theo FR-042/CLR-002.
+    await this.transcriptRepo.update(
+      transcriptId,
+      updatePayload as Parameters<typeof this.transcriptRepo.update>[1],
+    );
+
+    this.logger.log(
+      'Transcript ' +
+        transcriptId +
+        ' content (rawText/cleanedText) edited by ' +
+        userId +
+        (dto.revisionNote ? ' — ' + dto.revisionNote : ''),
+    );
+
+    return { transcriptId, editedBy: userId, updatedAt: editedAt };
+  }
+
+  /**
+   * Gap fix (Nhóm A) — chưa từng có endpoint chuyển transcript từ `draft`
+   * sang `reviewed`/`approved` dù enum đã có sẵn 2 trạng thái này (chỉ có
+   * thể sửa segment/content, KHÔNG đổi status — theo đúng FR-042/CLR-002 cũ).
+   * Chỉ cho chuyển TIẾN: draft→reviewed, draft/reviewed→approved. Không cho
+   * lùi lại draft, không cho set từ processing/failed/hidden (trạng thái hệ
+   * thống tự quản lý). Cùng authz Host/Admin như UC-127.
+   */
+  async updateTranscriptStatus(
+    transcriptId: string,
+    dto: UpdateTranscriptStatusDto,
+    userId: string,
+  ): Promise<{
+    transcriptId: string;
+    status: TranscriptStatus;
+    updatedAt: Date;
+  }> {
+    const transcript = await this.transcriptRepo.findOne({
+      where: { id: transcriptId },
+    });
+    if (!transcript) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay transcript.',
+        error: {
+          code: TRANSCRIPTION_ERROR_CODES.TRANSCRIPT_NOT_FOUND,
+          details: {},
+        },
+      });
+    }
+
+    // Authz: Host của meeting hoặc Admin — giống updateTranscriptSegments/Content.
+    const isHost = await this.participantRepo.findOne({
+      where: {
+        meetingId: transcript.meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      },
+    });
+    if (!isHost) {
+      const { roleCodes } = await this.getEffectiveRolesAndPermissions(userId);
+      if (!this.isAdminRole(roleCodes)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Chi Host hoac Admin duoc doi trang thai transcript.',
+          error: { code: 'PERMISSION_DENIED', details: {} },
+        });
+      }
+    }
+
+    const target =
+      dto.status === TranscriptStatusTransition.REVIEWED
+        ? TranscriptStatus.REVIEWED
+        : TranscriptStatus.APPROVED;
+    const allowedFrom: Record<TranscriptStatus, TranscriptStatus[]> = {
+      [TranscriptStatus.PROCESSING]: [],
+      [TranscriptStatus.DRAFT]: [
+        TranscriptStatus.REVIEWED,
+        TranscriptStatus.APPROVED,
+      ],
+      [TranscriptStatus.REVIEWED]: [TranscriptStatus.APPROVED],
+      [TranscriptStatus.APPROVED]: [],
+      [TranscriptStatus.FAILED]: [],
+      [TranscriptStatus.HIDDEN]: [],
+    };
+    if (!allowedFrom[transcript.status].includes(target)) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Khong the chuyen transcript tu trang thai "' +
+          transcript.status +
+          '" sang "' +
+          target +
+          '".',
+        error: {
+          code: TRANSCRIPTION_ERROR_CODES.INVALID_TRANSCRIPT_STATUS_TRANSITION,
+          details: { from: transcript.status, to: target },
+        },
+      });
+    }
+
+    const updatedAt = new Date();
+    const updatePayload: Partial<TranscriptEntity> = { status: target };
+    if (target === TranscriptStatus.APPROVED) {
+      updatePayload.approvedBy = userId;
+      updatePayload.approvedAt = updatedAt;
+    }
+    await this.transcriptRepo.update(
+      transcriptId,
+      updatePayload as Parameters<typeof this.transcriptRepo.update>[1],
+    );
+
+    this.logger.log(
+      'Transcript ' +
+        transcriptId +
+        ' status ' +
+        transcript.status +
+        ' -> ' +
+        target +
+        ' by ' +
+        userId +
+        (dto.note ? ' — ' + dto.note : ''),
+    );
+
+    return { transcriptId, status: target, updatedAt };
   }
 
   async failTranscript(

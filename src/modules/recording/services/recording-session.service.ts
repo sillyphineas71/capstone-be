@@ -424,6 +424,64 @@ export class RecordingSessionService {
   }
 
   /**
+   * Gap fix (Nhóm A) — participant không có cách nào tự tìm recordingSessionId
+   * để upload track ngoài việc Host relay tay. Trả danh sách recording_sessions
+   * của meeting (mọi loại, mới nhất trước) cho participant/Admin xem — dùng để
+   * chọn đúng sessionId trước khi gọi uploadAudioTrack().
+   */
+  async listRecordingSessions(
+    meetingId: string,
+    userId: string,
+  ): Promise<
+    Array<{
+      recordingSessionId: string;
+      sessionType: string;
+      sourceType: string;
+      status: string;
+      startedAt: Date;
+      stoppedAt: Date | null;
+    }>
+  > {
+    const meetingRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (!meetingRows || meetingRows.length === 0) {
+      throw new NotFoundException({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+    }
+
+    await this.assertParticipantOrAdmin(meetingId, userId);
+
+    const rows: Array<{
+      id: string;
+      session_type: string;
+      source_type: string;
+      status: string;
+      started_at: Date;
+      stopped_at: Date | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, session_type, source_type, status, started_at, stopped_at
+       FROM recording_sessions
+       WHERE meeting_id = $1
+       ORDER BY started_at DESC`,
+      [meetingId],
+    );
+
+    return rows.map((r) => ({
+      recordingSessionId: r.id,
+      sessionType: r.session_type,
+      sourceType: r.source_type,
+      status: r.status,
+      startedAt: r.started_at,
+      stoppedAt: r.stopped_at,
+    }));
+  }
+
+  /**
    * Upload audio đã ghi sẵn (ví dụ .m4a) cho 1 meeting, dùng để test/feed pipeline
    * transcription (TRANS-OFFLINE-001) khi không có camera/capture agent thật.
    * Tạo 1 recording_session (sessionType=audio, sourceType=manual_upload, status
@@ -753,6 +811,35 @@ export class RecordingSessionService {
         code: 'PERMISSION_DENIED',
         message:
           'Chỉ Host/Organizer hoặc Admin được upload audio cho meeting này.',
+      });
+    }
+  }
+
+  /** Bất kỳ participant nào của meeting, hoặc Business/System Admin — ngoài ra từ chối. */
+  private async assertParticipantOrAdmin(
+    meetingId: string,
+    userId: string,
+  ): Promise<void> {
+    const participantRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2',
+        [meetingId, userId],
+      );
+    if (participantRows && participantRows.length > 0) return;
+
+    const roleRows: Array<{ role_code: string }> =
+      await this.dataSource.manager.query(
+        `SELECT r.role_code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1 AND r.is_active = true`,
+        [userId],
+      );
+    const isAdmin = roleRows.some((r) =>
+      ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'].includes(r.role_code),
+    );
+    if (!isAdmin) {
+      throw new ForbiddenException({
+        code: 'PERMISSION_DENIED',
+        message:
+          'Chỉ participant của meeting hoặc Admin được xem danh sách recording session.',
       });
     }
   }

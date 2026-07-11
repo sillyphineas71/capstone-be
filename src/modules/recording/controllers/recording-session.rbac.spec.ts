@@ -18,6 +18,7 @@ describe('RecordingSessionController — RBAC metadata (PROMPT 1)', () => {
     ['startVideo', 'recording.video.start'],
     ['stopVideo', 'recording.video.stop'],
     ['createAudioSession', 'transcript.create'],
+    ['listRecordingSessions', 'transcript.read'],
     ['uploadAudio', 'transcript.create'],
     ['uploadAudioTrack', 'recording.upload_track'],
     ['getStatus', 'recording.video.status'],
