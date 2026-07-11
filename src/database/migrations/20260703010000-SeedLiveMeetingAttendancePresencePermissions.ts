@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * live-meeting.controller.ts nhung chua tung duoc seed o dau -> moi role
  * (ke ca SYSTEM_ADMIN) deu bi 403 khi goi 2 endpoint tren.
  */
-export class SeedLiveMeetingAttendancePresencePermissions20260703010000
-  implements MigrationInterface
-{
+export class SeedLiveMeetingAttendancePresencePermissions20260703010000 implements MigrationInterface {
   name = 'SeedLiveMeetingAttendancePresencePermissions20260703010000';
 
   private readonly permissions = [

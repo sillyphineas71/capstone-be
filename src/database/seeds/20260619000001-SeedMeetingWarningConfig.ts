@@ -17,7 +17,8 @@ export async function seedMeetingWarningConfig(
         configValue: '10',
         valueType: 'number',
         configGroup: 'meeting',
-        description: 'Minutes before meeting end_time to schedule warning notification',
+        description:
+          'Minutes before meeting end_time to schedule warning notification',
       })
       .orIgnore()
       .execute();

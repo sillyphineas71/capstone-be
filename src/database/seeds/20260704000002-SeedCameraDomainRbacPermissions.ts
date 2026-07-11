@@ -153,6 +153,24 @@ const OWNED_PERMISSIONS: CameraPermissionSeed[] = [
     description: 'Cho phép tạo mới phòng họp.',
     roles: ['SYSTEM_ADMIN', 'BUSINESS_ADMIN'],
   },
+  {
+    code: 'room.update',
+    name: 'Cập nhật thông tin phòng họp',
+    moduleCode: 'rooms',
+    actionCode: 'update',
+    description:
+      'Cho phép sửa tên, vị trí, sức chứa, thiết bị tiện ích của phòng họp (UC-ROOM-02).',
+    roles: ['SYSTEM_ADMIN', 'BUSINESS_ADMIN'],
+  },
+  {
+    code: 'room.delete',
+    name: 'Xóa phòng họp',
+    moduleCode: 'rooms',
+    actionCode: 'delete',
+    description:
+      'Cho phép xóa (soft-delete) phòng họp khỏi danh mục không gian khả dụng (UC-ROOM-03).',
+    roles: ['SYSTEM_ADMIN', 'BUSINESS_ADMIN'],
+  },
 
   // ── face-access (dữ liệu khuôn mặt nhạy cảm) — SYSTEM_ADMIN ──
   {

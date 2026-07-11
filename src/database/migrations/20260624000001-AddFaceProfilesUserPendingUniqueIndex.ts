@@ -7,9 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Đây là lưới an toàn ở tầng DB chống race condition khi 2 request submit gửi
  * gần như đồng thời (spec.md EC-003). Không tạo bảng mới, chỉ thêm index.
  */
-export class AddFaceProfilesUserPendingUniqueIndex20260624000001
-  implements MigrationInterface
-{
+export class AddFaceProfilesUserPendingUniqueIndex20260624000001 implements MigrationInterface {
   name = 'AddFaceProfilesUserPendingUniqueIndex20260624000001';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

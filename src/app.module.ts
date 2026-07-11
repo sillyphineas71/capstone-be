@@ -71,7 +71,7 @@ void loadDevModule; // suppress unused warning
       envFilePath: '.env',
       validationSchema: envValidationSchema,
       validationOptions: {
-        abortEarly: false,  // hiện tất cả lỗi validation cùng lúc
+        abortEarly: false, // hiện tất cả lỗi validation cùng lúc
         allowUnknown: true, // cho phép env chưa khai báo
       },
     }),
@@ -81,8 +81,8 @@ void loadDevModule; // suppress unused warning
     RedisModule,
     MailModule,
     StorageModule,
-    AdministrationModule,  // @Global — exports BackgroundJobsService, AuditLogsService
-    QueueModule,           // @Global — exports QueueService
+    AdministrationModule, // @Global — exports BackgroundJobsService, AuditLogsService
+    QueueModule, // @Global — exports QueueService
     HealthModule,
     SchedulerModule,
     WebsocketModule,
@@ -130,4 +130,3 @@ void loadDevModule; // suppress unused warning
   ],
 })
 export class AppModule {}
-

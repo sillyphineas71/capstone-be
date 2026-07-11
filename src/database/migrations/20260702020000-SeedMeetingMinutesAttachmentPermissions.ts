@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Dung migration (khong dung src/database/seeds/) — nhat quan voi
  * SeedMeetingMinutesReadPermission20260702010000.
  */
-export class SeedMeetingMinutesAttachmentPermissions20260702020000
-  implements MigrationInterface
-{
+export class SeedMeetingMinutesAttachmentPermissions20260702020000 implements MigrationInterface {
   name = 'SeedMeetingMinutesAttachmentPermissions20260702020000';
 
   private readonly permissions = [
@@ -19,7 +17,8 @@ export class SeedMeetingMinutesAttachmentPermissions20260702020000
       code: 'meeting.minutes.attachment.create',
       name: 'Dinh kem tai lieu vao bien ban',
       action: 'minutes.attachment.create',
-      description: 'Cho phep upload file dinh kem cho bien ban dang o trang thai draft',
+      description:
+        'Cho phep upload file dinh kem cho bien ban dang o trang thai draft',
     },
     {
       code: 'meeting.minutes.attachment.read',
@@ -31,7 +30,8 @@ export class SeedMeetingMinutesAttachmentPermissions20260702020000
       code: 'meeting.minutes.attachment.delete',
       name: 'Go tai lieu dinh kem khoi bien ban',
       action: 'minutes.attachment.delete',
-      description: 'Cho phep soft-delete file dinh kem cua bien ban dang o trang thai draft',
+      description:
+        'Cho phep soft-delete file dinh kem cua bien ban dang o trang thai draft',
     },
   ];
 

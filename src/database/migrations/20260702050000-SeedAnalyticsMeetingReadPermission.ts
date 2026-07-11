@@ -14,11 +14,7 @@ export class SeedAnalyticsMeetingReadPermission20260702050000 implements Migrati
     description: 'Cho phep xem thong ke cuoc hop theo pham vi phan quyen',
   };
 
-  private readonly roles = [
-    'MANAGER',
-    'BUSINESS_ADMIN',
-    'SYSTEM_ADMIN',
-  ];
+  private readonly roles = ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const p = this.permission;

@@ -4,9 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Seed permission report.meeting_activity.export (UC-AA-12 / UC-158).
  * Gán cho 3 role: MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN.
  */
-export class SeedReportMeetingActivityExportPermission20260703000001
-  implements MigrationInterface
-{
+export class SeedReportMeetingActivityExportPermission20260703000001 implements MigrationInterface {
   name = 'SeedReportMeetingActivityExportPermission20260703000001';
 
   private readonly permission = {

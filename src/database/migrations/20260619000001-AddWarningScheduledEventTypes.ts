@@ -25,10 +25,26 @@ export class AddWarningScheduledEventTypes20260619000001 implements MigrationInt
   }
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await this.addEnumValueIfTypeExists(queryRunner, 'meeting_event_type', 'warning_scheduled');
-    await this.addEnumValueIfTypeExists(queryRunner, 'meeting_event_type', 'warning_scheduling_skipped');
-    await this.addEnumValueIfTypeExists(queryRunner, 'background_job_type', 'meeting_time_warning');
-    await this.addEnumValueIfTypeExists(queryRunner, 'background_job_status', 'scheduled');
+    await this.addEnumValueIfTypeExists(
+      queryRunner,
+      'meeting_event_type',
+      'warning_scheduled',
+    );
+    await this.addEnumValueIfTypeExists(
+      queryRunner,
+      'meeting_event_type',
+      'warning_scheduling_skipped',
+    );
+    await this.addEnumValueIfTypeExists(
+      queryRunner,
+      'background_job_type',
+      'meeting_time_warning',
+    );
+    await this.addEnumValueIfTypeExists(
+      queryRunner,
+      'background_job_status',
+      'scheduled',
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {}

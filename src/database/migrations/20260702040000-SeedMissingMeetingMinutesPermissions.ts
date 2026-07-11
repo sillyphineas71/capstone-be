@@ -6,9 +6,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * - meeting.minutes.delete (dành cho INTERNAL_USER, MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN)
  * - meeting.minutes.search_by_person (dành cho MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN)
  */
-export class SeedMissingMeetingMinutesPermissions20260702040000
-  implements MigrationInterface
-{
+export class SeedMissingMeetingMinutesPermissions20260702040000 implements MigrationInterface {
   name = 'SeedMissingMeetingMinutesPermissions20260702040000';
 
   private readonly permissions = [
@@ -16,21 +14,24 @@ export class SeedMissingMeetingMinutesPermissions20260702040000
       code: 'meeting.minutes.update',
       name: 'Cap nhat bien ban hop nhap',
       action: 'minutes.update',
-      description: 'Cho phep Host hoac nguoi soan thao cap nhat bien ban hop o trang thai draft',
+      description:
+        'Cho phep Host hoac nguoi soan thao cap nhat bien ban hop o trang thai draft',
       roles: ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'],
     },
     {
       code: 'meeting.minutes.delete',
       name: 'Xoa bien ban hop nhap',
       action: 'minutes.delete',
-      description: 'Cho phep Host, nguoi soan thao hoac Admin xoa bien ban hop o trang thai draft',
+      description:
+        'Cho phep Host, nguoi soan thao hoac Admin xoa bien ban hop o trang thai draft',
       roles: ['INTERNAL_USER', 'MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'],
     },
     {
       code: 'meeting.minutes.search_by_person',
       name: 'Tim kiem bien ban hop theo nhan su',
       action: 'minutes.search_by_person',
-      description: 'Cho phep Manager hoac Admin tim kiem cac bien ban hop lien quan den mot nhan su',
+      description:
+        'Cho phep Manager hoac Admin tim kiem cac bien ban hop lien quan den mot nhan su',
       roles: ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'],
     },
   ];

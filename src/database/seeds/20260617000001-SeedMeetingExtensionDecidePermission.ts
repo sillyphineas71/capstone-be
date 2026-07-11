@@ -14,7 +14,8 @@ export async function seedMeetingExtensionDecidePermission(
         name: 'Phê duyệt/từ chối yêu cầu gia hạn',
         module: 'live-meeting',
         action: 'session.extension.decide',
-        description: 'Cho phép phê duyệt hoặc từ chối yêu cầu gia hạn phiên họp (cần nằm trong approver list)',
+        description:
+          'Cho phép phê duyệt hoặc từ chối yêu cầu gia hạn phiên họp (cần nằm trong approver list)',
         roles: ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'],
       },
       {
@@ -22,7 +23,8 @@ export async function seedMeetingExtensionDecidePermission(
         name: 'Override yêu cầu gia hạn',
         module: 'live-meeting',
         action: 'session.extension.override',
-        description: 'Cho phép override phê duyệt/từ chối yêu cầu gia hạn phiên họp (không cần trong approver list)',
+        description:
+          'Cho phép override phê duyệt/từ chối yêu cầu gia hạn phiên họp (không cần trong approver list)',
         roles: ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'],
       },
     ];

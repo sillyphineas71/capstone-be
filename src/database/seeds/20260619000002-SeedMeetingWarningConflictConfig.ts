@@ -17,7 +17,8 @@ export async function seedMeetingWarningConflictConfig(
         configValue: '0',
         valueType: 'number',
         configGroup: 'meeting',
-        description: 'Buffer window in minutes after meeting end_time for conflict detection. 0 = detect only at exact end_time.',
+        description:
+          'Buffer window in minutes after meeting end_time for conflict detection. 0 = detect only at exact end_time.',
       })
       .orIgnore()
       .execute();

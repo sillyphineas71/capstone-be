@@ -11,7 +11,8 @@ export class SeedMeetingMinutesIssuePermission20260702030000 implements Migratio
     code: 'meeting.minutes.issue',
     name: 'Ban hanh bien ban hop chinh thuc',
     action: 'minutes.issue',
-    description: 'Cho phep ban hanh (publish) bien ban hop tu draft sang trang thai chinh thuc',
+    description:
+      'Cho phep ban hanh (publish) bien ban hop tu draft sang trang thai chinh thuc',
   };
 
   private readonly roles = [

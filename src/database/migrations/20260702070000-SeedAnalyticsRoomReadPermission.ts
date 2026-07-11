@@ -11,14 +11,11 @@ export class SeedAnalyticsRoomReadPermission20260702070000 implements MigrationI
     code: 'analytics.room.read',
     name: 'Xem dashboard su dung phong hop',
     action: 'room.read',
-    description: 'Cho phep xem thong ke, ti le no-show va ti le lap day phong hop (read-only)',
+    description:
+      'Cho phep xem thong ke, ti le no-show va ti le lap day phong hop (read-only)',
   };
 
-  private readonly roles = [
-    'MANAGER',
-    'BUSINESS_ADMIN',
-    'SYSTEM_ADMIN',
-  ];
+  private readonly roles = ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const p = this.permission;

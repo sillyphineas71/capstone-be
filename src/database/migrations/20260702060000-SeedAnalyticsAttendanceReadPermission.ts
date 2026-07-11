@@ -11,14 +11,11 @@ export class SeedAnalyticsAttendanceReadPermission20260702060000 implements Migr
     code: 'analytics.attendance.read',
     name: 'Xem thong ke ty le tham du dung gio',
     action: 'attendance.read',
-    description: 'Cho phep xem thong ke va lich su di muon tham du cuoc hop (read-only)',
+    description:
+      'Cho phep xem thong ke va lich su di muon tham du cuoc hop (read-only)',
   };
 
-  private readonly roles = [
-    'MANAGER',
-    'BUSINESS_ADMIN',
-    'SYSTEM_ADMIN',
-  ];
+  private readonly roles = ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const p = this.permission;
