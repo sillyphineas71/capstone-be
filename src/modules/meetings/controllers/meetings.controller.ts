@@ -17,18 +17,23 @@ import {
   ValidationPipe,
   Delete,
   Put,
+  UploadedFile,
+  UseInterceptors,
+  Res,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 
@@ -98,12 +103,19 @@ import {
 
 import { ClientContext } from '../services/meetings.service.js';
 
+import { ParticipantImportService } from '../services/participant-import.service.js';
+import { ImportParticipantsDto } from '../dto/import-participants.dto.js';
+import { ImportParticipantsReportDto } from '../dto/import-participants-response.dto.js';
+import { XLSX_MIME } from '../constants/import-participants.constants.js';
+
 @Controller()
 export class MeetingsController {
   constructor(
     private readonly meetingsService: MeetingsService,
 
     private readonly meetingRequestReviewService: MeetingRequestReviewService,
+
+    private readonly participantImportService: ParticipantImportService,
   ) {}
 
   @Post('meetings')
@@ -319,6 +331,91 @@ export class MeetingsController {
 
       message: 'Thanh vien noi bo da duoc them vao cuoc hop thanh cong',
 
+      data: result,
+    };
+  }
+
+  @Get('meetings/:meetingId/participants/import/template')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.participant.import')
+  @ApiBearerAuth()
+  @ApiTags('Meetings')
+  @ApiOperation({
+    summary: 'Tải tệp Excel mẫu để import thành viên',
+    description:
+      'Trả về file .xlsx chứa header chuẩn (type, email, employee_code, full_name, organization_name, phone_number), dòng ví dụ và sheet hướng dẫn.',
+  })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  async downloadImportTemplate(
+    @Param('meetingId', ParseUUIDPipe) _meetingId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const buffer = await this.participantImportService.generateTemplate();
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="meeting-participants-template.xlsx"',
+    );
+    res.send(buffer);
+  }
+
+  @Post('meetings/:meetingId/participants/import')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.participant.import')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiBearerAuth()
+  @ApiTags('Meetings')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Import thành viên cuộc họp bằng Excel',
+    description:
+      'Tải lên file .xlsx danh sách thành viên (internal + external). Lần đầu (forceAddWithWarnings=false) nếu có dòng cảnh báo sẽ trả 422 kèm preview. Gửi lại với forceAddWithWarnings=true để thêm cả dòng cảnh báo. Xử lý partial-success theo từng dòng.',
+  })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        forceAddWithWarnings: { type: 'boolean' },
+      },
+      required: ['file'],
+    },
+  })
+  async importParticipants(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @UploadedFile()
+    file:
+      | {
+          buffer: Buffer;
+          mimetype?: string;
+          size?: number;
+          originalname?: string;
+        }
+      | undefined,
+    @Body() dto: ImportParticipantsDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: ImportParticipantsReportDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const result = await this.participantImportService.importParticipants(
+      meetingId,
+      file,
+      { forceAddWithWarnings: dto.forceAddWithWarnings },
+      { userId: user!.userId },
+      { ipAddress, userAgent },
+    );
+
+    return {
+      success: true,
+      message: 'Import thành viên hoàn tất',
       data: result,
     };
   }

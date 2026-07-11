@@ -1418,7 +1418,7 @@ export class MeetingsService {
 
   // ── T007: Helpers ──────────────────────────────────────────────────
 
-  private async getAttendeeCount(meetingId: string): Promise<number> {
+  async getAttendeeCount(meetingId: string): Promise<number> {
     const [internalCount, externalCount] = await Promise.all([
       this.dataSource.getRepository(MeetingParticipantEntity).count({
         where: { meetingId },
@@ -2362,6 +2362,150 @@ export class MeetingsService {
     };
   }
 
+  /**
+   * Core persist cho internal participant (insert + audit, KHÔNG notification).
+   * Dùng chung cho luồng add đơn lẻ và luồng import Excel.
+   * Phải được gọi bên trong một transaction (nhận `em`).
+   */
+  async persistInternalParticipantCore(
+    em: EntityManager,
+    meetingId: string,
+    userId: string,
+    invitedBy: string,
+    clientContext: ClientContext,
+  ): Promise<string> {
+    await em.findOne(MeetingEntity, {
+      where: { id: meetingId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    const dupCheck = await em.findOne(MeetingParticipantEntity, {
+      where: { meetingId, userId },
+    });
+
+    if (dupCheck) {
+      throw new ConflictException({
+        success: false,
+        message: 'Người dùng đã có trong danh sách tham gia cuộc họp',
+        error: { code: 'PARTICIPANT_ALREADY_EXISTS', details: {} },
+      });
+    }
+
+    const participant = em.create(MeetingParticipantEntity, {
+      meetingId,
+      userId,
+      participantRole: ParticipantRole.ATTENDEE,
+      invitationStatus: InvitationStatus.PENDING,
+      attendanceRequired: true,
+      isRequired: true,
+      invitedBy,
+    });
+    await em.save(MeetingParticipantEntity, participant);
+
+    await em.save(AuditLogEntity, {
+      userId: invitedBy,
+      actionType: 'ADD_PARTICIPANT',
+      entityType: 'meeting_participant',
+      entityId: participant.id,
+      newValueJson: {
+        userId,
+        meetingId,
+        invitedBy,
+      } as any,
+      ipAddress: clientContext.ipAddress || null,
+      userAgent: clientContext.userAgent || null,
+      severity: AuditLogSeverity.INFO,
+    });
+
+    return participant.id;
+  }
+
+  /**
+   * Core persist cho external participant (insert + event + audit, KHÔNG notification).
+   * Dùng chung cho luồng add đơn lẻ và luồng import Excel.
+   * Phải được gọi bên trong một transaction (nhận `em`).
+   */
+  async persistExternalParticipantCore(
+    em: EntityManager,
+    meetingId: string,
+    data: {
+      fullName: string;
+      email: string;
+      organizationName: string | null;
+      phoneNumber: string | null;
+    },
+    actorUserId: string,
+    clientContext: ClientContext,
+  ): Promise<string> {
+    await em.findOne(MeetingEntity, {
+      where: { id: meetingId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    const dupInTx = await em
+      .getRepository(MeetingExternalParticipantEntity)
+      .createQueryBuilder('ep')
+      .where('ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)', {
+        meetingId,
+        email: data.email,
+      })
+      .getOne();
+
+    if (dupInTx) {
+      throw new ConflictException({
+        success: false,
+        message: 'Email khách mời đã tồn tại trong cuộc họp này',
+        error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
+      });
+    }
+
+    const participant = em.create(MeetingExternalParticipantEntity, {
+      meetingId,
+      fullName: data.fullName,
+      email: data.email,
+      organizationName: data.organizationName ?? null,
+      phoneNumber: data.phoneNumber ?? null,
+      participantRole: 'attendee',
+      invitationStatus: 'pending',
+    });
+    const savedParticipant = await em.save(
+      MeetingExternalParticipantEntity,
+      participant,
+    );
+
+    const event = em.create(MeetingEventEntity, {
+      meetingId,
+      eventType: MeetingEventType.EXTERNAL_PARTICIPANT_ADDED,
+      actorUserId,
+      sourceType: MeetingEventSourceType.MANUAL,
+      description: `External participant ${data.email} added to meeting ${meetingId}`,
+      metadataJson: {
+        email: data.email,
+        fullName: data.fullName,
+      } as any,
+    });
+    await em.save(MeetingEventEntity, event);
+
+    await em.save(AuditLogEntity, {
+      userId: actorUserId,
+      actionType: 'add_external_participant',
+      entityType: 'meeting_external_participant',
+      entityId: savedParticipant.id,
+      newValueJson: {
+        meetingId,
+        email: data.email,
+        fullName: data.fullName,
+        organizationName: data.organizationName ?? null,
+        phoneNumber: data.phoneNumber ?? null,
+      } as any,
+      ipAddress: clientContext.ipAddress ?? null,
+      userAgent: clientContext.userAgent ?? null,
+      severity: AuditLogSeverity.INFO,
+    });
+
+    return savedParticipant.id;
+  }
+
   async addInternalParticipant(
     meetingId: string,
     dto: AddInternalParticipantDto,
@@ -2608,52 +2752,15 @@ export class MeetingsService {
     let participantId: string;
 
     try {
-      participantId = await this.dataSource.transaction(async (em) => {
-        await em.findOne(MeetingEntity, {
-          where: { id: meetingId },
-          lock: { mode: 'pessimistic_write' },
-        });
-
-        const dupCheck = await em.findOne(MeetingParticipantEntity, {
-          where: { meetingId, userId: dto.userId },
-        });
-
-        if (dupCheck) {
-          throw new ConflictException({
-            success: false,
-            message: 'Người dùng đã có trong danh sách tham gia cuộc họp',
-            error: { code: 'PARTICIPANT_ALREADY_EXISTS', details: {} },
-          });
-        }
-
-        const participant = em.create(MeetingParticipantEntity, {
+      participantId = await this.dataSource.transaction(async (em) =>
+        this.persistInternalParticipantCore(
+          em,
           meetingId,
-          userId: dto.userId,
-          participantRole: ParticipantRole.ATTENDEE,
-          invitationStatus: InvitationStatus.PENDING,
-          attendanceRequired: true,
-          isRequired: true,
-          invitedBy: authUser.userId,
-        });
-        await em.save(MeetingParticipantEntity, participant);
-
-        await em.save(AuditLogEntity, {
-          userId: authUser.userId,
-          actionType: 'ADD_PARTICIPANT',
-          entityType: 'meeting_participant',
-          entityId: participant.id,
-          newValueJson: {
-            userId: dto.userId,
-            meetingId,
-            invitedBy: authUser.userId,
-          } as any,
-          ipAddress: clientContext.ipAddress || null,
-          userAgent: clientContext.userAgent || null,
-          severity: AuditLogSeverity.INFO,
-        });
-
-        return participant.id;
-      });
+          dto.userId,
+          authUser.userId,
+          clientContext,
+        ),
+      );
     } catch (error: unknown) {
       if (
         error instanceof ConflictException ||
@@ -3136,7 +3243,7 @@ export class MeetingsService {
     if (trimmed.length === 0) return null;
     return `%${trimmed}%`;
   }
-  private async checkUserPermission(
+  async checkUserPermission(
     userId: string,
     permissionCode: string,
   ): Promise<boolean> {
@@ -3648,83 +3755,17 @@ export class MeetingsService {
 
     try {
       await this.dataSource.transaction(async (em) => {
-        // Pessimistic lock on meeting row
-        await em.findOne(MeetingEntity, {
-          where: { id: meetingId },
-          lock: { mode: 'pessimistic_write' },
-        });
-
-        // Re-check duplicate email inside transaction
-        const dupInTx = await em
-          .getRepository(MeetingExternalParticipantEntity)
-          .createQueryBuilder('ep')
-          .where(
-            'ep.meetingId = :meetingId AND LOWER(ep.email) = LOWER(:email)',
-            {
-              meetingId,
-              email: dto.email,
-            },
-          )
-          .getOne();
-
-        if (dupInTx) {
-          throw new ConflictException({
-            success: false,
-            message: 'Email khách mời đã tồn tại trong cuộc họp này',
-            error: { code: 'EXTERNAL_PARTICIPANT_ALREADY_EXISTS', details: {} },
-          });
-        }
-
-        // 7a: Insert external participant
-        const participant = em.create(MeetingExternalParticipantEntity, {
+        createdParticipantId = await this.persistExternalParticipantCore(
+          em,
           meetingId,
-          fullName: dto.fullName,
-          email: dto.email,
-          organizationName: dto.organizationName ?? null,
-          phoneNumber: dto.phoneNumber ?? null,
-          participantRole: 'attendee',
-          invitationStatus: 'pending',
-        });
-        const savedParticipant = await em.save(
-          MeetingExternalParticipantEntity,
-          participant,
-        );
-        createdParticipantId = savedParticipant.id;
-
-        // 7b: Insert meeting event
-        const event = em.create(MeetingEventEntity, {
-          meetingId,
-          eventType: MeetingEventType.EXTERNAL_PARTICIPANT_ADDED,
-          actorUserId: authUser.userId,
-          sourceType: MeetingEventSourceType.MANUAL,
-          description: `External participant ${dto.email} added to meeting ${meetingId}`,
-          metadataJson: {
-            email: dto.email,
+          {
             fullName: dto.fullName,
-          } as any,
-        });
-        await em.save(MeetingEventEntity, event);
-
-        // 7c: Insert audit log
-        await em.save(AuditLogEntity, {
-          userId: authUser.userId,
-          actionType: 'add_external_participant',
-          entityType: 'meeting_external_participant',
-          entityId: createdParticipantId,
-          newValueJson: {
-            meetingId,
             email: dto.email,
-            fullName: dto.fullName,
             organizationName: dto.organizationName ?? null,
             phoneNumber: dto.phoneNumber ?? null,
-          } as any,
-          ipAddress: clientContext.ipAddress ?? null,
-          userAgent: clientContext.userAgent ?? null,
-          severity: AuditLogSeverity.INFO,
-        });
-
-        this.logger.log(
-          `[AddExternalParticipant] Meeting ${meetingId}: external participant ${dto.email} added by ${authUser.userId}`,
+          },
+          authUser.userId,
+          clientContext,
         );
       });
     } catch (error: unknown) {

@@ -18,6 +18,7 @@ import { MeetingsController } from './controllers/meetings.controller.js';
 import { MeetingRequestsController } from './controllers/meeting-requests.controller.js';
 import { MeetingsService } from './services/meetings.service.js';
 import { MeetingRequestReviewService } from './services/meeting-request-review.service.js';
+import { ParticipantImportService } from './services/participant-import.service.js';
 import { WarningTokenUtil } from './utils/warning-token.util.js';
 import { IsFutureDateConstraint } from './validators/is-future-date.validator.js';
 import { IsAfterStartTimeConstraint } from './validators/is-after-start-time.validator.js';
@@ -66,6 +67,7 @@ import { FromToConstraint } from './validators/from-to.constraint.js';
   providers: [
     MeetingsService,
     MeetingRequestReviewService,
+    ParticipantImportService,
     WarningTokenUtil,
     IsFutureDateConstraint,
     IsAfterStartTimeConstraint,
