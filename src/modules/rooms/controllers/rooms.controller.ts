@@ -1,12 +1,14 @@
 ﻿import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Ip,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -30,9 +32,15 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 
 import { RoomsService } from '../services/rooms.service.js';
 import { RoomStatusService } from '../services/room-status.service.js';
+import { RoomSearchService } from '../services/room-search.service.js';
 import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 import { RealtimeStatusQueryDto } from '../dto/realtime-status-query.dto.js';
+import { UpdateRoomDto } from '../dto/update-room.dto.js';
+import { UpdateRoomResponseDto } from '../dto/update-room-response.dto.js';
+import { SearchRoomsQueryDto } from '../dto/search-rooms-query.dto.js';
+import { DeletionImpactResponseDto } from '../dto/deletion-impact-response.dto.js';
+import { DeleteRoomResponseDto } from '../dto/delete-room-response.dto.js';
 
 @ApiTags('Rooms')
 @Controller('rooms')
@@ -42,7 +50,36 @@ export class RoomsController {
   constructor(
     private readonly roomsService: RoomsService,
     private readonly roomStatusService: RoomStatusService,
+    private readonly roomSearchService: RoomSearchService,
   ) {}
+
+  // UC-ROOM-04: tim kiem/liet ke danh sach phong (moi user da dang nhap, khong
+  // permission rieng). Khai TRUOC ':roomId/status' de tranh route param nuot mat
+  // (dam bao an toan du 'search' chi 1 segment, ':roomId/status' 2 segment, khong
+  // thuc su xung dot — giu quy uoc khai static route truoc de nhat quan).
+  @Get('search')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({ summary: 'Tim kiem/liet ke danh sach phong hop' })
+  @ApiResponse({
+    status: 200,
+    description: 'Danh sach phong hop duoc truy xuat thanh cong',
+  })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  async search(@Query() query: SearchRoomsQueryDto) {
+    const result = await this.roomSearchService.search(query);
+    const message =
+      result.rooms.length === 0
+        ? 'Không có phòng họp nào khớp với các tiêu chí hiện tại. Vui lòng điều chỉnh bộ lọc của bạn.'
+        : 'Danh sách phòng họp được truy xuất thành công';
+    return {
+      success: true,
+      message,
+      data: result.rooms,
+      meta: result.meta,
+    };
+  }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -83,6 +120,115 @@ export class RoomsController {
     return {
       success: true,
       message: 'Room created successfully',
+      data: result,
+    };
+  }
+
+  // UC-ROOM-02: cap nhat thong tin phong hop.
+  @Patch(':roomId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.update')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Cap nhat thong tin phong hop' })
+  @ApiBody({ type: UpdateRoomDto })
+  @ApiResponse({ status: 200, description: 'Cap nhat thanh cong' })
+  @ApiResponse({ status: 400, description: 'Thieu truong bat buoc' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen room.update' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay phong' })
+  @ApiResponse({ status: 409, description: 'Trung roomName' })
+  async update(
+    @Param('roomId', ParseUUIDPipe) roomId: string,
+    @Body() dto: UpdateRoomDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UpdateRoomResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.roomsService.update(
+      roomId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Cập nhật thông tin phòng họp thành công',
+      data: result,
+    };
+  }
+
+  // UC-ROOM-03: xem truoc tac dong xoa phong (preview, read-only).
+  @Get(':roomId/deletion-impact')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.delete')
+  @ApiOperation({ summary: 'Xem truoc tac dong cua viec xoa phong hop' })
+  @ApiResponse({
+    status: 200,
+    description: 'Thong tin tac dong da duoc truy xuat',
+  })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen room.delete' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay phong' })
+  async deletionImpact(
+    @Param('roomId', ParseUUIDPipe) roomId: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DeletionImpactResponseDto;
+  }> {
+    const result = await this.roomsService.getDeletionImpact(roomId);
+    return {
+      success: true,
+      message: 'Thông tin tác động đã được truy xuất',
+      data: result,
+    };
+  }
+
+  // UC-ROOM-03: xoa (soft-delete) phong hop.
+  @Delete(':roomId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.delete')
+  async deleteRoom(
+    @Param('roomId', ParseUUIDPipe) roomId: string,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DeleteRoomResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.roomsService.deleteRoom(
+      roomId,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Xóa phòng họp thành công',
       data: result,
     };
   }

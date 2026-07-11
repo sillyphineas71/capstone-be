@@ -16,6 +16,9 @@ describe('RoomsController — RBAC metadata', () => {
 
   const cases: Array<[string, string]> = [
     ['create', 'room.create'],
+    ['update', 'room.update'],
+    ['deletionImpact', 'room.delete'],
+    ['deleteRoom', 'room.delete'],
     ['realtimeStatus', 'room.utilization.read'],
     ['roomStatus', 'room.utilization.read'],
   ];
@@ -24,6 +27,17 @@ describe('RoomsController — RBAC metadata', () => {
     const guards = (Reflect.getMetadata(GUARDS_METADATA, RoomsController) ??
       []) as unknown[];
     expect(guards).toEqual(expect.arrayContaining([JwtAuthGuard]));
+  });
+
+  it('search (UC-ROOM-04): KHÔNG gắn PermissionsGuard/permission riêng — chỉ cần JwtAuthGuard class-level', () => {
+    const handler = (RoomsController.prototype as Record<string, unknown>)[
+      'search'
+    ] as (...args: unknown[]) => unknown;
+    const guards = (Reflect.getMetadata(GUARDS_METADATA, handler) ??
+      []) as unknown[];
+    expect(guards).not.toEqual(expect.arrayContaining([PermissionsGuard]));
+    const perms = reflector.get<string[]>(PERMISSIONS_KEY, handler);
+    expect(perms).toBeUndefined();
   });
 
   it.each(cases)('%s: @RequirePermissions = %s', (method, code) => {

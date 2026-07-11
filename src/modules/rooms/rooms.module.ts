@@ -13,9 +13,12 @@ import { AuthModule } from '../auth/auth.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
+import { SchedulingModule } from '../scheduling/scheduling.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomsService } from './services/rooms.service.js';
 import { RoomStatusService } from './services/room-status.service.js';
+import { RoomSearchService } from './services/room-search.service.js';
+import { RoomDeleteNotificationProcessor } from './services/room-delete-notification.processor.js';
 import { NoShowController } from './controllers/no-show.controller.js';
 import { NoShowConfigController } from './controllers/no-show-config.controller.js';
 import { EarlyVacancyConfigController } from './controllers/early-vacancy-config.controller.js';
@@ -42,6 +45,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     WebsocketModule,
     NotificationsModule,
     AdministrationModule,
+    SchedulingModule,
     JwtModule.register({}),
     CacheModule.register(),
     TypeOrmModule.forFeature([
@@ -61,6 +65,8 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
   providers: [
     RoomsService,
     RoomStatusService,
+    RoomSearchService,
+    RoomDeleteNotificationProcessor,
     NoShowService,
     NoShowDetectionService,
     NoShowConfigService,
