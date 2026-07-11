@@ -1,8 +1,12 @@
 ﻿import { Test, TestingModule } from '@nestjs/testing';
 import { SchedulingController } from '../scheduling.controller.js';
 import { SchedulingService } from '../services/scheduling.service.js';
+import { ParticipantConflictService } from '../services/participant-conflict.service.js';
+import { TimeSuggestionService } from '../services/time-suggestion.service.js';
 import { RoomSuggestionQueryDto } from '../dto/room-suggestion-query.dto.js';
 import { RoomSuggestionItemDto } from '../dto/room-suggestion-item.dto.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 
 describe('SchedulingController', () => {
   let controller: SchedulingController;
@@ -34,6 +38,13 @@ describe('SchedulingController', () => {
       getRoomSuggestions: jest.fn(),
     };
 
+    // Pre-existing gap (not caused by this session's changes): this spec file
+    // only mocked SchedulingService even though the controller already
+    // required ParticipantConflictService — added here alongside the new
+    // TimeSuggestionService dependency (UC-SM-02) so module.compile() resolves.
+    const mockParticipantConflictService = { checkConflicts: jest.fn() };
+    const mockTimeSuggestionService = { suggestTimeSlots: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SchedulingController],
       providers: [
@@ -41,8 +52,21 @@ describe('SchedulingController', () => {
           provide: SchedulingService,
           useValue: mockService,
         },
+        {
+          provide: ParticipantConflictService,
+          useValue: mockParticipantConflictService,
+        },
+        {
+          provide: TimeSuggestionService,
+          useValue: mockTimeSuggestionService,
+        },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PermissionsGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<SchedulingController>(SchedulingController);
   });

@@ -99,7 +99,7 @@ export class ParticipantConflictService {
     ).map((email) => ({
       email,
       status: 'unknown' as const,
-      warningMessage: 'Kh$1u00f4ng r$1u00f5 l$1u1ecbch tr$1u00ecnh',
+      warningMessage: 'Không rõ lịch trình',
     }));
 
     const hasConflict = participants.some((p) => p.status === 'busy');
@@ -181,11 +181,14 @@ export class ParticipantConflictService {
       const meetingRecord = meeting[0];
       const isOrganizer = meetingRecord.organizer_id === requestingUserId;
 
-      const participantCheck = await this.entityManager.query(
-        `SELECT 1 FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2 LIMIT 1`,
-        [meetingId, requestingUserId],
-      );
-      const isParticipant = participantCheck.length > 0;
+      let isParticipant = false;
+      if (!isOrganizer) {
+        const participantCheck = await this.entityManager.query(
+          `SELECT 1 FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2 LIMIT 1`,
+          [meetingId, requestingUserId],
+        );
+        isParticipant = participantCheck.length > 0;
+      }
 
       if (!isOrganizer && !isParticipant) {
         throw new ForbiddenException({
@@ -205,12 +208,12 @@ export class ParticipantConflictService {
       `SELECT DISTINCT mp.user_id
         FROM meeting_participants mp
         JOIN meetings m ON m.id = mp.meeting_id
-        WHERE mp.user_id = ANY(1::uuid[])
+        WHERE mp.user_id = ANY($1::uuid[])
           AND m.deleted_at IS NULL
-          AND m.status NOT IN (2, 3)
-          AND m.start_time < 4
-          AND m.end_time > 5
-          AND (6::uuid IS NULL OR m.id != 6)`,
+          AND m.status NOT IN ($2, $3)
+          AND m.start_time < $4
+          AND m.end_time > $5
+          AND ($6::uuid IS NULL OR m.id != $6)`,
       [userIds, 'cancelled', 'completed', endTime, startTime, excludeMeetingId],
     );
 
@@ -222,12 +225,12 @@ export class ParticipantConflictService {
       `SELECT m.start_time, m.end_time
         FROM meeting_participants mp
         JOIN meetings m ON m.id = mp.meeting_id
-        WHERE mp.user_id = 1
+        WHERE mp.user_id = $1
           AND m.deleted_at IS NULL
-          AND m.status NOT IN (2, 3)
-          AND m.start_time < 4
-          AND m.end_time > 5
-          AND (6::uuid IS NULL OR m.id != 6)
+          AND m.status NOT IN ($2, $3)
+          AND m.start_time < $4
+          AND m.end_time > $5
+          AND ($6::uuid IS NULL OR m.id != $6)
         ORDER BY m.start_time ASC`,
       [userId, 'cancelled', 'completed', endTime, startTime, excludeMeetingId],
     );
@@ -274,9 +277,11 @@ export class ParticipantConflictService {
     };
 
     if (slots.length === 1) {
-      return `B$1u1eadn t$1u1eeb  - `;
+      return `Bận từ ${formatTime(slots[0].start_time)} - ${formatTime(slots[0].end_time)}`;
     }
 
-    return slots.map((s) => ` - `).join(', ');
+    return slots
+      .map((s) => `${formatTime(s.start_time)} - ${formatTime(s.end_time)}`)
+      .join(', ');
   }
 }

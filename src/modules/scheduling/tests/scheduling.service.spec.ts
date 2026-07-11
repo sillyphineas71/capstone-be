@@ -77,10 +77,15 @@ describe('SchedulingService', () => {
     return { mockQueryBuilder, getParams: () => params };
   }
 
+  const futureStartTime = () =>
+    new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const futureEndTime = () =>
+    new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+
   describe('getRoomSuggestions', () => {
     const validDto: RoomSuggestionQueryDto = {
-      startTime: '2026-07-01T09:00:00+07:00',
-      endTime: '2026-07-01T11:00:00+07:00',
+      startTime: futureStartTime(),
+      endTime: futureEndTime(),
       attendeeCount: 5,
     };
 
@@ -196,8 +201,8 @@ describe('SchedulingService', () => {
   describe('validateTimeRange', () => {
     it('[VAL-1] should throw when endTime <= startTime', async () => {
       const dto: RoomSuggestionQueryDto = {
-        startTime: '2026-07-01T11:00:00+07:00',
-        endTime: '2026-07-01T09:00:00+07:00',
+        startTime: futureEndTime(),
+        endTime: futureStartTime(),
         attendeeCount: 5,
       };
 
@@ -208,8 +213,8 @@ describe('SchedulingService', () => {
 
     it('[VAL-2] should throw when duration exceeds 24h', async () => {
       const dto: RoomSuggestionQueryDto = {
-        startTime: '2026-07-01T09:00:00+07:00',
-        endTime: '2026-07-02T10:00:00+07:00',
+        startTime: futureStartTime(),
+        endTime: new Date(Date.now() + 50 * 60 * 60 * 1000).toISOString(),
         attendeeCount: 5,
       };
 
@@ -234,8 +239,8 @@ describe('SchedulingService', () => {
       setupMockQueryBuilder([mockRoom()]);
 
       const dto: RoomSuggestionQueryDto = {
-        startTime: '2026-07-01T09:00:00+07:00',
-        endTime: '2026-07-01T11:00:00+07:00',
+        startTime: futureStartTime(),
+        endTime: futureEndTime(),
         attendeeCount: 5,
       };
 

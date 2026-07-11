@@ -15,18 +15,24 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { SchedulingService } from './services/scheduling.service.js';
 import { ParticipantConflictService } from './services/participant-conflict.service.js';
+import { TimeSuggestionService } from './services/time-suggestion.service.js';
 import { RoomSuggestionQueryDto } from './dto/room-suggestion-query.dto.js';
 import { RoomSuggestionItemDto } from './dto/room-suggestion-item.dto.js';
 import { CheckParticipantConflictDto } from './dto/check-participant-conflict.dto.js';
 import { ParticipantConflictResponseDto } from './dto/participant-conflict-response.dto.js';
+import { SuggestTimeSlotDto } from './dto/suggest-time-slot.dto.js';
+import { TimeSuggestionItemDto } from './dto/time-suggestion-item.dto.js';
+import { TimeSuggestionMetaDto } from './dto/time-suggestion-response.dto.js';
 
 @Controller()
 export class SchedulingController {
   constructor(
     private readonly schedulingService: SchedulingService,
     private readonly participantConflictService: ParticipantConflictService,
+    private readonly timeSuggestionService: TimeSuggestionService,
   ) {}
 
   /**
@@ -114,6 +120,47 @@ export class SchedulingController {
       success: true,
       message: 'Kiểm tra xung đột lịch hoàn tất',
       data: result,
+    };
+  }
+
+  /**
+   * UC-SM-02: Chọn khung giờ họp tối ưu.
+   * POST /api/v1/scheduling/time-suggestions
+   *
+   * Required participants (bao gồm organizer ngầm định) là hard filter — chỉ
+   * đề xuất khung giờ họ đều rảnh. Optional participants chỉ ảnh hưởng ranking.
+   */
+  @Post('scheduling/time-suggestions')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('scheduling.suggest.times')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async suggestTimeSlots(
+    @Body() dto: SuggestTimeSlotDto,
+    @CurrentUser() currentUser: { userId: string } | undefined,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: TimeSuggestionItemDto[];
+    meta: TimeSuggestionMetaDto;
+  }> {
+    const { result, message } =
+      await this.timeSuggestionService.suggestTimeSlots(
+        dto,
+        currentUser?.userId as string,
+      );
+
+    return {
+      success: true,
+      message,
+      data: result.data,
+      meta: result.meta,
     };
   }
 }
