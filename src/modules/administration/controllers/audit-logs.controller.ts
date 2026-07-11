@@ -56,10 +56,19 @@ export class AuditLogsController {
     description: 'Danh sách audit logs phân trang',
     type: AuditLogListResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR — tham số không hợp lệ (e.g. from > to)' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR — tham số không hợp lệ (e.g. from > to)',
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized — chưa đăng nhập' })
-  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED — thiếu quyền audit.system.read' })
-  @ApiResponse({ status: 500, description: 'INTERNAL_ERROR — lỗi máy chủ không lường trước' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED — thiếu quyền audit.system.read',
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'INTERNAL_ERROR — lỗi máy chủ không lường trước',
+  })
   async listAuditLogs(
     @Query() query: QueryAuditLogsDto,
   ): Promise<{ success: boolean; data: AuditLogItemType[]; meta: MetaType }> {

@@ -26,14 +26,21 @@ export enum AuditLogSeverityFilter {
  * Validate `from > to` được xử lý ở service (T013).
  */
 export class QueryAuditLogsDto {
-  @ApiPropertyOptional({ description: 'Trang hiện tại (bắt đầu từ 1)', minimum: 1 })
+  @ApiPropertyOptional({
+    description: 'Trang hiện tại (bắt đầu từ 1)',
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', minimum: 1, maximum: 100 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    minimum: 1,
+    maximum: 100,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -41,28 +48,43 @@ export class QueryAuditLogsDto {
   @Max(100)
   limit?: number;
 
-  @ApiPropertyOptional({ description: 'Lọc từ thời điểm (ISO 8601)', example: '2026-01-01T00:00:00Z' })
+  @ApiPropertyOptional({
+    description: 'Lọc từ thời điểm (ISO 8601)',
+    example: '2026-01-01T00:00:00Z',
+  })
   @IsOptional()
   @IsDateString()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc đến thời điểm (ISO 8601)', example: '2026-12-31T23:59:59Z' })
+  @ApiPropertyOptional({
+    description: 'Lọc đến thời điểm (ISO 8601)',
+    example: '2026-12-31T23:59:59Z',
+  })
   @IsOptional()
   @IsDateString()
   to?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo userId (UUID)', format: 'uuid' })
+  @ApiPropertyOptional({
+    description: 'Lọc theo userId (UUID)',
+    format: 'uuid',
+  })
   @IsOptional()
   @IsUUID()
   userId?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo loại hành động (actionType)', maxLength: 80 })
+  @ApiPropertyOptional({
+    description: 'Lọc theo loại hành động (actionType)',
+    maxLength: 80,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(80)
   actionType?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo loại entity (entityType)', maxLength: 80 })
+  @ApiPropertyOptional({
+    description: 'Lọc theo loại entity (entityType)',
+    maxLength: 80,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(80)

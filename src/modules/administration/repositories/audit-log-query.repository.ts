@@ -68,7 +68,7 @@ export class AuditLogQueryRepository {
     `;
 
     const offset = (page - 1) * limit;
-    return this.dataSource.query(query, [...params, limit, offset]) as Promise<AuditLogRow[]>;
+    return this.dataSource.query(query, [...params, limit, offset]);
   }
 
   /**
@@ -86,7 +86,7 @@ export class AuditLogQueryRepository {
       ${sql}
     `;
 
-    const result = (await this.dataSource.query(query, params)) as Array<{ total: string }>;
+    const result = await this.dataSource.query(query, params);
     return parseInt(result[0]?.total ?? '0', 10);
   }
 

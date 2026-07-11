@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuditLogsController } from '../controllers/audit-logs.controller.js';
 import { AuditLogQueryService } from '../services/audit-log-query.service.js';
@@ -76,7 +80,11 @@ describe('AuditLogsController', () => {
     it('should pass query DTO to service', async () => {
       serviceMock.listAuditLogs.mockResolvedValue(mockServiceResult);
 
-      const query: QueryAuditLogsDto = { page: 2, limit: 50, severity: undefined };
+      const query: QueryAuditLogsDto = {
+        page: 2,
+        limit: 50,
+        severity: undefined,
+      };
       await controller.listAuditLogs(query);
 
       expect(serviceMock.listAuditLogs).toHaveBeenCalledWith(query);
@@ -86,7 +94,9 @@ describe('AuditLogsController', () => {
       const error = new Error('Unexpected DB failure');
       serviceMock.listAuditLogs.mockRejectedValue(error);
 
-      await expect(controller.listAuditLogs({})).rejects.toThrow('Unexpected DB failure');
+      await expect(controller.listAuditLogs({})).rejects.toThrow(
+        'Unexpected DB failure',
+      );
     });
   });
 
@@ -103,7 +113,10 @@ describe('AuditLogsController', () => {
     });
 
     it('should require permission audit.system.read', () => {
-      const permissions = Reflect.getMetadata('permissions', AuditLogsController);
+      const permissions = Reflect.getMetadata(
+        'permissions',
+        AuditLogsController,
+      );
       expect(permissions).toBeDefined();
       expect(permissions).toContain('audit.system.read');
     });
@@ -177,7 +190,10 @@ describe('AuditLogsController', () => {
       );
 
       for (const method of methods) {
-        const patchMeta = Reflect.getMetadata('method', prototype[method as keyof typeof prototype]);
+        const patchMeta = Reflect.getMetadata(
+          'method',
+          prototype[method as keyof typeof prototype],
+        );
         // Patch=4, Put=3, Delete=5 in NestJS RequestMethod enum
         expect([3, 4, 5]).not.toContain(patchMeta);
       }

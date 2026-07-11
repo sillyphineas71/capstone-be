@@ -1,8 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import {
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { AuditLogQueryService } from '../services/audit-log-query.service.js';
 import { AuditLogQueryRepository } from '../repositories/audit-log-query.repository.js';
-import { QueryAuditLogsDto, AuditLogSeverityFilter } from '../dto/query-audit-logs.dto.js';
+import {
+  QueryAuditLogsDto,
+  AuditLogSeverityFilter,
+} from '../dto/query-audit-logs.dto.js';
 
 /**
  * Unit tests cho AuditLogQueryService.
@@ -17,16 +23,18 @@ describe('AuditLogQueryService', () => {
   let service: AuditLogQueryService;
   let repositoryMock: jest.Mocked<AuditLogQueryRepository>;
 
-  const makeRow = (overrides: Partial<{
-    id: string;
-    created_at: Date;
-    user_id: string | null;
-    action_type: string;
-    entity_type: string;
-    entity_id: string | null;
-    severity: string;
-    user_full_name: string | null;
-  }> = {}) => ({
+  const makeRow = (
+    overrides: Partial<{
+      id: string;
+      created_at: Date;
+      user_id: string | null;
+      action_type: string;
+      entity_type: string;
+      entity_id: string | null;
+      severity: string;
+      user_full_name: string | null;
+    }> = {},
+  ) => ({
     id: 'uuid-1',
     created_at: new Date('2026-07-01T10:00:00Z'),
     user_id: 'user-uuid-1',
@@ -93,7 +101,9 @@ describe('AuditLogQueryService', () => {
         to: '2026-01-01T00:00:00Z',
       };
 
-      await expect(service.listAuditLogs(dto)).rejects.toThrow(BadRequestException);
+      await expect(service.listAuditLogs(dto)).rejects.toThrow(
+        BadRequestException,
+      );
       await expect(service.listAuditLogs(dto)).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'VALIDATION_ERROR' }),
       });
@@ -290,7 +300,9 @@ describe('AuditLogQueryService', () => {
 
       // Verify service has no injection of AuditLogsService whatsoever
       // (AuditLogQueryService only injects AuditLogQueryRepository)
-      const serviceKeys = Object.keys(service as unknown as Record<string, unknown>);
+      const serviceKeys = Object.keys(
+        service as unknown as Record<string, unknown>,
+      );
       const hasAuditLogsService = serviceKeys.some(
         (key) =>
           key.toLowerCase().includes('auditlogsservice') ||
@@ -308,10 +320,14 @@ describe('AuditLogQueryService', () => {
   // ---------------------------------------------------------------------------
   describe('T020 — error handling', () => {
     it('should wrap unexpected errors in InternalServerErrorException', async () => {
-      repositoryMock.findPaginated.mockRejectedValue(new Error('DB connection lost'));
+      repositoryMock.findPaginated.mockRejectedValue(
+        new Error('DB connection lost'),
+      );
       repositoryMock.countMatching.mockResolvedValue(0);
 
-      await expect(service.listAuditLogs({})).rejects.toThrow(InternalServerErrorException);
+      await expect(service.listAuditLogs({})).rejects.toThrow(
+        InternalServerErrorException,
+      );
       await expect(service.listAuditLogs({})).rejects.toMatchObject({
         response: expect.objectContaining({ code: 'INTERNAL_ERROR' }),
       });
@@ -323,7 +339,9 @@ describe('AuditLogQueryService', () => {
         to: '2026-01-01T00:00:00Z',
       };
 
-      await expect(service.listAuditLogs(dto)).rejects.toThrow(BadRequestException);
+      await expect(service.listAuditLogs(dto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 });

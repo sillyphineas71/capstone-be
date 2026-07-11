@@ -17,10 +17,15 @@ export class AuditLogItemDto {
   @ApiProperty({ description: 'Thời điểm ghi log (UTC)' })
   createdAt: Date;
 
-  @ApiPropertyOptional({ description: 'UUID của người thực hiện; null nếu hệ thống tự động', nullable: true })
+  @ApiPropertyOptional({
+    description: 'UUID của người thực hiện; null nếu hệ thống tự động',
+    nullable: true,
+  })
   actorUserId: string | null;
 
-  @ApiProperty({ description: 'Tên hiển thị của người thực hiện; "Hệ thống" nếu null' })
+  @ApiProperty({
+    description: 'Tên hiển thị của người thực hiện; "Hệ thống" nếu null',
+  })
   actorName: string;
 
   @ApiProperty({ description: 'Loại hành động (e.g. "meeting.create")' })
@@ -29,10 +34,16 @@ export class AuditLogItemDto {
   @ApiProperty({ description: 'Loại entity bị tác động (e.g. "meeting")' })
   entityType: string;
 
-  @ApiPropertyOptional({ description: 'UUID của entity bị tác động; null nếu không áp dụng', nullable: true })
+  @ApiPropertyOptional({
+    description: 'UUID của entity bị tác động; null nếu không áp dụng',
+    nullable: true,
+  })
   entityId: string | null;
 
-  @ApiProperty({ description: 'Mức độ nghiêm trọng', enum: ['info', 'warning', 'error', 'critical'] })
+  @ApiProperty({
+    description: 'Mức độ nghiêm trọng',
+    enum: ['info', 'warning', 'error', 'critical'],
+  })
   severity: string;
 }
 

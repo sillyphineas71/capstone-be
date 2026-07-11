@@ -1,5 +1,8 @@
 import { DataSource, QueryRunner } from 'typeorm';
-import { AuditLogQueryRepository, AuditLogFilters } from '../repositories/audit-log-query.repository.js';
+import {
+  AuditLogQueryRepository,
+  AuditLogFilters,
+} from '../repositories/audit-log-query.repository.js';
 import { SeedAuditSystemReadPermission20260703000000 } from '../../../database/migrations/20260703000000-SeedAuditSystemReadPermission.js';
 
 /**
@@ -28,7 +31,10 @@ describe('AuditLogQueryRepository', () => {
 
       await repository.findPaginated({}, 1, 20);
 
-      const [sql, params] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      const [sql, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
       expect(sql).not.toMatch(/WHERE/i);
       expect(params).toEqual([20, 0]); // limit=20, offset=0
     });
@@ -42,7 +48,10 @@ describe('AuditLogQueryRepository', () => {
       };
       await repository.findPaginated(filters, 1, 20);
 
-      const [sql, params] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      const [sql, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
       expect(sql).toMatch(/WHERE/i);
       expect(sql).toMatch(/al\.user_id = \$1/);
       expect(sql).toMatch(/al\.action_type = \$2/);
@@ -85,7 +94,10 @@ describe('AuditLogQueryRepository', () => {
       mockDataSource.query.mockResolvedValue([]);
       await repository.findPaginated({}, 2, 20);
 
-      const [, params] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      const [, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
       expect(params[params.length - 2]).toBe(20); // LIMIT
       expect(params[params.length - 1]).toBe(20); // OFFSET = (2-1)*20
     });
@@ -159,10 +171,16 @@ describe('AuditLogQueryRepository', () => {
     it('should apply same WHERE conditions as findPaginated', async () => {
       mockDataSource.query.mockResolvedValue([{ total: '5' }]);
 
-      const filters: AuditLogFilters = { severity: 'critical', userId: 'uid-x' };
+      const filters: AuditLogFilters = {
+        severity: 'critical',
+        userId: 'uid-x',
+      };
       await repository.countMatching(filters);
 
-      const [sql, params] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      const [sql, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
       expect(sql).toMatch(/WHERE/i);
       expect(params).toContain('critical');
       expect(params).toContain('uid-x');
@@ -174,13 +192,18 @@ describe('AuditLogQueryRepository', () => {
   // ---------------------------------------------------------------------------
   describe('T023 — pagination correctness', () => {
     it('page=2, limit=20 → OFFSET=20 (rows 21-40)', async () => {
-      const fakeRows = Array.from({ length: 20 }, (_, i) => ({ id: `uuid-${i + 21}` }));
+      const fakeRows = Array.from({ length: 20 }, (_, i) => ({
+        id: `uuid-${i + 21}`,
+      }));
       mockDataSource.query.mockResolvedValue(fakeRows);
 
       const rows = await repository.findPaginated({}, 2, 20);
 
       expect(rows).toHaveLength(20);
-      const [, params] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      const [, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
       expect(params[params.length - 1]).toBe(20); // offset = (2-1)*20 = 20
     });
   });
@@ -221,12 +244,14 @@ describe('T029 — Seed permission audit.system.read', () => {
     await migration.up(mockQueryRunner as unknown as QueryRunner);
 
     // First call: INSERT permission
-    const [insertPermSql, insertPermParams] = mockQueryRunner.query.mock.calls[0] as [string, unknown[]];
+    const [insertPermSql, insertPermParams] = mockQueryRunner.query.mock
+      .calls[0] as [string, unknown[]];
     expect(insertPermSql).toMatch(/INSERT INTO permissions/i);
     expect(insertPermParams[0]).toBe('audit.system.read');
 
     // Second call: INSERT role_permission
-    const [insertRoleSql, insertRoleParams] = mockQueryRunner.query.mock.calls[1] as [string, unknown[]];
+    const [insertRoleSql, insertRoleParams] = mockQueryRunner.query.mock
+      .calls[1] as [string, unknown[]];
     expect(insertRoleSql).toMatch(/INSERT INTO role_permissions/i);
     // Should ONLY have SYSTEM_ADMIN — NOT MANAGER or BUSINESS_ADMIN
     expect(insertRoleParams[0]).toBe('SYSTEM_ADMIN');
@@ -263,9 +288,12 @@ describe('T029 — Seed permission audit.system.read', () => {
     await migration.down(mockQueryRunner as unknown as QueryRunner);
 
     const calls = mockQueryRunner.query.mock.calls as [string, unknown[]][];
-    const deleteRolePerm = calls.find(([sql]) => sql.includes('role_permissions'));
-    const deletePerm = calls.find(([sql]) =>
-      sql.includes('permissions') && !sql.includes('role_permissions'),
+    const deleteRolePerm = calls.find(([sql]) =>
+      sql.includes('role_permissions'),
+    );
+    const deletePerm = calls.find(
+      ([sql]) =>
+        sql.includes('permissions') && !sql.includes('role_permissions'),
     );
 
     expect(deleteRolePerm).toBeDefined();

@@ -4,7 +4,10 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { AuditLogQueryRepository, AuditLogFilters } from '../repositories/audit-log-query.repository.js';
+import {
+  AuditLogQueryRepository,
+  AuditLogFilters,
+} from '../repositories/audit-log-query.repository.js';
 import { QueryAuditLogsDto } from '../dto/query-audit-logs.dto.js';
 import {
   AuditLogItemDto,
@@ -38,7 +41,9 @@ export class AuditLogQueryService {
   /**
    * T020: Luồng chính — list audit logs phân trang có filter.
    */
-  async listAuditLogs(query: QueryAuditLogsDto): Promise<AuditLogListResponseDto> {
+  async listAuditLogs(
+    query: QueryAuditLogsDto,
+  ): Promise<AuditLogListResponseDto> {
     try {
       // T012: Apply defaults
       const page = query.page ?? 1;
@@ -49,7 +54,10 @@ export class AuditLogQueryService {
         const fromDate = new Date(query.from);
         const toDate = new Date(query.to);
         if (fromDate > toDate) {
-          throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'from must not be after to' });
+          throw new BadRequestException({
+            code: 'VALIDATION_ERROR',
+            message: 'from must not be after to',
+          });
         }
       }
 
