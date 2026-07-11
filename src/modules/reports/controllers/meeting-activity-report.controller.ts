@@ -39,13 +39,12 @@ export class MeetingActivityReportController {
   @HttpCode(HttpStatus.ACCEPTED)
   async createExport(
     @Body() dto: CreateMeetingActivityExportDto,
-    @CurrentUser() currentUser: { id: string; email: string; roles?: string[] },
+    @CurrentUser() currentUser: { userId: string; email: string; sub?: string },
   ) {
-    const data =
-      await this.meetingActivityReportService.createExportJob(
-        currentUser,
-        dto,
-      );
+    const data = await this.meetingActivityReportService.createExportJob(
+      currentUser,
+      dto,
+    );
     return {
       success: true,
       message: 'Export job đã được tạo và đang xử lý.',

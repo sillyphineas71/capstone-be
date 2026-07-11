@@ -16,6 +16,7 @@ import { BackgroundJobsService } from '../../administration/services/background-
 import { MeetingActivityReportDataService } from '../services/meeting-activity-report-data.service.js';
 import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { RoomUtilizationReportWorkerProcessor } from '../processors/room-utilization-report-worker.processor.js';
 
 // Mock renderers — must be defined BEFORE module imports
 const mockRenderPdf = jest.fn().mockResolvedValue(Buffer.from('PDF_CONTENT'));
@@ -88,15 +89,28 @@ describe('MeetingActivityReportWorkerProcessor', () => {
     get: jest.fn().mockReturnValue('./storage/recordings'),
   };
 
-  const makeJob = (data: Partial<{
-    backgroundJobId: string;
-    from: string;
-    to: string;
-    format: string;
-    scope: { departmentId: null; roomId: null; organizerId: null };
-    requestedByEmail: string;
-  }> = {}) => ({
+  // UC-RUM-16: MeetingActivityReportWorkerProcessor la @Processor duy nhat cho
+  // queue 'report-export', dispatch sang RoomUtilizationReportWorkerProcessor
+  // khi job.name='export:room-utilization' — khong lien quan test file nay
+  // (chi test job.name='export:meeting-activity'), mock rong la du.
+  const mockRoomUtilizationWorker = {
+    processExport: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const makeJob = (
+    data: Partial<{
+      backgroundJobId: string;
+      from: string;
+      to: string;
+      format: string;
+      scope: { departmentId: null; roomId: null; organizerId: null };
+      requestedByEmail: string;
+    }> = {},
+  ) => ({
     id: 'bull-job-1',
+    // UC-RUM-16: process() dispatches by job.name (queue 'report-export' shared
+    // with export:room-utilization) — this test suite is for meeting-activity jobs.
+    name: 'export:meeting-activity',
     data: {
       backgroundJobId: 'bg-job-1',
       from: '2026-07-01',
@@ -115,10 +129,20 @@ describe('MeetingActivityReportWorkerProcessor', () => {
       providers: [
         MeetingActivityReportWorkerProcessor,
         { provide: BackgroundJobsService, useValue: mockBackgroundJobsService },
-        { provide: MeetingActivityReportDataService, useValue: mockDataService },
-        { provide: getRepositoryToken(MediaFileEntity), useValue: mockMediaFileRepo },
+        {
+          provide: MeetingActivityReportDataService,
+          useValue: mockDataService,
+        },
+        {
+          provide: getRepositoryToken(MediaFileEntity),
+          useValue: mockMediaFileRepo,
+        },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: StorageService, useValue: mockStorageService },
+        {
+          provide: RoomUtilizationReportWorkerProcessor,
+          useValue: mockRoomUtilizationWorker,
+        },
       ],
     }).compile();
 
@@ -134,7 +158,9 @@ describe('MeetingActivityReportWorkerProcessor', () => {
       await processor.process(makeJob() as any);
 
       // markRunning called first
-      expect(mockBackgroundJobsService.markRunning).toHaveBeenCalledWith('bg-job-1');
+      expect(mockBackgroundJobsService.markRunning).toHaveBeenCalledWith(
+        'bg-job-1',
+      );
 
       // Data service methods all called
       expect(mockDataService.getReportMetadata).toHaveBeenCalled();
@@ -176,7 +202,12 @@ describe('MeetingActivityReportWorkerProcessor', () => {
         extractedByEmail: 'test@test.com',
         generatedAt: new Date(),
       });
-      mockDataService.getCoreKpis.mockResolvedValue({ meetingCount: 5, reservationUtilizationRate: 0, noShowRate: 0, onTimeRate: 0 });
+      mockDataService.getCoreKpis.mockResolvedValue({
+        meetingCount: 5,
+        reservationUtilizationRate: 0,
+        noShowRate: 0,
+        onTimeRate: 0,
+      });
       mockDataService.getStatusBreakdown.mockResolvedValue([]);
       mockDataService.getMeetingDetailList.mockResolvedValue([]);
 

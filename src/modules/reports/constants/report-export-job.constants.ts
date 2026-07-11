@@ -11,3 +11,6 @@ export const REPORT_EXPORT_QUEUE_NAME = 'report-export';
 
 /** Job name cho meeting activity export */
 export const MEETING_ACTIVITY_EXPORT_JOB_NAME = 'export:meeting-activity';
+
+/** Job name cho room utilization export (UC-RUM-16) */
+export const ROOM_UTILIZATION_EXPORT_JOB_NAME = 'export:room-utilization';

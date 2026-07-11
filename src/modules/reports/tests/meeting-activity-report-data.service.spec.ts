@@ -65,14 +65,14 @@ describe('MeetingActivityReportDataService', () => {
       // getCoreKpis runs 4 sub-functions in Promise.all (parallel)
       // Use SQL-content dispatch to handle non-deterministic call order
       mockDataSource.query = makeSqlDispatchMock([
-        ["status <> 'draft'", [{ count: '42' }]],       // meetingCount
-        ['COUNT(DISTINCT r.id)', [{ count: '5' }]],      // rooms for utilization
-        ['EPOCH', [{ hours: '120' }]],                   // bookedHours
+        ["status <> 'draft'", [{ count: '42' }]], // meetingCount
+        ['COUNT(DISTINCT r.id)', [{ count: '5' }]], // rooms for utilization
+        ['EPOCH', [{ hours: '120' }]], // bookedHours
         ['analytics.room_operating_hours_per_day', [{ config_value: '8' }]], // operating hrs
-        ["'confirmed', 'in_use', 'completed', 'cancelled'", [{ count: '50' }]], // totalBookings no-show
-        ['no_show_cases', [{ count: '5' }]],             // noShowCount
-        ['check_in_time <=', [{ count: '80' }]],         // onTimeCount
-        ['meeting_participants', [{ count: '100' }]],    // totalRequired on-time
+        ["'approved', 'active', 'completed', 'released'", [{ count: '50' }]], // totalBookings no-show
+        ['no_show_cases', [{ count: '5' }]], // noShowCount
+        ['check_in_time <=', [{ count: '80' }]], // onTimeCount
+        ['meeting_participants', [{ count: '100' }]], // totalRequired on-time
       ]);
 
       const kpis = await service.getCoreKpis(baseParams);
@@ -96,7 +96,7 @@ describe('MeetingActivityReportDataService', () => {
         ['EPOCH', [{ hours: '0' }]],
         ['analytics.room_operating_hours_per_day', []],
         // totalBookings (all room_bookings): 10
-        ["'confirmed', 'in_use', 'completed', 'cancelled'", [{ count: '10' }]],
+        ["'approved', 'active', 'completed', 'released'", [{ count: '10' }]],
         // noShowCount: 2 (only confirmed/released)
         ['no_show_cases', [{ count: '2' }]],
         ['meeting_participants', [{ count: '0' }]],
@@ -119,10 +119,10 @@ describe('MeetingActivityReportDataService', () => {
         ['COUNT(DISTINCT r.id)', [{ count: '1' }]],
         ['EPOCH', [{ hours: '10' }]],
         ['analytics.room_operating_hours_per_day', []],
-        ["'confirmed', 'in_use', 'completed', 'cancelled'", [{ count: '5' }]],
+        ["'approved', 'active', 'completed', 'released'", [{ count: '5' }]],
         ['no_show_cases', [{ count: '0' }]],
-        ['check_in_time <=', [{ count: '8' }]],      // onTimeCount
-        ['meeting_participants', [{ count: '10' }]],  // totalRequired
+        ['check_in_time <=', [{ count: '8' }]], // onTimeCount
+        ['meeting_participants', [{ count: '10' }]], // totalRequired
       ]);
 
       const kpis = await service.getCoreKpis(scopedParams);
@@ -147,7 +147,7 @@ describe('MeetingActivityReportDataService', () => {
         ['COUNT(DISTINCT r.id)', [{ count: '1' }]], // activeRoomCount
         ['EPOCH', [{ hours: '40' }]], // bookedHours
         ['analytics.room_operating_hours_per_day', [{ config_value: '8' }]],
-        ["'confirmed', 'in_use', 'completed', 'cancelled'", [{ count: '10' }]],
+        ["'approved', 'active', 'completed', 'released'", [{ count: '10' }]],
         ['no_show_cases', [{ count: '1' }]],
         ['meeting_participants', [{ count: '10' }]],
         ['check_in_time <=', [{ count: '10' }]],

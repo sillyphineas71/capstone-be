@@ -32,11 +32,11 @@ describe('SeedReportMeetingActivityExportPermission', () => {
       mockQueryRunner.query
         .mockResolvedValueOnce([{ id: 'perm-1' }]) // INSERT permission
         .mockResolvedValueOnce([{ id: 'role-1' }]) // SELECT MANAGER
-        .mockResolvedValueOnce(undefined)           // INSERT role_permission MANAGER
+        .mockResolvedValueOnce(undefined) // INSERT role_permission MANAGER
         .mockResolvedValueOnce([{ id: 'role-2' }]) // SELECT BUSINESS_ADMIN
-        .mockResolvedValueOnce(undefined)           // INSERT role_permission BUSINESS_ADMIN
+        .mockResolvedValueOnce(undefined) // INSERT role_permission BUSINESS_ADMIN
         .mockResolvedValueOnce([{ id: 'role-3' }]) // SELECT SYSTEM_ADMIN
-        .mockResolvedValueOnce(undefined);          // INSERT role_permission SYSTEM_ADMIN
+        .mockResolvedValueOnce(undefined); // INSERT role_permission SYSTEM_ADMIN
 
       await expect(
         seedReportMeetingActivityExportPermission(mockDataSource),
@@ -102,8 +102,7 @@ describe('SeedReportMeetingActivityExportPermission', () => {
     let migration: SeedReportMeetingActivityExportPermission20260703000001;
 
     beforeEach(() => {
-      migration =
-        new SeedReportMeetingActivityExportPermission20260703000001();
+      migration = new SeedReportMeetingActivityExportPermission20260703000001();
     });
 
     it('up inserts permission and assigns to 3 roles', async () => {

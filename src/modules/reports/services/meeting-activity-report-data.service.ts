@@ -130,7 +130,8 @@ export class MeetingActivityReportDataService {
    * Scope: theo organizer (người tổ chức thuộc phòng ban trong scope).
    */
   private async getMeetingCount(params: ReportParams): Promise<number> {
-    const { conditions, bindValues } = this.buildOrganizerScopeConditions(params);
+    const { conditions, bindValues } =
+      this.buildOrganizerScopeConditions(params);
 
     const rows: { count: string }[] = await this.dataSource.query(
       `SELECT COUNT(m.id)::text AS count
@@ -158,9 +159,7 @@ export class MeetingActivityReportDataService {
     const fromDate = new Date(params.from);
     const toDate = new Date(params.to);
     const numberOfDays =
-      Math.round(
-        (toDate.getTime() - fromDate.getTime()) / 86400000,
-      ) + 1;
+      Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
 
     // Số phòng active trong scope + kỳ
     const roomCountRows: { count: string }[] = await this.dataSource.query(
@@ -176,7 +175,7 @@ export class MeetingActivityReportDataService {
     const totalCapacityHours = operatingHours * numberOfDays * activeRoomCount;
     if (totalCapacityHours === 0) return 0;
 
-    // Tổng giờ đã đặt (room_bookings hợp lệ: status IN (confirmed, in_use, completed))
+    // Tổng giờ đã đặt (room_bookings hợp lệ: status IN (approved, active, completed, released) — UC-AA-08)
     const { conditions: scopeConds, bindValues: scopeVals } =
       this.buildOrganizerScopeConditions(params);
     const fixedParamsCount = 2 + (params.scope.roomId ? 1 : 0);
@@ -195,7 +194,7 @@ export class MeetingActivityReportDataService {
           )::text AS hours
          FROM room_bookings rb
          JOIN meetings m ON m.id = rb.meeting_id
-        WHERE rb.status IN ('confirmed', 'in_use', 'completed')
+        WHERE rb.status IN ('approved', 'active', 'completed', 'released')
           AND rb.reserved_start_time >= $1::date
           AND rb.reserved_start_time < ($2::date + interval '1 day')
           ${params.scope.roomId ? `AND rb.room_id = $3` : ''}
@@ -214,14 +213,15 @@ export class MeetingActivityReportDataService {
    * Scope theo reserved_start_time.
    */
   private async getNoShowRate(params: ReportParams): Promise<number> {
-    const { conditions, bindValues } = this.buildOrganizerScopeConditions(params);
+    const { conditions, bindValues } =
+      this.buildOrganizerScopeConditions(params);
 
-    // Total valid bookings
+    // Total valid bookings (UC-AA-09: status IN (approved, active, completed, released))
     const totalRows: { count: string }[] = await this.dataSource.query(
       `SELECT COUNT(rb.id)::text AS count
          FROM room_bookings rb
          JOIN meetings m ON m.id = rb.meeting_id
-        WHERE rb.status IN ('confirmed', 'in_use', 'completed', 'cancelled')
+        WHERE rb.status IN ('approved', 'active', 'completed', 'released')
           AND rb.reserved_start_time >= $1::date
           AND rb.reserved_start_time < ($2::date + interval '1 day')
           ${conditions}`,
@@ -253,7 +253,8 @@ export class MeetingActivityReportDataService {
    * ⚠️ RỦI RO CAO: dùng scope organizer, KHÔNG phải scope attendee như UC-AA-10 gốc.
    */
   private async getOnTimeRate(params: ReportParams): Promise<number> {
-    const { conditions, bindValues } = this.buildOrganizerScopeConditions(params);
+    const { conditions, bindValues } =
+      this.buildOrganizerScopeConditions(params);
 
     // totalRequiredParticipants = tất cả meeting_participants của completed meetings trong scope (không declined)
     const totalRows: { count: string }[] = await this.dataSource.query(
@@ -304,7 +305,8 @@ export class MeetingActivityReportDataService {
   async getStatusBreakdown(
     params: ReportParams,
   ): Promise<StatusBreakdownItem[]> {
-    const { conditions, bindValues } = this.buildOrganizerScopeConditions(params);
+    const { conditions, bindValues } =
+      this.buildOrganizerScopeConditions(params);
 
     // Cancelled
     const cancelledRows: { count: string }[] = await this.dataSource.query(
@@ -370,7 +372,8 @@ export class MeetingActivityReportDataService {
     );
     const scheduledCount = parseInt(scheduledRows[0]?.count ?? '0', 10);
 
-    const total = cancelledCount + noShowCount + completedCount + scheduledCount;
+    const total =
+      cancelledCount + noShowCount + completedCount + scheduledCount;
 
     const calcPercent = (count: number): number =>
       total > 0 ? Math.round((count / total) * 10000) / 100 : 0;
@@ -411,7 +414,8 @@ export class MeetingActivityReportDataService {
   async getMeetingDetailList(
     params: ReportParams,
   ): Promise<MeetingDetailItem[]> {
-    const { conditions, bindValues } = this.buildOrganizerScopeConditions(params);
+    const { conditions, bindValues } =
+      this.buildOrganizerScopeConditions(params);
 
     const rows: {
       meeting_code: string | null;
@@ -439,7 +443,7 @@ export class MeetingActivityReportDataService {
          FROM meetings m
          LEFT JOIN users u ON u.id = m.organizer_id
          LEFT JOIN room_bookings rb ON rb.meeting_id = m.id
-           AND rb.status IN ('confirmed','in_use','completed','cancelled')
+           AND rb.status IN ('approved','active','completed','released','cancelled')
          LEFT JOIN rooms r ON r.id = rb.room_id
          LEFT JOIN meeting_participants mp ON mp.meeting_id = m.id AND mp.invitation_status <> 'declined'
          LEFT JOIN attendance_records ar

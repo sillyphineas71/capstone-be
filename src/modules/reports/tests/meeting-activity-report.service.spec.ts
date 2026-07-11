@@ -51,8 +51,8 @@ describe('MeetingActivityReportService', () => {
     get: jest.fn().mockReturnValue('true'),
   };
 
-  const adminUser = { id: 'user-admin', email: 'admin@test.com', roles: ['SYSTEM_ADMIN'] };
-  const managerUser = { id: 'user-mgr', email: 'mgr@test.com', roles: ['MANAGER'] };
+  const adminUser = { userId: 'user-admin', email: 'admin@test.com' };
+  const managerUser = { userId: 'user-mgr', email: 'mgr@test.com' };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -61,7 +61,9 @@ describe('MeetingActivityReportService', () => {
       roles: ['SYSTEM_ADMIN'],
       permissions: ['report.meeting_activity.export'],
     });
-    mockBackgroundJobsService.createQueuedJob.mockResolvedValue({ id: 'job-123' });
+    mockBackgroundJobsService.createQueuedJob.mockResolvedValue({
+      id: 'job-123',
+    });
     mockQueueService.addJob.mockResolvedValue('bull-job-1');
     mockAuditLogsService.logAction.mockResolvedValue(undefined);
     mockDataSource.query.mockResolvedValue([]);
@@ -72,14 +74,19 @@ describe('MeetingActivityReportService', () => {
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
         { provide: BackgroundJobsService, useValue: mockBackgroundJobsService },
         { provide: QueueService, useValue: mockQueueService },
-        { provide: DashboardOverviewConfigService, useValue: mockDashboardConfigService },
+        {
+          provide: DashboardOverviewConfigService,
+          useValue: mockDashboardConfigService,
+        },
         { provide: AuditLogsService, useValue: mockAuditLogsService },
         { provide: DataSource, useValue: mockDataSource },
         { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
-    service = module.get<MeetingActivityReportService>(MeetingActivityReportService);
+    service = module.get<MeetingActivityReportService>(
+      MeetingActivityReportService,
+    );
   });
 
   // ─── T031: Validation tests ─────────────────────────────────────────────────
@@ -214,7 +221,7 @@ describe('MeetingActivityReportService', () => {
       expect(mockBackgroundJobsService.createQueuedJob).toHaveBeenCalledWith(
         expect.objectContaining({
           jobType: BackgroundJobType.EXPORT_REPORT,
-          requestedBy: adminUser.id,
+          requestedBy: adminUser.userId,
         }),
       );
     });

@@ -46,10 +46,9 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
         .font('Helvetica')
         .fontSize(10)
         .fillColor('#666666')
-        .text(
-          `Tạo lúc: ${data.metadata.generatedAt.toLocaleString('vi-VN')}`,
-          { align: 'center' },
-        );
+        .text(`Tạo lúc: ${data.metadata.generatedAt.toLocaleString('vi-VN')}`, {
+          align: 'center',
+        });
       doc.fillColor('#000000');
       doc.moveDown(1);
 
@@ -84,10 +83,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
           'Tỷ lệ sử dụng phòng (Reservation Utilization)',
           `${data.kpis.reservationUtilizationRate.toFixed(2)}%`,
         ],
-        [
-          'Tỷ lệ no-show',
-          `${data.kpis.noShowRate.toFixed(2)}%`,
-        ],
+        ['Tỷ lệ no-show', `${data.kpis.noShowRate.toFixed(2)}%`],
         [
           'Tỷ lệ đúng giờ (On-time Rate)',
           `${data.kpis.onTimeRate.toFixed(2)}%`,
@@ -101,7 +97,10 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       doc.moveDown(1);
 
       // ── Phần 3: Phân bổ trạng thái ───────────────────────────────
-      doc.font('Helvetica-Bold').fontSize(13).text('3. Phân bổ trạng thái cuộc họp');
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(13)
+        .text('3. Phân bổ trạng thái cuộc họp');
       doc.moveDown(0.3);
       doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
       doc.moveDown(0.5);
@@ -111,9 +110,13 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       const statusX = [50, 230, 310];
       doc.font('Helvetica-Bold').fontSize(10);
       const statusHeaderY = doc.y;
-      doc.text('Trạng thái', statusX[0], statusHeaderY, { width: statusColW[0] });
+      doc.text('Trạng thái', statusX[0], statusHeaderY, {
+        width: statusColW[0],
+      });
       doc.text('Số lượng', statusX[1], statusHeaderY, { width: statusColW[1] });
-      doc.text('Tỷ lệ (%)', statusX[2], statusHeaderY, { width: statusColW[2] });
+      doc.text('Tỷ lệ (%)', statusX[2], statusHeaderY, {
+        width: statusColW[2],
+      });
       doc.y = statusHeaderY + 15;
       doc.moveTo(50, doc.y).lineTo(450, doc.y).stroke('#cccccc');
       doc.y += 5;
@@ -122,7 +125,9 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
         doc.font('Helvetica').fontSize(10);
         const rowY = doc.y;
         doc.text(item.status, statusX[0], rowY, { width: statusColW[0] });
-        doc.text(item.count.toString(), statusX[1], rowY, { width: statusColW[1] });
+        doc.text(item.count.toString(), statusX[1], rowY, {
+          width: statusColW[1],
+        });
         doc.text(`${item.percentage.toFixed(2)}%`, statusX[2], rowY, {
           width: statusColW[2],
         });
@@ -132,7 +137,10 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
 
       // ── Phần 4: Danh sách chi tiết ───────────────────────────────
       doc.addPage();
-      doc.font('Helvetica-Bold').fontSize(13).text('4. Danh sách chi tiết cuộc họp');
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(13)
+        .text('4. Danh sách chi tiết cuộc họp');
       doc.moveDown(0.3);
       doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
       doc.moveDown(0.5);
@@ -197,7 +205,10 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       });
 
       if (data.meetingDetails.length === 0) {
-        doc.font('Helvetica').fontSize(10).fillColor('#888888')
+        doc
+          .font('Helvetica')
+          .fontSize(10)
+          .fillColor('#888888')
           .text('Không có cuộc họp nào trong kỳ báo cáo.');
         doc.fillColor('#000000');
       }

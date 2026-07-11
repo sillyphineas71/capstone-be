@@ -20,6 +20,7 @@ import { renderMeetingActivityPdf } from '../renderers/meeting-activity-pdf-rend
 import { renderMeetingActivityXlsx } from '../renderers/meeting-activity-xlsx-renderer.js';
 import { REPORT_EXPORT_QUEUE_NAME } from '../constants/report-export-job.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { RoomUtilizationReportWorkerProcessor } from './room-utilization-report-worker.processor.js';
 
 interface MeetingActivityExportJobData {
   backgroundJobId: string;
@@ -61,11 +62,23 @@ export class MeetingActivityReportWorkerProcessor extends WorkerHost {
     private readonly mediaFileRepo: Repository<MediaFileEntity>,
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
+    private readonly roomUtilizationWorker: RoomUtilizationReportWorkerProcessor,
   ) {
     super();
   }
 
+  /**
+   * Đây là @Processor duy nhất cho queue 'report-export' — dispatch theo
+   * job.name thay vì đăng ký nhiều @Processor cạnh tranh trên cùng 1 queue
+   * (BullMQ Worker không tự lọc theo job.name, xem ghi chú ở
+   * room-utilization-report-worker.processor.ts).
+   */
   async process(job: Job<MeetingActivityExportJobData>): Promise<void> {
+    if (job.name === 'export:room-utilization') {
+      return this.roomUtilizationWorker.processExport(job);
+    }
+    if (job.name !== 'export:meeting-activity') return;
+
     const { backgroundJobId } = job.data;
 
     this.logger.log(
@@ -157,8 +170,7 @@ export class MeetingActivityReportWorkerProcessor extends WorkerHost {
         `Job ${job.id} completed — file: ${fileName} mediaFileId: ${savedMedia.id}`,
       );
     } catch (error: unknown) {
-      const errMsg =
-        error instanceof Error ? error.message : 'Unknown error';
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Job ${job.id} failed — ${errMsg}`);
 
       // ARCH-02: KHÔNG throw tiếp để không crash worker

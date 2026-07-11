@@ -55,7 +55,7 @@ export class MeetingActivityReportService {
    * FR-001, FR-005, FR-029.
    */
   async createExportJob(
-    currentUser: { id: string; email: string; roles?: string[] },
+    currentUser: { userId: string; email: string; sub?: string },
     dto: CreateMeetingActivityExportDto,
   ): Promise<CreateExportResponseDto> {
     try {
@@ -69,21 +69,27 @@ export class MeetingActivityReportService {
       this.validateDelivery(dto.delivery);
 
       // 4. Resolve department scope (T019)
-      const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(currentUser.id);
+      const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(
+        currentUser.userId,
+      );
       const viewerRole = roles.includes('SYSTEM_ADMIN')
         ? 'SYSTEM_ADMIN'
         : roles.includes('BUSINESS_ADMIN')
-        ? 'BUSINESS_ADMIN'
-        : roles.includes('MANAGER')
-        ? 'MANAGER'
-        : 'USER';
+          ? 'BUSINESS_ADMIN'
+          : roles.includes('MANAGER')
+            ? 'MANAGER'
+            : 'USER';
 
-      const resolvedScope = await this.resolveDepartmentScope(currentUser.id, dto.scope, roles);
+      const resolvedScope = await this.resolveDepartmentScope(
+        currentUser.userId,
+        dto.scope,
+        roles,
+      );
 
       // 5. Tạo background job record
       const backgroundJob = await this.backgroundJobsService.createQueuedJob({
         jobType: BackgroundJobType.EXPORT_REPORT,
-        requestedBy: currentUser.id,
+        requestedBy: currentUser.userId,
         relatedEntityType: 'meeting_activity_report',
         inputJson: {
           from: dto.from,
@@ -110,7 +116,7 @@ export class MeetingActivityReportService {
 
       // 7. Audit log non-blocking (FR-029)
       this.writeAuditLog(
-        currentUser.id,
+        currentUser.userId,
         backgroundJob.id,
         viewerRole,
         dto.from,
@@ -277,7 +283,10 @@ export class MeetingActivityReportService {
     format: string,
     scope: ResolvedScope,
   ): Promise<void> {
-    const auditEnabled = this.configService.get<string>('AUDIT_LOG_ENABLED', 'true');
+    const auditEnabled = this.configService.get<string>(
+      'AUDIT_LOG_ENABLED',
+      'true',
+    );
     if (auditEnabled !== 'true') return;
     await this.auditLogsService.logAction({
       userId,

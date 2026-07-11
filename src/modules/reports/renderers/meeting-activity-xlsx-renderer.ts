@@ -74,26 +74,14 @@ function buildOverviewSheet(
   // ─── Phần 2: KPI ─────────────────────────────────────────────────
   appendSectionHeader(sheet, '2. KPI tổng quan');
 
-  appendLabelValue(
-    sheet,
-    'Tổng số cuộc họp',
-    kpis.meetingCount,
-  );
+  appendLabelValue(sheet, 'Tổng số cuộc họp', kpis.meetingCount);
   appendLabelValue(
     sheet,
     'Tỷ lệ sử dụng phòng (Reservation Utilization) (%)',
     kpis.reservationUtilizationRate,
   );
-  appendLabelValue(
-    sheet,
-    'Tỷ lệ no-show (%)',
-    kpis.noShowRate,
-  );
-  appendLabelValue(
-    sheet,
-    'Tỷ lệ đúng giờ On-time Rate (%)',
-    kpis.onTimeRate,
-  );
+  appendLabelValue(sheet, 'Tỷ lệ no-show (%)', kpis.noShowRate);
+  appendLabelValue(sheet, 'Tỷ lệ đúng giờ On-time Rate (%)', kpis.onTimeRate);
   sheet.addRow([]);
 
   // ─── Phần 3: Phân bổ trạng thái ──────────────────────────────────
