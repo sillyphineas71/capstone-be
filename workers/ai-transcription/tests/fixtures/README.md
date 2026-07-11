@@ -5,6 +5,7 @@
 | 2026-06-30 | Tạo fixture `sample-domain-vocabulary.wav` cho T014B (benchmark small/medium/large-v3, kiểm tra nhận diện proper noun/thuật ngữ ngành). | Toàn bộ file (mới) |
 | 2026-06-30 | Phát hiện lỗi: bản gốc `sample-domain-vocabulary.wav` sinh bằng giọng TTS **tiếng Anh** (`Microsoft Zira Desktop`, en-US) dù mô tả là podcast tiếng Việt — khi chạy benchmark T014B với `language=vi`, lỗi ngôn ngữ nguồn khiến model `medium` hallucinate nội dung tiếng Việt sai hoàn toàn thay vì phiên âm đúng. Thay fixture bằng audio sinh từ giọng `vi-VN-HoaiMyNeural` (Microsoft Edge neural TTS, qua thư viện `edge-tts`), nội dung tiếng Việt thật có chèn thuật ngữ tiếng Anh đúng như cách người Việt nói. | Toàn bộ file `sample-domain-vocabulary.wav` (thay nội dung), dòng mô tả bên dưới |
 | 2026-07-01 | Tạo fixture `sample-overlap.wav` cho **T034** (M2 Independent Test) — 2 giọng tiếng Việt (`vi-VN-HoaiMyNeural` + `vi-VN-NamMinhNeural`) ghép timeline có khoảng lặng + 1 vùng chồng tiếng thật. Verify chạy thật pipeline M2: detectedSpeakers=2, segment overlap được đánh dấu `overlap=true`. | `sample-overlap.wav` (mới), dòng mô tả cuối |
+| 2026-07-11 | Tạo fixture `sample-vad-silence-gaps.wav` để verify thật `vad_filter=True` (whisper_runner.py:60) trên audio dài có nhiều khoảng lặng xen kẽ tiếng nói. | `sample-vad-silence-gaps.wav` + `sample-vad-silence-gaps.result.json` (mới), dòng mô tả cuối |
 
 # Test fixtures — AI Worker (offline transcription)
 
@@ -34,3 +35,25 @@ test / M2 Independent Test). Verify thật qua pipeline đầy đủ (whisper + 
 diarization + overlap detection): `detectedSpeakers=2`, segment vùng chồng tiếng
 có `overlap=true` + `manualReviewRequired=true` (best-effort, chưa có SepFormer
 M3). Cách dựng lại: xem `tasks.md` changelog 2026-07-01 (Wave 2).
+
+`sample-vad-silence-gaps.wav` — audio giả lập (~37.4s), ghép từ 3 clip TTS tiếng
+Anh (Windows SAPI `Microsoft David/Zira Desktop`, không phải recording thật của
+công ty) xen kẽ 2 đoạn khoảng lặng có noise nền rất nhỏ (white noise amplitude
+0.006, mô phỏng self-noise micro thật thay vì digital-zero silence) dài 7s và 8s:
+**speech1** (0-7.96s) → **silence 7s** → **speech2** (14.96-21.48s) → **silence
+8s** → **speech3** (29.48-37.42s). Dùng ngôn ngữ tiếng Anh + truyền
+`language="en"` khớp giọng audio (tránh đúng lỗi mismatch ngôn ngữ đã ghi nhận ở
+`sample-domain-vocabulary.wav` phía trên). Mục tiêu: verify `vad_filter=True`
+(`whisper_runner.py:60`) có thực sự bỏ qua 2 đoạn khoảng lặng dài mà không sinh
+segment rác/hallucination loop khi chạy qua `transcribe_pipeline.py` đầy đủ (model
+`medium`, CPU/int8, khớp `.env`).
+
+Kết quả chạy thật (`sample-vad-silence-gaps.result.json`): 7 segments, không có
+segment nào rơi vào 2 khoảng lặng, `warnings=[]` (không có
+`hallucination_loop_collapsed` lẫn `low_confidence_transcript`), confidence tổng
+hợp ~0.706, text khớp đúng nội dung đã đọc ở cả 3 đoạn. Ghi nhận: `endMs` của
+segment ngay trước mỗi khoảng lặng bị kéo dài gần sát tới điểm bắt đầu của đoạn
+tiếng nói kế tiếp (ví dụ segment 1 kết thúc ở 15000ms dù nội dung nói thực tế chỉ
+kéo dài tới ~7.96s) — VAD chặn hallucination nội dung tốt, nhưng timestamp cuối
+segment không tight quanh biên khoảng lặng; cần lưu ý nếu downstream logic dựa
+vào `endMs` chính xác để đồng bộ với video/UI.
