@@ -21,6 +21,7 @@ import {
   RecordingSessionStatus,
 } from '../entities/recording-session.entity.js';
 import { StartVideoDto } from '../dto/start-video.dto.js';
+import { CreateAudioSessionDto } from '../dto/create-audio-session.dto.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { decryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { probeMedia, probeAudioDuration } from '../utils/ffprobe.util.js';
@@ -359,6 +360,66 @@ export class RecordingSessionService {
       fileSizeBytes: result.fileSizeBytes,
       mediaFileId: result.mediaFileId,
       captured: true,
+    };
+  }
+
+  /**
+   * Tạo 1 audio recording_session "rỗng" (chưa có media_file nào) — điểm neo
+   * (sessionId) để nhiều participant lần lượt upload audio track riêng của mình
+   * qua uploadAudioTrack() (channel_zone mode). Khác uploadAudioForTranscription
+   * (luôn kèm sẵn 1 file) — session ở đây chỉ có metadata, KHÔNG có file/process.
+   * status=starting là placeholder trung tính (không có ffmpeg/process đứng sau,
+   * không bị bất kỳ logic nào ở createTranscriptionJob kiểm tra) — session được
+   * coi là "sẵn sàng nhận track" ngay từ khi tạo, không cần bước "start" riêng.
+   * Chỉ Host/Organizer của meeting hoặc Business/System Admin được tạo.
+   */
+  async createAudioSession(
+    meetingId: string,
+    userId: string | null,
+    dto: CreateAudioSessionDto,
+  ): Promise<{
+    recordingSessionId: string;
+    sessionType: string;
+    status: string;
+    startedAt: Date;
+  }> {
+    const meetingRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        'SELECT id FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (!meetingRows || meetingRows.length === 0) {
+      throw new NotFoundException({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+    }
+
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId);
+    }
+
+    const sessionId = randomUUID();
+    const startedAt = new Date();
+    const metadataJson = dto?.notes ? { notes: dto.notes } : null;
+
+    const session = this.dataSource.manager.create(RecordingSessionEntity, {
+      id: sessionId,
+      meetingId,
+      sessionType: RecordingSessionType.AUDIO,
+      sourceType: RecordingSourceType.MANUAL_UPLOAD,
+      status: RecordingSessionStatus.STARTING,
+      startedAt,
+      startedBy: userId,
+      metadataJson,
+    });
+    await this.dataSource.manager.save(RecordingSessionEntity, session);
+
+    return {
+      recordingSessionId: sessionId,
+      sessionType: RecordingSessionType.AUDIO,
+      status: RecordingSessionStatus.STARTING,
+      startedAt,
     };
   }
 

@@ -754,3 +754,95 @@ describe('RecordingSessionService.uploadAudioForTranscription', () => {
     expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('RecordingSessionService.createAudioSession', () => {
+  let service: RecordingSessionService;
+  let dataSourceMock: any;
+  let savedSession: any;
+
+  // query() router theo SQL — meeting tồn tại + user là host theo mặc định
+  // (mirror pattern của describe uploadAudioForTranscription ở trên).
+  const makeQuery =
+    (opts: { meeting?: any[]; host?: any[]; roles?: any[] }) =>
+    (sql: string) => {
+      if (sql.includes('FROM meetings'))
+        return Promise.resolve(opts.meeting ?? [{ id: 'm1' }]);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(opts.host ?? [{ id: 'mp-1' }]);
+      if (sql.includes('FROM user_roles'))
+        return Promise.resolve(opts.roles ?? []);
+      return Promise.resolve([]);
+    };
+
+  beforeEach(async () => {
+    savedSession = null;
+    dataSourceMock = {
+      manager: {
+        query: jest.fn().mockImplementation(makeQuery({})),
+        create: jest.fn((_e: unknown, obj: any) => obj),
+        save: jest.fn(async (_e: unknown, obj: any) => {
+          savedSession = obj;
+          return obj;
+        }),
+      },
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RecordingSessionService,
+        { provide: DataSource, useValue: dataSourceMock },
+        {
+          provide: ConfigService,
+          useValue: { get: (_k: string, d?: unknown) => d },
+        },
+        { provide: RecordingProcessManager, useValue: {} },
+        { provide: StorageService, useValue: { saveFile: jest.fn() } },
+      ],
+    }).compile();
+    service = module.get(RecordingSessionService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('happy: host tạo audio session rỗng → status=starting, không có file', async () => {
+    const result = await service.createAudioSession('m1', 'u1', {});
+
+    expect(result.sessionType).toBe('audio');
+    expect(result.status).toBe('starting');
+    expect(typeof result.recordingSessionId).toBe('string');
+    expect(savedSession.sessionType).toBe('audio');
+    expect(savedSession.sourceType).toBe('manual_upload');
+    expect(savedSession.status).toBe('starting');
+    expect(savedSession.startedBy).toBe('u1');
+    expect(savedSession.metadataJson).toBeNull();
+  });
+
+  it('happy: notes được lưu vào metadataJson', async () => {
+    await service.createAudioSession('m1', 'u1', { notes: 'ghi chu test' });
+    expect(savedSession.metadataJson).toEqual({ notes: 'ghi chu test' });
+  });
+
+  it('404: meeting không tồn tại', async () => {
+    dataSourceMock.manager.query.mockImplementation(makeQuery({ meeting: [] }));
+    await expect(service.createAudioSession('m1', 'u1', {})).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('403: không phải host và không phải admin', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], roles: [{ role_code: 'INTERNAL_USER' }] }),
+    );
+    await expect(service.createAudioSession('m1', 'u1', {})).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('admin (không phải host) vẫn tạo được', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], roles: [{ role_code: 'SYSTEM_ADMIN' }] }),
+    );
+    const result = await service.createAudioSession('m1', 'u1', {});
+    expect(result.status).toBe('starting');
+  });
+});

@@ -2,6 +2,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-01 | Tạo tài liệu tổng hợp toàn bộ API endpoint của luồng transcription (recording-config → recording-session → media-files → transcription-jobs → transcript → segments), đối chiếu trực tiếp với source code controller/DTO hiện tại (không chỉ theo `contracts/transcription-api.md` cũ). Mục tiêu: dùng để test thủ công (Postman/curl). | Toàn bộ file (mới) |
+| 2026-07-11 | Gap fix: thêm endpoint mới `POST /meetings/{meetingId}/recording-sessions` (tạo audio session rỗng làm điểm neo cho N participant lần lượt upload audio-tracks vào cùng 1 sessionId — trước đây `audio-tracks` yêu cầu `sessionId` có sẵn nhưng không có API nào tạo được session rỗng cho luồng channel_zone thuần upload). Đánh số lại mục 2.4/2.5 → 2.5/2.6, cập nhật bảng tổng hợp mục 6. | Mục "Luồng test đề xuất", mục 2 (mới 2.4), mục 6 (bảng, dòng #7-9 renumber) |
 
 # Tổng hợp API — Luồng Transcription (Recording → Transcription Job → Transcript)
 
@@ -26,7 +27,7 @@
 1. (Optional) Tạo/xem/sửa recording-config cho meeting
 2a. Ghi hình qua camera thật: start-video → stop-video → (media_files tự tạo)
 2b. HOẶC test nhanh không cần camera: audio-upload (upload file .wav/.mp3/.m4a có sẵn)
-2c. (Optional, multi-speaker) Từng participant tự uploadAudioTrack sau khi meeting completed
+2c. (Optional, multi-speaker) Tạo audio session rỗng (POST recording-sessions) → từng participant tự uploadAudioTrack vào sessionId đó sau khi meeting completed
 3. Xem danh sách media-files của meeting để lấy recordingSessionId/mediaFileId
 4. POST transcription-jobs (dùng recordingSessionId từ bước 2)
 5. Poll GET /background-jobs/:jobId (status: queued → running → completed/failed)
@@ -187,7 +188,40 @@ curl -X POST "http://localhost:3000/api/v1/meetings/{meetingId}/recording-sessio
 ```
 Lỗi: `400 EMPTY_AUDIO_FILE`, `400 UNSUPPORTED_MEDIA_FORMAT`, `404 MEETING_NOT_FOUND`.
 
-### 2.4. Upload audio track riêng theo participant (multi-channel, cho `channel_zone` mode)
+### 2.4. Tạo audio session rỗng (điểm neo cho nhiều participant upload track)
+
+```http
+POST /api/v1/meetings/{meetingId}/recording-sessions
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
+Permission thật: `transcript.create` (dùng `PermissionsGuard` thật) | Chỉ Host/Organizer của meeting hoặc Business/System Admin | Response: `201`
+
+**Mục đích**: sinh ra `recordingSessionId` làm điểm neo — session này KHÔNG có file/process nào đứng sau (khác `audio-upload` ở mục 2.3, vốn tạo session kèm sẵn 1 file). Dùng `recordingSessionId` trả về để N participant lần lượt gọi mục 2.5 (`audio-tracks`) vào CÙNG session này.
+
+**Body mẫu** (tất cả field optional):
+```json
+{
+  "notes": "Ghi chú tuỳ chọn cho session này"
+}
+```
+
+**Response 201 mẫu**:
+```json
+{
+  "success": true,
+  "message": "Audio session created — dùng recordingSessionId để participant upload audio-tracks",
+  "data": {
+    "recordingSessionId": "9f1e...uuid",
+    "sessionType": "audio",
+    "status": "starting",
+    "startedAt": "2026-07-11T10:00:00.000Z"
+  }
+}
+```
+Lỗi: `404 MEETING_NOT_FOUND`, `403 PERMISSION_DENIED` (không phải Host/Admin).
+
+### 2.5. Upload audio track riêng theo participant (multi-channel, cho `channel_zone` mode)
 
 ```http
 POST /api/v1/meetings/{meetingId}/recording-sessions/{sessionId}/audio-tracks
@@ -197,6 +231,8 @@ Content-Type: multipart/form-data
 Permission: `recording.upload_track` (guard thật) | **Điều kiện bắt buộc**: `meeting.status = completed` VÀ user gọi phải là `meeting_participants` của đúng meeting đó | Response: `201`
 
 **Form-data**: giống mục 2.3 (`file`).
+
+`sessionId` phải tồn tại trước — lấy từ mục 2.4 (session rỗng, dùng khi muốn multi-track thuần) hoặc từ mục 2.1/2.3 (session đã có sẵn 1 file/video, ít dùng cho luồng multi-track).
 
 **Response 201 mẫu**:
 ```json
@@ -213,7 +249,7 @@ Permission: `recording.upload_track` (guard thật) | **Điều kiện bắt bu�
 ```
 Lỗi: `400 MEETING_NOT_ENDED` (meeting chưa completed), `403 NOT_A_PARTICIPANT`, `404 RECORDING_SESSION_NOT_FOUND`.
 
-### 2.5. Xem trạng thái phiên ghi (read-only) **[MOCK GUARD]**
+### 2.6. Xem trạng thái phiên ghi (read-only) **[MOCK GUARD]**
 
 ```http
 GET /api/v1/live-meetings/{meetingId}/recording/{sessionId}/status
@@ -544,16 +580,17 @@ Endpoint này **không** tự đổi `status` sang `reviewed`/`approved` — hi�
 | 5 | POST | `/live-meetings/{meetingId}/recording/{sessionId}/stop-video` | `recording.video.stop` | ❌ Mock |
 | 6 | GET | `/live-meetings/{meetingId}/recording/{sessionId}/status` | `recording.video.status` | ❌ Mock |
 | 7 | POST | `/meetings/{meetingId}/recording-sessions/audio-upload` | `transcript.create` | ✅ Thật |
-| 8 | POST | `/meetings/{meetingId}/recording-sessions/{sessionId}/audio-tracks` | `recording.upload_track` | ✅ Thật |
-| 9 | GET | `/meetings/{meetingId}/media-files` | `recording.files.read` | ❌ Mock |
-| 10 | GET | `/media-files/{fileId}` | `recording.files.read` | ❌ Mock |
-| 11 | GET | `/media-files/{fileId}/playback` | `recording.files.play` | ❌ Mock |
-| 12 | PATCH | `/media-files/{fileId}/visibility` | `recording.files.manage` | ❌ Mock |
-| 13 | GET | `/media-files/{fileId}/secure-download?token=` | (HMAC token, không JWT) | — |
-| 14 | POST | `/meetings/{meetingId}/transcription-jobs` | `transcript.create` | ✅ Thật |
-| 15 | GET | `/background-jobs/{jobId}` | (chỉ JwtAuthGuard) | ✅ Thật |
-| 16 | GET | `/meetings/{meetingId}/transcription-jobs` | `transcript.read` | ✅ Thật |
-| 17 | GET | `/meetings/{meetingId}/transcript` | `transcript.read` | ✅ Thật |
-| 18 | PATCH | `/transcripts/{transcriptId}/segments` | `transcript.update` | ✅ Thật |
+| 8 | POST | `/meetings/{meetingId}/recording-sessions` | `transcript.create` | ✅ Thật |
+| 9 | POST | `/meetings/{meetingId}/recording-sessions/{sessionId}/audio-tracks` | `recording.upload_track` | ✅ Thật |
+| 10 | GET | `/meetings/{meetingId}/media-files` | `recording.files.read` | ❌ Mock |
+| 11 | GET | `/media-files/{fileId}` | `recording.files.read` | ❌ Mock |
+| 12 | GET | `/media-files/{fileId}/playback` | `recording.files.play` | ❌ Mock |
+| 13 | PATCH | `/media-files/{fileId}/visibility` | `recording.files.manage` | ❌ Mock |
+| 14 | GET | `/media-files/{fileId}/secure-download?token=` | (HMAC token, không JWT) | — |
+| 15 | POST | `/meetings/{meetingId}/transcription-jobs` | `transcript.create` | ✅ Thật |
+| 16 | GET | `/background-jobs/{jobId}` | (chỉ JwtAuthGuard) | ✅ Thật |
+| 17 | GET | `/meetings/{meetingId}/transcription-jobs` | `transcript.read` | ✅ Thật |
+| 18 | GET | `/meetings/{meetingId}/transcript` | `transcript.read` | ✅ Thật |
+| 19 | PATCH | `/transcripts/{transcriptId}/segments` | `transcript.update` | ✅ Thật |
 
 Tất cả path phía trên cần prefix `http://localhost:3000/api/v1` khi test.

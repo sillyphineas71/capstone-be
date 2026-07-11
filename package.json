@@ -6,7 +6,8 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && npm run build:ai-worker",
+    "build:ai-worker": "npm run build --prefix workers/ai-transcription",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -55,7 +56,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
-    "typeorm": "^1.0.0"
+    "typeorm": "^1.0.0",
+    "undici": "^7.28.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

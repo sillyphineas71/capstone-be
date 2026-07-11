@@ -7,6 +7,7 @@
 | 2026-07-01 | Phase 3 implemented: AI Worker multi-channel download + Python channel_zone pipeline | Giai Đoạn 3 |
 | 2026-07-01 | Phase 4 implemented: WebSocket transcript.ready notification + meeting:subscribe handler | Giai Đoạn 4 |
 | 2026-07-01 | Phase 5 implemented: GET transcription-jobs API endpoint | Giai Đoạn 5 |
+| 2026-07-11 | Gap fix Giai Đoạn 1: phát hiện qua review — `audio-tracks` yêu cầu `sessionId` có sẵn nhưng chưa từng có API tạo audio session rỗng cho luồng multi-track thuần upload. Thêm `POST /meetings/{meetingId}/recording-sessions` (`createAudioSession`) làm điểm neo. Chi tiết: xem `API-ENDPOINTS-full-flow.md` mục 2.4. | Giai Đoạn 1 (thêm ghi chú cuối mục) |
 
 ---
 
@@ -66,6 +67,16 @@ Body: file (audio binary)
 
 ### Permission cần seed
 - `recording.upload_track` — participant tự upload audio của mình
+
+### Gap fix 2026-07-11 — API tạo audio session rỗng
+Thiết kế gốc ở trên giả định `sessionId` đã tồn tại trước khi gọi `audio-tracks`,
+nhưng không có endpoint nào tạo được audio session mà KHÔNG kèm sẵn 1 file
+(session hiện chỉ sinh từ `start-video` — video — hoặc `audio-upload` — luôn kèm
+1 file). Đã bổ sung `POST /meetings/:meetingId/recording-sessions`
+(`RecordingSessionService.createAudioSession`) tạo 1 audio session "rỗng"
+(`status=starting`, không file/process) làm điểm neo cho N participant lần lượt
+gọi `audio-tracks`. Cùng permission/authz với `audio-upload`
+(`transcript.create`, chỉ Host/Organizer hoặc Admin) — không cần permission mới.
 
 ---
 

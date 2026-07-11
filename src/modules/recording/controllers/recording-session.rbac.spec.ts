@@ -17,6 +17,7 @@ describe('RecordingSessionController — RBAC metadata (PROMPT 1)', () => {
   const cases: Array<[string, string]> = [
     ['startVideo', 'recording.video.start'],
     ['stopVideo', 'recording.video.stop'],
+    ['createAudioSession', 'transcript.create'],
     ['uploadAudio', 'transcript.create'],
     ['uploadAudioTrack', 'recording.upload_track'],
     ['getStatus', 'recording.video.status'],

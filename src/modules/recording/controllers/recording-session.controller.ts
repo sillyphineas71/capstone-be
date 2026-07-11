@@ -16,6 +16,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { RecordingSessionService } from '../services/recording-session.service.js';
 import { StartVideoDto } from '../dto/start-video.dto.js';
+import { CreateAudioSessionDto } from '../dto/create-audio-session.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
@@ -104,6 +105,34 @@ export class RecordingSessionController {
       success: true,
       message:
         'Audio uploaded — dùng recordingSessionId để tạo transcription job',
+      data,
+    };
+  }
+
+  // Gap fix — PLAN-transcription-completion Phase 1: tạo audio session "rỗng"
+  // làm điểm neo (sessionId) để N participant lần lượt upload audio-tracks vào
+  // cùng 1 session (channel_zone mode). Cùng permission/authz với audio-upload
+  // (transcript.create, Host/Organizer hoặc Admin) vì cùng thuộc luồng transcription.
+  @Post('meetings/:meetingId/recording-sessions')
+  @HttpCode(201)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('transcript.create')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  async createAudioSession(
+    @Req() req: any,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() dto: CreateAudioSessionDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    const data = await this.recordingSessionService.createAudioSession(
+      meetingId,
+      userId,
+      dto,
+    );
+    return {
+      success: true,
+      message:
+        'Audio session created — dùng recordingSessionId để participant upload audio-tracks',
       data,
     };
   }
