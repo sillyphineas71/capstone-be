@@ -1,0 +1,302 @@
+import * as ExcelJS from 'exceljs';
+import { BadRequestException } from '@nestjs/common';
+
+import { AccountImportService } from './account-import.service.js';
+import { UserEntity } from '../entities/user.entity.js';
+import { DepartmentEntity } from '../entities/department.entity.js';
+import { RoleEntity } from '../entities/role.entity.js';
+import {
+  IMPORT_ACCOUNTS_HEADERS,
+  XLSX_MIME,
+  ImportAccountRowStatus,
+  ImportAccountRowReason,
+} from '../constants/import-accounts.constants.js';
+
+type AnyRow = Record<string, string>;
+
+async function buildXlsx(
+  rows: AnyRow[],
+  headers: readonly string[] = IMPORT_ACCOUNTS_HEADERS,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet('Accounts');
+  sheet.columns = headers.map((h) => ({ header: h, key: h, width: 20 }));
+  rows.forEach((r) => sheet.addRow(r));
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
+}
+
+function fileOf(buffer: Buffer) {
+  return {
+    buffer,
+    mimetype: XLSX_MIME,
+    size: buffer.length,
+    originalname: 'accounts.xlsx',
+  };
+}
+
+describe('AccountImportService', () => {
+  let service: AccountImportService;
+  let usersService: { persistAccount: jest.Mock };
+  let notificationsService: { enqueueEmailNotification: jest.Mock };
+  let dataSource: any;
+
+  // Mutable DB fixtures
+  let dbDepartments: Array<Partial<DepartmentEntity>>;
+  let dbRoles: Array<Partial<RoleEntity>>;
+  let dbUsers: Array<Partial<UserEntity>>;
+
+  beforeEach(() => {
+    dbDepartments = [{ id: 'dept-eng', departmentCode: 'ENG', isActive: true }];
+    dbRoles = [{ id: 'role-emp', roleCode: 'EMPLOYEE', isActive: true }];
+    dbUsers = [];
+
+    usersService = {
+      persistAccount: jest.fn().mockImplementation((_em, data) =>
+        Promise.resolve({
+          user: { id: `new-${data.email}` },
+          tempPassword: 'Temp123!@#',
+        }),
+      ),
+    };
+    notificationsService = {
+      enqueueEmailNotification: jest.fn().mockResolvedValue({}),
+    };
+
+    const deptRepo = {
+      find: jest.fn((opts: any) => {
+        const codes: string[] = opts.where.departmentCode.value;
+        return Promise.resolve(
+          dbDepartments.filter(
+            (d) => d.isActive && codes.includes(d.departmentCode as string),
+          ),
+        );
+      }),
+    };
+    const roleRepo = {
+      find: jest.fn((opts: any) => {
+        const codes: string[] = opts.where.roleCode.value;
+        return Promise.resolve(
+          dbRoles.filter(
+            (r) => r.isActive && codes.includes(r.roleCode as string),
+          ),
+        );
+      }),
+    };
+    const userRepo = {
+      find: jest.fn((opts: any) => {
+        const where = opts.where;
+        if (where.employeeCode) {
+          const codes: string[] = where.employeeCode.value;
+          return Promise.resolve(
+            dbUsers.filter(
+              (u) => u.employeeCode && codes.includes(u.employeeCode),
+            ),
+          );
+        }
+        const emails: string[] = where.email.value;
+        return Promise.resolve(
+          dbUsers.filter(
+            (u) => u.email && emails.includes(u.email.toLowerCase()),
+          ),
+        );
+      }),
+    };
+
+    dataSource = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === DepartmentEntity) return deptRepo;
+        if (entity === RoleEntity) return roleRepo;
+        if (entity === UserEntity) return userRepo;
+        return { find: jest.fn().mockResolvedValue([]) };
+      }),
+      transaction: jest.fn((cb: any) => cb({})),
+      manager: { save: jest.fn().mockResolvedValue({}) },
+    };
+
+    service = new AccountImportService(
+      dataSource,
+      usersService as any,
+      notificationsService as any,
+    );
+  });
+
+  const actor = { userId: 'admin-1' };
+  const ctx = {};
+
+  it('rejects non-xlsx file', async () => {
+    await expect(
+      service.importAccounts(
+        {
+          buffer: Buffer.from('x'),
+          mimetype: 'text/plain',
+          originalname: 'a.txt',
+        },
+        {},
+        actor,
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects file with wrong header', async () => {
+    const buf = await buildXlsx([{ wrong: 'x' }], ['wrong']);
+    await expect(
+      service.importAccounts(fileOf(buf), {}, actor, ctx),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('preview: does not write DB and classifies rows', async () => {
+    dbUsers = [
+      { id: 'u-existing', email: 'existing@company.com', employeeCode: null },
+    ];
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      },
+      {
+        full_name: '',
+        email: 'b@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      }, // missing name
+      {
+        full_name: 'C',
+        email: 'bad-email',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      }, // invalid email
+      {
+        full_name: 'D',
+        email: 'existing@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      }, // exists
+      {
+        full_name: 'E',
+        email: 'e@company.com',
+        department_code: 'NOPE',
+        role_codes: 'EMPLOYEE',
+      }, // dept not found
+      {
+        full_name: 'F',
+        email: 'f@company.com',
+        department_code: 'ENG',
+        role_codes: 'GHOST',
+      }, // role not found
+    ]);
+
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: false },
+      actor,
+      ctx,
+    );
+
+    expect(report.mode).toBe('preview');
+    expect(report.totalRows).toBe(6);
+    expect(report.validCount).toBe(1);
+    expect(report.invalidCount).toBe(5);
+    expect(usersService.persistAccount).not.toHaveBeenCalled();
+
+    const reasons = report.results.map((r) => r.reason);
+    expect(reasons).toContain(ImportAccountRowReason.MISSING_REQUIRED_FIELD);
+    expect(reasons).toContain(ImportAccountRowReason.INVALID_EMAIL);
+    expect(reasons).toContain(ImportAccountRowReason.EMAIL_ALREADY_EXISTS);
+    expect(reasons).toContain(ImportAccountRowReason.DEPARTMENT_NOT_FOUND);
+    expect(reasons).toContain(ImportAccountRowReason.ROLE_NOT_FOUND);
+  });
+
+  it('detects duplicate email within the file', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'dup@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      },
+      {
+        full_name: 'B',
+        email: 'dup@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: false },
+      actor,
+      ctx,
+    );
+    const second = report.results.find((r) => r.row === 3);
+    expect(second?.reason).toBe(ImportAccountRowReason.DUPLICATE_IN_FILE);
+  });
+
+  it('commit: creates valid rows, skips invalid, sends one email per created account', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      },
+      {
+        full_name: '',
+        email: 'b@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      }, // invalid
+    ]);
+
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true },
+      actor,
+      ctx,
+    );
+
+    expect(report.mode).toBe('commit');
+    expect(report.successCount).toBe(1);
+    expect(report.failedCount).toBe(1);
+    expect(usersService.persistAccount).toHaveBeenCalledTimes(1);
+    expect(notificationsService.enqueueEmailNotification).toHaveBeenCalledTimes(
+      1,
+    );
+
+    const success = report.results.find(
+      (r) => r.status === ImportAccountRowStatus.SUCCESS,
+    );
+    expect(success?.userId).toBeDefined();
+    // NFR-004: no password field in results
+    expect(JSON.stringify(report.results)).not.toContain('Temp123');
+  });
+
+  it('resolves multiple role codes separated by ";"', async () => {
+    dbRoles.push({ id: 'role-mgr', roleCode: 'MANAGER', isActive: true });
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE;MANAGER',
+      },
+    ]);
+    await service.importAccounts(fileOf(buf), { commit: true }, actor, ctx);
+    const data = usersService.persistAccount.mock.calls[0][1];
+    expect(data.roleIds.sort()).toEqual(['role-emp', 'role-mgr'].sort());
+  });
+
+  it('generates a template with the correct headers', async () => {
+    const buffer = await service.generateTemplate();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+    const sheet = wb.worksheets[0];
+    const headers = IMPORT_ACCOUNTS_HEADERS.map((_, i) =>
+      String(sheet.getRow(1).getCell(i + 1).value ?? '').toLowerCase(),
+    );
+    expect(headers).toEqual([...IMPORT_ACCOUNTS_HEADERS]);
+  });
+});

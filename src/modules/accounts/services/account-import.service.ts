@@ -1,0 +1,683 @@
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { DataSource, In, IsNull } from 'typeorm';
+import * as ExcelJS from 'exceljs';
+
+import {
+  UsersService,
+  UserClientContext,
+  ResolvedAccountData,
+} from './users.service.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import {
+  NotificationType,
+  NotificationChannel,
+} from '../../notifications/entities/notification.entity.js';
+import {
+  UserEntity,
+  AccountStatus,
+  EmploymentStatus,
+} from '../entities/user.entity.js';
+import { DepartmentEntity } from '../entities/department.entity.js';
+import { RoleEntity } from '../entities/role.entity.js';
+import {
+  AuditLogEntity,
+  AuditLogSeverity,
+} from '../../administration/entities/audit-log.entity.js';
+
+import {
+  MAX_IMPORT_ROWS,
+  MAX_IMPORT_FILE_BYTES,
+  XLSX_MIME,
+  ROLE_CODES_SEPARATOR,
+  IMPORT_ACCOUNTS_HEADERS,
+  ImportAccountMode,
+  ImportAccountRowStatus,
+  ImportAccountRowReason,
+  ImportAccountRequestError,
+} from '../constants/import-accounts.constants.js';
+import {
+  ImportAccountReportDto,
+  ImportAccountRowResult,
+} from '../dto/import-accounts-response.dto.js';
+
+interface ParsedAccountRow {
+  row: number;
+  fullName: string;
+  email: string;
+  departmentCode: string;
+  roleCodes: string;
+  employeeCode: string;
+  phoneNumber: string;
+  positionTitle: string;
+  directManagerEmail: string;
+}
+
+interface AccountRowState {
+  parsed: ParsedAccountRow;
+  result: ImportAccountRowResult;
+  resolved?: ResolvedAccountData;
+  isError: boolean;
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+@Injectable()
+export class AccountImportService {
+  private readonly logger = new Logger(AccountImportService.name);
+
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly usersService: UsersService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
+
+  // ════════════════════════════════════════════════════════════════
+  //  Template generation
+  // ════════════════════════════════════════════════════════════════
+
+  async generateTemplate(): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'SmartTracking System';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Accounts');
+    sheet.columns = IMPORT_ACCOUNTS_HEADERS.map((header) => ({
+      header,
+      key: header,
+      width: 26,
+    }));
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFDCE6F1' },
+      };
+      cell.border = { bottom: { style: 'thin' } };
+    });
+
+    sheet.addRow({
+      full_name: 'Nguyen Van A',
+      email: 'a@company.com',
+      department_code: 'ENG',
+      role_codes: 'EMPLOYEE',
+      employee_code: 'EMP001',
+      phone_number: '0900000001',
+      position_title: 'Developer',
+      direct_manager_email: 'lead@company.com',
+    });
+    sheet.addRow({
+      full_name: 'Tran Thi B',
+      email: 'b@company.com',
+      department_code: 'HR',
+      role_codes: 'EMPLOYEE;MANAGER',
+      employee_code: 'EMP002',
+      phone_number: '',
+      position_title: 'HR Lead',
+      direct_manager_email: '',
+    });
+
+    const guide = workbook.addWorksheet('Huong dan');
+    guide.columns = [{ width: 26 }, { width: 72 }];
+    const guideRows: [string, string][] = [
+      ['Cột', 'Mô tả'],
+      ['full_name', 'Bắt buộc: Họ tên'],
+      ['email', 'Bắt buộc: Email đăng nhập (định danh tài khoản)'],
+      ['department_code', 'Bắt buộc: Mã phòng ban (đang active)'],
+      [
+        'role_codes',
+        `Bắt buộc: Mã vai trò, nhiều giá trị phân tách "${ROLE_CODES_SEPARATOR}"`,
+      ],
+      ['employee_code', 'Tùy chọn: Mã nhân viên (duy nhất nếu có)'],
+      ['phone_number', 'Tùy chọn'],
+      ['position_title', 'Tùy chọn: Chức danh'],
+      ['direct_manager_email', 'Tùy chọn: Email người quản lý trực tiếp'],
+    ];
+    guideRows.forEach((r, idx) => {
+      const row = guide.addRow(r);
+      if (idx === 0) row.font = { bold: true };
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Import orchestration
+  // ════════════════════════════════════════════════════════════════
+
+  async importAccounts(
+    file:
+      | {
+          buffer: Buffer;
+          mimetype?: string;
+          size?: number;
+          originalname?: string;
+        }
+      | undefined,
+    options: { commit?: boolean },
+    actor: { userId: string },
+    clientContext: UserClientContext,
+  ): Promise<ImportAccountReportDto> {
+    // ── Step 0: File validation ──
+    this.validateFile(file);
+
+    // ── Step 1: Parse ──
+    const rows = await this.parseWorkbook(file!.buffer);
+
+    // ── Step 2: Static per-row validation ──
+    const states: AccountRowState[] = rows.map((parsed) =>
+      this.staticValidate(parsed),
+    );
+
+    // ── Step 3: Duplicate-in-file (email) ──
+    this.detectDuplicateInFile(states);
+
+    // ── Step 4: Batch resolve (department, role, duplicate-in-DB, manager) ──
+    await this.resolveRows(states);
+
+    // ── Step 5: Preview gate ──
+    if (options.commit !== true) {
+      return new ImportAccountReportDto({
+        mode: ImportAccountMode.PREVIEW,
+        totalRows: states.length,
+        validCount: states.filter((s) => !s.isError).length,
+        invalidCount: states.filter((s) => s.isError).length,
+        results: states.map((s) => s.result),
+      });
+    }
+
+    // ── Step 6: Commit (per-row transaction) ──
+    const created: Array<{
+      email: string;
+      fullName: string;
+      tempPassword: string;
+    }> = [];
+
+    for (const state of states) {
+      if (state.isError || !state.resolved) {
+        state.result.status = ImportAccountRowStatus.FAILED;
+        continue;
+      }
+      try {
+        const persisted = await this.dataSource.transaction((em) =>
+          this.usersService.persistAccount(
+            em,
+            state.resolved!,
+            actor.userId,
+            clientContext,
+          ),
+        );
+        state.result.status = ImportAccountRowStatus.SUCCESS;
+        state.result.userId = persisted.user.id;
+        state.result.reason = undefined;
+        created.push({
+          email: state.resolved.email,
+          fullName: state.resolved.fullName,
+          tempPassword: persisted.tempPassword,
+        });
+      } catch (error: unknown) {
+        state.result.status = ImportAccountRowStatus.FAILED;
+        state.result.reason = this.extractErrorCode(error);
+        this.logger.error(
+          `[AccountImport] Row ${state.result.row} failed: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    // ── Step 7: Email credentials (best-effort, per-user) ──
+    for (const acc of created) {
+      await this.enqueueCredentialEmail(acc, actor.userId);
+    }
+
+    // ── Step 8: Audit tổng + return ──
+    const successCount = states.filter(
+      (s) => s.result.status === ImportAccountRowStatus.SUCCESS,
+    ).length;
+    const failedCount = states.filter(
+      (s) => s.result.status === ImportAccountRowStatus.FAILED,
+    ).length;
+
+    await this.writeImportAudit(actor.userId, clientContext, {
+      totalRows: states.length,
+      successCount,
+      failedCount,
+    });
+
+    return new ImportAccountReportDto({
+      mode: ImportAccountMode.COMMIT,
+      totalRows: states.length,
+      successCount,
+      failedCount,
+      results: states.map((s) => s.result),
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Helpers
+  // ════════════════════════════════════════════════════════════════
+
+  private validateFile(
+    file:
+      | {
+          buffer: Buffer;
+          mimetype?: string;
+          size?: number;
+          originalname?: string;
+        }
+      | undefined,
+  ): void {
+    if (!file || !file.buffer) {
+      throw new BadRequestException({
+        success: false,
+        message:
+          'Tệp không đúng định dạng hoặc vượt quá dung lượng cho phép. Vui lòng thử lại.',
+        error: {
+          code: ImportAccountRequestError.INVALID_FILE_FORMAT,
+          details: {},
+        },
+      });
+    }
+    const isXlsxMime = file.mimetype === XLSX_MIME;
+    const isXlsxName = (file.originalname ?? '')
+      .toLowerCase()
+      .endsWith('.xlsx');
+    if (!isXlsxMime && !isXlsxName) {
+      throw new BadRequestException({
+        success: false,
+        message:
+          'Tệp không đúng định dạng hoặc vượt quá dung lượng cho phép. Vui lòng thử lại.',
+        error: {
+          code: ImportAccountRequestError.INVALID_FILE_FORMAT,
+          details: {},
+        },
+      });
+    }
+    if ((file.size ?? file.buffer.length) > MAX_IMPORT_FILE_BYTES) {
+      throw new BadRequestException({
+        success: false,
+        message:
+          'Tệp không đúng định dạng hoặc vượt quá dung lượng cho phép. Vui lòng thử lại.',
+        error: {
+          code: ImportAccountRequestError.FILE_TOO_LARGE,
+          details: { maxBytes: MAX_IMPORT_FILE_BYTES },
+        },
+      });
+    }
+  }
+
+  private async parseWorkbook(buffer: Buffer): Promise<ParsedAccountRow[]> {
+    const workbook = new ExcelJS.Workbook();
+    try {
+      await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+    } catch {
+      throw new BadRequestException({
+        success: false,
+        message: 'Không đọc được tệp Excel',
+        error: {
+          code: ImportAccountRequestError.INVALID_FILE_FORMAT,
+          details: {},
+        },
+      });
+    }
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Tệp Excel không có sheet dữ liệu',
+        error: {
+          code: ImportAccountRequestError.INVALID_TEMPLATE,
+          details: {},
+        },
+      });
+    }
+
+    const headerRow = sheet.getRow(1);
+    const actualHeaders = IMPORT_ACCOUNTS_HEADERS.map((_, idx) =>
+      this.cellString(headerRow.getCell(idx + 1)).toLowerCase(),
+    );
+    const headerMatches = IMPORT_ACCOUNTS_HEADERS.every(
+      (expected, idx) => actualHeaders[idx] === expected,
+    );
+    if (!headerMatches) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Sai cấu trúc header. Vui lòng tải lại tệp mẫu.',
+        error: {
+          code: ImportAccountRequestError.INVALID_TEMPLATE,
+          details: { expectedHeaders: IMPORT_ACCOUNTS_HEADERS },
+        },
+      });
+    }
+
+    const rows: ParsedAccountRow[] = [];
+    const lastRow = sheet.rowCount;
+    for (let r = 2; r <= lastRow; r++) {
+      const excelRow = sheet.getRow(r);
+      const fullName = this.cellString(excelRow.getCell(1));
+      const email = this.cellString(excelRow.getCell(2)).toLowerCase();
+      const departmentCode = this.cellString(excelRow.getCell(3));
+      const roleCodes = this.cellString(excelRow.getCell(4));
+      const employeeCode = this.cellString(excelRow.getCell(5));
+      const phoneNumber = this.cellString(excelRow.getCell(6));
+      const positionTitle = this.cellString(excelRow.getCell(7));
+      const directManagerEmail = this.cellString(
+        excelRow.getCell(8),
+      ).toLowerCase();
+
+      if (
+        !fullName &&
+        !email &&
+        !departmentCode &&
+        !roleCodes &&
+        !employeeCode &&
+        !phoneNumber &&
+        !positionTitle &&
+        !directManagerEmail
+      ) {
+        continue;
+      }
+
+      rows.push({
+        row: r,
+        fullName,
+        email,
+        departmentCode,
+        roleCodes,
+        employeeCode,
+        phoneNumber,
+        positionTitle,
+        directManagerEmail,
+      });
+    }
+
+    if (rows.length === 0) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Tệp không có dữ liệu',
+        error: {
+          code: ImportAccountRequestError.INVALID_TEMPLATE,
+          details: {},
+        },
+      });
+    }
+    if (rows.length > MAX_IMPORT_ROWS) {
+      throw new BadRequestException({
+        success: false,
+        message: `Tệp vượt quá số dòng tối đa (${MAX_IMPORT_ROWS})`,
+        error: {
+          code: ImportAccountRequestError.IMPORT_ROW_LIMIT_EXCEEDED,
+          details: { maxRows: MAX_IMPORT_ROWS, actual: rows.length },
+        },
+      });
+    }
+
+    return rows;
+  }
+
+  private staticValidate(parsed: ParsedAccountRow): AccountRowState {
+    const result: ImportAccountRowResult = {
+      row: parsed.row,
+      email: parsed.email,
+      status: ImportAccountRowStatus.VALID,
+    };
+    const state: AccountRowState = { parsed, result, isError: false };
+
+    if (
+      !parsed.fullName ||
+      !parsed.email ||
+      !parsed.departmentCode ||
+      !parsed.roleCodes
+    ) {
+      return this.markError(
+        state,
+        ImportAccountRowReason.MISSING_REQUIRED_FIELD,
+      );
+    }
+    if (!EMAIL_REGEX.test(parsed.email)) {
+      return this.markError(state, ImportAccountRowReason.INVALID_EMAIL);
+    }
+    return state;
+  }
+
+  private detectDuplicateInFile(states: AccountRowState[]): void {
+    const seen = new Set<string>();
+    for (const s of states) {
+      if (s.isError) continue;
+      if (seen.has(s.parsed.email)) {
+        this.markError(s, ImportAccountRowReason.DUPLICATE_IN_FILE);
+      } else {
+        seen.add(s.parsed.email);
+      }
+    }
+  }
+
+  private async resolveRows(states: AccountRowState[]): Promise<void> {
+    const active = states.filter((s) => !s.isError);
+    if (active.length === 0) return;
+
+    // ── Resolve departments by code ──
+    const deptCodes = [...new Set(active.map((s) => s.parsed.departmentCode))];
+    const departments = await this.dataSource
+      .getRepository(DepartmentEntity)
+      .find({ where: { departmentCode: In(deptCodes), isActive: true } });
+    const deptByCode = new Map(
+      departments.map((d) => [d.departmentCode, d.id]),
+    );
+
+    // ── Resolve roles by code ──
+    const allRoleCodes = [
+      ...new Set(
+        active.flatMap((s) => this.splitRoleCodes(s.parsed.roleCodes)),
+      ),
+    ];
+    const roles = allRoleCodes.length
+      ? await this.dataSource
+          .getRepository(RoleEntity)
+          .find({ where: { roleCode: In(allRoleCodes), isActive: true } })
+      : [];
+    const roleByCode = new Map(roles.map((r) => [r.roleCode, r.id]));
+
+    // ── Duplicate-in-DB: email + employee_code ──
+    const emails = active.map((s) => s.parsed.email);
+    const existingEmailUsers = await this.dataSource
+      .getRepository(UserEntity)
+      .find({ where: { email: In(emails), deletedAt: IsNull() } });
+    const existingEmails = new Set(
+      existingEmailUsers.map((u) => u.email.toLowerCase()),
+    );
+
+    const empCodes = active
+      .map((s) => s.parsed.employeeCode)
+      .filter((c) => !!c);
+    const existingCodeUsers = empCodes.length
+      ? await this.dataSource
+          .getRepository(UserEntity)
+          .find({ where: { employeeCode: In(empCodes), deletedAt: IsNull() } })
+      : [];
+    const existingCodes = new Set(
+      existingCodeUsers
+        .map((u) => u.employeeCode)
+        .filter((c): c is string => !!c),
+    );
+
+    // ── Resolve manager emails ──
+    const managerEmails = [
+      ...new Set(
+        active.map((s) => s.parsed.directManagerEmail).filter((e) => !!e),
+      ),
+    ];
+    const managers = managerEmails.length
+      ? await this.dataSource.getRepository(UserEntity).find({
+          where: { email: In(managerEmails), deletedAt: IsNull() },
+        })
+      : [];
+    const managerByEmail = new Map(
+      managers
+        .filter(
+          (m) =>
+            m.accountStatus === AccountStatus.ACTIVE &&
+            m.employmentStatus !== EmploymentStatus.RESIGNED,
+        )
+        .map((m) => [m.email.toLowerCase(), m.id]),
+    );
+
+    for (const s of active) {
+      // Email already exists
+      if (existingEmails.has(s.parsed.email)) {
+        this.markError(s, ImportAccountRowReason.EMAIL_ALREADY_EXISTS);
+        continue;
+      }
+      // Employee code already exists
+      if (s.parsed.employeeCode && existingCodes.has(s.parsed.employeeCode)) {
+        this.markError(s, ImportAccountRowReason.EMPLOYEE_CODE_ALREADY_EXISTS);
+        continue;
+      }
+      // Department
+      const departmentId = deptByCode.get(s.parsed.departmentCode);
+      if (!departmentId) {
+        this.markError(s, ImportAccountRowReason.DEPARTMENT_NOT_FOUND);
+        continue;
+      }
+      // Roles
+      const roleCodesList = this.splitRoleCodes(s.parsed.roleCodes);
+      const roleIds: string[] = [];
+      let roleError = false;
+      for (const code of roleCodesList) {
+        const roleId = roleByCode.get(code);
+        if (!roleId) {
+          roleError = true;
+          break;
+        }
+        if (!roleIds.includes(roleId)) roleIds.push(roleId);
+      }
+      if (roleError || roleIds.length === 0) {
+        this.markError(s, ImportAccountRowReason.ROLE_NOT_FOUND);
+        continue;
+      }
+      // Manager (optional)
+      let directManagerId: string | null = null;
+      if (s.parsed.directManagerEmail) {
+        const managerId = managerByEmail.get(s.parsed.directManagerEmail);
+        if (!managerId) {
+          this.markError(s, ImportAccountRowReason.MANAGER_NOT_FOUND);
+          continue;
+        }
+        directManagerId = managerId;
+      }
+
+      s.resolved = {
+        fullName: s.parsed.fullName,
+        email: s.parsed.email,
+        departmentId,
+        roleIds,
+        employeeCode: s.parsed.employeeCode || null,
+        phoneNumber: s.parsed.phoneNumber || null,
+        positionTitle: s.parsed.positionTitle || null,
+        directManagerId,
+      };
+    }
+  }
+
+  private async enqueueCredentialEmail(
+    acc: { email: string; fullName: string; tempPassword: string },
+    creatorId: string,
+  ): Promise<void> {
+    const content = [
+      'Kính gửi ' + acc.fullName + ',',
+      '',
+      'Tài khoản Smart Meeting của bạn đã được tạo thành công.',
+      '',
+      'Thông tin đăng nhập:',
+      '- Email: ' + acc.email,
+      '- Mật khẩu tạm thời: ' + acc.tempPassword,
+      '',
+      'Vui lòng đăng nhập và đổi mật khẩu ngay sau lần đầu tiên.',
+      '',
+      'Trân trọng,',
+      'Hệ thống Smart Meeting Management',
+    ].join('\n');
+
+    try {
+      await this.notificationsService.enqueueEmailNotification({
+        notificationType: NotificationType.ACCOUNT_WELCOME,
+        channel: NotificationChannel.EMAIL,
+        subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
+        content,
+        toEmails: [acc.email],
+        relatedEntityType: 'users',
+        recipientScope: 'user_list',
+        createdBy: creatorId,
+        payloadJson: {
+          fullName: acc.fullName,
+          username: acc.email,
+          mustChangePassword: true,
+          source: 'excel_import',
+        },
+      });
+    } catch (err: unknown) {
+      this.logger.error(
+        `[AccountImport] Failed to enqueue credential email to ${acc.email}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async writeImportAudit(
+    actorId: string,
+    clientContext: UserClientContext,
+    summary: { totalRows: number; successCount: number; failedCount: number },
+  ): Promise<void> {
+    try {
+      await this.dataSource.manager.save(AuditLogEntity, {
+        userId: actorId,
+        actionType: 'ACCOUNT_IMPORT',
+        entityType: 'users',
+        severity: AuditLogSeverity.INFO,
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+        newValueJson: summary,
+      });
+    } catch (err: unknown) {
+      this.logger.error(
+        `[AccountImport] Failed to write import audit: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // ── Small utilities ──
+
+  private splitRoleCodes(raw: string): string[] {
+    return raw
+      .split(ROLE_CODES_SEPARATOR)
+      .map((c) => c.trim())
+      .filter((c) => !!c);
+  }
+
+  private markError(
+    state: AccountRowState,
+    reason: ImportAccountRowReason,
+  ): AccountRowState {
+    state.isError = true;
+    state.result.status = ImportAccountRowStatus.INVALID;
+    state.result.reason = reason;
+    return state;
+  }
+
+  private cellString(cell: ExcelJS.Cell | undefined): string {
+    if (!cell) return '';
+    // ExcelJS Cell.text trả về biểu diễn văn bản đã format (kể cả hyperlink/rich text).
+    const text = cell.text;
+    return (typeof text === 'string' ? text : '')
+      .replace(/^mailto:/i, '')
+      .trim();
+  }
+
+  private extractErrorCode(error: unknown): string {
+    const resp = (error as { response?: { error?: { code?: string } } })
+      ?.response;
+    return resp?.error?.code ?? 'IMPORT_ROW_FAILED';
+  }
+}

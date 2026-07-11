@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, ILike, IsNull } from 'typeorm';
+import { DataSource, EntityManager, ILike, IsNull } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -49,6 +49,21 @@ export interface UserClientContext {
   ipAddress?: string;
   userAgent?: string;
   requestId?: string;
+}
+
+/**
+ * Dữ liệu tài khoản ĐÃ resolve (departmentId/roleIds/managerId là id thật),
+ * dùng cho core persist chung giữa tạo đơn lẻ và import Excel.
+ */
+export interface ResolvedAccountData {
+  fullName: string;
+  email: string;
+  departmentId: string;
+  roleIds: string[];
+  employeeCode: string | null;
+  phoneNumber: string | null;
+  positionTitle: string | null;
+  directManagerId: string | null;
 }
 
 @Injectable()
@@ -201,70 +216,24 @@ export class UsersService {
         }
       }
 
-      // 7. Generate temporary password and hash
-      tempPassword =
-        this.passwordGeneratorService.generateTemporaryPassword(12);
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(tempPassword, salt);
-
-      // 8. Create and save User
-      const user = em.create(UserEntity, {
-        fullName: dto.fullName.trim(),
-        email,
-        username: email,
-        passwordHash,
-        departmentId: dto.departmentId,
-        employeeCode,
-        phoneNumber: dto.phoneNumber ? dto.phoneNumber.trim() : null,
-        positionTitle: dto.positionTitle ? dto.positionTitle.trim() : null,
-        directManagerId: dto.directManagerId || null,
-        employmentStatus: EmploymentStatus.ACTIVE,
-        accountStatus: AccountStatus.ACTIVE,
-        mustChangePassword: true,
-      });
-
-      createdUser = await em.save(UserEntity, user);
-
-      // 9. Assign user_roles
-      for (const role of roles) {
-        const userRole = em.create(UserRoleEntity, {
-          userId: createdUser.id,
-          roleId: role.id,
-          assignedBy: creatorId,
-          isActive: true,
-        });
-        await em.save(UserRoleEntity, userRole);
-      }
-
-      // 10. Write audit log (non-blocking)
-      try {
-        const auditLog = em.create(AuditLogEntity, {
-          userId: creatorId,
-          actionType: 'ACCOUNT_CREATE',
-          entityType: 'users',
-          entityId: createdUser.id,
-          severity: AuditLogSeverity.INFO,
-          ipAddress: clientContext.ipAddress || null,
-          userAgent: clientContext.userAgent || null,
-          requestId: clientContext.requestId || null,
-          newValueJson: {
-            id: createdUser.id,
-            email: createdUser.email,
-            username: createdUser.username,
-            fullName: createdUser.fullName,
-            departmentId: createdUser.departmentId,
-            employeeCode: createdUser.employeeCode,
-            phoneNumber: createdUser.phoneNumber,
-            roleIds: dto.roleIds,
-          },
-        });
-        await em.save(AuditLogEntity, auditLog);
-      } catch (auditError) {
-        this.logger.error(
-          `Failed to save audit log for user creation of ${createdUser.id}: ${(auditError as Error).message}`,
-          (auditError as Error).stack,
-        );
-      }
+      // 7-10. Persist account (password + user + roles + audit) — reuse core
+      const persisted = await this.persistAccount(
+        em,
+        {
+          fullName: dto.fullName.trim(),
+          email,
+          departmentId: dto.departmentId,
+          roleIds: dto.roleIds,
+          employeeCode,
+          phoneNumber: dto.phoneNumber ? dto.phoneNumber.trim() : null,
+          positionTitle: dto.positionTitle ? dto.positionTitle.trim() : null,
+          directManagerId: dto.directManagerId || null,
+        },
+        creatorId,
+        clientContext,
+      );
+      createdUser = persisted.user;
+      tempPassword = persisted.tempPassword;
     });
 
     // ── After transaction: enqueue credential email via NotificationsService ──
@@ -346,6 +315,81 @@ export class UsersService {
       roles: rolesDto,
       createdAt: createdUser!.createdAt,
     };
+  }
+
+  /**
+   * Core persist tài khoản (sinh mật khẩu + hash + insert user + user_roles + audit).
+   * KHÔNG gửi email. Dùng chung cho tạo đơn lẻ và import Excel.
+   * Phải được gọi bên trong một transaction (nhận `em`). Dữ liệu đầu vào đã resolve id.
+   */
+  async persistAccount(
+    em: EntityManager,
+    data: ResolvedAccountData,
+    creatorId: string,
+    clientContext: UserClientContext,
+  ): Promise<{ user: UserEntity; tempPassword: string }> {
+    // Sinh mật khẩu tạm + hash (BR1)
+    const tempPassword =
+      this.passwordGeneratorService.generateTemporaryPassword(12);
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(tempPassword, salt);
+
+    const user = em.create(UserEntity, {
+      fullName: data.fullName,
+      email: data.email,
+      username: data.email, // BR4: định danh đăng nhập là email
+      passwordHash,
+      departmentId: data.departmentId,
+      employeeCode: data.employeeCode,
+      phoneNumber: data.phoneNumber,
+      positionTitle: data.positionTitle,
+      directManagerId: data.directManagerId,
+      employmentStatus: EmploymentStatus.ACTIVE,
+      accountStatus: AccountStatus.ACTIVE,
+      mustChangePassword: true, // BR3
+    });
+    const createdUser = await em.save(UserEntity, user);
+
+    for (const roleId of data.roleIds) {
+      const userRole = em.create(UserRoleEntity, {
+        userId: createdUser.id,
+        roleId,
+        assignedBy: creatorId,
+        isActive: true,
+      });
+      await em.save(UserRoleEntity, userRole);
+    }
+
+    try {
+      const auditLog = em.create(AuditLogEntity, {
+        userId: creatorId,
+        actionType: 'ACCOUNT_CREATE',
+        entityType: 'users',
+        entityId: createdUser.id,
+        severity: AuditLogSeverity.INFO,
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+        newValueJson: {
+          id: createdUser.id,
+          email: createdUser.email,
+          username: createdUser.username,
+          fullName: createdUser.fullName,
+          departmentId: createdUser.departmentId,
+          employeeCode: createdUser.employeeCode,
+          phoneNumber: createdUser.phoneNumber,
+          roleIds: data.roleIds,
+        },
+      });
+      await em.save(AuditLogEntity, auditLog);
+    } catch (auditError) {
+      this.logger.error(
+        `Failed to save audit log for user creation of ${createdUser.id}: ${(auditError as Error).message}`,
+        (auditError as Error).stack,
+      );
+    }
+
+    return { user: createdUser, tempPassword };
   }
 
   async getUserDetail(

@@ -36,7 +36,7 @@ export class FaceProfileService {
     private readonly dataSource: DataSource,
     private readonly storageService: StorageService,
     private readonly configService: ConfigService,
-  ) { }
+  ) {}
 
   /** UC-17: lưu ảnh chân dung → media_files → upsert face_profiles. */
   async enrollPortrait(
@@ -181,7 +181,8 @@ export class FaceProfileService {
         return Buffer.from(arrayBuf);
       } catch (e) {
         this.logger.warn(
-          `getPortraitBytes: Cloudinary fetch error user ${userId}: ${e instanceof Error ? e.message : String(e)
+          `getPortraitBytes: Cloudinary fetch error user ${userId}: ${
+            e instanceof Error ? e.message : String(e)
           }`,
         );
         return null;

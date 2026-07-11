@@ -13,6 +13,7 @@ import { FaceProfileController } from './controllers/face-profile.controller.js'
 import { AvatarController } from './controllers/avatar.controller.js';
 import { AdminAvatarReviewController } from './controllers/admin-avatar-review.controller.js';
 import { UsersService } from './services/users.service.js';
+import { AccountImportService } from './services/account-import.service.js';
 import { FaceProfileService } from './services/face-profile.service.js';
 import { PermissionsController } from './controllers/permissions.controller.js';
 import { RolePermissionsController } from './controllers/role-permissions.controller.js';
@@ -68,6 +69,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
   ],
   providers: [
     UsersService,
+    AccountImportService,
     FaceProfileService,
     AvatarStatusService,
     AvatarSubmissionService,
@@ -89,4 +91,3 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
   ],
 })
 export class AccountsModule {}
-
