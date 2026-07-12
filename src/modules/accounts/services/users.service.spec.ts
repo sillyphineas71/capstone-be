@@ -13,6 +13,8 @@ import {
 import { UsersService } from './users.service.js';
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { RedisService } from '../../redis/redis.service.js';
+import { AuthConfigService } from '../../auth/services/auth-config.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import {
   UserEntity,
@@ -24,6 +26,10 @@ import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
 import { FaceProfileEntity } from '../entities/face-profile.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
+import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
+import { MeetingParticipantEntity } from '../../meetings/entities/meeting-participant.entity.js';
+import { RoomBookingEntity } from '../../rooms/entities/room-booking.entity.js';
+import { DeviceUserMappingEntity } from '../../iot/entities/device-user-mapping.entity.js';
 
 interface MockFindOneOptions {
   where?: {
@@ -39,6 +45,8 @@ describe('UsersService', () => {
   let dataSource: jest.Mocked<DataSource>;
   let passwordGeneratorService: jest.Mocked<PasswordGeneratorService>;
   let notificationsService: jest.Mocked<NotificationsService>;
+  let redisService: jest.Mocked<RedisService>;
+  let authConfigService: jest.Mocked<AuthConfigService>;
   let em: jest.Mocked<EntityManager>;
 
   beforeEach(async () => {
@@ -49,6 +57,9 @@ describe('UsersService', () => {
       create: jest.fn(),
       save: jest.fn(),
       update: jest.fn(),
+      count: jest.fn(),
+      softDelete: jest.fn(),
+      createQueryBuilder: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
     // Mock DataSource
@@ -74,6 +85,14 @@ describe('UsersService', () => {
       }),
     } as unknown as jest.Mocked<NotificationsService>;
 
+    // Mock RedisService + AuthConfigService (UC-10 token revocation)
+    redisService = {
+      setWithTtl: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<RedisService>;
+    authConfigService = {
+      getRefreshTokenTtlSeconds: jest.fn().mockReturnValue(604800),
+    } as unknown as jest.Mocked<AuthConfigService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
@@ -86,6 +105,8 @@ describe('UsersService', () => {
           provide: NotificationsService,
           useValue: notificationsService,
         },
+        { provide: RedisService, useValue: redisService },
+        { provide: AuthConfigService, useValue: authConfigService },
       ],
     }).compile();
 
@@ -1607,6 +1628,278 @@ describe('UsersService', () => {
           {},
         ),
       ).rejects.toThrow('DB write failed');
+    });
+  });
+
+  describe('deleteUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const baseTarget = {
+      id: targetUserId,
+      email: 'user@company.com',
+      fullName: 'Nguyen Van A',
+      employeeCode: 'EMP001',
+      departmentId: 'dept-id',
+      accountStatus: 'active',
+      deletedAt: null,
+    };
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown;
+      targetRoles?: {
+        roleId: string;
+        role: { roleCode: string; isActive: boolean };
+      }[];
+      otherAdminCount?: number;
+      hostCount?: number;
+      participantCount?: number;
+      bookingCount?: number;
+      manageeCount?: number;
+      departmentCount?: number;
+      softDeleteThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target = opts.target === undefined ? baseTarget : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity && o?.where?.id === targetUserId) {
+          return target;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity && o?.where?.userId === targetUserId) {
+          return opts.targetRoles ?? [];
+        }
+        return [];
+      });
+      (em.count as jest.Mock).mockImplementation(async (entity: unknown) => {
+        if (entity === MeetingEntity) return opts.hostCount ?? 0;
+        if (entity === RoomBookingEntity) return opts.bookingCount ?? 0;
+        if (entity === UserEntity) return opts.manageeCount ?? 0;
+        if (entity === DepartmentEntity) return opts.departmentCount ?? 0;
+        return 0;
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) => {
+          if (entity === UserRoleEntity) {
+            return makeQb(opts.otherAdminCount ?? 1);
+          }
+          if (entity === MeetingParticipantEntity) {
+            return makeQb(opts.participantCount ?? 0);
+          }
+          return makeQb(0);
+        },
+      );
+      (em.softDelete as jest.Mock).mockImplementation(async () => {
+        if (opts.softDeleteThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      (em.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      em.create.mockImplementation((_entity: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    const sysAdminRole = [
+      { roleId: 'r-sys', role: { roleCode: 'SYSTEM_ADMIN', isActive: true } },
+    ];
+
+    it('[D1] Happy path — soft-delete users + vô hiệu user_roles + face_profiles + device_user_mappings + audit + revoke', async () => {
+      setup({});
+
+      await service.deleteUser(targetUserId, actorId, {
+        ipAddress: '127.0.0.1',
+      });
+
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+      expect(em.update).toHaveBeenCalledWith(
+        UserRoleEntity,
+        { userId: targetUserId, isActive: true },
+        expect.objectContaining({ isActive: false }),
+      );
+      expect(em.softDelete).toHaveBeenCalledWith(FaceProfileEntity, {
+        userId: targetUserId,
+      });
+      expect(em.softDelete).toHaveBeenCalledWith(DeviceUserMappingEntity, {
+        userId: targetUserId,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_DELETE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: expect.objectContaining({
+            id: targetUserId,
+            email: 'user@company.com',
+          }),
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+    });
+
+    it('[D2] BR-01 self-delete → 422 CANNOT_DELETE_SELF, không WRITE', async () => {
+      setup({});
+      await expect(
+        service.deleteUser(targetUserId, targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D3] BR-02 last SYSTEM_ADMIN → 422 LAST_SYSTEM_ADMIN, không WRITE', async () => {
+      setup({ targetRoles: sysAdminRole, otherAdminCount: 0 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D4] BR-02 còn admin khác → không chặn (thành công)', async () => {
+      setup({ targetRoles: sysAdminRole, otherAdminCount: 2 });
+      await service.deleteUser(targetUserId, actorId, {});
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+    });
+
+    it('[D5] BR-03 đã xóa/không tồn tại → 404 USER_NOT_FOUND', async () => {
+      setup({ target: null });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D6] Ràng buộc (a) meeting host/organizer → 409 upcoming_meeting_host', async () => {
+      setup({ hostCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            code: 'USER_HAS_DEPENDENCIES',
+            details: {
+              dependencies: expect.arrayContaining(['upcoming_meeting_host']),
+            },
+          },
+        },
+      });
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D7] Ràng buộc (b) participant → 409 upcoming_meeting_participant', async () => {
+      setup({ participantCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining([
+                'upcoming_meeting_participant',
+              ]),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D8] Ràng buộc (c) booking → 409 active_booking', async () => {
+      setup({ bookingCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['active_booking']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D9] Ràng buộc (d) direct_manager → 409 manages_users', async () => {
+      setup({ manageeCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['manages_users']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D10] Ràng buộc (e) department manager → 409 manages_department', async () => {
+      setup({ departmentCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['manages_department']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D10b] Nhiều loại vi phạm cùng lúc → details liệt kê đủ', async () => {
+      setup({ hostCount: 1, bookingCount: 1, manageeCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining([
+                'upcoming_meeting_host',
+                'active_booking',
+                'manages_users',
+              ]),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D11] Rollback — WRITE trong transaction lỗi → reject, KHÔNG revoke', async () => {
+      setup({ softDeleteThrows: true });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[D12] Redis set fail post-commit → không throw, DB vẫn soft-deleted', async () => {
+      setup({ redisThrows: true });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).resolves.toBeUndefined();
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+      expect(redisService.setWithTtl).toHaveBeenCalled();
     });
   });
 });

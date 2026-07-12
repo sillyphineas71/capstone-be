@@ -21,6 +21,7 @@ describe('UsersController', () => {
     getPublicProfile: jest.Mock;
     updateUserRoles: jest.Mock;
     updateUser: jest.Mock;
+    deleteUser: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -30,6 +31,7 @@ describe('UsersController', () => {
       getPublicProfile: jest.fn(),
       updateUserRoles: jest.fn(),
       updateUser: jest.fn(),
+      deleteUser: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -422,6 +424,80 @@ describe('UsersController', () => {
       ) as string[];
 
       expect(permissions).toEqual(['accounts.user.update']);
+    });
+  });
+
+  describe('deleteUser', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[DC1] Success — gọi service đúng params & trả { success, message }', async () => {
+      service.deleteUser.mockResolvedValue(undefined);
+
+      const request = {
+        user: { userId: 'sysadmin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.deleteUser(
+        validUserId,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.deleteUser).toHaveBeenCalledWith(
+        validUserId,
+        'sysadmin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã xóa tài khoản thành công',
+      });
+    });
+
+    it('[DC2] userId không hợp lệ → ParseUUIDPipe reject code INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { deleteUser } = UsersController.prototype;
+
+    it('[DC3] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        deleteUser,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[DC4] Yêu cầu permission accounts.user.delete', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        deleteUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.delete']);
     });
   });
 });

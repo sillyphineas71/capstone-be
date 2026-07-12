@@ -7,7 +7,7 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, ILike, IsNull, In, Not } from 'typeorm';
+import { DataSource, ILike, IsNull, In, Not, MoreThan } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -23,6 +23,21 @@ import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+
+// UC-10 — READ-only cross-module entities (chỉ dùng để kiểm ràng buộc tham chiếu
+// và soft-delete quan hệ trong transaction xóa; KHÔNG gọi/sửa service module khác).
+import {
+  MeetingEntity,
+  MeetingStatus,
+} from '../../meetings/entities/meeting.entity.js';
+import { MeetingParticipantEntity } from '../../meetings/entities/meeting-participant.entity.js';
+import {
+  RoomBookingEntity,
+  RoomBookingStatus,
+} from '../../rooms/entities/room-booking.entity.js';
+import { DeviceUserMappingEntity } from '../../iot/entities/device-user-mapping.entity.js';
+import { RedisService } from '../../redis/redis.service.js';
+import { AuthConfigService } from '../../auth/services/auth-config.service.js';
 
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import {
@@ -63,6 +78,8 @@ export class UsersService {
     private readonly dataSource: DataSource,
     private readonly passwordGeneratorService: PasswordGeneratorService,
     private readonly notificationsService: NotificationsService,
+    private readonly redisService: RedisService,
+    private readonly authConfigService: AuthConfigService,
   ) {}
 
   async createUser(
@@ -529,6 +546,226 @@ export class UsersService {
       roleCode: ur.role.roleCode,
       roleName: ur.role.roleName,
     }));
+  }
+
+  /**
+   * UC-10 — Xóa (SOFT-DELETE) một tài khoản người dùng.
+   *
+   * Ràng buộc chốt:
+   * - SOFT-DELETE (set users.deleted_at), KHÔNG hard-delete (DATA-01).
+   * - Actor chỉ SYSTEM_ADMIN (enforce ở controller qua PermissionsGuard).
+   * - Chặn xóa nếu còn ràng buộc active (5 loại) → 409 USER_HAS_DEPENDENCIES.
+   * - Không tự xóa mình; không xóa SYSTEM_ADMIN cuối cùng; không xóa user đã soft-delete.
+   * - Transaction atomic: softDelete users + vô hiệu user_roles + softDelete face_profiles
+   *   + softDelete device_user_mappings + audit ACCOUNT_DELETE (WARNING).
+   * - Post-commit: thu hồi token qua Redis auth:user:{id}:invalid_after.
+   *
+   * Chỉ ĐỌC entity cross-module (meetings/rooms/departments/iot) qua EntityManager —
+   * KHÔNG gọi/sửa service của các module đó.
+   */
+  async deleteUser(
+    targetUserId: string,
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<void> {
+    const ACTION_TYPE = 'ACCOUNT_DELETE';
+    const em = this.dataSource.manager;
+    const now = new Date();
+
+    // ── Phase A — Validate (READ, ngoài transaction) ──
+
+    // A.1 Load target (chưa soft-delete)
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.2 BR-01 — không tự xóa chính mình
+    if (targetUserId === actorId) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Bạn không thể xóa tài khoản của chính mình.',
+        error: { code: 'CANNOT_DELETE_SELF', details: {} },
+      });
+    }
+
+    // Đọc roles active của target TRƯỚC khi vô hiệu (cho audit snapshot + kiểm last-admin)
+    const targetActiveRoles = await em.find(UserRoleEntity, {
+      where: { userId: targetUserId, isActive: true },
+      relations: { role: true },
+    });
+    const roleIds = targetActiveRoles.map((ur) => ur.roleId);
+    const targetIsSystemAdmin = targetActiveRoles.some(
+      (ur) => ur.role?.roleCode === 'SYSTEM_ADMIN' && ur.role?.isActive,
+    );
+
+    // A.3 BR-02 — không xóa SYSTEM_ADMIN active cuối cùng
+    if (targetIsSystemAdmin) {
+      const otherAdminCount = await em
+        .createQueryBuilder(UserRoleEntity, 'ur')
+        .innerJoin('ur.role', 'r')
+        .innerJoin('ur.user', 'u')
+        .where('r.roleCode = :code', { code: 'SYSTEM_ADMIN' })
+        .andWhere('r.isActive = true')
+        .andWhere('ur.isActive = true')
+        .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > :now)', { now })
+        .andWhere('u.deletedAt IS NULL')
+        .andWhere('u.accountStatus = :active', {
+          active: AccountStatus.ACTIVE,
+        })
+        .andWhere('u.id != :targetUserId', { targetUserId })
+        .getCount();
+
+      if (otherAdminCount === 0) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message:
+            'Không thể xóa quản trị viên hệ thống cuối cùng còn hoạt động.',
+          error: { code: 'LAST_SYSTEM_ADMIN', details: {} },
+        });
+      }
+    }
+
+    // A.4 Ràng buộc tham chiếu (5 loại) — CHỈ READ; gom tất cả loại vi phạm rồi mới ném
+    const dependencies: string[] = [];
+
+    const upcomingMeetingStatuses = [
+      MeetingStatus.SCHEDULED,
+      MeetingStatus.IN_PROGRESS,
+    ];
+
+    // (a) organizer/host của meeting sắp tới/đang diễn ra
+    const hostCount = await em.count(MeetingEntity, {
+      where: [
+        {
+          organizerId: targetUserId,
+          status: In(upcomingMeetingStatuses),
+          endTime: MoreThan(now),
+        },
+        {
+          hostId: targetUserId,
+          status: In(upcomingMeetingStatuses),
+          endTime: MoreThan(now),
+        },
+      ],
+    });
+    if (hostCount > 0) dependencies.push('upcoming_meeting_host');
+
+    // (b) participant của meeting sắp tới/đang diễn ra
+    const participantCount = await em
+      .createQueryBuilder(MeetingParticipantEntity, 'mp')
+      .innerJoin('mp.meeting', 'm')
+      .where('mp.userId = :targetUserId', { targetUserId })
+      .andWhere('m.status IN (:...statuses)', {
+        statuses: upcomingMeetingStatuses,
+      })
+      .andWhere('m.endTime > :now', { now })
+      .getCount();
+    if (participantCount > 0) dependencies.push('upcoming_meeting_participant');
+
+    // (c) booked_by của room_booking còn hiệu lực
+    const bookingCount = await em.count(RoomBookingEntity, {
+      where: {
+        bookedBy: targetUserId,
+        status: In([
+          RoomBookingStatus.PENDING,
+          RoomBookingStatus.APPROVED,
+          RoomBookingStatus.ACTIVE,
+        ]),
+        reservedEndTime: MoreThan(now),
+      },
+    });
+    if (bookingCount > 0) dependencies.push('active_booking');
+
+    // (d) là direct_manager của user khác đang active
+    const manageeCount = await em.count(UserEntity, {
+      where: {
+        directManagerId: targetUserId,
+        deletedAt: IsNull(),
+        accountStatus: AccountStatus.ACTIVE,
+      },
+    });
+    if (manageeCount > 0) dependencies.push('manages_users');
+
+    // (e) là trưởng phòng ban đang active
+    const departmentCount = await em.count(DepartmentEntity, {
+      where: {
+        managerUserId: targetUserId,
+        deletedAt: IsNull(),
+        isActive: true,
+      },
+    });
+    if (departmentCount > 0) dependencies.push('manages_department');
+
+    if (dependencies.length > 0) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Không thể xóa tài khoản vì còn dữ liệu/ràng buộc liên quan đang hoạt động.',
+        error: { code: 'USER_HAS_DEPENDENCIES', details: { dependencies } },
+      });
+    }
+
+    // ── Phase B — Transaction (atomic) ──
+    await this.dataSource.transaction(async (tem) => {
+      // B.1 Soft-delete users
+      await tem.softDelete(UserEntity, targetUserId);
+
+      // B.2 Vô hiệu user_roles active
+      await tem.update(
+        UserRoleEntity,
+        { userId: targetUserId, isActive: true },
+        { isActive: false, expiredAt: now },
+      );
+
+      // B.3 Soft-delete face_profiles
+      await tem.softDelete(FaceProfileEntity, { userId: targetUserId });
+
+      // B.4 Soft-delete device_user_mappings
+      await tem.softDelete(DeviceUserMappingEntity, { userId: targetUserId });
+
+      // B.5 Audit atomic (ACCOUNT_DELETE, WARNING) — không log secret
+      const auditLog = tem.create(AuditLogEntity, {
+        userId: actorId,
+        actionType: ACTION_TYPE,
+        entityType: 'users',
+        entityId: targetUserId,
+        severity: AuditLogSeverity.WARNING,
+        oldValueJson: {
+          id: targetUser.id,
+          email: targetUser.email,
+          fullName: targetUser.fullName,
+          employeeCode: targetUser.employeeCode,
+          departmentId: targetUser.departmentId,
+          roleIds,
+        },
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+      });
+      await tem.save(AuditLogEntity, auditLog);
+    });
+
+    // ── Phase C — Post-commit: thu hồi token (Redis) ──
+    // Redis fail KHÔNG throw, KHÔNG rollback (user đã soft-delete).
+    try {
+      const ttlSeconds = this.authConfigService.getRefreshTokenTtlSeconds();
+      await this.redisService.setWithTtl(
+        `auth:user:${targetUserId}:invalid_after`,
+        String(now.getTime()),
+        ttlSeconds,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to revoke tokens for deleted user ${targetUserId}: ${(error as Error).message}`,
+      );
+    }
   }
 
   /**

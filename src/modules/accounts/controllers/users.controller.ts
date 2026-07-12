@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -254,6 +255,66 @@ export class UsersController {
       success: true,
       message: 'Cập nhật thông tin tài khoản thành công',
       data: result,
+    };
+  }
+
+  @Delete(':userId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.delete')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xóa tài khoản người dùng (soft-delete)',
+    description:
+      'Cho phép System Admin xóa (soft-delete) một tài khoản chưa phát sinh dữ liệu ràng buộc. Thu hồi token và vô hiệu hóa vai trò của tài khoản. Chặn xóa nếu còn ràng buộc active (đang tổ chức/tham dự cuộc họp sắp tới, có booking hiệu lực, là quản lý trực tiếp/trưởng phòng ban).',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần xóa',
+    type: String,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Đã xóa tài khoản thành công.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.delete).',
+  })
+  async deleteUser(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId',
+        }),
+      }),
+    )
+    userId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    await this.usersService.deleteUser(userId, actorId, {
+      ipAddress,
+      userAgent,
+      requestId,
+    });
+
+    return {
+      success: true,
+      message: 'Đã xóa tài khoản thành công',
     };
   }
 
