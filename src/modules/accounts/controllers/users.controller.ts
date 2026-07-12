@@ -37,6 +37,7 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
+import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
 import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import {
   UserResponseDto,
@@ -179,6 +180,84 @@ export class UsersController {
     return {
       success: true,
       message: 'Cập nhật vai trò tài khoản thành công',
+      data: result,
+    };
+  }
+
+  // ⚠️ Route order: khai báo ':userId/status' TRƯỚC ':userId' (UC-09) để route
+  // cụ thể hơn không bị pattern ':userId' nuốt.
+  @Patch(':userId/status')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.update_status')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Cập nhật trạng thái tài khoản (ACTIVE/INACTIVE)',
+    description:
+      'Cho phép System Admin (toàn hệ thống) và Business Admin (giới hạn department scope) chuyển trạng thái tài khoản giữa active và inactive. Tài khoản inactive bị chặn đăng nhập; khi vô hiệu hóa, token đang hoạt động bị thu hồi ngay. Không dùng để khóa (locked) hay đổi trạng thái đặt lại mật khẩu.',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần đổi trạng thái',
+    type: String,
+  })
+  @ApiBody({ type: UpdateUserStatusDto })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Trạng thái tài khoản được cập nhật thành công.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission accounts.user.update_status) hoặc ngoài phạm vi department.',
+  })
+  async updateUserStatus(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/status',
+        }),
+      }),
+    )
+    userId: string,
+    @Body(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    )
+    dto: UpdateUserStatusDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { id: string; accountStatus: string };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const result = await this.usersService.updateUserStatus(
+      userId,
+      dto.status,
+      actorId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Cập nhật trạng thái tài khoản thành công',
       data: result,
     };
   }

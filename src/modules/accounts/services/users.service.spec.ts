@@ -1902,4 +1902,245 @@ describe('UsersService', () => {
       expect(redisService.setWithTtl).toHaveBeenCalled();
     });
   });
+
+  describe('updateUserStatus', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown; // null -> USER_NOT_FOUND
+      currentStatus?: string;
+      targetDeptId?: string;
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      targetIsAdmin?: boolean;
+      otherAdminCount?: number;
+      updateThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target =
+        opts.target === undefined
+          ? {
+              id: targetUserId,
+              accountStatus: opts.currentStatus ?? 'active',
+              departmentId: opts.targetDeptId ?? 'admin-dept',
+            }
+          : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity) {
+          if (o?.where?.id === actorId && o?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          if (o?.where?.id === targetUserId) return target;
+          return null;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity) {
+          if (o?.where?.userId === actorId) {
+            return [
+              { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+            ];
+          }
+          if (o?.where?.userId === targetUserId) {
+            return opts.targetIsAdmin
+              ? [{ role: { roleCode: 'SYSTEM_ADMIN', isActive: true } }]
+              : [];
+          }
+          return [];
+        }
+        if (entity === DepartmentEntity) return [];
+        return [];
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) =>
+          makeQb(entity === UserRoleEntity ? (opts.otherAdminCount ?? 1) : 0),
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      em.create.mockImplementation((_e: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    it('[S1] active→inactive (System Admin): UPDATE inactive + audit WARNING + revoke', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'inactive',
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'inactive' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_STATUS_UPDATE',
+          severity: 'warning',
+          oldValueJson: { accountStatus: 'active' },
+          newValueJson: { accountStatus: 'inactive' },
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+    });
+
+    it('[S2] inactive→active: UPDATE active + audit INFO + KHÔNG revoke', async () => {
+      setup({ currentStatus: 'inactive' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'active',
+        actorId,
+        {},
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'active',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({ severity: 'info' }),
+      );
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[S3] No-op (status == current) → 200, không WRITE/audit', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'active',
+        actorId,
+        {},
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S4] BR-02 self-deactivate → 422 CANNOT_DEACTIVATE_SELF', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S5] BR-05 last SYSTEM_ADMIN (→inactive) → 422 LAST_SYSTEM_ADMIN', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 0,
+      });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S6] BR-05 còn admin khác → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 2,
+      });
+      await service.updateUserStatus(targetUserId, 'inactive', actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+    });
+
+    it('[S7] BR-04 current=LOCKED → 409 INVALID_STATUS_TRANSITION', async () => {
+      setup({ currentStatus: 'locked' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S8] BR-04 current=PENDING_RESET → 409 INVALID_STATUS_TRANSITION', async () => {
+      setup({ currentStatus: 'pending_reset' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'active', actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S9] BR-06 USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S10] BR-07 Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S11] System Admin bỏ qua scope (target khác phòng) → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: true,
+        targetDeptId: 'other-dept',
+      });
+      await service.updateUserStatus(targetUserId, 'inactive', actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+    });
+
+    it('[S12] Redis fail post-commit (→inactive) → không throw, status đã đổi', async () => {
+      setup({ currentStatus: 'active', redisThrows: true });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).resolves.toEqual({ id: targetUserId, accountStatus: 'inactive' });
+      expect(em.update).toHaveBeenCalled();
+      expect(redisService.setWithTtl).toHaveBeenCalled();
+    });
+
+    it('[S13] Rollback — WRITE trong transaction lỗi → reject, KHÔNG revoke', async () => {
+      setup({ currentStatus: 'active', updateThrows: true });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+  });
 });

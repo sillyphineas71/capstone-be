@@ -769,6 +769,173 @@ export class UsersService {
   }
 
   /**
+   * UC-11 — Cập nhật trạng thái tài khoản (ACTIVE ↔ INACTIVE).
+   *
+   * Ràng buộc chốt:
+   * - Chỉ đổi giữa ACTIVE/INACTIVE (không set LOCKED/PENDING_RESET — UC-12/auth).
+   * - Actor SYSTEM_ADMIN (không scope) + BUSINESS_ADMIN (department scope, chỉ target).
+   * - Không tự vô hiệu hóa mình; không vô hiệu SYSTEM_ADMIN active cuối cùng.
+   * - No-op nếu status mới == hiện tại.
+   * - Transaction atomic: UPDATE account_status + audit ACCOUNT_STATUS_UPDATE.
+   * - Post-commit CHỈ khi -> INACTIVE: thu hồi token qua Redis invalid_after.
+   *
+   * KHÔNG chạm user_roles/hồ sơ/soft-delete; KHÔNG sửa login (đã chặn inactive sẵn).
+   */
+  async updateUserStatus(
+    targetUserId: string,
+    status: 'active' | 'inactive',
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<{ id: string; accountStatus: string }> {
+    const ACTION_TYPE = 'ACCOUNT_STATUS_UPDATE';
+    const em = this.dataSource.manager;
+    const now = new Date();
+    const nextStatus =
+      status === 'active' ? AccountStatus.ACTIVE : AccountStatus.INACTIVE;
+
+    // ── Phase A — Validate (READ, ngoài transaction) ──
+
+    // A.1 Load target (chưa soft-delete)
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.2 Xác định System Admin & department scope của target (chỉ target)
+    const actorRoles = await em.find(UserRoleEntity, {
+      where: { userId: actorId, isActive: true },
+      relations: { role: true },
+    });
+    const isSystemAdmin = actorRoles.some(
+      (ur) => ur.role?.isSystemRole === true,
+    );
+    if (!isSystemAdmin) {
+      const scope = await this.resolveDepartmentScope(actorId);
+      if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền cập nhật trạng thái của nhân sự này.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+    }
+
+    // A.3 BR-04 — không đổi status khi đang LOCKED/PENDING_RESET (địa hạt UC-12/auth)
+    if (
+      targetUser.accountStatus === AccountStatus.LOCKED ||
+      targetUser.accountStatus === AccountStatus.PENDING_RESET
+    ) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Không thể cập nhật trạng thái của tài khoản đang bị khóa hoặc đang chờ đặt lại mật khẩu.',
+        error: {
+          code: 'INVALID_STATUS_TRANSITION',
+          details: { currentStatus: targetUser.accountStatus },
+        },
+      });
+    }
+
+    // A.4 BR-03 no-op — status mới trùng hiện tại: không WRITE/không audit
+    if (nextStatus === targetUser.accountStatus) {
+      return { id: targetUserId, accountStatus: targetUser.accountStatus };
+    }
+
+    // A.5 Khi chuyển sang INACTIVE
+    if (nextStatus === AccountStatus.INACTIVE) {
+      // BR-02 — không tự vô hiệu hóa chính mình
+      if (targetUserId === actorId) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message: 'Bạn không thể vô hiệu hóa tài khoản của chính mình.',
+          error: { code: 'CANNOT_DEACTIVATE_SELF', details: {} },
+        });
+      }
+
+      // BR-05 — không vô hiệu hóa SYSTEM_ADMIN active cuối cùng
+      const targetActiveRoles = await em.find(UserRoleEntity, {
+        where: { userId: targetUserId, isActive: true },
+        relations: { role: true },
+      });
+      const targetIsSystemAdmin = targetActiveRoles.some(
+        (ur) => ur.role?.roleCode === 'SYSTEM_ADMIN' && ur.role?.isActive,
+      );
+      if (targetIsSystemAdmin) {
+        const otherAdminCount = await em
+          .createQueryBuilder(UserRoleEntity, 'ur')
+          .innerJoin('ur.role', 'r')
+          .innerJoin('ur.user', 'u')
+          .where('r.roleCode = :code', { code: 'SYSTEM_ADMIN' })
+          .andWhere('r.isActive = true')
+          .andWhere('ur.isActive = true')
+          .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > :now)', { now })
+          .andWhere('u.deletedAt IS NULL')
+          .andWhere('u.accountStatus = :active', {
+            active: AccountStatus.ACTIVE,
+          })
+          .andWhere('u.id != :targetUserId', { targetUserId })
+          .getCount();
+
+        if (otherAdminCount === 0) {
+          throw new UnprocessableEntityException({
+            success: false,
+            message:
+              'Không thể vô hiệu hóa quản trị viên hệ thống cuối cùng còn hoạt động.',
+            error: { code: 'LAST_SYSTEM_ADMIN', details: {} },
+          });
+        }
+      }
+    }
+
+    // ── Phase B — Transaction (atomic: account_status + audit) ──
+    await this.dataSource.transaction(async (tem) => {
+      await tem.update(UserEntity, targetUserId, { accountStatus: nextStatus });
+
+      const auditLog = tem.create(AuditLogEntity, {
+        userId: actorId,
+        actionType: ACTION_TYPE,
+        entityType: 'users',
+        entityId: targetUserId,
+        severity:
+          nextStatus === AccountStatus.INACTIVE
+            ? AuditLogSeverity.WARNING
+            : AuditLogSeverity.INFO,
+        oldValueJson: { accountStatus: targetUser.accountStatus },
+        newValueJson: { accountStatus: nextStatus },
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+      });
+      await tem.save(AuditLogEntity, auditLog);
+    });
+
+    // ── Phase C — Post-commit: thu hồi token CHỈ khi chuyển sang INACTIVE ──
+    // Redis fail KHÔNG throw, KHÔNG rollback (status đã đổi).
+    if (nextStatus === AccountStatus.INACTIVE) {
+      try {
+        const ttlSeconds = this.authConfigService.getRefreshTokenTtlSeconds();
+        await this.redisService.setWithTtl(
+          `auth:user:${targetUserId}:invalid_after`,
+          String(now.getTime()),
+          ttlSeconds,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Failed to revoke tokens for deactivated user ${targetUserId}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return { id: targetUserId, accountStatus: nextStatus };
+  }
+
+  /**
    * UC-09 — Cập nhật (partial) thông tin hồ sơ của một tài khoản đã tồn tại.
    *
    * Ràng buộc chốt:

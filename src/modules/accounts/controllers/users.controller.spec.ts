@@ -8,6 +8,7 @@ import { UsersController } from './users.controller.js';
 import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
+import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
 import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -22,6 +23,7 @@ describe('UsersController', () => {
     updateUserRoles: jest.Mock;
     updateUser: jest.Mock;
     deleteUser: jest.Mock;
+    updateUserStatus: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -32,6 +34,7 @@ describe('UsersController', () => {
       updateUserRoles: jest.fn(),
       updateUser: jest.fn(),
       deleteUser: jest.fn(),
+      updateUserStatus: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -498,6 +501,94 @@ describe('UsersController', () => {
       ) as string[];
 
       expect(permissions).toEqual(['accounts.user.delete']);
+    });
+  });
+
+  describe('updateUserStatus', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[SC1] Success — gọi service đúng params & trả { success, message, data }', async () => {
+      const dto: UpdateUserStatusDto = { status: 'inactive' };
+      const mockResult = { id: validUserId, accountStatus: 'inactive' };
+      service.updateUserStatus.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.updateUserStatus(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.updateUserStatus).toHaveBeenCalledWith(
+        validUserId,
+        'inactive',
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Cập nhật trạng thái tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[SC2] userId không hợp lệ → ParseUUIDPipe reject INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/status',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    it('[SC3] status không hợp lệ (locked) → DTO @IsIn reject', async () => {
+      const dto = plainToInstance(UpdateUserStatusDto, { status: 'locked' });
+      const errors = await validate(dto);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('status');
+      expect(errors[0].constraints).toHaveProperty('isIn');
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { updateUserStatus } = UsersController.prototype;
+
+    it('[SC4] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        updateUserStatus,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[SC5] Yêu cầu permission accounts.user.update_status', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        updateUserStatus,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.update_status']);
     });
   });
 });
