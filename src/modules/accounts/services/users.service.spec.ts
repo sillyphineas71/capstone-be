@@ -2,6 +2,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -47,6 +48,7 @@ describe('UsersService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      update: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
     // Mock DataSource
@@ -1275,6 +1277,335 @@ describe('UsersService', () => {
 
       await expect(
         service.updateUserRoles(targetUserId, ['role-b'], actorId, {}),
+      ).rejects.toThrow('DB write failed');
+    });
+  });
+
+  describe('updateUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const baseTarget = {
+      id: targetUserId,
+      employeeCode: 'EMP001',
+      email: 'user@company.com',
+      fullName: 'Nguyen Van A',
+      phoneNumber: '0900000000',
+      avatarUrl: null,
+      positionTitle: 'Dev',
+      departmentId: 'admin-dept',
+      directManagerId: null,
+      accountStatus: 'active',
+      employmentStatus: 'active',
+      mustChangePassword: false,
+      lastLoginAt: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      department: { id: 'admin-dept', departmentName: 'IT' },
+    };
+
+    function setup(opts: {
+      target?: unknown; // null để test USER_NOT_FOUND
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string; // scope Business Admin
+      childDepts?: string[];
+      employeeCodeDup?: boolean;
+      department?: unknown; // A.4 department lookup
+      freshRoles?: unknown[];
+      manager?: unknown;
+      faceProfile?: unknown;
+      updateThrows?: boolean;
+    }) {
+      const target = opts.target === undefined ? baseTarget : opts.target;
+
+      em.findOne.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserEntity) {
+          const where = options?.where ?? {};
+          // uniqueness employee_code (loại self)
+          if (where.employeeCode !== undefined) {
+            return opts.employeeCodeDup ? { id: 'other-user' } : null;
+          }
+          // resolveDepartmentScope: lookup actor (select departmentId)
+          if (where.id === actorId && options?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          // manager lookup (select id, fullName)
+          if (
+            (target as any)?.directManagerId &&
+            where.id === (target as any).directManagerId
+          ) {
+            return opts.manager ?? null;
+          }
+          // fresh (map) — có relations.department
+          if (where.id === targetUserId && options?.relations?.department) {
+            return target;
+          }
+          // A.2 target load
+          if (where.id === targetUserId) {
+            return target;
+          }
+          return null;
+        }
+        if (entityClass === DepartmentEntity) {
+          return opts.department ?? null;
+        }
+        if (entityClass === FaceProfileEntity) {
+          return opts.faceProfile ?? null;
+        }
+        return null;
+      });
+
+      em.find.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserRoleEntity) {
+          if (options?.where?.userId === actorId) {
+            return [{ role: { isSystemRole: !!opts.actorIsSystemAdmin } }];
+          }
+          if (options?.where?.userId === targetUserId) {
+            return opts.freshRoles ?? [];
+          }
+          return [];
+        }
+        if (entityClass === DepartmentEntity) {
+          // collectDepartmentScope children
+          return (opts.childDepts ?? []).map((id) => ({ id }));
+        }
+        return [];
+      });
+
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (_entityClass: unknown, entity: unknown) => entity,
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+    }
+
+    it('[U1] Happy path — cập nhật 1 field (phoneNumber), audit diff đúng, trả 16 field', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      const result = await service.updateUser(
+        targetUserId,
+        { phoneNumber: '0911111111' },
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        phoneNumber: '0911111111',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_UPDATE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: { phoneNumber: '0900000000' },
+          newValueJson: { phoneNumber: '0911111111' },
+        }),
+      );
+      expect(Object.keys(result)).toHaveLength(16);
+      expect(result.id).toBe(targetUserId);
+      expect(result.email).toBe('user@company.com'); // email không đổi
+    });
+
+    it('[U2] Happy path — nhiều field (fullName + positionTitle + departmentId)', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        department: { id: 'new-dept', isActive: true },
+      });
+
+      await service.updateUser(
+        targetUserId,
+        {
+          fullName: 'New Name',
+          positionTitle: 'Lead',
+          departmentId: 'new-dept',
+        },
+        actorId,
+        {},
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        fullName: 'New Name',
+        positionTitle: 'Lead',
+        departmentId: 'new-dept',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          newValueJson: {
+            fullName: 'New Name',
+            positionTitle: 'Lead',
+            departmentId: 'new-dept',
+          },
+        }),
+      );
+    });
+
+    it('[U3] No-op — field gửi trùng giá trị cũ: không WRITE, không audit', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      const result = await service.updateUser(
+        targetUserId,
+        { phoneNumber: '0900000000' },
+        actorId,
+        {},
+      );
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+      expect(em.create).not.toHaveBeenCalled();
+      expect(result.id).toBe(targetUserId);
+    });
+
+    it('[U4] EMPTY_UPDATE — không field nào → 400', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      await expect(
+        service.updateUser(targetUserId, {}, actorId, {}),
+      ).rejects.toThrow(BadRequestException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U5] employeeCode trùng user khác → 409, không WRITE', async () => {
+      setup({ actorIsSystemAdmin: true, employeeCodeDup: true });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { employeeCode: 'EMP999' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U5b] employeeCode = giá trị cũ của chính mình → không lỗi, không check unique (no-op)', async () => {
+      setup({ actorIsSystemAdmin: true, employeeCodeDup: true });
+
+      // employeeCode 'EMP001' trùng giá trị hiện tại -> bị loại khỏi diff -> không check unique
+      const result = await service.updateUser(
+        targetUserId,
+        { employeeCode: 'EMP001' },
+        actorId,
+        {},
+      );
+
+      expect(result.id).toBe(targetUserId);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U6] department không tồn tại → 404', async () => {
+      setup({ actorIsSystemAdmin: true, department: null });
+
+      await expect(
+        service.updateUser(targetUserId, { departmentId: 'nope' }, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U7] department inactive → 422', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        department: { id: 'new-dept', isActive: false },
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { departmentId: 'new-dept' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U8] Business Admin — target user ngoài scope → 403', async () => {
+      setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        target: { ...baseTarget, departmentId: 'other-dept' },
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U9] Business Admin — department MỚI ngoài scope → 403', async () => {
+      setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept', // scope = { admin-dept }
+        target: { ...baseTarget, departmentId: 'admin-dept' }, // target trong scope
+        department: { id: 'new-dept', isActive: true }, // dept mới tồn tại+active nhưng ngoài scope
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { departmentId: 'new-dept' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U10] System Admin — bỏ qua scope (đổi department khác phòng) → thành công', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        target: { ...baseTarget, departmentId: 'x-dept' },
+        department: { id: 'new-dept', isActive: true },
+      });
+
+      await service.updateUser(
+        targetUserId,
+        { departmentId: 'new-dept' },
+        actorId,
+        {},
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        departmentId: 'new-dept',
+      });
+    });
+
+    it('[U11] USER_NOT_FOUND — user không tồn tại/đã soft-delete → 404', async () => {
+      setup({ actorIsSystemAdmin: true, target: null });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U12] Rollback — WRITE trong transaction lỗi → reject (atomic)', async () => {
+      setup({ actorIsSystemAdmin: true, updateThrows: true });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
       ).rejects.toThrow('DB write failed');
     });
   });

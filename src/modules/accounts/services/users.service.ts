@@ -1,12 +1,13 @@
 import {
   Injectable,
   Logger,
+  BadRequestException,
   ConflictException,
   NotFoundException,
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, ILike, IsNull, In } from 'typeorm';
+import { DataSource, ILike, IsNull, In, Not } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -31,6 +32,7 @@ import {
 
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
+import { UpdateUserDto } from '../dto/update-user.dto.js';
 import {
   UserResponseDto,
   UserRoleResponseDto,
@@ -527,6 +529,280 @@ export class UsersService {
       roleCode: ur.role.roleCode,
       roleName: ur.role.roleName,
     }));
+  }
+
+  /**
+   * UC-09 — Cập nhật (partial) thông tin hồ sơ của một tài khoản đã tồn tại.
+   *
+   * Ràng buộc chốt:
+   * - Chỉ 5 trường: fullName, employeeCode, phoneNumber, positionTitle, departmentId.
+   *   Email/username/role/account_status/password/avatar KHÔNG thuộc UC-09.
+   * - Actor: SYSTEM_ADMIN (không scope) + BUSINESS_ADMIN (giới hạn department scope,
+   *   kiểm cả target user lẫn department mới).
+   * - Diff-based: chỉ trường khác giá trị cũ mới được ghi; diff rỗng -> no-op (không audit).
+   * - Audit ghi ATOMIC trong transaction (chỉ log các trường đã đổi).
+   * - Response tái dùng UserDetailResponseDto, lắp bằng re-query inline (khớp getUserDetail).
+   */
+  async updateUser(
+    targetUserId: string,
+    dto: UpdateUserDto,
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<UserDetailResponseDto> {
+    const ACTION_TYPE = 'ACCOUNT_UPDATE';
+    const em = this.dataSource.manager;
+
+    // ── Phase A — Validate (ngoài transaction) ──
+
+    // A.1 Empty update -> 400
+    const hasAnyField =
+      dto.fullName !== undefined ||
+      dto.employeeCode !== undefined ||
+      dto.phoneNumber !== undefined ||
+      dto.positionTitle !== undefined ||
+      dto.departmentId !== undefined;
+    if (!hasAnyField) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Không có thông tin nào để cập nhật.',
+        error: { code: 'EMPTY_UPDATE', details: {} },
+      });
+    }
+
+    // A.2 Load target (chưa soft-delete)
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.3 Xác định System Admin & department scope của target
+    const actorRoles = await em.find(UserRoleEntity, {
+      where: { userId: actorId, isActive: true },
+      relations: { role: true },
+    });
+    const isSystemAdmin = actorRoles.some(
+      (ur) => ur.role?.isSystemRole === true,
+    );
+
+    let scope: Set<string> | null = null;
+    if (!isSystemAdmin) {
+      scope = await this.resolveDepartmentScope(actorId);
+      if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền cập nhật hồ sơ của nhân sự này.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+    }
+
+    // A.5 Tính diff (chỉ trường có mặt & khác giá trị cũ; string -> trim, nullable -> '' thành null)
+    const changed: Partial<
+      Pick<
+        UserEntity,
+        | 'fullName'
+        | 'employeeCode'
+        | 'phoneNumber'
+        | 'positionTitle'
+        | 'departmentId'
+      >
+    > = {};
+    const oldValues: Record<string, unknown> = {};
+    const newValues: Record<string, unknown> = {};
+
+    if (dto.fullName !== undefined) {
+      const next = dto.fullName.trim();
+      if (next !== targetUser.fullName) {
+        changed.fullName = next;
+        oldValues.fullName = targetUser.fullName;
+        newValues.fullName = next;
+      }
+    }
+    if (dto.employeeCode !== undefined) {
+      const next = dto.employeeCode.trim() || null;
+      if (next !== targetUser.employeeCode) {
+        changed.employeeCode = next;
+        oldValues.employeeCode = targetUser.employeeCode;
+        newValues.employeeCode = next;
+      }
+    }
+    if (dto.phoneNumber !== undefined) {
+      const next = dto.phoneNumber.trim() || null;
+      if (next !== targetUser.phoneNumber) {
+        changed.phoneNumber = next;
+        oldValues.phoneNumber = targetUser.phoneNumber;
+        newValues.phoneNumber = next;
+      }
+    }
+    if (dto.positionTitle !== undefined) {
+      const next = dto.positionTitle.trim() || null;
+      if (next !== targetUser.positionTitle) {
+        changed.positionTitle = next;
+        oldValues.positionTitle = targetUser.positionTitle;
+        newValues.positionTitle = next;
+      }
+    }
+    // departmentId: chỉ hỗ trợ đổi sang department khác (không hỗ trợ clear = null trong UC-09)
+    if (typeof dto.departmentId === 'string') {
+      if (dto.departmentId !== targetUser.departmentId) {
+        changed.departmentId = dto.departmentId;
+        oldValues.departmentId = targetUser.departmentId;
+        newValues.departmentId = dto.departmentId;
+      }
+    }
+
+    // A.4 Validate các trường đã đổi
+    // employee_code UNIQUE loại self
+    if (changed.employeeCode) {
+      const dup = await em.findOne(UserEntity, {
+        where: {
+          employeeCode: changed.employeeCode,
+          deletedAt: IsNull(),
+          id: Not(targetUserId),
+        },
+      });
+      if (dup) {
+        throw new ConflictException({
+          success: false,
+          message: 'Mã nhân viên này đã được đăng ký bởi tài khoản khác.',
+          error: {
+            code: 'ACCOUNT_EMPLOYEE_CODE_ALREADY_EXISTS',
+            details: { employeeCode: changed.employeeCode },
+          },
+        });
+      }
+    }
+    // department tồn tại + active + trong scope
+    if (changed.departmentId) {
+      const department = await em.findOne(DepartmentEntity, {
+        where: { id: changed.departmentId, deletedAt: IsNull() },
+      });
+      if (!department) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Phòng ban được chỉ định không tồn tại.',
+          error: {
+            code: 'DEPARTMENT_NOT_FOUND',
+            details: { departmentId: changed.departmentId },
+          },
+        });
+      }
+      if (!department.isActive) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message: 'Phòng ban được chỉ định không hoạt động hoặc đã bị xóa.',
+          error: {
+            code: 'DEPARTMENT_INACTIVE_OR_DELETED',
+            details: { departmentId: changed.departmentId },
+          },
+        });
+      }
+      if (!isSystemAdmin && scope && !scope.has(changed.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message:
+            'Bạn không có quyền chuyển nhân sự sang phòng ban ngoài phạm vi quản lý.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+    }
+
+    // A.6 No-op — không có thay đổi thực chất: không WRITE/không audit
+    // (map trả về ở cuối cho cả 2 nhánh)
+
+    // ── Phase B — Transaction (atomic: users + audit) ──
+    if (Object.keys(changed).length > 0) {
+      await this.dataSource.transaction(async (tem) => {
+        await tem.update(UserEntity, targetUserId, changed);
+
+        const auditLog = tem.create(AuditLogEntity, {
+          userId: actorId,
+          actionType: ACTION_TYPE,
+          entityType: 'users',
+          entityId: targetUserId,
+          severity: AuditLogSeverity.INFO,
+          oldValueJson: oldValues,
+          newValueJson: newValues,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+        });
+        await tem.save(AuditLogEntity, auditLog);
+      });
+    }
+
+    // ── Re-query INLINE map -> UserDetailResponseDto (khớp shape getUserDetail) ──
+    const rm = this.dataSource.manager;
+
+    const fresh = await rm.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+      relations: { department: true },
+    });
+    if (!fresh) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    const freshRoles = await rm.find(UserRoleEntity, {
+      where: { userId: targetUserId, isActive: true },
+      relations: { role: true },
+    });
+    const rolesDto: RoleInfoDto[] = freshRoles.map((ur) => ({
+      id: ur.role.id,
+      roleCode: ur.role.roleCode,
+      roleName: ur.role.roleName,
+    }));
+
+    let directManagerDto: DirectManagerInfoDto | null = null;
+    if (fresh.directManagerId) {
+      const manager = await rm.findOne(UserEntity, {
+        where: { id: fresh.directManagerId },
+        select: { id: true, fullName: true },
+      });
+      if (manager) {
+        directManagerDto = { id: manager.id, fullName: manager.fullName };
+      }
+    }
+
+    const faceProfile = await rm.findOne(FaceProfileEntity, {
+      where: { userId: targetUserId },
+    });
+
+    let departmentDto: DepartmentInfoDto | null = null;
+    if (fresh.department) {
+      departmentDto = {
+        id: fresh.department.id,
+        departmentName: fresh.department.departmentName,
+      };
+    }
+
+    return {
+      id: fresh.id,
+      employeeCode: fresh.employeeCode,
+      email: fresh.email,
+      fullName: fresh.fullName,
+      phoneNumber: fresh.phoneNumber,
+      avatarUrl: fresh.avatarUrl,
+      positionTitle: fresh.positionTitle,
+      department: departmentDto,
+      directManager: directManagerDto,
+      accountStatus: fresh.accountStatus,
+      employmentStatus: fresh.employmentStatus,
+      mustChangePassword: fresh.mustChangePassword,
+      lastLoginAt: fresh.lastLoginAt ? fresh.lastLoginAt.toISOString() : null,
+      roles: rolesDto,
+      hasFaceProfile: !!faceProfile,
+      createdAt: fresh.createdAt.toISOString(),
+    };
   }
 
   async getUserDetail(
