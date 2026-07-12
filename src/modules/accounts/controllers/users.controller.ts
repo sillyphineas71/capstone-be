@@ -9,6 +9,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -33,7 +34,11 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 
 import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
-import { UserResponseDto } from '../dto/user-response.dto.js';
+import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
+import {
+  UserResponseDto,
+  UserRoleResponseDto,
+} from '../dto/user-response.dto.js';
 import { UserDetailResponseDto } from '../dto/user-detail-response.dto.js';
 import { UserPublicProfileResponseDto } from '../dto/user-public-profile-response.dto.js';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
@@ -95,6 +100,82 @@ export class UsersController {
       success: true,
       message:
         'Nhân viên đã được tạo thành công và thông tin đăng nhập đã được gửi tới email.',
+      data: result,
+    };
+  }
+
+  @Put(':userId/roles')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.update_roles')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Cập nhật vai trò tài khoản (replace-set)',
+    description:
+      'Cho phép System Admin thay thế toàn bộ tập vai trò của một tài khoản. Nhận full desired roleIds[]; hệ thống tự soft-remove vai trò bị bỏ và gán vai trò được thêm theo RBAC.',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần cập nhật vai trò',
+    type: String,
+  })
+  @ApiBody({ type: UpdateUserRolesDto })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Vai trò tài khoản được cập nhật thành công.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission accounts.user.update_roles).',
+  })
+  async updateUserRoles(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/roles',
+        }),
+      }),
+    )
+    userId: string,
+    @Body(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    )
+    dto: UpdateUserRolesDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { userId: string; roles: UserRoleResponseDto[] };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const result = await this.usersService.updateUserRoles(
+      userId,
+      dto.roleIds,
+      actorId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Cập nhật vai trò tài khoản thành công',
       data: result,
     };
   }

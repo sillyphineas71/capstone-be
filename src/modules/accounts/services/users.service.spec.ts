@@ -1022,4 +1022,260 @@ describe('UsersService', () => {
       expect(result.id).toBe('new-user-id');
     });
   });
+
+  describe('updateUserRoles', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const activeTarget = {
+      id: targetUserId,
+      accountStatus: AccountStatus.ACTIVE,
+      deletedAt: null,
+    };
+
+    // Helper: dựng mock em cho một kịch bản updateUserRoles.
+    function setup(opts: {
+      target?: unknown;
+      roles?: Record<string, { isActive: boolean; isSystemRole?: boolean }>;
+      currentActiveRoleIds?: string[]; // tập role active hiện tại (Phase A)
+      existingRowByRoleId?: Record<string, unknown>; // reactivate-if-exists lookup
+      removeRows?: unknown[]; // rows trả về khi soft-remove trong txn
+      systemRolesInRemove?: { id: string; isSystemRole: boolean }[]; // BR-04
+      finalActiveRoles?: { id: string; roleCode: string; roleName: string }[]; // getActiveRolesResponse
+      saveThrowsOnUserRole?: boolean;
+    }) {
+      em.findOne.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserEntity) {
+          return options?.where?.id === targetUserId
+            ? (opts.target ?? activeTarget)
+            : null;
+        }
+        if (entityClass === RoleEntity) {
+          const r = opts.roles?.[options?.where?.id];
+          return r ? { id: options.where.id, ...r } : null;
+        }
+        if (entityClass === UserRoleEntity) {
+          // reactivate-if-exists lookup trong transaction
+          const roleId = options?.where?.roleId;
+          return opts.existingRowByRoleId?.[roleId] ?? null;
+        }
+        return null;
+      });
+
+      em.find.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserRoleEntity) {
+          // getActiveRolesResponse (có relations)
+          if (options?.relations?.role) {
+            return (opts.finalActiveRoles ?? []).map((r) => ({ role: r }));
+          }
+          // soft-remove trong txn (where có roleId là In(...))
+          if (options?.where?.roleId) {
+            return opts.removeRows ?? [];
+          }
+          // Phase A currentActive
+          return (opts.currentActiveRoleIds ?? []).map((roleId) => ({
+            roleId,
+          }));
+        }
+        if (entityClass === RoleEntity) {
+          // BR-04: find roles In(toRemove)
+          return opts.systemRolesInRemove ?? [];
+        }
+        return [];
+      });
+
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (entityClass: unknown, entity: unknown) => {
+          if (opts.saveThrowsOnUserRole && entityClass === UserRoleEntity) {
+            throw new Error('DB write failed');
+          }
+          return entity;
+        },
+      );
+    }
+
+    it('[U1] Happy path add+remove — soft-remove role bỏ, insert role thêm, audit atomic, trả role mới', async () => {
+      const removedRow: any = { roleId: 'role-a', isActive: true };
+      setup({
+        roles: { 'role-b': { isActive: true, isSystemRole: false } },
+        currentActiveRoleIds: ['role-a'],
+        existingRowByRoleId: {}, // role-b chưa có row → insert
+        removeRows: [removedRow],
+        finalActiveRoles: [{ id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' }],
+      });
+
+      const result = await service.updateUserRoles(
+        targetUserId,
+        ['role-b'],
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      // trả tập role active mới
+      expect(result).toEqual({
+        userId: targetUserId,
+        roles: [{ id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' }],
+      });
+      // soft-remove: role-a bị set inactive + expired
+      expect(removedRow.isActive).toBe(false);
+      expect(removedRow.expiredAt).toBeInstanceOf(Date);
+      // insert row mới cho role-b
+      expect(em.create).toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.objectContaining({
+          userId: targetUserId,
+          roleId: 'role-b',
+          assignedBy: actorId,
+          isActive: true,
+        }),
+      );
+      // audit atomic đúng old/new roleIds
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_ROLE_UPDATE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: { roleIds: ['role-a'] },
+          newValueJson: { roleIds: ['role-b'] },
+        }),
+      );
+      expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it('[U2] No-op idempotent — desired == current: không mở transaction, không ghi DB', async () => {
+      setup({
+        roles: { 'role-a': { isActive: true } },
+        currentActiveRoleIds: ['role-a'],
+        finalActiveRoles: [{ id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' }],
+      });
+
+      const result = await service.updateUserRoles(
+        targetUserId,
+        ['role-a'],
+        actorId,
+        {},
+      );
+
+      expect(result.roles).toEqual([
+        { id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' },
+      ]);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U3] USER_NOT_FOUND — user không tồn tại/đã soft-delete', async () => {
+      setup({ target: null });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U4] ACCOUNT_INACTIVE — target account_status ≠ active (BR-08)', async () => {
+      setup({
+        target: {
+          id: targetUserId,
+          accountStatus: AccountStatus.LOCKED,
+          deletedAt: null,
+        },
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('[U5] ROLE_NOT_FOUND — desired role không tồn tại', async () => {
+      setup({ roles: {}, currentActiveRoleIds: [] });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-x'], actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U6] ROLE_INACTIVE — desired role đang inactive', async () => {
+      setup({
+        roles: { 'role-a': { isActive: false } },
+        currentActiveRoleIds: [],
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U7] BR-04 self-lockout — actor tự gỡ vai trò hệ thống của chính mình', async () => {
+      setup({
+        roles: { 'role-a': { isActive: true } },
+        currentActiveRoleIds: ['role-sys', 'role-a'],
+        systemRolesInRemove: [{ id: 'role-sys', isSystemRole: true }],
+      });
+
+      await expect(
+        // actorId === targetUserId, desired bỏ role-sys (system role)
+        service.updateUserRoles(targetUserId, ['role-a'], targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('[U8] Reactivate-if-exists — add role từng soft-remove: update row cũ, KHÔNG insert trùng', async () => {
+      const existingInactive: any = {
+        id: 'ur-b',
+        roleId: 'role-b',
+        isActive: false,
+      };
+      setup({
+        roles: {
+          'role-a': { isActive: true },
+          'role-b': { isActive: true },
+        },
+        currentActiveRoleIds: ['role-a'],
+        existingRowByRoleId: { 'role-b': existingInactive },
+        removeRows: [],
+        finalActiveRoles: [
+          { id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' },
+          { id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' },
+        ],
+      });
+
+      await service.updateUserRoles(
+        targetUserId,
+        ['role-a', 'role-b'],
+        actorId,
+        {},
+      );
+
+      // row cũ được reactivate
+      expect(existingInactive.isActive).toBe(true);
+      expect(existingInactive.expiredAt).toBeNull();
+      expect(existingInactive.assignedBy).toBe(actorId);
+      // KHÔNG tạo row UserRoleEntity mới (chỉ AuditLogEntity được create)
+      expect(em.create).not.toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.anything(),
+      );
+      expect(em.save).toHaveBeenCalledWith(UserRoleEntity, existingInactive);
+    });
+
+    it('[U9] Rollback — WRITE trong transaction lỗi thì reject (atomic)', async () => {
+      setup({
+        roles: { 'role-b': { isActive: true } },
+        currentActiveRoleIds: ['role-a'],
+        removeRows: [{ roleId: 'role-a', isActive: true }],
+        saveThrowsOnUserRole: true,
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-b'], actorId, {}),
+      ).rejects.toThrow('DB write failed');
+    });
+  });
 });

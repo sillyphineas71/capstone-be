@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, ILike, IsNull } from 'typeorm';
+import { DataSource, ILike, IsNull, In } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -346,6 +346,187 @@ export class UsersService {
       roles: rolesDto,
       createdAt: createdUser!.createdAt,
     };
+  }
+
+  /**
+   * UC-08 — Cập nhật (replace) tập vai trò của một tài khoản đã tồn tại.
+   *
+   * Ràng buộc chốt:
+   * - Chỉ SYSTEM_ADMIN được gọi (enforce ở controller qua PermissionsGuard) → service
+   *   KHÔNG kiểm department scope / role-elevation.
+   * - Replace-set: `desiredRoleIds` là tập mong muốn đầy đủ.
+   * - Soft-remove role bị bỏ (is_active=false + expired_at=now()); role thêm dùng
+   *   reactivate-if-exists (update row cũ nếu tồn tại do UNIQUE (user_id, role_id),
+   *   INSERT nếu chưa có) → KHÔNG hard-delete, KHÔNG insert trùng.
+   * - Audit ghi ATOMIC trong cùng transaction (không ghi sau commit).
+   */
+  async updateUserRoles(
+    targetUserId: string,
+    desiredRoleIds: string[],
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<{ userId: string; roles: UserRoleResponseDto[] }> {
+    const ACTION_TYPE = 'ACCOUNT_ROLE_UPDATE';
+    const desired = [...new Set(desiredRoleIds)];
+    const em = this.dataSource.manager;
+
+    // ── Phase A — Validate (ngoài transaction, fail sớm) ──
+
+    // A.2 Target user tồn tại & chưa soft-delete
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.3 BR-08 — tài khoản phải đang active
+    if (targetUser.accountStatus !== AccountStatus.ACTIVE) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Tài khoản đang bị khóa hoặc không hoạt động nên không thể cập nhật vai trò.',
+        error: {
+          code: 'ACCOUNT_INACTIVE',
+          details: { accountStatus: targetUser.accountStatus },
+        },
+      });
+    }
+
+    // A.4 Validate từng role trong tập mong muốn (mirror createUser)
+    for (const roleId of desired) {
+      const role = await em.findOne(RoleEntity, { where: { id: roleId } });
+      if (!role) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
+          error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
+        });
+      }
+      if (!role.isActive) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message:
+            'Một hoặc nhiều vai trò được chọn đang ở trạng thái không hoạt động.',
+          error: { code: 'ROLE_INACTIVE', details: { roleId } },
+        });
+      }
+    }
+
+    // A.5 Tập role active hiện tại + A.6 diff
+    const currentActive = await em.find(UserRoleEntity, {
+      where: { userId: targetUserId, isActive: true },
+    });
+    const currentRoleIds = currentActive.map((ur) => ur.roleId);
+    const currentSet = new Set(currentRoleIds);
+    const desiredSet = new Set(desired);
+    const toAdd = desired.filter((id) => !currentSet.has(id));
+    const toRemove = currentRoleIds.filter((id) => !desiredSet.has(id));
+
+    // A.7 BR-04 — self-lockout: không tự gỡ vai trò hệ thống của chính mình
+    if (actorId === targetUserId && toRemove.length > 0) {
+      const removingRoles = await em.find(RoleEntity, {
+        where: { id: In(toRemove) },
+      });
+      const systemRole = removingRoles.find((r) => r.isSystemRole);
+      if (systemRole) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message: 'Bạn không thể tự gỡ vai trò hệ thống của chính mình.',
+          error: {
+            code: 'CANNOT_MODIFY_OWN_ADMIN_ROLE',
+            details: { roleId: systemRole.id },
+          },
+        });
+      }
+    }
+
+    // A.8 No-op idempotent — không thay đổi thì trả về tập hiện tại, không ghi DB/audit
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      const roles = await this.getActiveRolesResponse(em, targetUserId);
+      return { userId: targetUserId, roles };
+    }
+
+    // ── Phase B — Transaction (atomic: user_roles + audit) ──
+    await this.dataSource.transaction(async (tem) => {
+      // B.1 Soft-remove role bị bỏ
+      if (toRemove.length > 0) {
+        const removeRows = await tem.find(UserRoleEntity, {
+          where: { userId: targetUserId, roleId: In(toRemove), isActive: true },
+        });
+        for (const row of removeRows) {
+          row.isActive = false;
+          row.expiredAt = new Date();
+          await tem.save(UserRoleEntity, row);
+        }
+      }
+
+      // B.2 Add role — reactivate-if-exists (tránh vi phạm UNIQUE (user_id, role_id))
+      for (const roleId of toAdd) {
+        const existing = await tem.findOne(UserRoleEntity, {
+          where: { userId: targetUserId, roleId },
+        });
+        if (existing) {
+          existing.isActive = true;
+          existing.expiredAt = null;
+          existing.assignedBy = actorId;
+          existing.assignedAt = new Date();
+          await tem.save(UserRoleEntity, existing);
+        } else {
+          const newRow = tem.create(UserRoleEntity, {
+            userId: targetUserId,
+            roleId,
+            assignedBy: actorId,
+            isActive: true,
+          });
+          await tem.save(UserRoleEntity, newRow);
+        }
+      }
+
+      // B.3 Audit ATOMIC trong transaction (chỉ log roleIds, không log secret/token)
+      const auditLog = tem.create(AuditLogEntity, {
+        userId: actorId,
+        actionType: ACTION_TYPE,
+        entityType: 'users',
+        entityId: targetUserId,
+        severity: AuditLogSeverity.WARNING,
+        oldValueJson: { roleIds: currentRoleIds },
+        newValueJson: { roleIds: desired },
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+      });
+      await tem.save(AuditLogEntity, auditLog);
+    });
+
+    // Sau commit — trả về tập role active mới
+    const roles = await this.getActiveRolesResponse(
+      this.dataSource.manager,
+      targetUserId,
+    );
+    return { userId: targetUserId, roles };
+  }
+
+  /**
+   * Đọc tập vai trò active của user và map sang UserRoleResponseDto (tái dùng DTO có sẵn).
+   */
+  private async getActiveRolesResponse(
+    em: import('typeorm').EntityManager,
+    userId: string,
+  ): Promise<UserRoleResponseDto[]> {
+    const rows = await em.find(UserRoleEntity, {
+      where: { userId, isActive: true },
+      relations: { role: true },
+    });
+    return rows.map((ur) => ({
+      id: ur.role.id,
+      roleCode: ur.role.roleCode,
+      roleName: ur.role.roleName,
+    }));
   }
 
   async getUserDetail(
