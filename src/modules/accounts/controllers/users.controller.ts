@@ -38,6 +38,7 @@ import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
+import { LockUserDto } from '../dto/lock-user.dto.js';
 import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import {
   UserResponseDto,
@@ -258,6 +259,150 @@ export class UsersController {
     return {
       success: true,
       message: 'Cập nhật trạng thái tài khoản thành công',
+      data: result,
+    };
+  }
+
+  // ⚠️ Route order: khai báo ':userId/lock' và ':userId/unlock' TRƯỚC ':userId'
+  // (UC-09) để route cụ thể hơn không bị pattern ':userId' nuốt.
+  @Patch(':userId/lock')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.lock')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Khóa tài khoản người dùng',
+    description:
+      'Cho phép System Admin (toàn hệ thống) và Business Admin (giới hạn department scope) khóa một tài khoản (kỷ luật/bảo mật). Tài khoản chuyển LOCKED, mọi session bị thu hồi ngay, dữ liệu lịch sử (vai trò, hồ sơ) giữ nguyên. Lý do khóa (tùy chọn) được ghi vào nhật ký kiểm toán.',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần khóa',
+    type: String,
+  })
+  @ApiBody({ type: LockUserDto, required: false })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Tài khoản đã được khóa thành công.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission accounts.user.lock) hoặc ngoài phạm vi department.',
+  })
+  async lockUser(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/lock',
+        }),
+      }),
+    )
+    userId: string,
+    @Body(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    )
+    dto: LockUserDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { id: string; accountStatus: string };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const result = await this.usersService.lockUser(
+      userId,
+      dto.reason,
+      actorId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Đã khóa tài khoản thành công',
+      data: result,
+    };
+  }
+
+  @Patch(':userId/unlock')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.unlock')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Mở khóa tài khoản người dùng',
+    description:
+      'Cho phép System Admin và Business Admin (giới hạn department scope) mở khóa một tài khoản đang bị khóa, đưa về trạng thái active và đặt lại bộ đếm đăng nhập thất bại.',
+  })
+  @ApiParam({
+    name: 'userId',
+    description: 'UUID của tài khoản cần mở khóa',
+    type: String,
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Tài khoản đã được mở khóa thành công.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission accounts.user.unlock) hoặc ngoài phạm vi department.',
+  })
+  async unlockUser(
+    @Param(
+      'userId',
+      new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/unlock',
+        }),
+      }),
+    )
+    userId: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { id: string; accountStatus: string };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const result = await this.usersService.unlockUser(userId, actorId, {
+      ipAddress,
+      userAgent,
+      requestId,
+    });
+
+    return {
+      success: true,
+      message: 'Đã mở khóa tài khoản thành công',
       data: result,
     };
   }

@@ -9,6 +9,7 @@ import { UsersService } from '../services/users.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
+import { LockUserDto } from '../dto/lock-user.dto.js';
 import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -24,6 +25,8 @@ describe('UsersController', () => {
     updateUser: jest.Mock;
     deleteUser: jest.Mock;
     updateUserStatus: jest.Mock;
+    lockUser: jest.Mock;
+    unlockUser: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -35,6 +38,8 @@ describe('UsersController', () => {
       updateUser: jest.fn(),
       deleteUser: jest.fn(),
       updateUserStatus: jest.fn(),
+      lockUser: jest.fn(),
+      unlockUser: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -589,6 +594,126 @@ describe('UsersController', () => {
       ) as string[];
 
       expect(permissions).toEqual(['accounts.user.update_status']);
+    });
+  });
+
+  describe('lockUser / unlockUser', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[LC1] lock success — gọi service đúng params & trả chuẩn', async () => {
+      const dto: LockUserDto = { reason: 'vi pham' };
+      const mockResult = { id: validUserId, accountStatus: 'locked' };
+      service.lockUser.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.lockUser(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.lockUser).toHaveBeenCalledWith(
+        validUserId,
+        'vi pham',
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã khóa tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[LC2] userId không hợp lệ (lock) → ParseUUIDPipe reject INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/lock',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { lockUser, unlockUser } = UsersController.prototype;
+
+    it('[LC3] lock endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        lockUser,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[LC4] lock yêu cầu permission accounts.user.lock', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        lockUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.lock']);
+    });
+
+    it('[UC1] unlock success — gọi service đúng params & trả chuẩn', async () => {
+      const mockResult = { id: validUserId, accountStatus: 'active' };
+      service.unlockUser.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.unlockUser(
+        validUserId,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.unlockUser).toHaveBeenCalledWith(
+        validUserId,
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã mở khóa tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[UC2] unlock yêu cầu permission accounts.user.unlock', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        unlockUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.unlock']);
     });
   });
 });

@@ -769,6 +769,240 @@ export class UsersService {
   }
 
   /**
+   * UC-12 — Khóa tài khoản người dùng (account_status = LOCKED) + thu hồi mọi session.
+   *
+   * Ràng buộc chốt:
+   * - Set account_status=LOCKED, locked_until=null (vô thời hạn tới khi admin mở).
+   * - KHÔNG chạm user_roles/hồ sơ/soft-delete → giữ nguyên dữ liệu lịch sử.
+   * - Actor SYSTEM_ADMIN (không scope) + BUSINESS_ADMIN (department scope, chỉ target).
+   * - Không tự khóa mình; không khóa SYSTEM_ADMIN active cuối cùng; no-op nếu đã LOCKED.
+   * - reason (tùy chọn) ghi vào audit_logs.metadataJson (không thêm cột users).
+   * - Post-commit: thu hồi token qua Redis invalid_after.
+   */
+  async lockUser(
+    targetUserId: string,
+    reason: string | undefined,
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<{ id: string; accountStatus: string }> {
+    const ACTION_TYPE = 'ACCOUNT_LOCK';
+    const em = this.dataSource.manager;
+    const now = new Date();
+
+    // ── Phase A — Validate (READ) ──
+
+    // A.1 Load target (chưa soft-delete)
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.2 Department scope của target (chỉ target)
+    const actorRoles = await em.find(UserRoleEntity, {
+      where: { userId: actorId, isActive: true },
+      relations: { role: true },
+    });
+    const isSystemAdmin = actorRoles.some(
+      (ur) => ur.role?.isSystemRole === true,
+    );
+    if (!isSystemAdmin) {
+      const scope = await this.resolveDepartmentScope(actorId);
+      if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền khóa tài khoản của nhân sự này.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+    }
+
+    // A.3 BR-01 — không tự khóa chính mình
+    if (targetUserId === actorId) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Bạn không thể khóa tài khoản của chính mình.',
+        error: { code: 'CANNOT_LOCK_SELF', details: {} },
+      });
+    }
+
+    // A.4 BR-03 no-op — đã LOCKED (BR-04: INACTIVE vẫn khóa được, không chặn)
+    if (targetUser.accountStatus === AccountStatus.LOCKED) {
+      return { id: targetUserId, accountStatus: AccountStatus.LOCKED };
+    }
+
+    // A.5 BR-02 — không khóa SYSTEM_ADMIN active cuối cùng
+    const targetActiveRoles = await em.find(UserRoleEntity, {
+      where: { userId: targetUserId, isActive: true },
+      relations: { role: true },
+    });
+    const targetIsSystemAdmin = targetActiveRoles.some(
+      (ur) => ur.role?.roleCode === 'SYSTEM_ADMIN' && ur.role?.isActive,
+    );
+    if (targetIsSystemAdmin) {
+      const otherAdminCount = await em
+        .createQueryBuilder(UserRoleEntity, 'ur')
+        .innerJoin('ur.role', 'r')
+        .innerJoin('ur.user', 'u')
+        .where('r.roleCode = :code', { code: 'SYSTEM_ADMIN' })
+        .andWhere('r.isActive = true')
+        .andWhere('ur.isActive = true')
+        .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > :now)', { now })
+        .andWhere('u.deletedAt IS NULL')
+        .andWhere('u.accountStatus = :active', {
+          active: AccountStatus.ACTIVE,
+        })
+        .andWhere('u.id != :targetUserId', { targetUserId })
+        .getCount();
+
+      if (otherAdminCount === 0) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message:
+            'Không thể khóa quản trị viên hệ thống cuối cùng còn hoạt động.',
+          error: { code: 'LAST_SYSTEM_ADMIN', details: {} },
+        });
+      }
+    }
+
+    // ── Phase B — Transaction (atomic: account_status + audit) ──
+    await this.dataSource.transaction(async (tem) => {
+      await tem.update(UserEntity, targetUserId, {
+        accountStatus: AccountStatus.LOCKED,
+        lockedUntil: null,
+      });
+
+      const auditLog = tem.create(AuditLogEntity, {
+        userId: actorId,
+        actionType: ACTION_TYPE,
+        entityType: 'users',
+        entityId: targetUserId,
+        severity: AuditLogSeverity.WARNING,
+        oldValueJson: { accountStatus: targetUser.accountStatus },
+        newValueJson: { accountStatus: AccountStatus.LOCKED },
+        metadataJson: reason ? { reason } : null,
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+      });
+      await tem.save(AuditLogEntity, auditLog);
+    });
+
+    // ── Phase C — Post-commit: thu hồi mọi session ──
+    // Redis fail KHÔNG throw, KHÔNG rollback (tài khoản đã LOCKED).
+    try {
+      const ttlSeconds = this.authConfigService.getRefreshTokenTtlSeconds();
+      await this.redisService.setWithTtl(
+        `auth:user:${targetUserId}:invalid_after`,
+        String(now.getTime()),
+        ttlSeconds,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to revoke tokens for locked user ${targetUserId}: ${(error as Error).message}`,
+      );
+    }
+
+    return { id: targetUserId, accountStatus: AccountStatus.LOCKED };
+  }
+
+  /**
+   * UC-12 — Mở khóa tài khoản người dùng (LOCKED -> ACTIVE).
+   *
+   * Ràng buộc chốt:
+   * - Chỉ mở khi đang LOCKED (ngược lại 409 NOT_LOCKED).
+   * - Đưa về ACTIVE + reset failed_login_count=0, locked_until=null.
+   *   (Không khôi phục trạng thái INACTIVE trước đó vì hệ thống không lưu.)
+   * - KHÔNG thao tác token (không có session hợp lệ khi đang khóa).
+   * - Actor SYSTEM_ADMIN (không scope) + BUSINESS_ADMIN (department scope, chỉ target).
+   */
+  async unlockUser(
+    targetUserId: string,
+    actorId: string,
+    clientContext: UserClientContext,
+  ): Promise<{ id: string; accountStatus: string }> {
+    const ACTION_TYPE = 'ACCOUNT_UNLOCK';
+    const em = this.dataSource.manager;
+
+    // ── Phase A — Validate (READ) ──
+
+    // A.1 Load target (chưa soft-delete)
+    const targetUser = await em.findOne(UserEntity, {
+      where: { id: targetUserId, deletedAt: IsNull() },
+    });
+    if (!targetUser) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy tài khoản.',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // A.2 Department scope của target (chỉ target)
+    const actorRoles = await em.find(UserRoleEntity, {
+      where: { userId: actorId, isActive: true },
+      relations: { role: true },
+    });
+    const isSystemAdmin = actorRoles.some(
+      (ur) => ur.role?.isSystemRole === true,
+    );
+    if (!isSystemAdmin) {
+      const scope = await this.resolveDepartmentScope(actorId);
+      if (targetUser.departmentId && !scope.has(targetUser.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền mở khóa tài khoản của nhân sự này.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+    }
+
+    // A.3 BR-03 — chỉ mở khi đang LOCKED
+    if (targetUser.accountStatus !== AccountStatus.LOCKED) {
+      throw new ConflictException({
+        success: false,
+        message: 'Tài khoản không ở trạng thái bị khóa.',
+        error: {
+          code: 'NOT_LOCKED',
+          details: { currentStatus: targetUser.accountStatus },
+        },
+      });
+    }
+
+    // ── Phase B — Transaction (atomic: account_status + reset + audit) ──
+    await this.dataSource.transaction(async (tem) => {
+      await tem.update(UserEntity, targetUserId, {
+        accountStatus: AccountStatus.ACTIVE,
+        failedLoginCount: 0,
+        lockedUntil: null,
+      });
+
+      const auditLog = tem.create(AuditLogEntity, {
+        userId: actorId,
+        actionType: ACTION_TYPE,
+        entityType: 'users',
+        entityId: targetUserId,
+        severity: AuditLogSeverity.INFO,
+        oldValueJson: { accountStatus: AccountStatus.LOCKED },
+        newValueJson: { accountStatus: AccountStatus.ACTIVE },
+        ipAddress: clientContext.ipAddress || null,
+        userAgent: clientContext.userAgent || null,
+        requestId: clientContext.requestId || null,
+      });
+      await tem.save(AuditLogEntity, auditLog);
+    });
+
+    // KHÔNG Phase C — không thao tác token khi mở khóa.
+
+    return { id: targetUserId, accountStatus: AccountStatus.ACTIVE };
+  }
+
+  /**
    * UC-11 — Cập nhật trạng thái tài khoản (ACTIVE ↔ INACTIVE).
    *
    * Ràng buộc chốt:

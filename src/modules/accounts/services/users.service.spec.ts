@@ -2143,4 +2143,284 @@ describe('UsersService', () => {
       expect(redisService.setWithTtl).not.toHaveBeenCalled();
     });
   });
+
+  describe('lockUser / unlockUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown; // null -> USER_NOT_FOUND
+      currentStatus?: string;
+      targetDeptId?: string;
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      targetIsAdmin?: boolean;
+      otherAdminCount?: number;
+      updateThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target =
+        opts.target === undefined
+          ? {
+              id: targetUserId,
+              accountStatus: opts.currentStatus ?? 'active',
+              departmentId: opts.targetDeptId ?? 'admin-dept',
+            }
+          : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity) {
+          if (o?.where?.id === actorId && o?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          if (o?.where?.id === targetUserId) return target;
+          return null;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity) {
+          if (o?.where?.userId === actorId) {
+            return [
+              { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+            ];
+          }
+          if (o?.where?.userId === targetUserId) {
+            return opts.targetIsAdmin
+              ? [{ role: { roleCode: 'SYSTEM_ADMIN', isActive: true } }]
+              : [];
+          }
+          return [];
+        }
+        if (entity === DepartmentEntity) return [];
+        return [];
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) =>
+          makeQb(entity === UserRoleEntity ? (opts.otherAdminCount ?? 1) : 0),
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      em.create.mockImplementation((_e: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    // ===== lockUser =====
+
+    it('[L1] lock happy (System Admin): LOCKED + audit WARNING(reason) + revoke; giữ user_roles', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.lockUser(
+        targetUserId,
+        'vi pham bao mat',
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_LOCK',
+          severity: 'warning',
+          oldValueJson: { accountStatus: 'active' },
+          newValueJson: { accountStatus: 'locked' },
+          metadataJson: { reason: 'vi pham bao mat' },
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+      // KHÔNG đụng user_roles (không update UserRoleEntity)
+      expect(em.update).not.toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('[L2] BR-01 self-lock → 422 CANNOT_LOCK_SELF', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.lockUser(targetUserId, undefined, targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L3] BR-02 last SYSTEM_ADMIN → 422 LAST_SYSTEM_ADMIN', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 0,
+      });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L4] BR-02 còn admin khác → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 2,
+      });
+      await service.lockUser(targetUserId, undefined, actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+    });
+
+    it('[L5] No-op đã LOCKED → 200, không WRITE/audit', async () => {
+      setup({ currentStatus: 'locked' });
+      const result = await service.lockUser(
+        targetUserId,
+        undefined,
+        actorId,
+        {},
+      );
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L6] Lock từ INACTIVE (BR-04) → thành công → LOCKED', async () => {
+      setup({ currentStatus: 'inactive' });
+      const result = await service.lockUser(
+        targetUserId,
+        undefined,
+        actorId,
+        {},
+      );
+      expect(result.accountStatus).toBe('locked');
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+    });
+
+    it('[L7] Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L8] System Admin bỏ qua scope → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: true,
+        targetDeptId: 'other-dept',
+      });
+      await service.lockUser(targetUserId, undefined, actorId, {});
+      expect(em.update).toHaveBeenCalled();
+    });
+
+    it('[L9] Redis fail post-commit → không throw, status đã LOCKED', async () => {
+      setup({ currentStatus: 'active', redisThrows: true });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).resolves.toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(em.update).toHaveBeenCalled();
+      expect(redisService.setWithTtl).toHaveBeenCalled();
+    });
+
+    it('[L10] Rollback — WRITE lỗi → reject, KHÔNG revoke', async () => {
+      setup({ currentStatus: 'active', updateThrows: true });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[L11] USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    // ===== unlockUser =====
+
+    it('[U1] unlock happy → ACTIVE + reset + audit INFO; KHÔNG revoke', async () => {
+      setup({ currentStatus: 'locked' });
+
+      const result = await service.unlockUser(targetUserId, actorId, {});
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'active',
+        failedLoginCount: 0,
+        lockedUntil: null,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_UNLOCK',
+          severity: 'info',
+          oldValueJson: { accountStatus: 'locked' },
+          newValueJson: { accountStatus: 'active' },
+        }),
+      );
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[U2] NOT_LOCKED (đang active) → 409', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U3] Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'locked',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U4] USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+  });
 });
