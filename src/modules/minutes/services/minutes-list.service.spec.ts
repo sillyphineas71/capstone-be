@@ -261,6 +261,22 @@ describe('MinutesService.findMinutesList', () => {
     expect(result.items[0].host).toBeNull();
   });
 
+  it('gắn cờ isAiGenerated: true khi ai_summary_json khác NULL, false khi NULL (MKM-AI-02)', async () => {
+    qb.getManyAndCount.mockResolvedValue([
+      [
+        buildMinutesRow({
+          id: 'ai-1',
+          aiSummaryJson: { keyPoints: ['x'], meta: { provider: 'mock' } },
+        }),
+        buildMinutesRow({ id: 'manual-1', aiSummaryJson: null }),
+      ],
+      2,
+    ]);
+    const result = await service.findMinutesList({}, authUser);
+    expect(result.items[0].isAiGenerated).toBe(true);
+    expect(result.items[1].isAiGenerated).toBe(false);
+  });
+
   it('trả 200 rỗng khi không có biên bản nào trong scope', async () => {
     qb.getManyAndCount.mockResolvedValue([[], 0]);
     const result = await service.findMinutesList({}, authUser);

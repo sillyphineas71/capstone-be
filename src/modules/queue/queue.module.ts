@@ -6,9 +6,10 @@ import { QueueService } from './queue.service.js';
 /**
  * QueueModule — Global module đăng ký BullMQ queues.
  *
- * Đăng ký 8 queues lấy name từ env:
+ * Đăng ký 9 queues lấy name từ env:
  * QUEUE_AUTH, QUEUE_NOTIFICATION, QUEUE_ACCOUNT_IMPORT, QUEUE_MEDIA_PROCESSING,
- * QUEUE_TRANSCRIPTION, QUEUE_REPORT_EXPORT, QUEUE_MINUTES_EXPORT, QUEUE_SCHEDULER
+ * QUEUE_TRANSCRIPTION, QUEUE_REPORT_EXPORT, QUEUE_MINUTES_EXPORT, QUEUE_SCHEDULER,
+ * QUEUE_MINUTES_AI_DRAFT
  *
  * QueueService cung cấp helper addJob() dùng chung.
  * Không implement worker business logic ở đây.
@@ -105,6 +106,16 @@ import { QueueService } from './queue.service.js';
         inject: [ConfigService],
         useFactory: (cs: ConfigService) => ({
           name: cs.get<string>('QUEUE_SCHEDULER', 'scheduler'),
+        }),
+      },
+      {
+        name: 'QUEUE_MINUTES_AI_DRAFT_NAME',
+        inject: [ConfigService],
+        useFactory: (cs: ConfigService) => ({
+          name: cs.get<string>(
+            'QUEUE_MINUTES_AI_DRAFT',
+            'minutes.generate_ai_draft',
+          ),
         }),
       },
     ),

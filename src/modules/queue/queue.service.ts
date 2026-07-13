@@ -25,6 +25,7 @@ export interface AddJobOptions extends Partial<JobsOptions> {
  * - 'report-export'   → QUEUE_REPORT_EXPORT
  * - 'minutes-export'  → QUEUE_MINUTES_EXPORT
  * - 'scheduler'       → QUEUE_SCHEDULER
+ * - 'minutes.generate_ai_draft' → QUEUE_MINUTES_AI_DRAFT (MKM-AI-01)
  */
 @Injectable()
 export class QueueService {
@@ -50,6 +51,8 @@ export class QueueService {
     @InjectQueue('QUEUE_MINUTES_EXPORT_NAME')
     private readonly minutesExportQueue: Queue,
     @InjectQueue('QUEUE_SCHEDULER_NAME') private readonly schedulerQueue: Queue,
+    @InjectQueue('QUEUE_MINUTES_AI_DRAFT_NAME')
+    private readonly minutesAiDraftQueue: Queue,
   ) {
     this.defaultAttempts = this.configService.get<number>(
       'BULL_DEFAULT_ATTEMPTS',
@@ -99,6 +102,13 @@ export class QueueService {
       [
         this.configService.get<string>('QUEUE_SCHEDULER', 'scheduler'),
         this.schedulerQueue,
+      ],
+      [
+        this.configService.get<string>(
+          'QUEUE_MINUTES_AI_DRAFT',
+          'minutes.generate_ai_draft',
+        ),
+        this.minutesAiDraftQueue,
       ],
     ]);
   }

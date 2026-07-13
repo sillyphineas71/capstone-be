@@ -18,6 +18,9 @@ export enum BackgroundJobType {
   MEDIA_PROCESSING = 'media_processing',
   // UC-IMM-12: Warning schedule delayed job
   MEETING_TIME_WARNING = 'meeting_time_warning',
+  // MKM-AI-01: AI draft meeting minutes tu transcript (cot DB la varchar,
+  // them gia tri enum khong can migration)
+  AI_MEETING_SUMMARY = 'ai_meeting_summary',
   // UC-ROOM-03: xu ly bat dong bo goi y phong thay the + gui notification
   // sau khi xoa phong hop (cot DB la varchar, khong can migration)
   ROOM_DELETE_NOTIFY = 'room_delete_notify',

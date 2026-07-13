@@ -27,6 +27,10 @@ export class MinutesListItemDto {
   @Type(() => UserSummaryDto)
   host: UserSummaryDto | null;
 
+  /** true nếu biên bản có nguồn gốc AI (ai_summary_json khác NULL) — badge FE. */
+  @Expose()
+  isAiGenerated: boolean;
+
   constructor(
     id: string,
     title: string,
@@ -35,6 +39,7 @@ export class MinutesListItemDto {
     createdAt: Date,
     meeting: MinutesMeetingSummaryDto,
     host: UserSummaryDto | null,
+    isAiGenerated = false,
   ) {
     this.id = id;
     this.title = title;
@@ -43,5 +48,6 @@ export class MinutesListItemDto {
     this.createdAt = createdAt;
     this.meeting = meeting;
     this.host = host;
+    this.isAiGenerated = isAiGenerated;
   }
 }

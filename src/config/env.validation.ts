@@ -101,6 +101,7 @@ export const envValidationSchema = Joi.object({
   QUEUE_REPORT_EXPORT: Joi.string().default('report-export'),
   QUEUE_MINUTES_EXPORT: Joi.string().default('minutes-export'),
   QUEUE_SCHEDULER: Joi.string().default('scheduler'),
+  QUEUE_MINUTES_AI_DRAFT: Joi.string().default('minutes.generate_ai_draft'),
 
   // ─── H. Notification ─────────────────────────────────────────────────────────
   NOTIFICATION_EMAIL_ENABLED: Joi.boolean().default(true),
@@ -149,6 +150,12 @@ export const envValidationSchema = Joi.object({
   AI_WORKER_JOB_TIMEOUT_MS: Joi.number()
     .integer()
     .default(15 * 60 * 1000),
+
+  // ─── AI Summary (feat-ai-meeting-minutes-draft, MKM-AI-01) ────────────────────
+  AI_SUMMARY_LLM_BASE_URL: Joi.string().default('http://localhost:11434'),
+  AI_SUMMARY_LLM_TIMEOUT_MS: Joi.number()
+    .integer()
+    .default(5 * 60 * 1000),
 
   // ─── J. WebSocket ────────────────────────────────────────────────────────────
   WS_ENABLED: Joi.boolean().default(true),

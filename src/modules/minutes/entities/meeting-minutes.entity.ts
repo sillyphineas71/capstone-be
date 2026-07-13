@@ -64,6 +64,14 @@ export class MeetingMinutesEntity {
   @Column({ name: 'action_items_json', type: 'jsonb', nullable: true })
   actionItemsJson: Record<string, unknown> | null;
 
+  /**
+   * MKM-AI-01: NULL = biên bản soạn thủ công; khác NULL = bản nháp có nguồn
+   * gốc AI (keyPoints/risks/openQuestions/uncertainParts + meta). Dùng để
+   * phân biệt khi forceRerun — chỉ được ghi đè bản nháp AI (FR-016/FR-020).
+   */
+  @Column({ name: 'ai_summary_json', type: 'jsonb', nullable: true })
+  aiSummaryJson: Record<string, unknown> | null;
+
   @Column({ name: 'linked_transcript_id', type: 'uuid', nullable: true })
   linkedTranscriptId: string | null;
 

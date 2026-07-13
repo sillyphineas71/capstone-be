@@ -46,6 +46,7 @@ import {
   MinutesDetailResponseDto,
   MinutesGeneralInfoDto,
   MinutesMainContentDto,
+  MinutesAiSummaryDto,
   MinutesRelatedResourcesDto,
   MinutesAttachmentSummaryDto,
   MinutesPermissionsDto,
@@ -299,6 +300,7 @@ export class MinutesService {
           'minutes.versionNo',
           'minutes.createdAt',
           'minutes.preparedBy',
+          'minutes.aiSummaryJson',
           'meeting.id',
           'meeting.title',
           'meeting.actualStartTime',
@@ -440,6 +442,7 @@ export class MinutesService {
             room,
           ),
           host,
+          minutes.aiSummaryJson != null,
         );
       });
 
@@ -1046,6 +1049,26 @@ export class MinutesService {
       minutes.status === MeetingMinutesStatus.DRAFT &&
       (isAdmin || minutes.preparedBy === authUser.userId);
 
+    // aiSummaryJson khác NULL = biên bản có nguồn gốc AI. Expose 4 khối insight
+    // + meta (read-only) cho FE; đồng thời set cờ isAiGenerated để FE phân biệt
+    // nháp AI vs nháp tay và hiển thị banner "cần review".
+    const aiJson = (minutes.aiSummaryJson ?? null) as Record<
+      string,
+      unknown
+    > | null;
+    const isAiGenerated = aiJson !== null;
+    let aiSummary: MinutesAiSummaryDto | null = null;
+    if (aiJson !== null) {
+      const ai = aiJson;
+      aiSummary = new MinutesAiSummaryDto({
+        keyPoints: (ai.keyPoints as string[]) ?? [],
+        risks: (ai.risks as string[]) ?? [],
+        openQuestions: (ai.openQuestions as string[]) ?? [],
+        uncertainParts: (ai.uncertainParts as string[]) ?? [],
+        meta: (ai.meta as Record<string, unknown>) ?? null,
+      });
+    }
+
     return new MinutesDetailResponseDto({
       id: minutes.id,
       meetingId: minutes.meetingId,
@@ -1076,9 +1099,11 @@ export class MinutesService {
       }),
       mainContent: new MinutesMainContentDto({
         minutesContent: minutes.minutesContent,
-        decisions: minutes.decisionsJson,
-        actionItems: minutes.actionItemsJson,
+        decisions: minutes.decisionsJson as any,
+        actionItems: minutes.actionItemsJson as any,
       }),
+      aiSummary,
+      isAiGenerated,
       relatedResources: new MinutesRelatedResourcesDto({
         transcript,
         recording,
@@ -1123,6 +1148,7 @@ export class MinutesService {
       'minutesContent',
       'decisionsJson',
       'actionItemsJson',
+      'aiSummary',
     ];
     if (!updatableFields.some((f) => dto[f] !== undefined)) {
       throw new BadRequestException({
@@ -1199,6 +1225,26 @@ export class MinutesService {
             id: item.id ?? randomUUID(),
           })) as any;
         }
+        // aiSummary: merge 4 mảng insight, GIỮ NGUYÊN meta (provenance) —
+        // người dùng không được ghi đè provider/model/generatedAt.
+        if (dto.aiSummary !== undefined) {
+          const existingAi = (minutes.aiSummaryJson ?? {}) as Record<
+            string,
+            unknown
+          >;
+          const merged: Record<string, unknown> = { ...existingAi };
+          for (const key of [
+            'keyPoints',
+            'risks',
+            'openQuestions',
+            'uncertainParts',
+          ] as const) {
+            if (dto.aiSummary[key] !== undefined) {
+              merged[key] = dto.aiSummary[key];
+            }
+          }
+          minutes.aiSummaryJson = merged;
+        }
         if (meeting?.status === MeetingStatus.COMPLETED) {
           const participants = await manager
             .getRepository(MeetingParticipantEntity)
@@ -1245,6 +1291,7 @@ export class MinutesService {
           minutesContent: result.saved.minutesContent,
           decisionsJson: result.saved.decisionsJson,
           actionItemsJson: result.saved.actionItemsJson,
+          aiSummaryJson: result.saved.aiSummaryJson,
           attendeesSnapshotJson: result.saved.attendeesSnapshotJson,
           preparedBy: result.saved.preparedBy,
           updatedAt: result.saved.updatedAt,
@@ -1598,6 +1645,7 @@ export class MinutesService {
         'minutes.versionNo',
         'minutes.createdAt',
         'minutes.preparedBy',
+        'minutes.aiSummaryJson',
         'meeting.id',
         'meeting.title',
         'meeting.actualStartTime',
@@ -1683,6 +1731,7 @@ export class MinutesService {
               hostEntity.email,
             )
           : null,
+        minutes.aiSummaryJson != null,
       );
     });
 

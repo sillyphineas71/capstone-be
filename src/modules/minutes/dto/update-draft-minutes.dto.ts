@@ -1,52 +1,28 @@
-﻿import {
+import {
   IsOptional,
   IsString,
   IsArray,
-  IsUUID,
   IsInt,
-  Min,
-  Max,
   ValidateNested,
-  IsIn,
-  IsObject,
   ArrayMaxSize,
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export class DecisionItemDto {
-  @IsString()
-  @MaxLength(500)
-  decision: string;
+import {
+  MinutesActionItemDto,
+  MinutesAiSummaryEditDto,
+  MinutesDecisionItemDto,
+} from './minutes-content.dto.js';
 
-  @IsOptional()
-  @IsUUID('4')
-  responsibleUserId?: string | null;
-}
-
-export class ActionItemDto {
-  @IsOptional()
-  @IsUUID('4')
-  id?: string;
-
-  @IsString()
-  @MaxLength(255)
-  title: string;
-
-  @IsOptional()
-  @IsUUID('4')
-  assigneeUserId?: string | null;
-
-  @IsOptional()
-  @IsString()
-  dueDate?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @IsIn(['low', 'medium', 'high'])
-  priority?: string = 'medium';
-}
-
+/**
+ * PATCH /meeting-minutes/:id (UC-MKM-04) — cập nhật bản nháp.
+ *
+ * Dùng schema GIÀU THỐNG NHẤT ([[minutes-content.dto]]) cho decisions/actionItems
+ * nên người dùng sửa tay được TRỌN VẸN kết quả AI mà không mất confidence/
+ * evidence. `aiSummary` cho phép sửa các khối insight (keyPoints/risks/
+ * openQuestions/uncertainParts); `meta` được service giữ nguyên, không cho sửa.
+ */
 export class UpdateDraftMinutesDto {
   @IsInt()
   versionNo: number;
@@ -65,13 +41,18 @@ export class UpdateDraftMinutesDto {
   @IsArray()
   @ArrayMaxSize(100)
   @ValidateNested({ each: true })
-  @Type(() => DecisionItemDto)
-  decisionsJson?: DecisionItemDto[];
+  @Type(() => MinutesDecisionItemDto)
+  decisionsJson?: MinutesDecisionItemDto[];
 
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(100)
   @ValidateNested({ each: true })
-  @Type(() => ActionItemDto)
-  actionItemsJson?: ActionItemDto[];
+  @Type(() => MinutesActionItemDto)
+  actionItemsJson?: MinutesActionItemDto[];
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MinutesAiSummaryEditDto)
+  aiSummary?: MinutesAiSummaryEditDto;
 }

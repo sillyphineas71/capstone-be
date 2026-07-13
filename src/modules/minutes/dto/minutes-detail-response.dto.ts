@@ -2,6 +2,10 @@
 // Nested DTOs for 4 data groups: generalInfo, mainContent, relatedResources, attachments
 
 import { MeetingMinutesStatus } from '../entities/meeting-minutes.entity.js';
+import {
+  MinutesActionItem,
+  MinutesDecisionItem,
+} from './minutes-content.dto.js';
 
 /* ── Nested DTOs ── */
 
@@ -48,10 +52,26 @@ export class MinutesGeneralInfoDto {
 
 export class MinutesMainContentDto {
   minutesContent: string;
-  decisions: Record<string, unknown> | null;
-  actionItems: Record<string, unknown> | null;
+  decisions: MinutesDecisionItem[] | null;
+  actionItems: MinutesActionItem[] | null;
 
   constructor(data: MinutesMainContentDto) {
+    Object.assign(this, data);
+  }
+}
+
+/**
+ * Khối insight do AI sinh — chỉ có giá trị khi biên bản có nguồn gốc AI
+ * (aiSummaryJson khác NULL). `meta` là read-only (provider/model/generatedAt).
+ */
+export class MinutesAiSummaryDto {
+  keyPoints: string[];
+  risks: string[];
+  openQuestions: string[];
+  uncertainParts: string[];
+  meta: Record<string, unknown> | null;
+
+  constructor(data: MinutesAiSummaryDto) {
     Object.assign(this, data);
   }
 }
@@ -121,6 +141,10 @@ export class MinutesDetailResponseDto {
   versionNo: number;
   generalInfo: MinutesGeneralInfoDto;
   mainContent: MinutesMainContentDto;
+  /** Khối insight AI (null nếu biên bản soạn tay). */
+  aiSummary: MinutesAiSummaryDto | null;
+  /** true nếu biên bản có nguồn gốc AI (aiSummaryJson khác NULL). */
+  isAiGenerated: boolean;
   relatedResources: MinutesRelatedResourcesDto;
   attachments: MinutesAttachmentSummaryDto[];
   preparedBy: { id: string; fullName: string; email: string } | null;

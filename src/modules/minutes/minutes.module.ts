@@ -11,7 +11,17 @@ import { AuthModule } from '../auth/auth.module.js';
 import { StorageModule } from '../storage/storage.module.js';
 import { MinutesController } from './controllers/minutes.controller.js';
 import { MeetingMinutesListController } from './controllers/minutes-list.controller.js';
+import { MinutesAiDraftController } from './controllers/minutes-ai-draft.controller.js';
 import { MinutesService } from './services/minutes.service.js';
+import { MinutesAiDraftService } from './services/minutes-ai-draft.service.js';
+import { MinutesAiDraftProcessor } from './processors/minutes-ai-draft.processor.js';
+import { MockLlmProvider } from './ai/mock-llm.provider.js';
+import { OllamaLlmProvider } from './ai/ollama-llm.provider.js';
+import { LlmProviderFactory } from './ai/llm-provider.factory.js';
+import {
+  CONTEXT_RETRIEVER,
+  EmptyContextRetriever,
+} from './ai/context-retriever.port.js';
 
 @Module({
   imports: [
@@ -24,8 +34,21 @@ import { MinutesService } from './services/minutes.service.js';
     StorageModule,
     TypeOrmModule.forFeature([MeetingMinutesEntity, MediaFileEntity]),
   ],
-  controllers: [MinutesController, MeetingMinutesListController],
-  providers: [MinutesService],
+  controllers: [
+    MinutesController,
+    MeetingMinutesListController,
+    MinutesAiDraftController,
+  ],
+  providers: [
+    MinutesService,
+    MinutesAiDraftService,
+    // MKM-AI-01 worker stack (plan 7.2-7.3): processor + provider ports
+    MinutesAiDraftProcessor,
+    MockLlmProvider,
+    OllamaLlmProvider,
+    LlmProviderFactory,
+    { provide: CONTEXT_RETRIEVER, useClass: EmptyContextRetriever },
+  ],
   exports: [TypeOrmModule],
 })
 export class MinutesModule {}

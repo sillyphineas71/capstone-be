@@ -762,6 +762,57 @@ describe('updateDraft service logic', () => {
       ),
     ).rejects.toThrow(ConflictException);
   });
+
+  it('preserves AI confidence/evidence when editing decisions manually', async () => {
+    const result = await service.updateDraft(
+      'min-1',
+      {
+        versionNo: 1,
+        decisionsJson: [
+          {
+            text: 'Chốt dùng schema thống nhất',
+            confidence: 'high',
+            evidence: 'phút 12:30 transcript',
+          },
+        ],
+      },
+      { userId: 'host-1' },
+    );
+    expect(result.decisionsJson[0]).toMatchObject({
+      text: 'Chốt dùng schema thống nhất',
+      confidence: 'high',
+      evidence: 'phút 12:30 transcript',
+    });
+  });
+
+  it('merges aiSummary edits but keeps read-only meta (provenance)', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      id: 'min-1',
+      meetingId: 'meet-1',
+      preparedBy: 'host-1',
+      status: MeetingMinutesStatus.DRAFT,
+      versionNo: 1,
+      title: 'Old Title',
+      aiSummaryJson: {
+        keyPoints: ['cũ'],
+        risks: [],
+        openQuestions: [],
+        uncertainParts: [],
+        meta: { provider: 'mock', modelName: 'x', generatedByJobId: 'job-1' },
+      },
+    });
+    const result = await service.updateDraft(
+      'min-1',
+      { versionNo: 1, aiSummary: { keyPoints: ['đã sửa tay'], risks: ['R1'] } },
+      { userId: 'host-1' },
+    );
+    expect(result.aiSummaryJson).toMatchObject({
+      keyPoints: ['đã sửa tay'],
+      risks: ['R1'],
+      // meta phải được giữ nguyên, không cho ghi đè
+      meta: { provider: 'mock', modelName: 'x', generatedByJobId: 'job-1' },
+    });
+  });
 });
 
 describe('deleteDraft service logic', () => {

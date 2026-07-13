@@ -45,6 +45,8 @@ import { seedReportMeetingActivityExportPermission } from '../src/database/seeds
 import { seedDepartmentReadPermission } from '../src/database/seeds/20260704000001-SeedDepartmentReadPermission';
 import { seedCameraDomainRbacPermissions } from '../src/database/seeds/20260704000002-SeedCameraDomainRbacPermissions';
 import { seedNoShowReadPermission } from '../src/database/seeds/20260705000001-SeedNoShowReadPermission';
+import { seedMeetingMinutesAiDraftPermission } from '../src/database/seeds/20260707000001-SeedMeetingMinutesAiDraftPermission';
+import { seedAiMinutesSummaryConfig } from '../src/database/seeds/20260707000002-SeedAiMinutesSummaryConfig';
 import { seedImportParticipantsPermission } from '../src/database/seeds/20260710000001-SeedImportParticipantsPermission';
 import { seedImportAccountsPermission } from '../src/database/seeds/20260710000002-SeedImportAccountsPermission';
 
@@ -88,6 +90,8 @@ const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<voi
   { name: '20260704000001 - SeedDepartmentReadPermission', fn: seedDepartmentReadPermission },
   { name: '20260704000002 - SeedCameraDomainRbacPermissions', fn: seedCameraDomainRbacPermissions },
   { name: '20260705000001 - SeedNoShowReadPermission', fn: seedNoShowReadPermission },
+  { name: '20260707000001 - SeedMeetingMinutesAiDraftPermission', fn: seedMeetingMinutesAiDraftPermission },
+  { name: '20260707000002 - SeedAiMinutesSummaryConfig', fn: seedAiMinutesSummaryConfig },
   { name: '20260710000001 - SeedImportParticipantsPermission', fn: seedImportParticipantsPermission },
   { name: '20260710000002 - SeedImportAccountsPermission', fn: seedImportAccountsPermission },
 ];

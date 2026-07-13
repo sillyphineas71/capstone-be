@@ -9,6 +9,7 @@ export class UpdateDraftMinutesResponseDto {
   minutesContent: string;
   decisionsJson: any;
   actionItemsJson: any;
+  aiSummaryJson: any;
   attendeesSnapshotJson: any;
   preparedBy: string | null;
   updatedAt: Date;
