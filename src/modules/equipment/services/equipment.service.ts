@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   ConflictException,
+  NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -16,6 +17,7 @@ import {
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
+import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
@@ -177,6 +179,129 @@ export class EquipmentService {
     }
 
     // 7. Map response
+    return new EquipmentResponseDto({
+      id: saved.id,
+      equipmentCode: saved.equipmentCode,
+      equipmentName: saved.equipmentName,
+      equipmentType: saved.equipmentType,
+      serialNumber: saved.serialNumber,
+      brand: saved.brand,
+      model: saved.model,
+      purchaseDate: saved.purchaseDate,
+      assetStatus: saved.assetStatus,
+      healthStatus: saved.healthStatus,
+      currentRoomId: saved.currentRoomId,
+      createdAt: saved.createdAt,
+    });
+  }
+
+  /**
+   * UC-62 — Báo lỗi / chuyển bảo trì thiết bị.
+   * Chỉ chiều "xấu đi": set healthStatus (warning/faulty/offline) và/hoặc
+   * assetStatus (maintenance). Mirror create: transaction cập nhật + audit fail-separate.
+   * KHÔNG set lastMaintenanceAt; KHÔNG đụng currentRoomId (gỡ khỏi phòng là UC-65).
+   */
+  async reportFault(
+    equipmentId: string,
+    dto: ReportEquipmentFaultDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<EquipmentResponseDto> {
+    // Phase A — validate
+    // A.1: phải có ít nhất một trong (healthStatus, assetStatus) — kiểm TRƯỚC load
+    if (!dto.healthStatus && !dto.assetStatus) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Phai cung cap it nhat healthStatus hoac assetStatus',
+        error: { code: 'FAULT_NO_CHANGE', details: {} },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault`,
+      });
+    }
+
+    // A.2: load equipment (findOne tự loại soft-deleted nhờ @DeleteDateColumn)
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault`,
+      });
+    }
+
+    // A.3: thiết bị retired/lost không cho báo lỗi
+    if (
+      equipment.assetStatus === AssetStatus.RETIRED ||
+      equipment.assetStatus === AssetStatus.LOST
+    ) {
+      throw new ConflictException({
+        success: false,
+        message: 'Thiet bi da thanh ly / mat, khong the bao loi',
+        error: {
+          code: 'EQUIPMENT_NOT_REPORTABLE',
+          details: { assetStatus: equipment.assetStatus },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault`,
+      });
+    }
+
+    // A.4: snapshot trạng thái cũ cho audit
+    const oldValue = {
+      healthStatus: equipment.healthStatus,
+      assetStatus: equipment.assetStatus,
+    };
+
+    // Phase B — cập nhật trong transaction
+    const saved = await this.dataSource.transaction(async (em) => {
+      if (dto.healthStatus) {
+        equipment.healthStatus = dto.healthStatus;
+      }
+      if (dto.assetStatus) {
+        equipment.assetStatus = dto.assetStatus;
+      }
+      equipment.lastIssueReportedAt = new Date();
+      equipment.lastIssueNote = dto.issueNote;
+      // KHÔNG set lastMaintenanceAt; KHÔNG đụng currentRoomId / assigned_*
+      return em.save(EquipmentEntity, equipment);
+    });
+
+    // Phase C — audit fail-separate (transaction riêng, không rollback thiết bị)
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'equipment',
+          entityId: saved.id,
+          oldValueJson: oldValue,
+          newValueJson: {
+            healthStatus: saved.healthStatus,
+            assetStatus: saved.assetStatus,
+            lastIssueReportedAt: saved.lastIssueReportedAt,
+            lastIssueNote: saved.lastIssueNote,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.WARNING,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit log for equipment fault ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    // Map response — tái dùng EquipmentResponseDto (UC-61)
     return new EquipmentResponseDto({
       id: saved.id,
       equipmentCode: saved.equipmentCode,

@@ -4,6 +4,9 @@ import {
   HttpCode,
   HttpStatus,
   Ip,
+  Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   UseGuards,
   UsePipes,
@@ -24,6 +27,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 
 import { EquipmentService } from '../services/equipment.service.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
+import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 @ApiTags('Equipment')
@@ -77,6 +81,64 @@ export class EquipmentController {
     return {
       success: true,
       message: 'Dang ky thiet bi thanh cong',
+      data: result,
+    };
+  }
+
+  @Patch(':equipmentId/fault')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.report_fault')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Bao loi / chuyen bao tri thiet bi' })
+  @ApiBody({ type: ReportEquipmentFaultDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Cap nhat trang thai loi thanh cong',
+  })
+  @ApiResponse({ status: 400, description: 'Du lieu DTO khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({
+    status: 403,
+    description: 'Khong co quyen equipment.report_fault',
+  })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  @ApiResponse({
+    status: 409,
+    description: 'Thiet bi retired/lost khong the bao loi',
+  })
+  @ApiResponse({ status: 422, description: 'Khong co status thay doi' })
+  async reportFault(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Body() dto: ReportEquipmentFaultDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.equipmentService.reportFault(
+      equipmentId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Cap nhat trang thai loi thiet bi thanh cong',
       data: result,
     };
   }
