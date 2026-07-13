@@ -5,6 +5,7 @@ import {
   ConflictException,
   ForbiddenException,
   UnprocessableEntityException,
+  BadRequestException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
@@ -58,6 +59,9 @@ import {
   NotificationPriority,
 } from '../../notifications/entities/notification.entity.js';
 import { UserEntity } from '../../accounts/entities/user.entity.js';
+import { MeetingNoteEntity } from '../../meetings/entities/meeting-note.entity.js';
+import { TimelineQueryDto } from '../dto/timeline-query.dto.js';
+import { TimelineItemDto } from '../dto/timeline-item.dto.js';
 import { DepartmentEntity } from '../../accounts/entities/department.entity.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 
@@ -3175,6 +3179,206 @@ export class LiveMeetingService {
     const totalPages = Math.ceil(total / limit);
 
     return { data, meta: { page, limit, total, totalPages } };
+  }
+
+  // ------------------------------------------------------------------
+  //  UC-99: View Meeting Timeline (READ-only, gộp 3 nguồn)
+  // ------------------------------------------------------------------
+
+  /**
+   * UC-99 — Timeline cuộc họp: gộp meeting_events (start/end/warning/extension_*)
+   * + attendance_events (check_in/check_out) + meeting_notes (theo visibility)
+   * thành 1 danh sách sắp theo thời gian, phân trang.
+   *
+   * - Quyền theo QUAN HỆ: host/participant của meeting (GỌI resolveMeetingRole).
+   * - Note-visibility BẮT BUỘC: GỌI buildVisibilityPredicate (không chép SQL).
+   * - App-merge: query 3 nguồn → gộp → sort → slice; total = tổng row hợp lệ.
+   * - READ-only, không mutation. KHÔNG sửa listMeetingNotes/2 private helper.
+   */
+  async getMeetingTimeline(
+    meetingId: string,
+    query: TimelineQueryDto,
+    currentUserId: string,
+  ): Promise<{
+    data: TimelineItemDto[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const sortDir: 'asc' | 'desc' = query.sort === 'desc' ? 'desc' : 'asc';
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+
+    if (from && to && from.getTime() > to.getTime()) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Khoang thoi gian khong hop le (from > to)',
+        error: { code: 'INVALID_DATE_RANGE', details: {} },
+      });
+    }
+
+    // ── A. Load meeting (404) ──
+    const meeting = await this.dataSource
+      .getRepository(MeetingEntity)
+      .findOne({ where: { id: meetingId } });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay cuoc hop',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // ── B. Quyền quan hệ: host HOẶC participant (GỌI resolveMeetingRole) ──
+    const participant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({ where: { meetingId, userId: currentUserId } });
+    const role = this.resolveMeetingRole(meeting, participant, currentUserId);
+    if (!role.isHost && !role.isParticipant) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Ban khong phai host/participant cua cuoc hop nay',
+        error: { code: 'NOT_A_MEETING_PARTICIPANT', details: {} },
+      });
+    }
+
+    const types = query.types
+      ? query.types
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : null;
+    const wantCategory = (c: string): boolean => !types || types.includes(c);
+
+    const items: Array<{
+      time: Date;
+      category: 'meeting_event' | 'attendance' | 'note';
+      type: string;
+      actorUserId: string | null;
+      detail: string | null;
+      refId: string;
+    }> = [];
+
+    // ── C1. meeting_events (start/end/warning/extension_*) ──
+    if (wantCategory('meeting_event')) {
+      const MEETING_EVENT_TYPES = [
+        MeetingEventType.MEETING_STARTED,
+        MeetingEventType.MEETING_ENDED,
+        MeetingEventType.WARNING_SENT,
+        MeetingEventType.EXTENSION_REQUESTED,
+        MeetingEventType.EXTENSION_APPROVED,
+        MeetingEventType.EXTENSION_REJECTED,
+      ];
+      const meQb = this.dataSource
+        .getRepository(MeetingEventEntity)
+        .createQueryBuilder('me')
+        .where('me.meetingId = :meetingId', { meetingId })
+        .andWhere('me.eventType IN (:...types)', {
+          types: MEETING_EVENT_TYPES,
+        });
+      if (from) meQb.andWhere('me.eventTime >= :from', { from });
+      if (to) meQb.andWhere('me.eventTime <= :to', { to });
+      const events = await meQb.getMany();
+      for (const e of events) {
+        items.push({
+          time: e.eventTime,
+          category: 'meeting_event',
+          type: e.eventType,
+          actorUserId: e.actorUserId,
+          detail: e.description,
+          refId: e.id,
+        });
+      }
+    }
+
+    // ── C2. attendance_events (check_in/check_out) ──
+    if (wantCategory('attendance')) {
+      const aeQb = this.dataSource
+        .getRepository(AttendanceEventEntity)
+        .createQueryBuilder('ae')
+        .where('ae.meetingId = :meetingId', { meetingId })
+        .andWhere('ae.eventType IN (:...types)', {
+          types: ['check_in', 'check_out'],
+        });
+      if (from) aeQb.andWhere('ae.eventTime >= :from', { from });
+      if (to) aeQb.andWhere('ae.eventTime <= :to', { to });
+      const atts = await aeQb.getMany();
+      for (const a of atts) {
+        items.push({
+          time: a.eventTime,
+          category: 'attendance',
+          type: a.eventType,
+          actorUserId: a.userId,
+          detail: null,
+          refId: a.id,
+        });
+      }
+    }
+
+    // ── C3. meeting_notes (BẮT BUỘC qua buildVisibilityPredicate) ──
+    if (wantCategory('note')) {
+      const mnQb = this.dataSource
+        .getRepository(MeetingNoteEntity)
+        .createQueryBuilder('mn')
+        .where('mn.meetingId = :meetingId', { meetingId });
+      // GỌI helper hiện có — KHÔNG chép/lỏng hơn logic visibility.
+      await this.buildVisibilityPredicate(mnQb, meetingId, currentUserId);
+      if (from) mnQb.andWhere('mn.createdAt >= :from', { from });
+      if (to) mnQb.andWhere('mn.createdAt <= :to', { to });
+      const notes = await mnQb.getMany();
+      for (const n of notes) {
+        items.push({
+          time: n.createdAt,
+          category: 'note',
+          type: 'note',
+          actorUserId: n.authorId,
+          detail: n.content,
+          refId: n.id,
+        });
+      }
+    }
+
+    // ── E. Merge + sort + slice ──
+    items.sort((x, y) =>
+      sortDir === 'asc'
+        ? x.time.getTime() - y.time.getTime()
+        : y.time.getTime() - x.time.getTime(),
+    );
+    const total = items.length;
+    const pageItems = items.slice((page - 1) * limit, page * limit);
+
+    // ── Batch actorName (1 query, tránh N+1) ──
+    const actorIds = [
+      ...new Set(
+        pageItems
+          .map((i) => i.actorUserId)
+          .filter((x): x is string => x != null),
+      ),
+    ];
+    const nameMap = new Map<string, string>();
+    if (actorIds.length > 0) {
+      const users = await this.dataSource
+        .getRepository(UserEntity)
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.fullName'])
+        .where('u.id IN (:...ids)', { ids: actorIds })
+        .getMany();
+      for (const u of users) nameMap.set(u.id, u.fullName);
+    }
+
+    const data: TimelineItemDto[] = pageItems.map((i) => ({
+      time: i.time.toISOString(),
+      category: i.category,
+      type: i.type,
+      actorUserId: i.actorUserId,
+      actorName: i.actorUserId ? (nameMap.get(i.actorUserId) ?? null) : null,
+      detail: i.detail,
+      refId: i.refId,
+    }));
+
+    return { data, total, page, limit };
   }
 
   // ------------------------------------------------------------------
