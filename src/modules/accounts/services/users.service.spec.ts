@@ -70,6 +70,7 @@ describe('UsersService', () => {
           cb(em),
         ),
       manager: em,
+      getRepository: jest.fn(),
     } as unknown as jest.Mocked<DataSource>;
 
     // Mock PasswordGeneratorService
@@ -2421,6 +2422,79 @@ describe('UsersService', () => {
         service.unlockUser(targetUserId, actorId, {}),
       ).rejects.toThrow(NotFoundException);
       expect(em.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listUsers (UC-13 search)', () => {
+    let findAndCount: jest.Mock;
+
+    beforeEach(() => {
+      findAndCount = jest.fn().mockResolvedValue([[], 0]);
+      (dataSource.getRepository as jest.Mock).mockReturnValue({ findAndCount });
+    });
+
+    it('[T1/T2/T3/T4] search → where là mảng OR 3 nhánh (fullName/email/employeeCode), MỖI nhánh giữ baseWhere (ACTIVE + deletedAt)', async () => {
+      await service.listUsers({ search: 'abc', page: 1, limit: 20 });
+
+      const opts = findAndCount.mock.calls[0][0];
+      expect(Array.isArray(opts.where)).toBe(true);
+      expect(opts.where).toHaveLength(3);
+
+      // T4: mọi nhánh OR đều kèm baseWhere -> không lộ INACTIVE/deleted
+      for (const branch of opts.where) {
+        expect(branch.accountStatus).toBe(AccountStatus.ACTIVE);
+        expect(branch.deletedAt).toBeDefined(); // IsNull()
+      }
+
+      // T2/T3/T1: từng nhánh field
+      expect(opts.where[0].fullName).toBeDefined();
+      expect(opts.where[1].email).toBeDefined();
+      expect(opts.where[2].employeeCode).toBeDefined();
+    });
+
+    it('[T6] nhánh employeeCode dùng ILike (null không khớp ở tầng DB — semantics ILIKE)', async () => {
+      await service.listUsers({ search: 'EMP', page: 1, limit: 20 });
+      const opts = findAndCount.mock.calls[0][0];
+      // FindOperator ILike có type 'ilike'
+      expect(opts.where[2].employeeCode?.type).toBe('ilike');
+    });
+
+    it('[T5] select có employeeCode và map output có employeeCode', async () => {
+      findAndCount.mockResolvedValue([
+        [{ id: 'u1', fullName: 'A', email: 'a@x.com', employeeCode: 'EMP1' }],
+        1,
+      ]);
+
+      const res = await service.listUsers({ search: 'a', page: 1, limit: 20 });
+
+      const opts = findAndCount.mock.calls[0][0];
+      expect(opts.select.employeeCode).toBe(true);
+      expect(opts.select.id).toBe(true);
+      expect(opts.select.fullName).toBe(true);
+      expect(opts.select.email).toBe(true);
+      expect(res.data[0]).toEqual({
+        id: 'u1',
+        fullName: 'A',
+        email: 'a@x.com',
+        employeeCode: 'EMP1',
+      });
+      expect(res.total).toBe(1);
+    });
+
+    it('[T7] phân trang & sort giữ nguyên (skip/take/order)', async () => {
+      await service.listUsers({ search: 'a', page: 2, limit: 10 });
+      const opts = findAndCount.mock.calls[0][0];
+      expect(opts.skip).toBe(10);
+      expect(opts.take).toBe(10);
+      expect(opts.order).toEqual({ fullName: 'asc' });
+    });
+
+    it('[T8] không search → where = baseWhere (object, không mảng OR), giữ ACTIVE + deletedAt', async () => {
+      await service.listUsers({ page: 1, limit: 20 });
+      const opts = findAndCount.mock.calls[0][0];
+      expect(Array.isArray(opts.where)).toBe(false);
+      expect(opts.where.accountStatus).toBe(AccountStatus.ACTIVE);
+      expect(opts.where.deletedAt).toBeDefined();
     });
   });
 });

@@ -9,4 +9,11 @@ export class UserListItemDto {
 
   @ApiProperty({ description: 'Email' })
   email: string;
+
+  @ApiProperty({
+    description: 'Mã nhân viên',
+    required: false,
+    nullable: true,
+  })
+  employeeCode?: string | null;
 }

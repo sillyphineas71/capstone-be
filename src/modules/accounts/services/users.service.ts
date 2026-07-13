@@ -1623,10 +1623,14 @@ export class UsersService {
       accountStatus: AccountStatus.ACTIVE,
     };
 
+    // UC-13: search khớp fullName / email / employee_code (OR).
+    // Mỗi nhánh OR BẮT BUỘC spread ...baseWhere để giữ ACTIVE + deletedAt IS NULL
+    // (không lộ tài khoản INACTIVE/đã xóa).
     const where = search
       ? [
           { ...baseWhere, fullName: ILike(`%${search}%`) },
           { ...baseWhere, email: ILike(`%${search}%`) },
+          { ...baseWhere, employeeCode: ILike(`%${search}%`) },
         ]
       : baseWhere;
 
@@ -1634,7 +1638,12 @@ export class UsersService {
       .getRepository(UserEntity)
       .findAndCount({
         where,
-        select: { id: true, fullName: true, email: true },
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          employeeCode: true,
+        },
         order: { fullName: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -1644,6 +1653,7 @@ export class UsersService {
       id: u.id,
       fullName: u.fullName,
       email: u.email,
+      employeeCode: u.employeeCode,
     }));
 
     return { data, total };
