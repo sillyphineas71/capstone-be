@@ -7,7 +7,15 @@ import {
   UnprocessableEntityException,
   ForbiddenException,
 } from '@nestjs/common';
-import { DataSource, ILike, IsNull, In, Not, MoreThan } from 'typeorm';
+import {
+  DataSource,
+  ILike,
+  IsNull,
+  In,
+  Not,
+  MoreThan,
+  Brackets,
+} from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 
 import {
@@ -61,6 +69,8 @@ import {
 import { UserPublicProfileResponseDto } from '../dto/user-public-profile-response.dto.js';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
+import { ManageUsersQueryDto } from '../dto/manage-users-query.dto.js';
+import { ManageUserItemDto } from '../dto/manage-user-item.dto.js';
 
 export interface UserClientContext {
   ipAddress?: string;
@@ -1654,6 +1664,146 @@ export class UsersService {
       fullName: u.fullName,
       email: u.email,
       employeeCode: u.employeeCode,
+    }));
+
+    return { data, total };
+  }
+
+  /**
+   * UC-14 — Lọc danh sách tài khoản (endpoint quản trị GET /users/manage).
+   *
+   * ENDPOINT TÁCH RIÊNG với listUsers (autocomplete) — KHÔNG đụng listUsers.
+   * - Filter optional AND: departmentId, roleId (subquery), accountStatus, search (ILIKE).
+   * - Mặc định chỉ deleted_at IS NULL (mọi trạng thái); accountStatus chỉ lọc khi truyền.
+   * - Business Admin giới hạn department scope; System Admin không scope.
+   * - Sort qua SORT_MAP allowlist (chống inject). roles[] lấy bằng batch query (tránh N+1).
+   */
+  async listUsersForManagement(
+    query: ManageUsersQueryDto,
+    actorId: string,
+  ): Promise<{ data: ManageUserItemDto[]; total: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const search = query.search?.trim();
+    const now = new Date();
+
+    // ── A. Department scope ──
+    const actorRoles = await this.dataSource.manager.find(UserRoleEntity, {
+      where: { userId: actorId, isActive: true },
+      relations: { role: true },
+    });
+    const isSystemAdmin = actorRoles.some(
+      (ur) => ur.role?.isSystemRole === true,
+    );
+
+    let scopeIds: string[] | null = null;
+    if (!isSystemAdmin) {
+      const scope = await this.resolveDepartmentScope(actorId);
+      if (query.departmentId && !scope.has(query.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền xem tài khoản ngoài phạm vi quản lý.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+      if (scope.size === 0) {
+        return { data: [], total: 0 };
+      }
+      scopeIds = [...scope];
+    }
+
+    // ── B. Query builder (base + filters + sort + pagination) ──
+    const qb = this.dataSource
+      .getRepository(UserEntity)
+      .createQueryBuilder('u')
+      .where('u.deletedAt IS NULL');
+
+    if (scopeIds) {
+      qb.andWhere('u.departmentId IN (:...scopeIds)', { scopeIds });
+    }
+    if (query.departmentId) {
+      qb.andWhere('u.departmentId = :departmentId', {
+        departmentId: query.departmentId,
+      });
+    }
+    if (query.accountStatus) {
+      qb.andWhere('u.accountStatus = :accountStatus', {
+        accountStatus: query.accountStatus,
+      });
+    }
+    if (query.roleId) {
+      // Subquery (KHÔNG innerJoin) để không nhân dòng làm sai total/pagination.
+      qb.andWhere(
+        'u.id IN (SELECT ur.user_id FROM user_roles ur WHERE ur.role_id = :roleId AND ur.is_active = true AND (ur.expired_at IS NULL OR ur.expired_at > :now))',
+        { roleId: query.roleId, now },
+      );
+    }
+    if (search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('u.fullName ILIKE :s', { s: `%${search}%` })
+            .orWhere('u.email ILIKE :s', { s: `%${search}%` })
+            .orWhere('u.employeeCode ILIKE :s', { s: `%${search}%` });
+        }),
+      );
+    }
+
+    // Sort qua allowlist SORT_MAP (KHÔNG đưa input trực tiếp vào orderBy).
+    const SORT_MAP: Record<string, string> = {
+      fullName: 'u.fullName',
+      email: 'u.email',
+      employeeCode: 'u.employeeCode',
+      accountStatus: 'u.accountStatus',
+      createdAt: 'u.createdAt',
+    };
+    const sortColumn = SORT_MAP[query.sortBy ?? 'fullName'] ?? 'u.fullName';
+    const sortDirection = (query.sortOrder ?? 'asc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
+
+    qb.select([
+      'u.id',
+      'u.fullName',
+      'u.email',
+      'u.employeeCode',
+      'u.accountStatus',
+      'u.departmentId',
+    ])
+      .orderBy(sortColumn, sortDirection)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [users, total] = await qb.getManyAndCount();
+
+    // ── C. Batch roles (1 query cho cả trang — tránh N+1) ──
+    const userIds = users.map((u) => u.id);
+    const rolesMap = new Map<string, string[]>();
+    if (userIds.length > 0) {
+      const userRoles = await this.dataSource
+        .getRepository(UserRoleEntity)
+        .createQueryBuilder('ur')
+        .innerJoinAndSelect('ur.role', 'r')
+        .where('ur.userId IN (:...userIds)', { userIds })
+        .andWhere('ur.isActive = true')
+        .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > :now)', { now })
+        .getMany();
+
+      for (const ur of userRoles) {
+        const list = rolesMap.get(ur.userId) ?? [];
+        list.push(ur.role.roleCode);
+        rolesMap.set(ur.userId, list);
+      }
+    }
+
+    // ── D. Map output ──
+    const data: ManageUserItemDto[] = users.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+      employeeCode: u.employeeCode,
+      accountStatus: u.accountStatus,
+      departmentId: u.departmentId,
+      roles: rolesMap.get(u.id) ?? [],
     }));
 
     return { data, total };

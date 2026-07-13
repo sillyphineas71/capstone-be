@@ -10,6 +10,7 @@ import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
 import { LockUserDto } from '../dto/lock-user.dto.js';
+import { ManageUsersQueryDto } from '../dto/manage-users-query.dto.js';
 import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -27,6 +28,7 @@ describe('UsersController', () => {
     updateUserStatus: jest.Mock;
     lockUser: jest.Mock;
     unlockUser: jest.Mock;
+    listUsersForManagement: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -40,6 +42,7 @@ describe('UsersController', () => {
       updateUserStatus: jest.fn(),
       lockUser: jest.fn(),
       unlockUser: jest.fn(),
+      listUsersForManagement: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -714,6 +717,74 @@ describe('UsersController', () => {
       ) as string[];
 
       expect(permissions).toEqual(['accounts.user.unlock']);
+    });
+  });
+
+  describe('listUsersForManagement (UC-14)', () => {
+    it('[MC1] Success — gọi service đúng params & trả { success, message, data, meta }', async () => {
+      const query: ManageUsersQueryDto = { page: 2, limit: 10 };
+      const mockData = [
+        {
+          id: 'u1',
+          fullName: 'A',
+          email: 'a@x.com',
+          employeeCode: 'EMP1',
+          accountStatus: 'active',
+          departmentId: 'dep-1',
+          roles: ['MANAGER'],
+        },
+      ];
+      service.listUsersForManagement.mockResolvedValue({
+        data: mockData,
+        total: 25,
+      });
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.listUsersForManagement(query, request);
+
+      expect(service.listUsersForManagement).toHaveBeenCalledWith(
+        query,
+        'admin-uuid',
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Lấy danh sách tài khoản thành công',
+        data: mockData,
+        meta: { page: 2, limit: 10, total: 25, totalPages: 3 },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { listUsersForManagement } = UsersController.prototype;
+
+    it('[MC2] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        listUsersForManagement,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[MC3] Yêu cầu permission accounts.user.manage', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        listUsersForManagement,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.manage']);
+    });
+
+    it('[MC4] sortBy ngoài allowlist → DTO @IsIn reject', async () => {
+      const dto = plainToInstance(ManageUsersQueryDto, {
+        sortBy: 'passwordHash',
+      });
+      const errors = await validate(dto);
+      const sortByError = errors.find((e) => e.property === 'sortBy');
+      expect(sortByError?.constraints).toHaveProperty('isIn');
     });
   });
 });

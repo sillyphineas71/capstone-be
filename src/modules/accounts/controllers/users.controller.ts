@@ -48,6 +48,8 @@ import { UserDetailResponseDto } from '../dto/user-detail-response.dto.js';
 import { UserPublicProfileResponseDto } from '../dto/user-public-profile-response.dto.js';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
+import { ManageUsersQueryDto } from '../dto/manage-users-query.dto.js';
+import { ManageUserItemDto } from '../dto/manage-user-item.dto.js';
 
 @ApiTags('Accounts')
 @Controller('users')
@@ -574,6 +576,61 @@ export class UsersController {
     return {
       success: true,
       message: 'Lấy danh sách người dùng thành công',
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // ⚠️ Route order: khai báo path tĩnh 'manage' TRƯỚC ':userId' để không bị
+  // pattern ':userId' nuốt "manage".
+  @Get('manage')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.manage')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Lọc danh sách tài khoản (quản trị)',
+    description:
+      'Cho phép System Admin (toàn hệ thống) và Business Admin (giới hạn department scope) lọc danh sách tài khoản theo phòng ban / vai trò / trạng thái, kết hợp tìm kiếm theo tên/email/mã NV, có sắp xếp và phân trang. Endpoint quản trị (khác endpoint autocomplete GET /users).',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Danh sách tài khoản (đã lọc, sắp xếp, phân trang).',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission accounts.user.manage) hoặc ngoài phạm vi department.',
+  })
+  async listUsersForManagement(
+    @Query() query: ManageUsersQueryDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: ManageUserItemDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+
+    const { data, total } = await this.usersService.listUsersForManagement(
+      query,
+      actorId,
+    );
+
+    return {
+      success: true,
+      message: 'Lấy danh sách tài khoản thành công',
       data,
       meta: {
         page,

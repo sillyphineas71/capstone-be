@@ -1,6 +1,6 @@
 ﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, Brackets } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -2495,6 +2495,240 @@ describe('UsersService', () => {
       expect(Array.isArray(opts.where)).toBe(false);
       expect(opts.where.accountStatus).toBe(AccountStatus.ACTIVE);
       expect(opts.where.deletedAt).toBeDefined();
+    });
+  });
+
+  describe('listUsersForManagement (UC-14 filter)', () => {
+    const actorId = 'actor-id';
+
+    type QbRecord = { name: string; args: unknown[] };
+    function makeQb(result: {
+      manyAndCount?: [unknown[], number];
+      many?: unknown[];
+    }) {
+      const records: QbRecord[] = [];
+      const qb: any = {};
+      const chain =
+        (name: string) =>
+        (...args: unknown[]) => {
+          records.push({ name, args });
+          return qb;
+        };
+      qb.where = chain('where');
+      qb.andWhere = chain('andWhere');
+      qb.orderBy = chain('orderBy');
+      qb.select = chain('select');
+      qb.skip = chain('skip');
+      qb.take = chain('take');
+      qb.innerJoinAndSelect = chain('innerJoinAndSelect');
+      qb.getManyAndCount = jest
+        .fn()
+        .mockResolvedValue(result.manyAndCount ?? [[], 0]);
+      qb.getMany = jest.fn().mockResolvedValue(result.many ?? []);
+      qb.records = records;
+      return qb;
+    }
+
+    function setup(opts: {
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      users?: { id: string }[];
+      total?: number;
+      userRoles?: { userId: string; role: { roleCode: string } }[];
+    }) {
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity && o?.where?.userId === actorId) {
+          return [
+            { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+          ];
+        }
+        if (entity === DepartmentEntity) return []; // collectDepartmentScope children
+        return [];
+      });
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity && o?.where?.id === actorId) {
+          return { departmentId: opts.actorDeptId ?? null };
+        }
+        return null;
+      });
+
+      const users = opts.users ?? [];
+      const mainQb = makeQb({
+        manyAndCount: [users, opts.total ?? users.length],
+      });
+      const rolesQb = makeQb({ many: opts.userRoles ?? [] });
+
+      (dataSource.getRepository as jest.Mock).mockImplementation(
+        (entity: unknown) => ({
+          createQueryBuilder: () =>
+            entity === UserRoleEntity ? rolesQb : mainQb,
+        }),
+      );
+
+      return { mainQb, rolesQb };
+    }
+
+    function andWheres(qb: any): unknown[] {
+      return (qb.records as QbRecord[])
+        .filter((r) => r.name === 'andWhere')
+        .map((r) => r.args[0]);
+    }
+    function hasAndWhereStr(qb: any, sub: string): boolean {
+      return andWheres(qb).some(
+        (a) => typeof a === 'string' && a.includes(sub),
+      );
+    }
+
+    it('[M1] filter departmentId → andWhere department_id', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ departmentId: 'dep-1' }, actorId);
+      expect(hasAndWhereStr(mainQb, 'u.departmentId = :departmentId')).toBe(
+        true,
+      );
+    });
+
+    it('[M2] filter accountStatus → andWhere account_status', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        { accountStatus: 'locked' },
+        actorId,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus = :accountStatus')).toBe(
+        true,
+      );
+    });
+
+    it('[M3] filter roleId → andWhere SUBQUERY user_roles (không innerJoin)', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ roleId: 'role-1' }, actorId);
+      expect(hasAndWhereStr(mainQb, 'SELECT ur.user_id FROM user_roles')).toBe(
+        true,
+      );
+      // KHÔNG innerJoin trên qb chính
+      expect(
+        (mainQb.records as QbRecord[]).some(
+          (r) => r.name === 'innerJoinAndSelect',
+        ),
+      ).toBe(false);
+    });
+
+    it('[M4] filter search → andWhere(Brackets) OR', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ search: 'abc' }, actorId);
+      expect(andWheres(mainQb).some((a) => a instanceof Brackets)).toBe(true);
+    });
+
+    it('[M5] tổ hợp nhiều filter (AND)', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        {
+          departmentId: 'dep-1',
+          accountStatus: 'active',
+          roleId: 'role-1',
+          search: 'x',
+        },
+        actorId,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.departmentId = :departmentId')).toBe(
+        true,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus = :accountStatus')).toBe(
+        true,
+      );
+      expect(hasAndWhereStr(mainQb, 'SELECT ur.user_id FROM user_roles')).toBe(
+        true,
+      );
+      expect(andWheres(mainQb).some((a) => a instanceof Brackets)).toBe(true);
+    });
+
+    it('[M6] mặc định (không filter) → chỉ deleted_at IS NULL, không lọc trạng thái', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({}, actorId);
+      const whereCall = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'where',
+      );
+      expect(whereCall?.args[0]).toBe('u.deletedAt IS NULL');
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus')).toBe(false);
+    });
+
+    it('[M7] sort allowlist → orderBy = SORT_MAP[sortBy], hướng sortOrder', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        { sortBy: 'email', sortOrder: 'desc' },
+        actorId,
+      );
+      const orderBy = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'orderBy',
+      );
+      expect(orderBy?.args).toEqual(['u.email', 'DESC']);
+    });
+
+    it('[M8] Business Admin — trong scope → andWhere department_id IN scope', async () => {
+      const { mainQb } = setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+      });
+      await service.listUsersForManagement({}, actorId);
+      expect(hasAndWhereStr(mainQb, 'u.departmentId IN (:...scopeIds)')).toBe(
+        true,
+      );
+    });
+
+    it('[M9] Business Admin — departmentId ngoài scope → 403 FORBIDDEN', async () => {
+      setup({ actorIsSystemAdmin: false, actorDeptId: 'admin-dept' });
+      await expect(
+        service.listUsersForManagement({ departmentId: 'other-dept' }, actorId),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('[M10] System Admin → KHÔNG andWhere scope', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({}, actorId);
+      expect(hasAndWhereStr(mainQb, 'scopeIds')).toBe(false);
+    });
+
+    it('[M11] phân trang → skip/take đúng', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ page: 3, limit: 10 }, actorId);
+      const skip = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'skip',
+      );
+      const take = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'take',
+      );
+      expect(skip?.args[0]).toBe(20);
+      expect(take?.args[0]).toBe(10);
+    });
+
+    it('[M12] roles map đúng + KHÔNG N+1 (1 query roles cho cả trang)', async () => {
+      const { rolesQb } = setup({
+        actorIsSystemAdmin: true,
+        users: [{ id: 'u1' }, { id: 'u2' }],
+        total: 2,
+        userRoles: [
+          { userId: 'u1', role: { roleCode: 'ADMIN' } },
+          { userId: 'u1', role: { roleCode: 'MANAGER' } },
+          { userId: 'u2', role: { roleCode: 'EMPLOYEE' } },
+        ],
+      });
+
+      const res = await service.listUsersForManagement({}, actorId);
+
+      expect(rolesQb.getMany).toHaveBeenCalledTimes(1); // 1 query cho cả trang
+      expect(res.data[0].roles).toEqual(['ADMIN', 'MANAGER']);
+      expect(res.data[1].roles).toEqual(['EMPLOYEE']);
+      expect(res.total).toBe(2);
+    });
+
+    it('[M13] trang rỗng (userIds=[]) → KHÔNG query roles', async () => {
+      const { rolesQb } = setup({
+        actorIsSystemAdmin: true,
+        users: [],
+        total: 0,
+      });
+      const res = await service.listUsersForManagement({}, actorId);
+      expect(rolesQb.getMany).not.toHaveBeenCalled();
+      expect(res.data).toEqual([]);
     });
   });
 });
