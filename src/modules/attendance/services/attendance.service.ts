@@ -7,7 +7,14 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not, LessThanOrEqual, MoreThan } from 'typeorm';
+import {
+  Repository,
+  IsNull,
+  Not,
+  LessThanOrEqual,
+  MoreThan,
+  In,
+} from 'typeorm';
 import {
   MeetingEntity,
   MeetingStatus,
@@ -28,6 +35,12 @@ import {
   AttendanceQueryStatusList,
 } from '../dto/query-attendance.dto.js';
 import { AttendanceItemDto } from '../dto/attendance-item.dto.js';
+import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
+import { toManualAttendanceResponse } from '../dto/manual-attendance-response.dto.js';
+import {
+  AttendanceRecordDetailResponseDto,
+  AttendanceEditHistoryItemDto,
+} from '../dto/attendance-record-detail-response.dto.js';
 
 interface ParticipantWithUser {
   participantId: string;
@@ -577,5 +590,76 @@ export class AttendanceService {
         error: 'INTERNAL_ERROR',
       });
     }
+  }
+
+  // ===== UC-82: getAttendanceRecordDetail (READ-only) =====
+  /**
+   * Xem chi tiết 1 bản ghi điểm danh + tên người/họp + editHistory (đọc lại audit_logs).
+   * READ-only: KHÔNG mutation/transaction/audit-ghi. KHÔNG đổi constructor —
+   * đọc audit qua attendanceRecordRepo.manager.getRepository(AuditLogEntity).
+   */
+  async getAttendanceRecordDetail(
+    meetingId: string,
+    recordId: string,
+  ): Promise<AttendanceRecordDetailResponseDto> {
+    // 1. Load record (kèm relation user + meeting cho tên); 404 nếu không có / khác meeting
+    const record = await this.attendanceRecordRepo.findOne({
+      where: { id: recordId, meetingId },
+      relations: { user: true, meeting: true },
+    });
+    if (!record) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Attendance record not found',
+        error: {
+          code: 'ATTENDANCE_RECORD_NOT_FOUND',
+          details: { meetingId, recordId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `/api/v1/meetings/${meetingId}/attendance/${recordId}`,
+      });
+    }
+
+    // 2. editHistory: BATCH 1 query audit_logs (entityId=recordId, actionType IN 4 loại), sort asc
+    const auditRepo =
+      this.attendanceRecordRepo.manager.getRepository(AuditLogEntity);
+    const auditRows = await auditRepo.find({
+      where: {
+        entityId: recordId,
+        actionType: In([
+          'create_manual_attendance',
+          'update_attendance_status',
+          'update_attendance_record',
+          'invalidate_attendance',
+        ]),
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    const editHistory: AttendanceEditHistoryItemDto[] = auditRows.map((row) => {
+      // changes linh hoạt: có old/new → {old,new}; chỉ có metadata → metadata; else null
+      let changes: Record<string, unknown> | null;
+      if (row.oldValueJson !== null || row.newValueJson !== null) {
+        changes = { old: row.oldValueJson, new: row.newValueJson };
+      } else if (row.metadataJson !== null) {
+        changes = row.metadataJson;
+      } else {
+        changes = null;
+      }
+      return {
+        at: row.createdAt.toISOString(),
+        actorUserId: row.userId,
+        actionType: row.actionType,
+        changes,
+      };
+    });
+
+    // 3. Map base (tái dùng mapper §5) + tên người/họp + editHistory
+    return {
+      ...toManualAttendanceResponse(record),
+      userFullName: record.user?.fullName ?? null,
+      meetingTitle: record.meeting?.title ?? null,
+      editHistory,
+    };
   }
 }

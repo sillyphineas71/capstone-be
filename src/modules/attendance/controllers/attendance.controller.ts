@@ -24,6 +24,7 @@ import { AttendanceService } from '../services/attendance.service.js';
 import { QueryAttendanceDto } from '../dto/query-attendance.dto.js';
 import { AttendanceListResponseDto } from '../dto/attendance-list-response.dto.js';
 import { AttendanceItemDto } from '../dto/attendance-item.dto.js';
+import { AttendanceRecordDetailResponseDto } from '../dto/attendance-record-detail-response.dto.js';
 
 @ApiTags('Attendance')
 @ApiBearerAuth()
@@ -74,5 +75,40 @@ export class AttendanceController {
       query,
     );
     return result;
+  }
+
+  // UC-82 — GET detail. Route ĐỘNG `:recordId` khai SAU `@Get()` list (tránh nuốt path).
+  @Get(':recordId')
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('attendance.read')
+  @ApiOperation({ summary: 'Get attendance record detail (UC-82)' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'recordId', type: 'string', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Attendance record detail retrieved successfully',
+    type: AttendanceRecordDetailResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'PERMISSION_DENIED' })
+  @ApiResponse({ status: 404, description: 'ATTENDANCE_RECORD_NOT_FOUND' })
+  async getAttendanceRecordDetail(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('recordId', ParseUUIDPipe) recordId: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: AttendanceRecordDetailResponseDto;
+  }> {
+    const data = await this.attendanceService.getAttendanceRecordDetail(
+      meetingId,
+      recordId,
+    );
+    return {
+      success: true,
+      message: 'Attendance record detail retrieved successfully',
+      data,
+    };
   }
 }
