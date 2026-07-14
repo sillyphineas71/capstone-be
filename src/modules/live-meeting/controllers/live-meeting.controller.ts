@@ -41,6 +41,8 @@ import {
   ViewNotesQueryDto,
   ViewNoteResponseDto,
 } from '../dto/index.js';
+import { TimelineQueryDto } from '../dto/timeline-query.dto.js';
+import { TimelineItemDto } from '../dto/timeline-item.dto.js';
 
 import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
 import { PresentAttendeesResponseDto } from '../dto/present-attendees-response.dto.js';
@@ -723,6 +725,69 @@ export class LiveMeetingController {
       message: result.message,
       data: result.data,
       meta: result.meta,
+    };
+  }
+
+  // UC-99: Timeline cuộc họp (gộp meeting_events + attendance_events + meeting_notes).
+  // Route leaf tĩnh 'timeline' — khác 'notes'/'attendance', không collision.
+  @Get('meetings/:meetingId/timeline')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.timeline.read')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xem timeline cuoc hop (UC-99)',
+    description:
+      'Gop cac su kien start/end/warning/extension (meeting_events), check-in/out (attendance_events) va ghi chu (meeting_notes, ton trong visibility) thanh 1 timeline sap theo thoi gian, phan trang. Chi host/participant cua cuoc hop moi xem duoc.',
+  })
+  @ApiParam({
+    name: 'meetingId',
+    type: String,
+    format: 'uuid',
+    description: 'ID cuoc hop',
+  })
+  @ApiResponse({ status: 200, description: 'Timeline cuoc hop (phan trang)' })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation error / INVALID_DATE_RANGE',
+  })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({
+    status: 403,
+    description: 'Khong co quyen hoac NOT_A_MEETING_PARTICIPANT',
+  })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  async getMeetingTimeline(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Query(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    query: TimelineQueryDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: TimelineItemDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+
+    const { data, total, page, limit } =
+      await this.liveMeetingService.getMeetingTimeline(
+        meetingId,
+        query,
+        user!.userId,
+      );
+
+    return {
+      success: true,
+      message: 'Lay timeline cuoc hop thanh cong',
+      data,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
 }

@@ -1,7 +1,8 @@
 ﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, Brackets } from 'typeorm';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -12,6 +13,8 @@ import {
 import { UsersService } from './users.service.js';
 import { PasswordGeneratorService } from './password-generator.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { RedisService } from '../../redis/redis.service.js';
+import { AuthConfigService } from '../../auth/services/auth-config.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import {
   UserEntity,
@@ -23,6 +26,10 @@ import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
 import { FaceProfileEntity } from '../entities/face-profile.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
+import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
+import { MeetingParticipantEntity } from '../../meetings/entities/meeting-participant.entity.js';
+import { RoomBookingEntity } from '../../rooms/entities/room-booking.entity.js';
+import { DeviceUserMappingEntity } from '../../iot/entities/device-user-mapping.entity.js';
 
 interface MockFindOneOptions {
   where?: {
@@ -38,6 +45,8 @@ describe('UsersService', () => {
   let dataSource: jest.Mocked<DataSource>;
   let passwordGeneratorService: jest.Mocked<PasswordGeneratorService>;
   let notificationsService: jest.Mocked<NotificationsService>;
+  let redisService: jest.Mocked<RedisService>;
+  let authConfigService: jest.Mocked<AuthConfigService>;
   let em: jest.Mocked<EntityManager>;
 
   beforeEach(async () => {
@@ -47,6 +56,10 @@ describe('UsersService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      update: jest.fn(),
+      count: jest.fn(),
+      softDelete: jest.fn(),
+      createQueryBuilder: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
     // Mock DataSource
@@ -57,6 +70,7 @@ describe('UsersService', () => {
           cb(em),
         ),
       manager: em,
+      getRepository: jest.fn(),
     } as unknown as jest.Mocked<DataSource>;
 
     // Mock PasswordGeneratorService
@@ -72,6 +86,14 @@ describe('UsersService', () => {
       }),
     } as unknown as jest.Mocked<NotificationsService>;
 
+    // Mock RedisService + AuthConfigService (UC-10 token revocation)
+    redisService = {
+      setWithTtl: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<RedisService>;
+    authConfigService = {
+      getRefreshTokenTtlSeconds: jest.fn().mockReturnValue(604800),
+    } as unknown as jest.Mocked<AuthConfigService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
@@ -84,6 +106,8 @@ describe('UsersService', () => {
           provide: NotificationsService,
           useValue: notificationsService,
         },
+        { provide: RedisService, useValue: redisService },
+        { provide: AuthConfigService, useValue: authConfigService },
       ],
     }).compile();
 
@@ -1020,6 +1044,1691 @@ describe('UsersService', () => {
       const result = await service.createUser(validDto, 'creator-id', {});
       expect(result).toBeDefined();
       expect(result.id).toBe('new-user-id');
+    });
+  });
+
+  describe('updateUserRoles', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const activeTarget = {
+      id: targetUserId,
+      accountStatus: AccountStatus.ACTIVE,
+      deletedAt: null,
+    };
+
+    // Helper: dựng mock em cho một kịch bản updateUserRoles.
+    function setup(opts: {
+      target?: unknown;
+      roles?: Record<string, { isActive: boolean; isSystemRole?: boolean }>;
+      currentActiveRoleIds?: string[]; // tập role active hiện tại (Phase A)
+      existingRowByRoleId?: Record<string, unknown>; // reactivate-if-exists lookup
+      removeRows?: unknown[]; // rows trả về khi soft-remove trong txn
+      systemRolesInRemove?: { id: string; isSystemRole: boolean }[]; // BR-04
+      finalActiveRoles?: { id: string; roleCode: string; roleName: string }[]; // getActiveRolesResponse
+      saveThrowsOnUserRole?: boolean;
+    }) {
+      em.findOne.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserEntity) {
+          return options?.where?.id === targetUserId
+            ? (opts.target ?? activeTarget)
+            : null;
+        }
+        if (entityClass === RoleEntity) {
+          const r = opts.roles?.[options?.where?.id];
+          return r ? { id: options.where.id, ...r } : null;
+        }
+        if (entityClass === UserRoleEntity) {
+          // reactivate-if-exists lookup trong transaction
+          const roleId = options?.where?.roleId;
+          return opts.existingRowByRoleId?.[roleId] ?? null;
+        }
+        return null;
+      });
+
+      em.find.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserRoleEntity) {
+          // getActiveRolesResponse (có relations)
+          if (options?.relations?.role) {
+            return (opts.finalActiveRoles ?? []).map((r) => ({ role: r }));
+          }
+          // soft-remove trong txn (where có roleId là In(...))
+          if (options?.where?.roleId) {
+            return opts.removeRows ?? [];
+          }
+          // Phase A currentActive
+          return (opts.currentActiveRoleIds ?? []).map((roleId) => ({
+            roleId,
+          }));
+        }
+        if (entityClass === RoleEntity) {
+          // BR-04: find roles In(toRemove)
+          return opts.systemRolesInRemove ?? [];
+        }
+        return [];
+      });
+
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (entityClass: unknown, entity: unknown) => {
+          if (opts.saveThrowsOnUserRole && entityClass === UserRoleEntity) {
+            throw new Error('DB write failed');
+          }
+          return entity;
+        },
+      );
+    }
+
+    it('[U1] Happy path add+remove — soft-remove role bỏ, insert role thêm, audit atomic, trả role mới', async () => {
+      const removedRow: any = { roleId: 'role-a', isActive: true };
+      setup({
+        roles: { 'role-b': { isActive: true, isSystemRole: false } },
+        currentActiveRoleIds: ['role-a'],
+        existingRowByRoleId: {}, // role-b chưa có row → insert
+        removeRows: [removedRow],
+        finalActiveRoles: [{ id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' }],
+      });
+
+      const result = await service.updateUserRoles(
+        targetUserId,
+        ['role-b'],
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      // trả tập role active mới
+      expect(result).toEqual({
+        userId: targetUserId,
+        roles: [{ id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' }],
+      });
+      // soft-remove: role-a bị set inactive + expired
+      expect(removedRow.isActive).toBe(false);
+      expect(removedRow.expiredAt).toBeInstanceOf(Date);
+      // insert row mới cho role-b
+      expect(em.create).toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.objectContaining({
+          userId: targetUserId,
+          roleId: 'role-b',
+          assignedBy: actorId,
+          isActive: true,
+        }),
+      );
+      // audit atomic đúng old/new roleIds
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_ROLE_UPDATE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: { roleIds: ['role-a'] },
+          newValueJson: { roleIds: ['role-b'] },
+        }),
+      );
+      expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it('[U2] No-op idempotent — desired == current: không mở transaction, không ghi DB', async () => {
+      setup({
+        roles: { 'role-a': { isActive: true } },
+        currentActiveRoleIds: ['role-a'],
+        finalActiveRoles: [{ id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' }],
+      });
+
+      const result = await service.updateUserRoles(
+        targetUserId,
+        ['role-a'],
+        actorId,
+        {},
+      );
+
+      expect(result.roles).toEqual([
+        { id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' },
+      ]);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U3] USER_NOT_FOUND — user không tồn tại/đã soft-delete', async () => {
+      setup({ target: null });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U4] ACCOUNT_INACTIVE — target account_status ≠ active (BR-08)', async () => {
+      setup({
+        target: {
+          id: targetUserId,
+          accountStatus: AccountStatus.LOCKED,
+          deletedAt: null,
+        },
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('[U5] ROLE_NOT_FOUND — desired role không tồn tại', async () => {
+      setup({ roles: {}, currentActiveRoleIds: [] });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-x'], actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U6] ROLE_INACTIVE — desired role đang inactive', async () => {
+      setup({
+        roles: { 'role-a': { isActive: false } },
+        currentActiveRoleIds: [],
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-a'], actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('[U7] BR-04 self-lockout — actor tự gỡ vai trò hệ thống của chính mình', async () => {
+      setup({
+        roles: { 'role-a': { isActive: true } },
+        currentActiveRoleIds: ['role-sys', 'role-a'],
+        systemRolesInRemove: [{ id: 'role-sys', isSystemRole: true }],
+      });
+
+      await expect(
+        // actorId === targetUserId, desired bỏ role-sys (system role)
+        service.updateUserRoles(targetUserId, ['role-a'], targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('[U8] Reactivate-if-exists — add role từng soft-remove: update row cũ, KHÔNG insert trùng', async () => {
+      const existingInactive: any = {
+        id: 'ur-b',
+        roleId: 'role-b',
+        isActive: false,
+      };
+      setup({
+        roles: {
+          'role-a': { isActive: true },
+          'role-b': { isActive: true },
+        },
+        currentActiveRoleIds: ['role-a'],
+        existingRowByRoleId: { 'role-b': existingInactive },
+        removeRows: [],
+        finalActiveRoles: [
+          { id: 'role-a', roleCode: 'ROLE_A', roleName: 'A' },
+          { id: 'role-b', roleCode: 'ROLE_B', roleName: 'B' },
+        ],
+      });
+
+      await service.updateUserRoles(
+        targetUserId,
+        ['role-a', 'role-b'],
+        actorId,
+        {},
+      );
+
+      // row cũ được reactivate
+      expect(existingInactive.isActive).toBe(true);
+      expect(existingInactive.expiredAt).toBeNull();
+      expect(existingInactive.assignedBy).toBe(actorId);
+      // KHÔNG tạo row UserRoleEntity mới (chỉ AuditLogEntity được create)
+      expect(em.create).not.toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.anything(),
+      );
+      expect(em.save).toHaveBeenCalledWith(UserRoleEntity, existingInactive);
+    });
+
+    it('[U9] Rollback — WRITE trong transaction lỗi thì reject (atomic)', async () => {
+      setup({
+        roles: { 'role-b': { isActive: true } },
+        currentActiveRoleIds: ['role-a'],
+        removeRows: [{ roleId: 'role-a', isActive: true }],
+        saveThrowsOnUserRole: true,
+      });
+
+      await expect(
+        service.updateUserRoles(targetUserId, ['role-b'], actorId, {}),
+      ).rejects.toThrow('DB write failed');
+    });
+  });
+
+  describe('updateUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const baseTarget = {
+      id: targetUserId,
+      employeeCode: 'EMP001',
+      email: 'user@company.com',
+      fullName: 'Nguyen Van A',
+      phoneNumber: '0900000000',
+      avatarUrl: null,
+      positionTitle: 'Dev',
+      departmentId: 'admin-dept',
+      directManagerId: null,
+      accountStatus: 'active',
+      employmentStatus: 'active',
+      mustChangePassword: false,
+      lastLoginAt: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      department: { id: 'admin-dept', departmentName: 'IT' },
+    };
+
+    function setup(opts: {
+      target?: unknown; // null để test USER_NOT_FOUND
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string; // scope Business Admin
+      childDepts?: string[];
+      employeeCodeDup?: boolean;
+      department?: unknown; // A.4 department lookup
+      freshRoles?: unknown[];
+      manager?: unknown;
+      faceProfile?: unknown;
+      updateThrows?: boolean;
+    }) {
+      const target = opts.target === undefined ? baseTarget : opts.target;
+
+      em.findOne.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserEntity) {
+          const where = options?.where ?? {};
+          // uniqueness employee_code (loại self)
+          if (where.employeeCode !== undefined) {
+            return opts.employeeCodeDup ? { id: 'other-user' } : null;
+          }
+          // resolveDepartmentScope: lookup actor (select departmentId)
+          if (where.id === actorId && options?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          // manager lookup (select id, fullName)
+          if (
+            (target as any)?.directManagerId &&
+            where.id === (target as any).directManagerId
+          ) {
+            return opts.manager ?? null;
+          }
+          // fresh (map) — có relations.department
+          if (where.id === targetUserId && options?.relations?.department) {
+            return target;
+          }
+          // A.2 target load
+          if (where.id === targetUserId) {
+            return target;
+          }
+          return null;
+        }
+        if (entityClass === DepartmentEntity) {
+          return opts.department ?? null;
+        }
+        if (entityClass === FaceProfileEntity) {
+          return opts.faceProfile ?? null;
+        }
+        return null;
+      });
+
+      em.find.mockImplementation(async (entityClass, options: any) => {
+        if (entityClass === UserRoleEntity) {
+          if (options?.where?.userId === actorId) {
+            return [{ role: { isSystemRole: !!opts.actorIsSystemAdmin } }];
+          }
+          if (options?.where?.userId === targetUserId) {
+            return opts.freshRoles ?? [];
+          }
+          return [];
+        }
+        if (entityClass === DepartmentEntity) {
+          // collectDepartmentScope children
+          return (opts.childDepts ?? []).map((id) => ({ id }));
+        }
+        return [];
+      });
+
+      em.create.mockImplementation(
+        (_entityClass: unknown, plain: unknown) => plain,
+      );
+      em.save.mockImplementation(
+        async (_entityClass: unknown, entity: unknown) => entity,
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+    }
+
+    it('[U1] Happy path — cập nhật 1 field (phoneNumber), audit diff đúng, trả 16 field', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      const result = await service.updateUser(
+        targetUserId,
+        { phoneNumber: '0911111111' },
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        phoneNumber: '0911111111',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_UPDATE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: { phoneNumber: '0900000000' },
+          newValueJson: { phoneNumber: '0911111111' },
+        }),
+      );
+      expect(Object.keys(result)).toHaveLength(16);
+      expect(result.id).toBe(targetUserId);
+      expect(result.email).toBe('user@company.com'); // email không đổi
+    });
+
+    it('[U2] Happy path — nhiều field (fullName + positionTitle + departmentId)', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        department: { id: 'new-dept', isActive: true },
+      });
+
+      await service.updateUser(
+        targetUserId,
+        {
+          fullName: 'New Name',
+          positionTitle: 'Lead',
+          departmentId: 'new-dept',
+        },
+        actorId,
+        {},
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        fullName: 'New Name',
+        positionTitle: 'Lead',
+        departmentId: 'new-dept',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          newValueJson: {
+            fullName: 'New Name',
+            positionTitle: 'Lead',
+            departmentId: 'new-dept',
+          },
+        }),
+      );
+    });
+
+    it('[U3] No-op — field gửi trùng giá trị cũ: không WRITE, không audit', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      const result = await service.updateUser(
+        targetUserId,
+        { phoneNumber: '0900000000' },
+        actorId,
+        {},
+      );
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+      expect(em.create).not.toHaveBeenCalled();
+      expect(result.id).toBe(targetUserId);
+    });
+
+    it('[U4] EMPTY_UPDATE — không field nào → 400', async () => {
+      setup({ actorIsSystemAdmin: true });
+
+      await expect(
+        service.updateUser(targetUserId, {}, actorId, {}),
+      ).rejects.toThrow(BadRequestException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U5] employeeCode trùng user khác → 409, không WRITE', async () => {
+      setup({ actorIsSystemAdmin: true, employeeCodeDup: true });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { employeeCode: 'EMP999' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U5b] employeeCode = giá trị cũ của chính mình → không lỗi, không check unique (no-op)', async () => {
+      setup({ actorIsSystemAdmin: true, employeeCodeDup: true });
+
+      // employeeCode 'EMP001' trùng giá trị hiện tại -> bị loại khỏi diff -> không check unique
+      const result = await service.updateUser(
+        targetUserId,
+        { employeeCode: 'EMP001' },
+        actorId,
+        {},
+      );
+
+      expect(result.id).toBe(targetUserId);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U6] department không tồn tại → 404', async () => {
+      setup({ actorIsSystemAdmin: true, department: null });
+
+      await expect(
+        service.updateUser(targetUserId, { departmentId: 'nope' }, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U7] department inactive → 422', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        department: { id: 'new-dept', isActive: false },
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { departmentId: 'new-dept' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U8] Business Admin — target user ngoài scope → 403', async () => {
+      setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        target: { ...baseTarget, departmentId: 'other-dept' },
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U9] Business Admin — department MỚI ngoài scope → 403', async () => {
+      setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept', // scope = { admin-dept }
+        target: { ...baseTarget, departmentId: 'admin-dept' }, // target trong scope
+        department: { id: 'new-dept', isActive: true }, // dept mới tồn tại+active nhưng ngoài scope
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { departmentId: 'new-dept' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U10] System Admin — bỏ qua scope (đổi department khác phòng) → thành công', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        target: { ...baseTarget, departmentId: 'x-dept' },
+        department: { id: 'new-dept', isActive: true },
+      });
+
+      await service.updateUser(
+        targetUserId,
+        { departmentId: 'new-dept' },
+        actorId,
+        {},
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        departmentId: 'new-dept',
+      });
+    });
+
+    it('[U11] USER_NOT_FOUND — user không tồn tại/đã soft-delete → 404', async () => {
+      setup({ actorIsSystemAdmin: true, target: null });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U12] Rollback — WRITE trong transaction lỗi → reject (atomic)', async () => {
+      setup({ actorIsSystemAdmin: true, updateThrows: true });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { phoneNumber: '0911111111' },
+          actorId,
+          {},
+        ),
+      ).rejects.toThrow('DB write failed');
+    });
+  });
+
+  describe('deleteUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    const baseTarget = {
+      id: targetUserId,
+      email: 'user@company.com',
+      fullName: 'Nguyen Van A',
+      employeeCode: 'EMP001',
+      departmentId: 'dept-id',
+      accountStatus: 'active',
+      deletedAt: null,
+    };
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown;
+      targetRoles?: {
+        roleId: string;
+        role: { roleCode: string; isActive: boolean };
+      }[];
+      otherAdminCount?: number;
+      hostCount?: number;
+      participantCount?: number;
+      bookingCount?: number;
+      manageeCount?: number;
+      departmentCount?: number;
+      softDeleteThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target = opts.target === undefined ? baseTarget : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity && o?.where?.id === targetUserId) {
+          return target;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity && o?.where?.userId === targetUserId) {
+          return opts.targetRoles ?? [];
+        }
+        return [];
+      });
+      (em.count as jest.Mock).mockImplementation(async (entity: unknown) => {
+        if (entity === MeetingEntity) return opts.hostCount ?? 0;
+        if (entity === RoomBookingEntity) return opts.bookingCount ?? 0;
+        if (entity === UserEntity) return opts.manageeCount ?? 0;
+        if (entity === DepartmentEntity) return opts.departmentCount ?? 0;
+        return 0;
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) => {
+          if (entity === UserRoleEntity) {
+            return makeQb(opts.otherAdminCount ?? 1);
+          }
+          if (entity === MeetingParticipantEntity) {
+            return makeQb(opts.participantCount ?? 0);
+          }
+          return makeQb(0);
+        },
+      );
+      (em.softDelete as jest.Mock).mockImplementation(async () => {
+        if (opts.softDeleteThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      (em.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      em.create.mockImplementation((_entity: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    const sysAdminRole = [
+      { roleId: 'r-sys', role: { roleCode: 'SYSTEM_ADMIN', isActive: true } },
+    ];
+
+    it('[D1] Happy path — soft-delete users + vô hiệu user_roles + face_profiles + device_user_mappings + audit + revoke', async () => {
+      setup({});
+
+      await service.deleteUser(targetUserId, actorId, {
+        ipAddress: '127.0.0.1',
+      });
+
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+      expect(em.update).toHaveBeenCalledWith(
+        UserRoleEntity,
+        { userId: targetUserId, isActive: true },
+        expect.objectContaining({ isActive: false }),
+      );
+      expect(em.softDelete).toHaveBeenCalledWith(FaceProfileEntity, {
+        userId: targetUserId,
+      });
+      expect(em.softDelete).toHaveBeenCalledWith(DeviceUserMappingEntity, {
+        userId: targetUserId,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_DELETE',
+          entityType: 'users',
+          entityId: targetUserId,
+          oldValueJson: expect.objectContaining({
+            id: targetUserId,
+            email: 'user@company.com',
+          }),
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+    });
+
+    it('[D2] BR-01 self-delete → 422 CANNOT_DELETE_SELF, không WRITE', async () => {
+      setup({});
+      await expect(
+        service.deleteUser(targetUserId, targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D3] BR-02 last SYSTEM_ADMIN → 422 LAST_SYSTEM_ADMIN, không WRITE', async () => {
+      setup({ targetRoles: sysAdminRole, otherAdminCount: 0 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D4] BR-02 còn admin khác → không chặn (thành công)', async () => {
+      setup({ targetRoles: sysAdminRole, otherAdminCount: 2 });
+      await service.deleteUser(targetUserId, actorId, {});
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+    });
+
+    it('[D5] BR-03 đã xóa/không tồn tại → 404 USER_NOT_FOUND', async () => {
+      setup({ target: null });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D6] Ràng buộc (a) meeting host/organizer → 409 upcoming_meeting_host', async () => {
+      setup({ hostCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            code: 'USER_HAS_DEPENDENCIES',
+            details: {
+              dependencies: expect.arrayContaining(['upcoming_meeting_host']),
+            },
+          },
+        },
+      });
+      expect(em.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('[D7] Ràng buộc (b) participant → 409 upcoming_meeting_participant', async () => {
+      setup({ participantCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining([
+                'upcoming_meeting_participant',
+              ]),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D8] Ràng buộc (c) booking → 409 active_booking', async () => {
+      setup({ bookingCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['active_booking']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D9] Ràng buộc (d) direct_manager → 409 manages_users', async () => {
+      setup({ manageeCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['manages_users']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D10] Ràng buộc (e) department manager → 409 manages_department', async () => {
+      setup({ departmentCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining(['manages_department']),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D10b] Nhiều loại vi phạm cùng lúc → details liệt kê đủ', async () => {
+      setup({ hostCount: 1, bookingCount: 1, manageeCount: 1 });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            details: {
+              dependencies: expect.arrayContaining([
+                'upcoming_meeting_host',
+                'active_booking',
+                'manages_users',
+              ]),
+            },
+          },
+        },
+      });
+    });
+
+    it('[D11] Rollback — WRITE trong transaction lỗi → reject, KHÔNG revoke', async () => {
+      setup({ softDeleteThrows: true });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[D12] Redis set fail post-commit → không throw, DB vẫn soft-deleted', async () => {
+      setup({ redisThrows: true });
+      await expect(
+        service.deleteUser(targetUserId, actorId, {}),
+      ).resolves.toBeUndefined();
+      expect(em.softDelete).toHaveBeenCalledWith(UserEntity, targetUserId);
+      expect(redisService.setWithTtl).toHaveBeenCalled();
+    });
+  });
+
+  describe('updateUserStatus', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown; // null -> USER_NOT_FOUND
+      currentStatus?: string;
+      targetDeptId?: string;
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      targetIsAdmin?: boolean;
+      otherAdminCount?: number;
+      updateThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target =
+        opts.target === undefined
+          ? {
+              id: targetUserId,
+              accountStatus: opts.currentStatus ?? 'active',
+              departmentId: opts.targetDeptId ?? 'admin-dept',
+            }
+          : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity) {
+          if (o?.where?.id === actorId && o?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          if (o?.where?.id === targetUserId) return target;
+          return null;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity) {
+          if (o?.where?.userId === actorId) {
+            return [
+              { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+            ];
+          }
+          if (o?.where?.userId === targetUserId) {
+            return opts.targetIsAdmin
+              ? [{ role: { roleCode: 'SYSTEM_ADMIN', isActive: true } }]
+              : [];
+          }
+          return [];
+        }
+        if (entity === DepartmentEntity) return [];
+        return [];
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) =>
+          makeQb(entity === UserRoleEntity ? (opts.otherAdminCount ?? 1) : 0),
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      em.create.mockImplementation((_e: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    it('[S1] active→inactive (System Admin): UPDATE inactive + audit WARNING + revoke', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'inactive',
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'inactive' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_STATUS_UPDATE',
+          severity: 'warning',
+          oldValueJson: { accountStatus: 'active' },
+          newValueJson: { accountStatus: 'inactive' },
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+    });
+
+    it('[S2] inactive→active: UPDATE active + audit INFO + KHÔNG revoke', async () => {
+      setup({ currentStatus: 'inactive' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'active',
+        actorId,
+        {},
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'active',
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({ severity: 'info' }),
+      );
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[S3] No-op (status == current) → 200, không WRITE/audit', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.updateUserStatus(
+        targetUserId,
+        'active',
+        actorId,
+        {},
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S4] BR-02 self-deactivate → 422 CANNOT_DEACTIVATE_SELF', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S5] BR-05 last SYSTEM_ADMIN (→inactive) → 422 LAST_SYSTEM_ADMIN', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 0,
+      });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S6] BR-05 còn admin khác → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 2,
+      });
+      await service.updateUserStatus(targetUserId, 'inactive', actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+    });
+
+    it('[S7] BR-04 current=LOCKED → 409 INVALID_STATUS_TRANSITION', async () => {
+      setup({ currentStatus: 'locked' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S8] BR-04 current=PENDING_RESET → 409 INVALID_STATUS_TRANSITION', async () => {
+      setup({ currentStatus: 'pending_reset' });
+      await expect(
+        service.updateUserStatus(targetUserId, 'active', actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S9] BR-06 USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S10] BR-07 Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[S11] System Admin bỏ qua scope (target khác phòng) → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: true,
+        targetDeptId: 'other-dept',
+      });
+      await service.updateUserStatus(targetUserId, 'inactive', actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'inactive',
+      });
+    });
+
+    it('[S12] Redis fail post-commit (→inactive) → không throw, status đã đổi', async () => {
+      setup({ currentStatus: 'active', redisThrows: true });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).resolves.toEqual({ id: targetUserId, accountStatus: 'inactive' });
+      expect(em.update).toHaveBeenCalled();
+      expect(redisService.setWithTtl).toHaveBeenCalled();
+    });
+
+    it('[S13] Rollback — WRITE trong transaction lỗi → reject, KHÔNG revoke', async () => {
+      setup({ currentStatus: 'active', updateThrows: true });
+      await expect(
+        service.updateUserStatus(targetUserId, 'inactive', actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lockUser / unlockUser', () => {
+    const targetUserId = 'target-user-id';
+    const actorId = 'actor-id';
+
+    function makeQb(count: number) {
+      const qb: any = {
+        innerJoin: () => qb,
+        where: () => qb,
+        andWhere: () => qb,
+        getCount: async () => count,
+      };
+      return qb;
+    }
+
+    function setup(opts: {
+      target?: unknown; // null -> USER_NOT_FOUND
+      currentStatus?: string;
+      targetDeptId?: string;
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      targetIsAdmin?: boolean;
+      otherAdminCount?: number;
+      updateThrows?: boolean;
+      redisThrows?: boolean;
+    }) {
+      const target =
+        opts.target === undefined
+          ? {
+              id: targetUserId,
+              accountStatus: opts.currentStatus ?? 'active',
+              departmentId: opts.targetDeptId ?? 'admin-dept',
+            }
+          : opts.target;
+
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity) {
+          if (o?.where?.id === actorId && o?.select?.departmentId) {
+            return { departmentId: opts.actorDeptId ?? null };
+          }
+          if (o?.where?.id === targetUserId) return target;
+          return null;
+        }
+        return null;
+      });
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity) {
+          if (o?.where?.userId === actorId) {
+            return [
+              { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+            ];
+          }
+          if (o?.where?.userId === targetUserId) {
+            return opts.targetIsAdmin
+              ? [{ role: { roleCode: 'SYSTEM_ADMIN', isActive: true } }]
+              : [];
+          }
+          return [];
+        }
+        if (entity === DepartmentEntity) return [];
+        return [];
+      });
+      (em.createQueryBuilder as jest.Mock).mockImplementation(
+        (entity: unknown) =>
+          makeQb(entity === UserRoleEntity ? (opts.otherAdminCount ?? 1) : 0),
+      );
+      (em.update as jest.Mock).mockImplementation(async () => {
+        if (opts.updateThrows) throw new Error('DB write failed');
+        return { affected: 1 };
+      });
+      em.create.mockImplementation((_e: unknown, plain: unknown) => plain);
+      em.save.mockResolvedValue(undefined);
+      if (opts.redisThrows) {
+        redisService.setWithTtl.mockRejectedValue(new Error('redis down'));
+      }
+    }
+
+    // ===== lockUser =====
+
+    it('[L1] lock happy (System Admin): LOCKED + audit WARNING(reason) + revoke; giữ user_roles', async () => {
+      setup({ currentStatus: 'active' });
+
+      const result = await service.lockUser(
+        targetUserId,
+        'vi pham bao mat',
+        actorId,
+        { ipAddress: '127.0.0.1' },
+      );
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_LOCK',
+          severity: 'warning',
+          oldValueJson: { accountStatus: 'active' },
+          newValueJson: { accountStatus: 'locked' },
+          metadataJson: { reason: 'vi pham bao mat' },
+        }),
+      );
+      expect(redisService.setWithTtl).toHaveBeenCalledWith(
+        `auth:user:${targetUserId}:invalid_after`,
+        expect.any(String),
+        604800,
+      );
+      // KHÔNG đụng user_roles (không update UserRoleEntity)
+      expect(em.update).not.toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('[L2] BR-01 self-lock → 422 CANNOT_LOCK_SELF', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.lockUser(targetUserId, undefined, targetUserId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L3] BR-02 last SYSTEM_ADMIN → 422 LAST_SYSTEM_ADMIN', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 0,
+      });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L4] BR-02 còn admin khác → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        targetIsAdmin: true,
+        otherAdminCount: 2,
+      });
+      await service.lockUser(targetUserId, undefined, actorId, {});
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+    });
+
+    it('[L5] No-op đã LOCKED → 200, không WRITE/audit', async () => {
+      setup({ currentStatus: 'locked' });
+      const result = await service.lockUser(
+        targetUserId,
+        undefined,
+        actorId,
+        {},
+      );
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L6] Lock từ INACTIVE (BR-04) → thành công → LOCKED', async () => {
+      setup({ currentStatus: 'inactive' });
+      const result = await service.lockUser(
+        targetUserId,
+        undefined,
+        actorId,
+        {},
+      );
+      expect(result.accountStatus).toBe('locked');
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'locked',
+        lockedUntil: null,
+      });
+    });
+
+    it('[L7] Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[L8] System Admin bỏ qua scope → thành công', async () => {
+      setup({
+        currentStatus: 'active',
+        actorIsSystemAdmin: true,
+        targetDeptId: 'other-dept',
+      });
+      await service.lockUser(targetUserId, undefined, actorId, {});
+      expect(em.update).toHaveBeenCalled();
+    });
+
+    it('[L9] Redis fail post-commit → không throw, status đã LOCKED', async () => {
+      setup({ currentStatus: 'active', redisThrows: true });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).resolves.toEqual({ id: targetUserId, accountStatus: 'locked' });
+      expect(em.update).toHaveBeenCalled();
+      expect(redisService.setWithTtl).toHaveBeenCalled();
+    });
+
+    it('[L10] Rollback — WRITE lỗi → reject, KHÔNG revoke', async () => {
+      setup({ currentStatus: 'active', updateThrows: true });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow('DB write failed');
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[L11] USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.lockUser(targetUserId, undefined, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    // ===== unlockUser =====
+
+    it('[U1] unlock happy → ACTIVE + reset + audit INFO; KHÔNG revoke', async () => {
+      setup({ currentStatus: 'locked' });
+
+      const result = await service.unlockUser(targetUserId, actorId, {});
+
+      expect(result).toEqual({ id: targetUserId, accountStatus: 'active' });
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountStatus: 'active',
+        failedLoginCount: 0,
+        lockedUntil: null,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'ACCOUNT_UNLOCK',
+          severity: 'info',
+          oldValueJson: { accountStatus: 'locked' },
+          newValueJson: { accountStatus: 'active' },
+        }),
+      );
+      expect(redisService.setWithTtl).not.toHaveBeenCalled();
+    });
+
+    it('[U2] NOT_LOCKED (đang active) → 409', async () => {
+      setup({ currentStatus: 'active' });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(ConflictException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U3] Business Admin — target ngoài scope → 403', async () => {
+      setup({
+        currentStatus: 'locked',
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+        targetDeptId: 'other-dept',
+      });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[U4] USER_NOT_FOUND → 404', async () => {
+      setup({ target: null });
+      await expect(
+        service.unlockUser(targetUserId, actorId, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(em.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listUsers (UC-13 search)', () => {
+    let findAndCount: jest.Mock;
+
+    beforeEach(() => {
+      findAndCount = jest.fn().mockResolvedValue([[], 0]);
+      (dataSource.getRepository as jest.Mock).mockReturnValue({ findAndCount });
+    });
+
+    it('[T1/T2/T3/T4] search → where là mảng OR 3 nhánh (fullName/email/employeeCode), MỖI nhánh giữ baseWhere (ACTIVE + deletedAt)', async () => {
+      await service.listUsers({ search: 'abc', page: 1, limit: 20 });
+
+      const opts = findAndCount.mock.calls[0][0];
+      expect(Array.isArray(opts.where)).toBe(true);
+      expect(opts.where).toHaveLength(3);
+
+      // T4: mọi nhánh OR đều kèm baseWhere -> không lộ INACTIVE/deleted
+      for (const branch of opts.where) {
+        expect(branch.accountStatus).toBe(AccountStatus.ACTIVE);
+        expect(branch.deletedAt).toBeDefined(); // IsNull()
+      }
+
+      // T2/T3/T1: từng nhánh field
+      expect(opts.where[0].fullName).toBeDefined();
+      expect(opts.where[1].email).toBeDefined();
+      expect(opts.where[2].employeeCode).toBeDefined();
+    });
+
+    it('[T6] nhánh employeeCode dùng ILike (null không khớp ở tầng DB — semantics ILIKE)', async () => {
+      await service.listUsers({ search: 'EMP', page: 1, limit: 20 });
+      const opts = findAndCount.mock.calls[0][0];
+      // FindOperator ILike có type 'ilike'
+      expect(opts.where[2].employeeCode?.type).toBe('ilike');
+    });
+
+    it('[T5] select có employeeCode và map output có employeeCode', async () => {
+      findAndCount.mockResolvedValue([
+        [{ id: 'u1', fullName: 'A', email: 'a@x.com', employeeCode: 'EMP1' }],
+        1,
+      ]);
+
+      const res = await service.listUsers({ search: 'a', page: 1, limit: 20 });
+
+      const opts = findAndCount.mock.calls[0][0];
+      expect(opts.select.employeeCode).toBe(true);
+      expect(opts.select.id).toBe(true);
+      expect(opts.select.fullName).toBe(true);
+      expect(opts.select.email).toBe(true);
+      expect(res.data[0]).toEqual({
+        id: 'u1',
+        fullName: 'A',
+        email: 'a@x.com',
+        employeeCode: 'EMP1',
+      });
+      expect(res.total).toBe(1);
+    });
+
+    it('[T7] phân trang & sort giữ nguyên (skip/take/order)', async () => {
+      await service.listUsers({ search: 'a', page: 2, limit: 10 });
+      const opts = findAndCount.mock.calls[0][0];
+      expect(opts.skip).toBe(10);
+      expect(opts.take).toBe(10);
+      expect(opts.order).toEqual({ fullName: 'asc' });
+    });
+
+    it('[T8] không search → where = baseWhere (object, không mảng OR), giữ ACTIVE + deletedAt', async () => {
+      await service.listUsers({ page: 1, limit: 20 });
+      const opts = findAndCount.mock.calls[0][0];
+      expect(Array.isArray(opts.where)).toBe(false);
+      expect(opts.where.accountStatus).toBe(AccountStatus.ACTIVE);
+      expect(opts.where.deletedAt).toBeDefined();
+    });
+  });
+
+  describe('listUsersForManagement (UC-14 filter)', () => {
+    const actorId = 'actor-id';
+
+    type QbRecord = { name: string; args: unknown[] };
+    function makeQb(result: {
+      manyAndCount?: [unknown[], number];
+      many?: unknown[];
+    }) {
+      const records: QbRecord[] = [];
+      const qb: any = {};
+      const chain =
+        (name: string) =>
+        (...args: unknown[]) => {
+          records.push({ name, args });
+          return qb;
+        };
+      qb.where = chain('where');
+      qb.andWhere = chain('andWhere');
+      qb.orderBy = chain('orderBy');
+      qb.select = chain('select');
+      qb.skip = chain('skip');
+      qb.take = chain('take');
+      qb.innerJoinAndSelect = chain('innerJoinAndSelect');
+      qb.getManyAndCount = jest
+        .fn()
+        .mockResolvedValue(result.manyAndCount ?? [[], 0]);
+      qb.getMany = jest.fn().mockResolvedValue(result.many ?? []);
+      qb.records = records;
+      return qb;
+    }
+
+    function setup(opts: {
+      actorIsSystemAdmin?: boolean;
+      actorDeptId?: string;
+      users?: { id: string }[];
+      total?: number;
+      userRoles?: { userId: string; role: { roleCode: string } }[];
+    }) {
+      em.find.mockImplementation(async (entity, o: any) => {
+        if (entity === UserRoleEntity && o?.where?.userId === actorId) {
+          return [
+            { role: { isSystemRole: opts.actorIsSystemAdmin !== false } },
+          ];
+        }
+        if (entity === DepartmentEntity) return []; // collectDepartmentScope children
+        return [];
+      });
+      em.findOne.mockImplementation(async (entity, o: any) => {
+        if (entity === UserEntity && o?.where?.id === actorId) {
+          return { departmentId: opts.actorDeptId ?? null };
+        }
+        return null;
+      });
+
+      const users = opts.users ?? [];
+      const mainQb = makeQb({
+        manyAndCount: [users, opts.total ?? users.length],
+      });
+      const rolesQb = makeQb({ many: opts.userRoles ?? [] });
+
+      (dataSource.getRepository as jest.Mock).mockImplementation(
+        (entity: unknown) => ({
+          createQueryBuilder: () =>
+            entity === UserRoleEntity ? rolesQb : mainQb,
+        }),
+      );
+
+      return { mainQb, rolesQb };
+    }
+
+    function andWheres(qb: any): unknown[] {
+      return (qb.records as QbRecord[])
+        .filter((r) => r.name === 'andWhere')
+        .map((r) => r.args[0]);
+    }
+    function hasAndWhereStr(qb: any, sub: string): boolean {
+      return andWheres(qb).some(
+        (a) => typeof a === 'string' && a.includes(sub),
+      );
+    }
+
+    it('[M1] filter departmentId → andWhere department_id', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ departmentId: 'dep-1' }, actorId);
+      expect(hasAndWhereStr(mainQb, 'u.departmentId = :departmentId')).toBe(
+        true,
+      );
+    });
+
+    it('[M2] filter accountStatus → andWhere account_status', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        { accountStatus: 'locked' },
+        actorId,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus = :accountStatus')).toBe(
+        true,
+      );
+    });
+
+    it('[M3] filter roleId → andWhere SUBQUERY user_roles (không innerJoin)', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ roleId: 'role-1' }, actorId);
+      expect(hasAndWhereStr(mainQb, 'SELECT ur.user_id FROM user_roles')).toBe(
+        true,
+      );
+      // KHÔNG innerJoin trên qb chính
+      expect(
+        (mainQb.records as QbRecord[]).some(
+          (r) => r.name === 'innerJoinAndSelect',
+        ),
+      ).toBe(false);
+    });
+
+    it('[M4] filter search → andWhere(Brackets) OR', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ search: 'abc' }, actorId);
+      expect(andWheres(mainQb).some((a) => a instanceof Brackets)).toBe(true);
+    });
+
+    it('[M5] tổ hợp nhiều filter (AND)', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        {
+          departmentId: 'dep-1',
+          accountStatus: 'active',
+          roleId: 'role-1',
+          search: 'x',
+        },
+        actorId,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.departmentId = :departmentId')).toBe(
+        true,
+      );
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus = :accountStatus')).toBe(
+        true,
+      );
+      expect(hasAndWhereStr(mainQb, 'SELECT ur.user_id FROM user_roles')).toBe(
+        true,
+      );
+      expect(andWheres(mainQb).some((a) => a instanceof Brackets)).toBe(true);
+    });
+
+    it('[M6] mặc định (không filter) → chỉ deleted_at IS NULL, không lọc trạng thái', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({}, actorId);
+      const whereCall = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'where',
+      );
+      expect(whereCall?.args[0]).toBe('u.deletedAt IS NULL');
+      expect(hasAndWhereStr(mainQb, 'u.accountStatus')).toBe(false);
+    });
+
+    it('[M7] sort allowlist → orderBy = SORT_MAP[sortBy], hướng sortOrder', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement(
+        { sortBy: 'email', sortOrder: 'desc' },
+        actorId,
+      );
+      const orderBy = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'orderBy',
+      );
+      expect(orderBy?.args).toEqual(['u.email', 'DESC']);
+    });
+
+    it('[M8] Business Admin — trong scope → andWhere department_id IN scope', async () => {
+      const { mainQb } = setup({
+        actorIsSystemAdmin: false,
+        actorDeptId: 'admin-dept',
+      });
+      await service.listUsersForManagement({}, actorId);
+      expect(hasAndWhereStr(mainQb, 'u.departmentId IN (:...scopeIds)')).toBe(
+        true,
+      );
+    });
+
+    it('[M9] Business Admin — departmentId ngoài scope → 403 FORBIDDEN', async () => {
+      setup({ actorIsSystemAdmin: false, actorDeptId: 'admin-dept' });
+      await expect(
+        service.listUsersForManagement({ departmentId: 'other-dept' }, actorId),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('[M10] System Admin → KHÔNG andWhere scope', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({}, actorId);
+      expect(hasAndWhereStr(mainQb, 'scopeIds')).toBe(false);
+    });
+
+    it('[M11] phân trang → skip/take đúng', async () => {
+      const { mainQb } = setup({ actorIsSystemAdmin: true });
+      await service.listUsersForManagement({ page: 3, limit: 10 }, actorId);
+      const skip = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'skip',
+      );
+      const take = (mainQb.records as QbRecord[]).find(
+        (r) => r.name === 'take',
+      );
+      expect(skip?.args[0]).toBe(20);
+      expect(take?.args[0]).toBe(10);
+    });
+
+    it('[M12] roles map đúng + KHÔNG N+1 (1 query roles cho cả trang)', async () => {
+      const { rolesQb } = setup({
+        actorIsSystemAdmin: true,
+        users: [{ id: 'u1' }, { id: 'u2' }],
+        total: 2,
+        userRoles: [
+          { userId: 'u1', role: { roleCode: 'ADMIN' } },
+          { userId: 'u1', role: { roleCode: 'MANAGER' } },
+          { userId: 'u2', role: { roleCode: 'EMPLOYEE' } },
+        ],
+      });
+
+      const res = await service.listUsersForManagement({}, actorId);
+
+      expect(rolesQb.getMany).toHaveBeenCalledTimes(1); // 1 query cho cả trang
+      expect(res.data[0].roles).toEqual(['ADMIN', 'MANAGER']);
+      expect(res.data[1].roles).toEqual(['EMPLOYEE']);
+      expect(res.total).toBe(2);
+    });
+
+    it('[M13] trang rỗng (userIds=[]) → KHÔNG query roles', async () => {
+      const { rolesQb } = setup({
+        actorIsSystemAdmin: true,
+        users: [],
+        total: 0,
+      });
+      const res = await service.listUsersForManagement({}, actorId);
+      expect(rolesQb.getMany).not.toHaveBeenCalled();
+      expect(res.data).toEqual([]);
     });
   });
 });

@@ -1,12 +1,21 @@
 import 'reflect-metadata';
 import { Test, TestingModule } from '@nestjs/testing';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
-import { ParseUUIDPipe, HttpStatus } from '@nestjs/common';
+import { ParseUUIDPipe, HttpStatus, ValidationPipe } from '@nestjs/common';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
 import { UsersController } from './users.controller.js';
 import { UsersService } from '../services/users.service.js';
+import { AccountImportService } from '../services/account-import.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
+import { UpdateUserDto } from '../dto/update-user.dto.js';
+import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
+import { LockUserDto } from '../dto/lock-user.dto.js';
+import { ManageUsersQueryDto } from '../dto/manage-users-query.dto.js';
+import { UpdateUserRolesDto } from '../dto/update-user-roles.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { PERMISSIONS_KEY } from '../../auth/decorators/require-permissions.decorator.js';
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -14,6 +23,13 @@ describe('UsersController', () => {
     createUser: jest.Mock;
     getUserDetail: jest.Mock;
     getPublicProfile: jest.Mock;
+    updateUserRoles: jest.Mock;
+    updateUser: jest.Mock;
+    deleteUser: jest.Mock;
+    updateUserStatus: jest.Mock;
+    lockUser: jest.Mock;
+    unlockUser: jest.Mock;
+    listUsersForManagement: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -21,6 +37,13 @@ describe('UsersController', () => {
       createUser: jest.fn(),
       getUserDetail: jest.fn(),
       getPublicProfile: jest.fn(),
+      updateUserRoles: jest.fn(),
+      updateUser: jest.fn(),
+      deleteUser: jest.fn(),
+      updateUserStatus: jest.fn(),
+      lockUser: jest.fn(),
+      unlockUser: jest.fn(),
+      listUsersForManagement: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -29,6 +52,13 @@ describe('UsersController', () => {
         {
           provide: UsersService,
           useValue: service,
+        },
+        {
+          provide: AccountImportService,
+          useValue: {
+            generateTemplate: jest.fn(),
+            importAccounts: jest.fn(),
+          },
         },
       ],
     })
@@ -206,6 +236,563 @@ describe('UsersController', () => {
       ).rejects.toMatchObject({
         error: { code: 'INVALID_USER_ID', details: {} },
       });
+    });
+  });
+
+  describe('updateUserRoles', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[C1] Success — gọi service đúng params & trả response format chuẩn', async () => {
+      const dto: UpdateUserRolesDto = {
+        roleIds: ['role-uuid-1', 'role-uuid-2'],
+      };
+      const mockResult = {
+        userId: validUserId,
+        roles: [
+          { id: 'role-uuid-1', roleCode: 'MANAGER', roleName: 'Quản lý' },
+        ],
+      };
+      service.updateUserRoles.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'sysadmin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.updateUserRoles(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.updateUserRoles).toHaveBeenCalledWith(
+        validUserId,
+        dto.roleIds,
+        'sysadmin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Cập nhật vai trò tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[C2] userId không hợp lệ → ParseUUIDPipe reject code INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/roles',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    it('[C3] roleIds rỗng → DTO @ArrayNotEmpty báo lỗi validation (400)', async () => {
+      const dto = plainToInstance(UpdateUserRolesDto, { roleIds: [] });
+      const errors = await validate(dto);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('roleIds');
+      expect(errors[0].constraints).toHaveProperty('arrayNotEmpty');
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { updateUserRoles } = UsersController.prototype;
+
+    it('[C4] Endpoint áp dụng JwtAuthGuard + PermissionsGuard (401/403 gate)', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        updateUserRoles,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[C5] Yêu cầu permission accounts.user.update_roles (403 nếu thiếu)', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        updateUserRoles,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.update_roles']);
+    });
+  });
+
+  describe('updateUser', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[C1] Success — gọi service đúng params & trả response format chuẩn', async () => {
+      const dto: UpdateUserDto = {
+        phoneNumber: '0911111111',
+        positionTitle: 'Lead',
+      };
+      const mockResult = { id: validUserId, fullName: 'Nguyen Van A' };
+      service.updateUser.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.updateUser(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.updateUser).toHaveBeenCalledWith(
+        validUserId,
+        dto,
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Cập nhật thông tin tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[C2] userId không hợp lệ → ParseUUIDPipe reject code INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    it('[C3] Body chứa field cấm (email) → forbidNonWhitelisted reject (400)', async () => {
+      const pipe = new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      });
+
+      await expect(
+        pipe.transform({ email: 'a@b.com', phoneNumber: '0911111111' }, {
+          type: 'body',
+          metatype: UpdateUserDto,
+        } as never),
+      ).rejects.toBeDefined();
+    });
+
+    it('[C3b] roleIds/accountStatus cũng bị chặn bởi forbidNonWhitelisted', async () => {
+      const pipe = new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      });
+
+      await expect(
+        pipe.transform({ roleIds: [], accountStatus: 'locked' }, {
+          type: 'body',
+          metatype: UpdateUserDto,
+        } as never),
+      ).rejects.toBeDefined();
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { updateUser } = UsersController.prototype;
+
+    it('[C4] Endpoint áp dụng JwtAuthGuard + PermissionsGuard (401/403 gate)', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        updateUser,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[C5] Yêu cầu permission accounts.user.update (403 nếu thiếu)', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        updateUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.update']);
+    });
+  });
+
+  describe('deleteUser', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[DC1] Success — gọi service đúng params & trả { success, message }', async () => {
+      service.deleteUser.mockResolvedValue(undefined);
+
+      const request = {
+        user: { userId: 'sysadmin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.deleteUser(
+        validUserId,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.deleteUser).toHaveBeenCalledWith(
+        validUserId,
+        'sysadmin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã xóa tài khoản thành công',
+      });
+    });
+
+    it('[DC2] userId không hợp lệ → ParseUUIDPipe reject code INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { deleteUser } = UsersController.prototype;
+
+    it('[DC3] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        deleteUser,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[DC4] Yêu cầu permission accounts.user.delete', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        deleteUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.delete']);
+    });
+  });
+
+  describe('updateUserStatus', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[SC1] Success — gọi service đúng params & trả { success, message, data }', async () => {
+      const dto: UpdateUserStatusDto = { status: 'inactive' };
+      const mockResult = { id: validUserId, accountStatus: 'inactive' };
+      service.updateUserStatus.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.updateUserStatus(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.updateUserStatus).toHaveBeenCalledWith(
+        validUserId,
+        'inactive',
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Cập nhật trạng thái tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[SC2] userId không hợp lệ → ParseUUIDPipe reject INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/status',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    it('[SC3] status không hợp lệ (locked) → DTO @IsIn reject', async () => {
+      const dto = plainToInstance(UpdateUserStatusDto, { status: 'locked' });
+      const errors = await validate(dto);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('status');
+      expect(errors[0].constraints).toHaveProperty('isIn');
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { updateUserStatus } = UsersController.prototype;
+
+    it('[SC4] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        updateUserStatus,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[SC5] Yêu cầu permission accounts.user.update_status', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        updateUserStatus,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.update_status']);
+    });
+  });
+
+  describe('lockUser / unlockUser', () => {
+    const validUserId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('[LC1] lock success — gọi service đúng params & trả chuẩn', async () => {
+      const dto: LockUserDto = { reason: 'vi pham' };
+      const mockResult = { id: validUserId, accountStatus: 'locked' };
+      service.lockUser.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.lockUser(
+        validUserId,
+        dto,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.lockUser).toHaveBeenCalledWith(
+        validUserId,
+        'vi pham',
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã khóa tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[LC2] userId không hợp lệ (lock) → ParseUUIDPipe reject INVALID_USER_ID (400)', async () => {
+      const pipe = new ParseUUIDPipe({
+        errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        exceptionFactory: () => ({
+          success: false,
+          message: 'Validation failed (uuid is expected)',
+          error: { code: 'INVALID_USER_ID', details: {} },
+          timestamp: new Date().toISOString(),
+          path: '/api/v1/users/:userId/lock',
+        }),
+      });
+
+      await expect(
+        pipe.transform('not-a-valid-uuid', {} as never),
+      ).rejects.toMatchObject({
+        error: { code: 'INVALID_USER_ID', details: {} },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { lockUser, unlockUser } = UsersController.prototype;
+
+    it('[LC3] lock endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        lockUser,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[LC4] lock yêu cầu permission accounts.user.lock', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        lockUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.lock']);
+    });
+
+    it('[UC1] unlock success — gọi service đúng params & trả chuẩn', async () => {
+      const mockResult = { id: validUserId, accountStatus: 'active' };
+      service.unlockUser.mockResolvedValue(mockResult);
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.unlockUser(
+        validUserId,
+        request,
+        '127.0.0.1',
+        'Mozilla/5.0',
+        'req-id',
+      );
+
+      expect(service.unlockUser).toHaveBeenCalledWith(
+        validUserId,
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Đã mở khóa tài khoản thành công',
+        data: mockResult,
+      });
+    });
+
+    it('[UC2] unlock yêu cầu permission accounts.user.unlock', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        unlockUser,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.unlock']);
+    });
+  });
+
+  describe('listUsersForManagement (UC-14)', () => {
+    it('[MC1] Success — gọi service đúng params & trả { success, message, data, meta }', async () => {
+      const query: ManageUsersQueryDto = { page: 2, limit: 10 };
+      const mockData = [
+        {
+          id: 'u1',
+          fullName: 'A',
+          email: 'a@x.com',
+          employeeCode: 'EMP1',
+          accountStatus: 'active',
+          departmentId: 'dep-1',
+          roles: ['MANAGER'],
+        },
+      ];
+      service.listUsersForManagement.mockResolvedValue({
+        data: mockData,
+        total: 25,
+      });
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const result = await controller.listUsersForManagement(query, request);
+
+      expect(service.listUsersForManagement).toHaveBeenCalledWith(
+        query,
+        'admin-uuid',
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Lấy danh sách tài khoản thành công',
+        data: mockData,
+        meta: { page: 2, limit: 10, total: 25, totalPages: 3 },
+      });
+    });
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { listUsersForManagement } = UsersController.prototype;
+
+    it('[MC2] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        listUsersForManagement,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[MC3] Yêu cầu permission accounts.user.manage', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        listUsersForManagement,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.manage']);
+    });
+
+    it('[MC4] sortBy ngoài allowlist → DTO @IsIn reject', async () => {
+      const dto = plainToInstance(ManageUsersQueryDto, {
+        sortBy: 'passwordHash',
+      });
+      const errors = await validate(dto);
+      const sortByError = errors.find((e) => e.property === 'sortBy');
+      expect(sortByError?.constraints).toHaveProperty('isIn');
     });
   });
 });
