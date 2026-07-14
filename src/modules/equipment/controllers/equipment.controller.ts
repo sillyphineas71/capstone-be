@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
   HttpStatus,
   Ip,
@@ -9,6 +10,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -29,6 +31,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { EquipmentService } from '../services/equipment.service.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
+import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 @ApiTags('Equipment')
@@ -171,6 +174,45 @@ export class EquipmentController {
     return {
       success: true,
       message: 'Xoa thiet bi thanh cong',
+    };
+  }
+
+  @Get()
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.read')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Tim kiem / loc kho thiet bi (co phan trang)' })
+  @ApiResponse({ status: 200, description: 'Danh sach thiet bi' })
+  @ApiResponse({ status: 400, description: 'Query khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.read' })
+  async listEquipments(@Query() query: ListEquipmentsQueryDto): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentResponseDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const { data, total } = await this.equipmentService.listEquipments(query);
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    return {
+      success: true,
+      message: 'Danh sach thiet bi',
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 }

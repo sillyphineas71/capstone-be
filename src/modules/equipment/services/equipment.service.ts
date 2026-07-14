@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, IsNull } from 'typeorm';
+import { DataSource, Repository, IsNull, Brackets } from 'typeorm';
 import {
   EquipmentEntity,
   AssetStatus,
@@ -18,6 +18,7 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
+import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
@@ -388,5 +389,96 @@ export class EquipmentService {
       });
       await tem.save(AuditLogEntity, auditLog);
     });
+  }
+
+  /**
+   * UC-64 — Tìm kiếm / lọc kho thiết bị (read-only, có phân trang).
+   * Mirror listUsersForManagement: query builder + filter AND + Brackets search
+   * + SORT_MAP allowlist (chống inject field) + getManyAndCount.
+   * KHÔNG department scope (thiết bị là tài sản toàn tổ chức). KHÔNG transaction/audit.
+   */
+  async listEquipments(
+    query: ListEquipmentsQueryDto,
+  ): Promise<{ data: EquipmentResponseDto[]; total: number }> {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const search = query.search?.trim();
+
+    const qb = this.equipmentRepo
+      .createQueryBuilder('e')
+      .where('e.deletedAt IS NULL');
+
+    // Filter optional, kết hợp AND — bind param
+    if (query.equipmentType) {
+      qb.andWhere('e.equipmentType = :equipmentType', {
+        equipmentType: query.equipmentType,
+      });
+    }
+    if (query.assetStatus) {
+      qb.andWhere('e.assetStatus = :assetStatus', {
+        assetStatus: query.assetStatus,
+      });
+    }
+    if (query.healthStatus) {
+      qb.andWhere('e.healthStatus = :healthStatus', {
+        healthStatus: query.healthStatus,
+      });
+    }
+    if (query.currentRoomId) {
+      qb.andWhere('e.currentRoomId = :currentRoomId', {
+        currentRoomId: query.currentRoomId,
+      });
+    }
+
+    // Search ILIKE — Brackets nhóm OR để không phá AND với filter khác
+    if (search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('e.equipmentCode ILIKE :s', { s: `%${search}%` })
+            .orWhere('e.equipmentName ILIKE :s', { s: `%${search}%` })
+            .orWhere('e.serialNumber ILIKE :s', { s: `%${search}%` });
+        }),
+      );
+    }
+
+    // Sort qua allowlist SORT_MAP — KHÔNG đưa sortBy input trực tiếp vào orderBy
+    const SORT_MAP: Record<string, string> = {
+      equipmentCode: 'e.equipmentCode',
+      equipmentName: 'e.equipmentName',
+      equipmentType: 'e.equipmentType',
+      assetStatus: 'e.assetStatus',
+      healthStatus: 'e.healthStatus',
+      createdAt: 'e.createdAt',
+    };
+    const sortColumn = SORT_MAP[query.sortBy ?? 'createdAt'] ?? 'e.createdAt';
+    const sortDirection = (query.sortOrder ?? 'desc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
+
+    qb.orderBy(sortColumn, sortDirection)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [rows, total] = await qb.getManyAndCount();
+
+    const data = rows.map(
+      (e) =>
+        new EquipmentResponseDto({
+          id: e.id,
+          equipmentCode: e.equipmentCode,
+          equipmentName: e.equipmentName,
+          equipmentType: e.equipmentType,
+          serialNumber: e.serialNumber,
+          brand: e.brand,
+          model: e.model,
+          purchaseDate: e.purchaseDate,
+          assetStatus: e.assetStatus,
+          healthStatus: e.healthStatus,
+          currentRoomId: e.currentRoomId,
+          createdAt: e.createdAt,
+        }),
+    );
+
+    return { data, total };
   }
 }
