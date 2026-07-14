@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Ip,
@@ -140,6 +141,36 @@ export class EquipmentController {
       success: true,
       message: 'Cap nhat trang thai loi thiet bi thanh cong',
       data: result,
+    };
+  }
+
+  @Delete(':equipmentId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.delete')
+  @ApiOperation({ summary: 'Xoa mem thiet bi (soft delete)' })
+  @ApiResponse({ status: 200, description: 'Xoa thiet bi thanh cong' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.delete' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  async deleteEquipment(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    await this.equipmentService.deleteEquipment(equipmentId, userId, ipAddress);
+
+    return {
+      success: true,
+      message: 'Xoa thiet bi thanh cong',
     };
   }
 }

@@ -6,7 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, IsNull } from 'typeorm';
 import {
   EquipmentEntity,
   AssetStatus,
@@ -315,6 +315,78 @@ export class EquipmentService {
       healthStatus: saved.healthStatus,
       currentRoomId: saved.currentRoomId,
       createdAt: saved.createdAt,
+    });
+  }
+
+  /**
+   * UC-63 — Xóa mềm thiết bị + gỡ tham chiếu phòng.
+   * Soft-delete (DATA-01), CẤM hard-delete. Gỡ tham chiếu phòng + set retired + softDelete
+   * + audit ATOMIC trong CÙNG transaction (khác UC-61/62 fail-separate — CHỦ ĐÍCH):
+   * audit fail → rollback toàn bộ, đảm bảo mọi lần xóa đều có vết audit.
+   */
+  async deleteEquipment(
+    equipmentId: string,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<void> {
+    // Phase A — validate (READ, ngoài transaction)
+    // A.1: load thiết bị chưa soft-delete (đã xóa cũng 404 — idempotent)
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId, deletedAt: IsNull() },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}`,
+      });
+    }
+
+    // A.2: KHÔNG chặn theo assetStatus (cho xóa thiết bị đang assigned + gỡ tham chiếu)
+
+    // A.3: snapshot trạng thái trước xóa cho audit
+    const oldValue = {
+      equipmentCode: equipment.equipmentCode,
+      equipmentName: equipment.equipmentName,
+      equipmentType: equipment.equipmentType,
+      serialNumber: equipment.serialNumber,
+      assetStatus: equipment.assetStatus,
+      healthStatus: equipment.healthStatus,
+      currentRoomId: equipment.currentRoomId,
+    };
+
+    // Phase B — transaction ATOMIC: gỡ ref + softDelete + audit cùng 1 transaction.
+    // Audit fail → rollback (KHÔNG try/catch nuốt lỗi — khác UC-61/62).
+    await this.dataSource.transaction(async (tem) => {
+      // B.1: gỡ tham chiếu phòng + chuyển retired — UPDATE field TRƯỚC softDelete
+      await tem.update(EquipmentEntity, equipmentId, {
+        currentRoomId: null,
+        assignedBy: null,
+        assignedAt: null,
+        installedAt: null,
+        assignmentNote: null,
+        assetStatus: AssetStatus.RETIRED,
+      });
+
+      // B.2: soft-delete (set deleted_at) — DATA-01, KHÔNG hard-delete
+      await tem.softDelete(EquipmentEntity, equipmentId);
+
+      // B.3: audit ATOMIC trong cùng transaction
+      const auditLog = tem.create(AuditLogEntity, {
+        userId,
+        actionType: 'delete',
+        entityType: 'equipment',
+        entityId: equipmentId,
+        oldValueJson: oldValue,
+        ipAddress: ipAddress ?? null,
+        severity: AuditLogSeverity.WARNING,
+      });
+      await tem.save(AuditLogEntity, auditLog);
     });
   }
 }
