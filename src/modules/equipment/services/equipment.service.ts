@@ -16,9 +16,11 @@ import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
+import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
@@ -480,5 +482,154 @@ export class EquipmentService {
     );
 
     return { data, total };
+  }
+
+  /**
+   * UC-65 — Phân bổ thiết bị vào phòng họp.
+   * Mirror reportFault: Phase A validate → Phase B transaction update → Phase C audit fail-separate.
+   * Cross-module: đọc RoomEntity qua dataSource.getRepository (CHỈ ĐỌC, KHÔNG đổi constructor).
+   * Thứ tự validate cố định: equipment 404 → equipment 409 → room 404 → room 409.
+   */
+  async assignToRoom(
+    equipmentId: string,
+    dto: AssignEquipmentDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<EquipmentResponseDto> {
+    // Phase A — validate (READ, ngoài transaction)
+    // A.1: load equipment (chưa soft-delete)
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId, deletedAt: IsNull() },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    // A.2: thiết bị phải available hoặc assigned mới gán được
+    if (
+      equipment.assetStatus !== AssetStatus.AVAILABLE &&
+      equipment.assetStatus !== AssetStatus.ASSIGNED
+    ) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Thiet bi khong o trang thai co the gan (retired/lost/maintenance)',
+        error: {
+          code: 'EQUIPMENT_NOT_ASSIGNABLE',
+          details: { assetStatus: equipment.assetStatus },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    // A.3: load room qua getRepository (cross-module, CHỈ ĐỌC — KHÔNG đổi constructor)
+    const room = await this.dataSource
+      .getRepository(RoomEntity)
+      .findOne({ where: { id: dto.roomId, deletedAt: IsNull() } });
+    if (!room) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay phong hop',
+        error: {
+          code: 'ROOM_NOT_FOUND',
+          details: { roomId: dto.roomId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    // A.4: phòng phải active và không inactive mới nhận được thiết bị
+    if (
+      !(room.isActive === true && room.currentStatus !== RoomStatus.INACTIVE)
+    ) {
+      throw new ConflictException({
+        success: false,
+        message: 'Phong khong o trang thai nhan duoc thiet bi',
+        error: {
+          code: 'ROOM_NOT_ASSIGNABLE',
+          details: {
+            roomId: dto.roomId,
+            isActive: room.isActive,
+            currentStatus: room.currentStatus,
+          },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    // A.5: snapshot trạng thái cũ cho audit
+    const oldValue = {
+      currentRoomId: equipment.currentRoomId,
+      assetStatus: equipment.assetStatus,
+    };
+
+    // Phase B — cập nhật trong transaction (re-assign / gán lại đều đi qua nhánh này)
+    const saved = await this.dataSource.transaction(async (em) => {
+      equipment.currentRoomId = dto.roomId;
+      equipment.assetStatus = AssetStatus.ASSIGNED;
+      equipment.assignedBy = userId;
+      equipment.assignedAt = new Date();
+      equipment.installedAt = dto.installedAt
+        ? new Date(dto.installedAt)
+        : new Date();
+      equipment.assignmentNote = dto.assignmentNote ?? null;
+      return em.save(EquipmentEntity, equipment);
+    });
+
+    // Phase C — audit fail-separate (transaction riêng, không rollback gán)
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'equipment',
+          entityId: saved.id,
+          oldValueJson: oldValue,
+          newValueJson: {
+            currentRoomId: saved.currentRoomId,
+            assetStatus: saved.assetStatus,
+            assignedBy: saved.assignedBy,
+            assignedAt: saved.assignedAt,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit log for equipment assignment ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    // Map response — tái dùng EquipmentResponseDto (UC-61)
+    return new EquipmentResponseDto({
+      id: saved.id,
+      equipmentCode: saved.equipmentCode,
+      equipmentName: saved.equipmentName,
+      equipmentType: saved.equipmentType,
+      serialNumber: saved.serialNumber,
+      brand: saved.brand,
+      model: saved.model,
+      purchaseDate: saved.purchaseDate,
+      assetStatus: saved.assetStatus,
+      healthStatus: saved.healthStatus,
+      currentRoomId: saved.currentRoomId,
+      createdAt: saved.createdAt,
+    });
   }
 }

@@ -32,6 +32,7 @@ import { EquipmentService } from '../services/equipment.service.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
+import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 
 @ApiTags('Equipment')
@@ -213,6 +214,57 @@ export class EquipmentController {
         total,
         totalPages: Math.ceil(total / limit),
       },
+    };
+  }
+
+  @Patch(':equipmentId/assignment')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.assign')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Phan bo thiet bi vao phong hop' })
+  @ApiBody({ type: AssignEquipmentDto })
+  @ApiResponse({ status: 200, description: 'Phan bo thiet bi thanh cong' })
+  @ApiResponse({ status: 400, description: 'Du lieu DTO khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.assign' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi / phong' })
+  @ApiResponse({
+    status: 409,
+    description: 'Thiet bi / phong khong o trang thai co the gan',
+  })
+  async assignToRoom(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Body() dto: AssignEquipmentDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.equipmentService.assignToRoom(
+      equipmentId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Phan bo thiet bi vao phong thanh cong',
+      data: result,
     };
   }
 }
