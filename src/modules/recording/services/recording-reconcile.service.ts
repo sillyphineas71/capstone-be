@@ -63,6 +63,9 @@ export class RecordingReconcileService implements OnApplicationBootstrap {
           skipped++;
           continue;
         }
+        // TODO(UC-114/115 C6 — ngoài scope): nếu session crash giữa chừng có nhiều segment
+        // (metadata_json.segments[] do pause/resume), reconcile hiện CHỈ finalize storage_path
+        // (segment cuối), CHƯA concat các segment mồ côi. Mở rộng concat ở đây khi cần.
         const storagePath = s.storage_path;
         const exists = !!storagePath && fs.existsSync(storagePath);
         const size = exists ? fs.statSync(storagePath).size : 0;

@@ -43,3 +43,21 @@ export function spawnFfmpeg(url: string, outPath: string): ChildProcess {
   const bin = process.env.FFMPEG_PATH || 'ffmpeg';
   return spawn(bin, buildFfmpegArgs(url, outPath), { windowsHide: true });
 }
+
+/**
+ * Build args ffmpeg concat demuxer: gộp N segment (cùng codec, `-c copy`) → 1 file.
+ * `listPath` là file text mỗi dòng `file '<abs path>'`. Dùng khi stopVideo có nhiều
+ * segment do pause/resume (UC-114/115). `-safe 0` cho phép path tuyệt đối.
+ */
+export function buildConcatArgs(listPath: string, outPath: string): string[] {
+  return ['-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outPath];
+}
+
+/** Spawn ffmpeg concat. FFMPEG_PATH lazy từ env. Path segment/list KHÔNG chứa credential. */
+export function spawnFfmpegConcat(
+  listPath: string,
+  outPath: string,
+): ChildProcess {
+  const bin = process.env.FFMPEG_PATH || 'ffmpeg';
+  return spawn(bin, buildConcatArgs(listPath, outPath), { windowsHide: true });
+}

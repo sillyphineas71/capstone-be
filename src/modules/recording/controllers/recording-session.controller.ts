@@ -79,6 +79,46 @@ export class RecordingSessionController {
     };
   }
 
+  // UC-114: tạm dừng ghi hình (segment). Tái dùng permission recording.video.stop.
+  @Post('live-meetings/:meetingId/recording/:sessionId/pause-video')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.video.stop')
+  async pauseVideo(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
+  ) {
+    const data = await this.recordingSessionService.pauseVideo(
+      meetingId,
+      sessionId,
+    );
+    return {
+      success: true,
+      message: 'Video recording paused',
+      data,
+    };
+  }
+
+  // UC-115: tiếp tục ghi hình (segment mới). Tái dùng permission recording.video.stop.
+  @Post('live-meetings/:meetingId/recording/:sessionId/resume-video')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('recording.video.stop')
+  async resumeVideo(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
+  ) {
+    const data = await this.recordingSessionService.resumeVideo(
+      meetingId,
+      sessionId,
+    );
+    return {
+      success: true,
+      message: 'Video recording resumed',
+      data,
+    };
+  }
+
   // Ad-hoc (ngoài REC-002/003/004 gốc): upload audio đã ghi sẵn (.wav/.mp3/.m4a/...)
   // để feed pipeline transcription (TRANS-OFFLINE-001) khi không có camera/capture
   // agent thật. Dùng guard thật (không Mock như các route REC khác) vì endpoint này

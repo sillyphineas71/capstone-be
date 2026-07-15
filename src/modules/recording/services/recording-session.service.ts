@@ -25,6 +25,7 @@ import { CreateAudioSessionDto } from '../dto/create-audio-session.dto.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { decryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { probeMedia, probeAudioDuration } from '../utils/ffprobe.util.js';
+import { spawnFfmpegConcat } from '../utils/ffmpeg.util.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 interface RtspConfig {
@@ -42,6 +43,8 @@ export class RecordingSessionService {
   // REC-007: cửa sổ phát hiện no-data khi start (poll file>0).
   private static readonly START_PROBE_MS = 5000;
   private static readonly POLL_MS = 250;
+  // UC-114/115: timeout concat N segment → 1 file khi stop (ffmpeg -c copy, nhanh).
+  private static readonly CONCAT_TIMEOUT_MS = 120000;
 
   private static readonly SUPPORTED_AUDIO_EXTENSIONS = [
     '.wav',
@@ -292,10 +295,19 @@ export class RecordingSessionService {
       });
     }
 
-    // 3. Dừng tiến trình (graceful → kill). Không còn handle → orphan.
-    const stopResult = this.processManager.has(sessionId)
-      ? await this.processManager.stop(sessionId)
-      : 'orphan';
+    // 3. Dừng tiến trình. UC-114/115: paused → process đã dừng lúc pause (KHÔNG stop lại,
+    //    KHÔNG coi là orphan). recording/starting → stop graceful; không handle → orphan.
+    let stopResult: 'exited' | 'killed' | 'orphan' | 'skipped_paused';
+    if (
+      (session.status as RecordingSessionStatus) ===
+      RecordingSessionStatus.PAUSED
+    ) {
+      stopResult = 'skipped_paused';
+    } else {
+      stopResult = this.processManager.has(sessionId)
+        ? await this.processManager.stop(sessionId)
+        : 'orphan';
+    }
     const isOrphan = stopResult === 'orphan';
 
     // 4. Chốt file (đợi exit ở bước 3 xong mới đọc).
@@ -306,12 +318,16 @@ export class RecordingSessionService {
       0,
       Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
     );
-    const storagePath = session.storage_path;
-    const exists = !!storagePath && fs.existsSync(storagePath);
-    const size = exists ? fs.statSync(storagePath).size : 0;
 
     const baseMeta = session.metadata_json ?? {};
     const metadata = isOrphan ? { ...baseMeta, orphan_stop: true } : baseMeta;
+
+    // UC-114/115: session có segment (đã pause/resume) → concat N segment → 1 file cuối.
+    //   Session 0-pause (segments rỗng) → resolveStopFile trả storage_path cũ (LUỒNG CŨ Y HỆT — BR-06).
+    const { storagePath, cleanup: cleanupSegments } =
+      await this.resolveStopFile(sessionId, session);
+    const exists = !!storagePath && fs.existsSync(storagePath);
+    const size = exists ? fs.statSync(storagePath).size : 0;
 
     // 5a. File thiếu / rỗng → stopped nhưng KHÔNG tạo media_files.
     if (!exists || size === 0) {
@@ -352,6 +368,9 @@ export class RecordingSessionService {
       baseMetadata: metadata,
     });
 
+    // UC-114/115 (C4): concat OK + finalize xong → xoá segment files + list.txt. (0-pause: noop.)
+    cleanupSegments();
+
     return {
       recordingSessionId: sessionId,
       status: RecordingSessionStatus.STOPPED,
@@ -361,6 +380,308 @@ export class RecordingSessionService {
       mediaFileId: result.mediaFileId,
       captured: true,
     };
+  }
+
+  /**
+   * UC-114 — Tạm dừng ghi hình (SEGMENT). BR-05: markStopping + stop ffmpeg → đóng file
+   * segment hiện tại; từ đây KHÔNG process nào ghi cho tới resume ⇒ đoạn pause không tồn
+   * tại trong bất kỳ file nào. KHÔNG audit (nhất quán start/stop).
+   */
+  async pauseVideo(
+    meetingId: string,
+    sessionId: string,
+  ): Promise<{
+    recordingSessionId: string;
+    status: string;
+    pauseCount: number;
+  }> {
+    // A. Load session
+    const rows: Array<{
+      id: string;
+      meeting_id: string;
+      status: string;
+      storage_path: string | null;
+      metadata_json: Record<string, unknown> | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, meeting_id, status, storage_path, metadata_json
+       FROM recording_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const session = rows?.[0];
+    if (!session || session.meeting_id !== meetingId) {
+      throw new NotFoundException({
+        code: 'RECORDING_SESSION_NOT_FOUND',
+        message: 'Recording session not found.',
+      });
+    }
+
+    // B. Guard: chỉ pause khi đang recording
+    if (
+      (session.status as RecordingSessionStatus) !==
+      RecordingSessionStatus.RECORDING
+    ) {
+      throw new ConflictException({
+        code: 'RECORDING_NOT_RECORDING',
+        message: 'Recording session is not recording.',
+      });
+    }
+
+    // C. markStopping TRƯỚC stop (BR-05: tránh bị đánh failed; đóng file segment sạch).
+    this.processManager.markStopping(sessionId);
+    await this.processManager.stop(sessionId);
+
+    // D. Ghi segment hiện tại vào metadata + set paused (merge KHÔNG đè orphan_stop/recovered).
+    const meta = session.metadata_json ?? {};
+    const segments = Array.isArray(meta.segments)
+      ? (meta.segments as unknown[]).filter(
+          (p): p is string => typeof p === 'string',
+        )
+      : [];
+    if (session.storage_path && !segments.includes(session.storage_path)) {
+      segments.push(session.storage_path);
+    }
+    const pauseCount =
+      (typeof meta.pause_count === 'number' ? meta.pause_count : 0) + 1;
+    const merged = {
+      ...meta,
+      segments,
+      paused_at: new Date().toISOString(),
+      pause_count: pauseCount,
+    };
+    await this.dataSource.manager.query(
+      `UPDATE recording_sessions SET status = $1, metadata_json = $2 WHERE id = $3`,
+      [RecordingSessionStatus.PAUSED, JSON.stringify(merged), sessionId],
+    );
+
+    return {
+      recordingSessionId: sessionId,
+      status: RecordingSessionStatus.PAUSED,
+      pauseCount,
+    };
+  }
+
+  /**
+   * UC-115 — Tiếp tục ghi hình (SEGMENT): start ffmpeg ghi segment MỚI. Dựng lại RTSP url
+   * in-memory (không log). Segment mới no-data/fail → GIỮ paused + 502 (C5): không mất
+   * segment cũ, không cộng pausedDuration. KHÔNG audit.
+   */
+  async resumeVideo(
+    meetingId: string,
+    sessionId: string,
+  ): Promise<{
+    recordingSessionId: string;
+    status: string;
+    pausedDurationSeconds: number;
+  }> {
+    // A. Load session
+    const rows: Array<{
+      id: string;
+      meeting_id: string;
+      status: string;
+      device_id: string | null;
+      paused_duration_seconds: number | null;
+      metadata_json: Record<string, unknown> | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, meeting_id, status, device_id, paused_duration_seconds, metadata_json
+       FROM recording_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const session = rows?.[0];
+    if (!session || session.meeting_id !== meetingId) {
+      throw new NotFoundException({
+        code: 'RECORDING_SESSION_NOT_FOUND',
+        message: 'Recording session not found.',
+      });
+    }
+
+    // B. Guard: chỉ resume khi đang paused
+    if (
+      (session.status as RecordingSessionStatus) !==
+      RecordingSessionStatus.PAUSED
+    ) {
+      throw new ConflictException({
+        code: 'RECORDING_NOT_PAUSED',
+        message: 'Recording session is not paused.',
+      });
+    }
+
+    // C. Dựng lại RTSP url (in-memory, KHÔNG log) từ device.rtsp_config — như startVideo.
+    const deviceRows: Array<{
+      metadata_json: Record<string, unknown> | null;
+    }> = await this.dataSource.manager.query(
+      'SELECT metadata_json FROM iot_devices WHERE id = $1',
+      [session.device_id],
+    );
+    const metaCfg = deviceRows?.[0]?.metadata_json?.['rtsp_config'];
+    const cfg = metaCfg ? (metaCfg as RtspConfig) : null;
+    if (!cfg || !cfg.rtsp_host || !cfg.rtsp_path) {
+      throw new BadRequestException({
+        code: 'RTSP_NOT_CONFIGURED',
+        message: 'Camera RTSP is not configured.',
+      });
+    }
+    const url = this.buildRtspUrl(cfg);
+
+    // D. Segment mới {sessionId}_seg{n}.mp4 (n = số segment hiện có) → start + probe no-data.
+    const meta = session.metadata_json ?? {};
+    const segments = Array.isArray(meta.segments)
+      ? (meta.segments as unknown[]).filter(
+          (p): p is string => typeof p === 'string',
+        )
+      : [];
+    const baseDir = this.configService.get<string>(
+      'RECORDING_STORAGE_PATH',
+      './storage/recordings',
+    );
+    fs.mkdirSync(path.resolve(baseDir), { recursive: true });
+    const segNew = path.join(
+      path.resolve(baseDir),
+      `${sessionId}_seg${segments.length}.mp4`,
+    );
+
+    this.processManager.start(sessionId, url, segNew);
+    const probe = await this.probeStart(sessionId, segNew);
+    if (probe === 'exited' || probe === 'no_data') {
+      // C5: GIỮ status=paused (KHÔNG update DB), không cộng pausedDuration, không mất segment cũ.
+      if (this.processManager.has(sessionId)) {
+        await this.processManager.stop(sessionId);
+      }
+      throw new BadGatewayException({
+        code: 'RECORDING_NO_VIDEO',
+        message: 'Camera không gửi dữ liệu video khi tiếp tục ghi.',
+      });
+    }
+
+    // E. capturing → cộng khoảng pause vào pausedDurationSeconds + xoá paused_at + recording.
+    const pausedAt =
+      typeof meta.paused_at === 'string' ? new Date(meta.paused_at) : null;
+    const pausedInc = pausedAt
+      ? Math.max(0, Math.floor((Date.now() - pausedAt.getTime()) / 1000))
+      : 0;
+    const newPausedDuration =
+      (session.paused_duration_seconds ?? 0) + pausedInc;
+    const { paused_at: _removed, ...restMeta } = meta;
+    void _removed;
+    const merged = { ...restMeta, segments: [...segments, segNew] };
+    await this.dataSource.manager.query(
+      `UPDATE recording_sessions
+       SET status = $1, paused_duration_seconds = $2, storage_path = $3, metadata_json = $4
+       WHERE id = $5`,
+      [
+        RecordingSessionStatus.RECORDING,
+        newPausedDuration,
+        segNew,
+        JSON.stringify(merged),
+        sessionId,
+      ],
+    );
+
+    return {
+      recordingSessionId: sessionId,
+      status: RecordingSessionStatus.RECORDING,
+      pausedDurationSeconds: newPausedDuration,
+    };
+  }
+
+  /**
+   * UC-114/115 — Quyết định file dùng để finalize khi stop:
+   * - 0-pause (segments rỗng) → storage_path cũ (LUỒNG CŨ Y HỆT — BR-06), cleanup noop.
+   * - 1 segment hợp lệ → chính segment đó (không concat).
+   * - >1 segment → concat demuxer → {sessionId}_final.mp4; concat lỗi → 500 (GIỮ segment).
+   * Lọc segment 0-byte/không tồn tại trước khi concat.
+   */
+  private async resolveStopFile(
+    sessionId: string,
+    session: {
+      storage_path: string | null;
+      metadata_json: Record<string, unknown> | null;
+    },
+  ): Promise<{ storagePath: string | null; cleanup: () => void }> {
+    const noop = () => {};
+    const meta = session.metadata_json ?? {};
+    const segList = Array.isArray(meta.segments)
+      ? (meta.segments as unknown[]).filter(
+          (p): p is string => typeof p === 'string',
+        )
+      : [];
+    if (segList.length === 0) {
+      return { storagePath: session.storage_path, cleanup: noop };
+    }
+    const validSegs = segList.filter(
+      (p) => fs.existsSync(p) && fs.statSync(p).size > 0,
+    );
+    if (validSegs.length === 0) {
+      return { storagePath: session.storage_path, cleanup: noop };
+    }
+    if (validSegs.length === 1) {
+      return { storagePath: validSegs[0], cleanup: noop };
+    }
+
+    // >1 segment → concat
+    const baseDir = this.configService.get<string>(
+      'RECORDING_STORAGE_PATH',
+      './storage/recordings',
+    );
+    const outConcat = path.join(
+      path.resolve(baseDir),
+      `${sessionId}_final.mp4`,
+    );
+    const listPath = path.join(
+      os.tmpdir(),
+      `concat-${sessionId}-${randomUUID()}.txt`,
+    );
+    const listBody = validSegs
+      .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
+      .join('\n');
+    fs.writeFileSync(listPath, listBody);
+
+    const code = await this.runFfmpegConcat(listPath, outConcat);
+    if (code !== 0) {
+      // C4: concat lỗi → 500, GIỮ segment + list (không xoá, không finalize).
+      throw new InternalServerErrorException({
+        code: 'RECORDING_STOP_FAILED',
+        message: 'Failed to concat recording segments.',
+      });
+    }
+    const cleanup = () => {
+      for (const seg of validSegs) {
+        try {
+          fs.unlinkSync(seg);
+        } catch {
+          // best-effort
+        }
+      }
+      try {
+        fs.unlinkSync(listPath);
+      } catch {
+        // best-effort
+      }
+    };
+    return { storagePath: outConcat, cleanup };
+  }
+
+  /** Chạy ffmpeg concat, chờ exit; trả exit code (−1 nếu error/timeout+kill). */
+  private runFfmpegConcat(listPath: string, outPath: string): Promise<number> {
+    return new Promise((resolve) => {
+      const proc = spawnFfmpegConcat(listPath, outPath);
+      let settled = false;
+      const done = (code: number) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(code);
+      };
+      const timer = setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // process có thể đã thoát
+        }
+        done(-1);
+      }, RecordingSessionService.CONCAT_TIMEOUT_MS);
+      proc.on('exit', (c) => done(c ?? -1));
+      proc.on('error', () => done(-1));
+    });
   }
 
   /**
