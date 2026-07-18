@@ -17,6 +17,7 @@ import { AccountImportService } from './services/account-import.service.js';
 import { FaceProfileService } from './services/face-profile.service.js';
 import { PermissionsController } from './controllers/permissions.controller.js';
 import { RolePermissionsController } from './controllers/role-permissions.controller.js';
+import { RolesController } from './controllers/roles.controller.js';
 import { AvatarStatusService } from './services/avatar-status.service.js';
 import { AvatarSubmissionService } from './services/avatar-submission.service.js';
 import { AdminAvatarReviewService } from './services/admin-avatar-review.service.js';
@@ -27,6 +28,7 @@ import { IsDepartmentNameUniqueConstraint } from './validators/is-department-nam
 import { NoEmojiOrControlConstraint } from './validators/no-emoji-or-control.validator.js';
 import { PermissionsService } from './services/permissions.service.js';
 import { RolePermissionsService } from './services/role-permissions.service.js';
+import { RolesService } from './services/roles.service.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
@@ -63,6 +65,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     DepartmentsController,
     PermissionsController,
     RolePermissionsController,
+    RolesController,
     FaceProfileController,
     AvatarController,
     AdminAvatarReviewController,
@@ -76,6 +79,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     AdminAvatarReviewService,
     PermissionsService,
     RolePermissionsService,
+    RolesService,
     PasswordGeneratorService,
     DepartmentsService,
     IsDepartmentCodeUniqueConstraint,
