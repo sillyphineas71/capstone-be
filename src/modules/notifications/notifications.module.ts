@@ -13,7 +13,7 @@ import { MeetingExternalParticipantEntity } from '../meetings/entities/meeting-e
 import { MeetingAgendaEntity } from '../meetings/entities/meeting-agenda.entity.js';
 import { MeetingMinutesEntity } from '../minutes/entities/meeting-minutes.entity.js';
 import { UserEntity } from '../accounts/entities/user.entity.js';
-import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 /**
  * NotificationsModule — Module quản lý notifications.
@@ -30,6 +30,11 @@ import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.
  *
  * KHÔNG import MeetingsModule/AccountsModule/MinutesModule (tránh circular).
  * TypeOrmModule.forFeature chỉ inject entity để đọc, không ghi.
+ *
+ * CÓ import AuthModule: NotificationsController dùng JwtAuthGuard/PermissionsGuard
+ * (cần JwtService/AuthConfigService), và MeetingNotificationsService dùng
+ * AuthzReadRepository (export từ AuthModule). AuthModule không import ngược lại
+ * NotificationsModule/AccountsModule nên không có circular dependency.
  */
 @Module({
   imports: [
@@ -44,13 +49,13 @@ import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.
       MeetingMinutesEntity,
       UserEntity,
     ]),
+    AuthModule,
   ],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
     NotificationWorkerService,
     MeetingNotificationsService,
-    AuthzReadRepository,
   ],
   exports: [TypeOrmModule, NotificationsService],
 })
