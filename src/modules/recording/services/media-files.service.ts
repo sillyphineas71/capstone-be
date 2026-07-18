@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -10,6 +10,7 @@ import {
 } from '../entities/media-file.entity.js';
 import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
 import { VisibilityDto } from '../dto/visibility.dto.js';
+import { StorageService } from '../../storage/storage.service.js';
 
 export interface MediaSummary {
   id: string;
@@ -31,10 +32,13 @@ export interface MediaSummary {
  */
 @Injectable()
 export class MediaFilesService {
+  private readonly logger = new Logger(MediaFilesService.name);
+
   constructor(
     @InjectRepository(MediaFileEntity)
     private readonly repo: Repository<MediaFileEntity>,
     private readonly configService: ConfigService,
+    private readonly storageService: StorageService,
   ) {}
 
   /** UC-120: list theo meeting, phân trang, ẩn deleted. */
@@ -74,7 +78,7 @@ export class MediaFilesService {
     };
   }
 
-  /** UC-121: chi tiết đầy đủ (gồm metadataJson.probe). */
+  /** UC-121/UC-140: chi tiết đầy đủ (gồm metadataJson.probe + Signed URL khi cần). */
   async detail(fileId: string): Promise<Record<string, unknown>> {
     const m = await this.loadActive(fileId);
     return {
@@ -96,7 +100,36 @@ export class MediaFilesService {
       recordingSessionId: m.recordingSessionId,
       uploadedAt: m.uploadedAt,
       metadataJson: m.metadataJson,
+      downloadUrl: this.buildSignedDownloadUrl(m),
     };
+  }
+
+  /**
+   * UC-140 (BR2): sinh Signed URL để client tải/mở file.
+   * - `cloud_provider` (VD: Cloudinary): dùng thẳng file_url công khai đã lưu.
+   * - `local`/`s3`/`minio`: sinh short-lived signed token qua secure-download endpoint.
+   * Trả null nếu không sinh được (không chặn response detail chỉ vì lỗi này).
+   */
+  private buildSignedDownloadUrl(m: MediaFileEntity): string | null {
+    if (m.storageProvider === StorageProvider.CLOUD_PROVIDER) {
+      return m.fileUrl ?? null;
+    }
+    try {
+      const baseUrl = this.configService
+        .get<string>('API_PUBLIC_BASE_URL', 'http://localhost:3000')
+        .replace(/\/$/, '');
+      const ttl = this.configService.get<number>(
+        'MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS',
+        600,
+      );
+      const signed = this.storageService.generateSignedDownloadToken(m.id, ttl);
+      return `${baseUrl}/api/v1/media-files/${m.id}/secure-download?token=${signed.token}`;
+    } catch (err) {
+      this.logger.warn(
+        `Failed to generate signed download URL for ${m.id}: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
   }
 
   /**

@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-02 | Khởi tạo plan cho feat-attach-minutes-document | Toàn bộ file |
+| 2026-07-17 | Mở rộng quyền đọc (List) theo UC-139/140, thay `loadMinutesForOwnerCheck` bằng `loadMinutesForReadCheck` (dùng chung `canAccessMinutes` với `feat-view-meeting-minutes-detail`); ghi chú gap-fix role `INTERNAL_USER` → `EMPLOYEE`. Xem `feat-view-minutes-attachment-detail` cho phần UC-140. | Mục 6.2, 4.3 |
 
 ## 1. Feature Summary
 Bổ sung 3 endpoint dưới `meeting-minutes/:minutesId/attachments` cho phép Host (`preparedBy`) upload, xem danh sách, và xóa (soft-delete) tài liệu đính kèm cho biên bản họp đang ở trạng thái `draft`. Dùng lại `MediaFileEntity` (polymorphic `relatedEntityType/relatedEntityId`, giống pattern `face_profile` trong avatar submission) và `StorageService` hiện có — không migration schema mới.
@@ -30,7 +31,7 @@ NestJS + TypeORM + PostgreSQL + Multer (`@nestjs/platform-express` `FileIntercep
 - Exception: `NotFoundException`/`ForbiddenException`/`ConflictException`/`BadRequestException` với payload `{ success: false, message, error: { code, details } }`.
 - Transaction: `this.dataSource.transaction(async (manager) => {...})`, lock `meeting_minutes` bằng `pessimistic_write` (giống `createDraft`).
 - Upload: `FileInterceptor('file')` + `@UploadedFile()`, KHÔNG set `limits.fileSize` ở Multer (để service tự trả đúng `ATTACHMENT_FILE_TOO_LARGE`, theo đúng ghi chú trong `avatar.controller.ts` dòng 85-86).
-- Quyết định tổ chức code: đặt 3 method mới trong `MinutesService` hiện có (không tách service riêng) — vì logic ngắn, tái dùng chung method `loadMinutesForOwnerCheck` nội bộ; nếu sau này thêm nhiều thao tác khác cho attachment, cân nhắc tách `MinutesAttachmentService` trong feature kế tiếp.
+- Quyết định tổ chức code: đặt 3 method mới trong `MinutesService` hiện có (không tách service riêng) — vì logic ngắn. Ban đầu tái dùng chung `loadMinutesForOwnerCheck` cho cả 3; từ 2026-07-17, `listAttachments` đổi sang `loadMinutesForReadCheck` (method mới, riêng cho quyền đọc), `addAttachment`/`removeAttachment` vẫn dùng `loadMinutesForOwnerCheck`. Nếu sau này thêm nhiều thao tác khác cho attachment, cân nhắc tách `MinutesAttachmentService` trong feature kế tiếp.
 
 ## 3. Scope Confirmation
 
@@ -72,6 +73,8 @@ Tóm tắt: 0 bảng mới, 0 cột mới, 3 permission mới (seed qua migratio
 ### 4.3 Seed / Migration
 1 migration mới: `SeedMeetingMinutesAttachmentPermissions` (copy pattern từ `20260702010000-SeedMeetingMinutesReadPermission.ts`), seed 3 permission: `meeting.minutes.attachment.create`, `meeting.minutes.attachment.read`, `meeting.minutes.attachment.delete`, module_code=`minutes`, roles=`INTERNAL_USER, MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN`.
 
+**Gap fix (2026-07-17)**: role `INTERNAL_USER` không tồn tại trong DB thật (4 role thật: `BUSINESS_ADMIN`, `EMPLOYEE`, `MANAGER`, `SYSTEM_ADMIN`) — migration trên chưa từng thực sự cấp quyền cho Employee. Vá bằng migration bổ sung `20260717000001-FixMinutesAttachmentEmployeeRole.ts` (cấp lại 4 permission liên quan minutes cho `EMPLOYEE`, theo đúng tiền lệ `20260711000001-SeedRecordingUploadTrackEmployeeRole.ts`).
+
 ## 5. API / Contract Plan
 
 ### 5.1 Endpoints
@@ -96,7 +99,9 @@ Xem spec.md mục 5.2.
 ### 6.2 Authorization Flow
 1. `JwtAuthGuard` xác thực token.
 2. `PermissionsGuard` + `@RequirePermissions(...)` kiểm tra permission cấp role, riêng theo từng endpoint.
-3. Service kiểm tra thêm resource ownership: `meetingMinutes.preparedBy === authUser.userId` (upload/delete). List **cũng áp dụng ownership** trong phạm vi feature này (chỉ `preparedBy` xem được danh sách của chính biên bản draft mình tạo) — vì chưa có UC xem chi tiết chính thức (UC-MKM-03) để định nghĩa quyền xem rộng hơn cho Participant/Host khi published.
+3. Service kiểm tra thêm:
+   - **Upload/Delete**: resource ownership `meetingMinutes.preparedBy === authUser.userId` (`loadMinutesForOwnerCheck`) — không đổi.
+   - **List (cập nhật 2026-07-17)**: trước đây dùng chung `loadMinutesForOwnerCheck` (preparedBy-only) "vì chưa có UC xem chi tiết chính thức để định nghĩa quyền xem rộng hơn cho Participant/Host khi published" — nay UC đó đã có (UC-139/UC-140, Feature Table chính thức), nên đổi sang `loadMinutesForReadCheck` (method mới, dùng chung `canAccessMinutes` với `findMinutesDetail` của `feat-view-meeting-minutes-detail`): biên bản `draft` → chỉ `preparedBy`; `published`/`archived` → Host của cuộc họp hoặc bất kỳ Participant nào; `SYSTEM_ADMIN`/`BUSINESS_ADMIN` → luôn qua.
 
 ### 6.3 Error
 Thiếu permission → 403 `FORBIDDEN` (guard). Có permission nhưng không phải `preparedBy` → 403 `NOT_MINUTES_OWNER` (service).
@@ -136,10 +141,15 @@ COMMIT
 -- Sau commit: best-effort storageService.deleteFile(storageKey) (catch, log warn — file vật lý xóa ngoài transaction, không chặn response)
 ```
 
-### 7.3 List (không cần transaction)
+### 7.3 List (không cần transaction, cập nhật 2026-07-17)
 ```text
-1. SELECT meeting_minutes WHERE id=:minutesId AND deletedAt IS NULL -> không có -> 404 MINUTES_NOT_FOUND
-2. Validate: preparedBy === authUser.userId -> 403 NOT_MINUTES_OWNER (xem 6.2)
+1. SELECT meeting_minutes JOIN meeting WHERE id=:minutesId AND deletedAt IS NULL -> không có -> 404 MINUTES_NOT_FOUND
+2. Nếu role effective KHÔNG có SYSTEM_ADMIN/BUSINESS_ADMIN:
+   - Đếm participant của meeting (userId=authUser.userId) -> isParticipant
+   - canAccessMinutes(minutes, meeting, userId, isAdmin=false, isParticipant):
+     - status=draft -> chỉ true nếu preparedBy === userId
+     - status=published/archived -> true nếu hostId === userId HOẶC isParticipant
+   - false -> 403 MEETING_MINUTES_ACCESS_DENIED (loadMinutesForReadCheck)
 3. SELECT media_files WHERE relatedEntityType='meeting_minutes' AND relatedEntityId=:minutesId AND deletedAt IS NULL ORDER BY uploadedAt DESC
 4. Trả về list + meta { total, maxCount }
 ```
@@ -162,7 +172,8 @@ Theo thứ tự ở mục 7.1/7.2: tồn tại → ownership → status draft �
 | Điều kiện | Exception | Code |
 | :--- | :--- | :--- |
 | Biên bản không tồn tại/đã xóa | `NotFoundException` | `MINUTES_NOT_FOUND` |
-| Không phải `preparedBy` | `ForbiddenException` | `NOT_MINUTES_OWNER` |
+| Upload/Delete: không phải `preparedBy` | `ForbiddenException` | `NOT_MINUTES_OWNER` |
+| List (2026-07-17): không thỏa `canAccessMinutes` | `ForbiddenException` | `MEETING_MINUTES_ACCESS_DENIED` |
 | Status không phải draft | `ConflictException` | `MINUTES_NOT_DRAFT` |
 | Thiếu file | `BadRequestException` | `ATTACHMENT_FILE_REQUIRED` |
 | File quá lớn | `BadRequestException` | `ATTACHMENT_FILE_TOO_LARGE` |
