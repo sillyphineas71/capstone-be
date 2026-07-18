@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   ConflictException,
   InternalServerErrorException,
+  UnprocessableEntityException,
   Logger,
 } from '@nestjs/common';
 import { DataSource, IsNull, In, Brackets, Repository } from 'typeorm';
@@ -21,6 +22,7 @@ import {
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
 } from '../entities/meeting-minutes.entity.js';
+import { MeetingMinutesShareEntity } from '../entities/meeting-minutes-share.entity.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { CreateDraftMinutesDto } from '../dto/create-draft-minutes.dto.js';
@@ -55,7 +57,10 @@ import {
   TranscriptSummaryDto,
   RecordingSummaryDto,
 } from '../dto/minutes-detail-response.dto.js';
-import { UserEntity } from '../../accounts/entities/user.entity.js';
+import {
+  UserEntity,
+  AccountStatus,
+} from '../../accounts/entities/user.entity.js';
 import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
 import {
@@ -69,12 +74,23 @@ import { UserSummaryDto } from '../../meetings/dto/user-summary.dto.js';
 import { UpdateDraftMinutesResponseDto } from '../dto/update-draft-minutes-response.dto.js';
 import { SearchMinutesByPersonQueryDto } from '../dto/search-minutes-by-person-query.dto.js';
 import { IssueMinutesResponseDto } from '../dto/issue-minutes-response.dto.js';
+import { LinkMinutesResourcesDto } from '../dto/link-minutes-resources.dto.js';
+import { LinkMinutesResourcesResponseDto } from '../dto/link-minutes-resources-response.dto.js';
 import { PersonSummaryDto } from '../dto/person-summary.dto.js';
 import {
   NotificationEntity,
   NotificationType,
   NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
+import { CreateMinutesShareDto } from '../dto/create-minutes-share.dto.js';
+import {
+  MinutesShareResponseDto,
+  UnshareMinutesResponseDto,
+} from '../dto/minutes-share-response.dto.js';
+import {
+  MinutesShareListItemDto,
+  MinutesShareListResponseDto,
+} from '../dto/minutes-share-list-response.dto.js';
 
 const DEFAULT_MINUTES_CONTENT =
   '1. Thành phần tham dự\n2. Nội dung cuộc họp\n3. Kết luận\n4. Đầu việc (Action items)';
@@ -200,7 +216,7 @@ export class MinutesService {
         if (existing) {
           throw new ConflictException({
             success: false,
-            message: 'Cuá»™c há»p nÃ y Ä‘Ã£ cÃ³ biÃªn báº£n há»p',
+            message: 'Cuá»™c há»p nÃ y Ä‘Ã£ cÃ³ biÃªn báº£n há»p',
             error: {
               code: 'MINUTES_ALREADY_EXISTS',
               details: { meetingId, existingMinutesId: existing.id },
@@ -246,7 +262,7 @@ export class MinutesService {
       },
     );
 
-    // Audit log ngoÃ i transaction â€” AuditLogsService tá»± fail-safe, khÃ´ng cháº·n business flow
+    // Audit log ngoÃ i transaction â€” AuditLogsService tá»± fail-safe, khÃ´ng cháº·n business flow
     await this.auditLogsService.logAction({
       userId: authUser.userId,
       actionType: 'meeting_minutes_draft_created',
@@ -353,7 +369,7 @@ export class MinutesService {
         );
       }
 
-      // status filter (client) â€” AND thÃªm vÃ o scope, khÃ´ng thay tháº¿
+      // status filter (client) â€” AND thÃªm vÃ o scope, khÃ´ng thay tháº¿
       if (queryDto.status && queryDto.status !== 'all') {
         qb.andWhere('minutes.status = :clientStatus', {
           clientStatus: queryDto.status,
@@ -363,6 +379,13 @@ export class MinutesService {
       // roomId filter
       if (queryDto.roomId) {
         qb.andWhere('meeting.roomId = :roomId', { roomId: queryDto.roomId });
+      }
+
+      // meetingId filter (tra cứu biên bản của 1 cuộc họp cụ thể)
+      if (queryDto.meetingId) {
+        qb.andWhere('meeting.id = :meetingId', {
+          meetingId: queryDto.meetingId,
+        });
       }
 
       // Date range filter (meeting.actualStartTime)
@@ -394,7 +417,7 @@ export class MinutesService {
       const [items, total] = await qb.getManyAndCount();
 
       // MeetingEntity khÃ´ng cÃ³ relation `room` (chá»‰ cÃ³ cá»™t roomId) â€” batch load
-      // riÃªng Ä‘á»ƒ trÃ¡nh N+1 vÃ  trÃ¡nh lá»—i hydrate cá»§a raw entity join (xem
+      // riÃªng Ä‘á»ƒ trÃ¡nh N+1 vÃ  trÃ¡nh lá»—i hydrate cá»§a raw entity join (xem
       // research.md má»¥c "Rá»§i ro & quyáº¿t Ä‘á»‹nh thiáº¿t káº¿").
       const roomIds = Array.from(
         new Set(
@@ -486,6 +509,67 @@ export class MinutesService {
         message: 'Ban khong phai la nguoi soan thao bien ban hop nay',
         error: { code: 'NOT_MINUTES_OWNER', details: { minutesId } },
       });
+    }
+
+    return minutes;
+  }
+
+  /**
+   * Kiem tra quyen ĐỌC bien ban (UC-139/UC-140): rong hon
+   * loadMinutesForOwnerCheck (upload/delete chi Host/preparer) — Host,
+   * Participant (khi da published/archived) hoac Admin deu duoc xem danh
+   * sach/chi tiet file dinh kem, dung voi actor trong dac ta UC-MKM.
+   * Dung chung logic voi findMinutesDetail (canAccessMinutes).
+   */
+  private async loadMinutesForReadCheck(
+    minutesId: string,
+    authUserId: string,
+  ): Promise<MeetingMinutesEntity> {
+    const minutes = await this.dataSource
+      .getRepository(MeetingMinutesEntity)
+      .createQueryBuilder('minutes')
+      .leftJoinAndSelect('minutes.meeting', 'meeting')
+      .where('minutes.id = :minutesId', { minutesId })
+      .andWhere('minutes.deletedAt IS NULL')
+      .getOne();
+
+    if (!minutes) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Bien ban hop khong ton tai hoac da bi xoa',
+        error: { code: 'MINUTES_NOT_FOUND', details: { minutesId } },
+      });
+    }
+
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(authUserId);
+    const isAdmin = roles.some(
+      (r) => r === 'SYSTEM_ADMIN' || r === 'BUSINESS_ADMIN',
+    );
+
+    if (!isAdmin) {
+      const participantCount = await this.dataSource
+        .getRepository(MeetingParticipantEntity)
+        .count({
+          where: { meetingId: minutes.meetingId, userId: authUserId },
+        });
+      const isParticipant = participantCount > 0;
+
+      if (
+        !(await this.canAccessMinutes(
+          minutes,
+          minutes.meeting,
+          authUserId,
+          false,
+          isParticipant,
+        ))
+      ) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Ban khong co quyen xem bien ban hop nay',
+          error: { code: 'MEETING_MINUTES_ACCESS_DENIED', details: {} },
+        });
+      }
     }
 
     return minutes;
@@ -712,7 +796,7 @@ export class MinutesService {
     total: number;
     maxCount: number;
   }> {
-    await this.loadMinutesForOwnerCheck(minutesId, authUser.userId);
+    await this.loadMinutesForReadCheck(minutesId, authUser.userId);
 
     const [files, total] = await this.mediaFileRepo.findAndCount({
       where: {
@@ -837,13 +921,21 @@ export class MinutesService {
      View Detail (UC-MKM-03)
      ================================================ */
 
-  private canAccessMinutes(
+  /**
+   * Quyết định user có xem được biên bản không (choke-point dùng chung cho
+   * findMinutesDetail + loadMinutesForReadCheck). Async vì có thêm nhánh kiểm
+   * tra bảng meeting_minutes_shares (feat-share-meeting-minutes, FR-009).
+   *
+   * CẢNH BÁO: mọi call-site PHẢI `await` — quên `await` khiến `!Promise` luôn
+   * false, vô hiệu hóa toàn bộ guard. Xem feat-share-meeting-minutes/research.md #5.
+   */
+  private async canAccessMinutes(
     minutes: MeetingMinutesEntity,
     meeting: MeetingEntity,
     userId: string,
     isAdmin: boolean,
     isParticipant: boolean,
-  ): boolean {
+  ): Promise<boolean> {
     if (isAdmin) return true;
     if (minutes.status === MeetingMinutesStatus.DRAFT) {
       return minutes.preparedBy === userId;
@@ -853,7 +945,12 @@ export class MinutesService {
       minutes.status === MeetingMinutesStatus.ARCHIVED
     ) {
       const isHost = meeting.hostId === userId;
-      return isHost || isParticipant;
+      if (isHost || isParticipant) return true;
+      // Nhánh share (FR-009/FR-011): áp dụng cho cả published và archived.
+      const shareCount = await this.dataSource
+        .getRepository(MeetingMinutesShareEntity)
+        .count({ where: { minutesId: minutes.id, userId } });
+      return shareCount > 0;
     }
     return false;
   }
@@ -895,13 +992,13 @@ export class MinutesService {
       const isParticipant = participantCount > 0;
 
       if (
-        !this.canAccessMinutes(
+        !(await this.canAccessMinutes(
           minutes,
           meeting,
           authUser.userId,
           false,
           isParticipant,
-        )
+        ))
       ) {
         throw new ForbiddenException({
           success: false,
@@ -1052,10 +1149,7 @@ export class MinutesService {
     // aiSummaryJson khác NULL = biên bản có nguồn gốc AI. Expose 4 khối insight
     // + meta (read-only) cho FE; đồng thời set cờ isAiGenerated để FE phân biệt
     // nháp AI vs nháp tay và hiển thị banner "cần review".
-    const aiJson = (minutes.aiSummaryJson ?? null) as Record<
-      string,
-      unknown
-    > | null;
+    const aiJson = minutes.aiSummaryJson ?? null;
     const isAiGenerated = aiJson !== null;
     let aiSummary: MinutesAiSummaryDto | null = null;
     if (aiJson !== null) {
@@ -1228,10 +1322,7 @@ export class MinutesService {
         // aiSummary: merge 4 mảng insight, GIỮ NGUYÊN meta (provenance) —
         // người dùng không được ghi đè provider/model/generatedAt.
         if (dto.aiSummary !== undefined) {
-          const existingAi = (minutes.aiSummaryJson ?? {}) as Record<
-            string,
-            unknown
-          >;
+          const existingAi = minutes.aiSummaryJson ?? {};
           const merged: Record<string, unknown> = { ...existingAi };
           for (const key of [
             'keyPoints',
@@ -1297,6 +1388,189 @@ export class MinutesService {
           updatedAt: result.saved.updatedAt,
         });
       });
+  }
+
+  /**
+   * UC-141: Lien ket/huy lien ket 1 file recording (media_files, audio/video)
+   * va/hoac 1 transcript voi bien ban dang draft. Chi Host (preparedBy hoac
+   * meeting.hostId) — KHONG co nhanh bypass cho Business Admin/System Admin
+   * (khac voi issueMinutes/deleteDraft), theo dung quyet dinh Q&A 2026-07-17
+   * (xem feat-link-minutes-resources/spec.md muc 1.5).
+   */
+  async linkResources(
+    minutesId: string,
+    dto: LinkMinutesResourcesDto,
+    authUser: MinutesAuthUser,
+  ): Promise<LinkMinutesResourcesResponseDto> {
+    if (dto.recordingFileId === undefined && dto.transcriptId === undefined) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Khong co truong nao duoc lien ket',
+        error: { code: 'NO_LINK_FIELD', details: {} },
+      });
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const minutes = await manager
+        .getRepository(MeetingMinutesEntity)
+        .createQueryBuilder('minutes')
+        .setLock('pessimistic_write')
+        .where('minutes.id = :minutesId', { minutesId })
+        .getOne();
+      if (!minutes || minutes.deletedAt) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Bien ban hop khong ton tai hoac da bi xoa',
+          error: { code: 'MINUTES_NOT_FOUND', details: { minutesId } },
+        });
+      }
+
+      const meeting = await manager
+        .getRepository(MeetingEntity)
+        .findOne({ where: { id: minutes.meetingId } });
+      const isOwner =
+        minutes.preparedBy === authUser.userId ||
+        meeting?.hostId === authUser.userId;
+      if (!isOwner) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Ban khong phai la nguoi soan thao hoac host',
+          error: { code: 'NOT_MINUTES_OWNER', details: { minutesId } },
+        });
+      }
+
+      if (minutes.status !== MeetingMinutesStatus.DRAFT) {
+        throw new ConflictException({
+          success: false,
+          message:
+            'Chi co the lien ket tai nguyen khi bien ban o trang thai nhap',
+          error: {
+            code: 'MINUTES_NOT_DRAFT',
+            details: { minutesId, currentStatus: minutes.status },
+          },
+        });
+      }
+
+      if (meeting?.status !== MeetingStatus.COMPLETED) {
+        throw new ConflictException({
+          success: false,
+          message: 'Cuoc hop chua ket thuc, chua the lien ket tai nguyen',
+          error: {
+            code: 'MEETING_NOT_COMPLETED',
+            details: {
+              meetingId: minutes.meetingId,
+              currentStatus: meeting?.status,
+            },
+          },
+        });
+      }
+
+      if (dto.recordingFileId !== undefined && dto.recordingFileId !== null) {
+        const file = await manager.getRepository(MediaFileEntity).findOne({
+          where: { id: dto.recordingFileId, deletedAt: IsNull() },
+        });
+        if (!file) {
+          throw new NotFoundException({
+            success: false,
+            message: 'File recording khong ton tai hoac da bi xoa',
+            error: {
+              code: 'RECORDING_FILE_NOT_FOUND',
+              details: { recordingFileId: dto.recordingFileId },
+            },
+          });
+        }
+        if (
+          file.fileType !== MediaFileType.AUDIO &&
+          file.fileType !== MediaFileType.VIDEO
+        ) {
+          throw new BadRequestException({
+            success: false,
+            message: 'File duoc chon khong phai file recording (audio/video)',
+            error: {
+              code: 'INVALID_RECORDING_FILE_TYPE',
+              details: {
+                recordingFileId: dto.recordingFileId,
+                fileType: file.fileType,
+              },
+            },
+          });
+        }
+        if (file.meetingId !== minutes.meetingId) {
+          throw new ConflictException({
+            success: false,
+            message: 'File recording khong thuoc cuoc hop cua bien ban nay',
+            error: {
+              code: 'RESOURCE_NOT_SAME_MEETING',
+              details: { recordingFileId: dto.recordingFileId },
+            },
+          });
+        }
+      }
+
+      if (dto.transcriptId !== undefined && dto.transcriptId !== null) {
+        const transcript = await manager
+          .getRepository(TranscriptEntity)
+          .findOne({
+            where: { id: dto.transcriptId },
+          });
+        if (!transcript) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Transcript khong ton tai',
+            error: {
+              code: 'TRANSCRIPT_NOT_FOUND',
+              details: { transcriptId: dto.transcriptId },
+            },
+          });
+        }
+        if (transcript.meetingId !== minutes.meetingId) {
+          throw new ConflictException({
+            success: false,
+            message: 'Transcript khong thuoc cuoc hop cua bien ban nay',
+            error: {
+              code: 'RESOURCE_NOT_SAME_MEETING',
+              details: { transcriptId: dto.transcriptId },
+            },
+          });
+        }
+      }
+
+      const oldValue = {
+        linkedRecordingFileId: minutes.linkedRecordingFileId,
+        linkedTranscriptId: minutes.linkedTranscriptId,
+      };
+
+      if (dto.recordingFileId !== undefined) {
+        minutes.linkedRecordingFileId = dto.recordingFileId;
+      }
+      if (dto.transcriptId !== undefined) {
+        minutes.linkedTranscriptId = dto.transcriptId;
+      }
+
+      const saved = await manager
+        .getRepository(MeetingMinutesEntity)
+        .save(minutes);
+      return { saved, oldValue };
+    });
+
+    await this.auditLogsService.logEntityChange({
+      userId: authUser.userId,
+      actionType: 'meeting_minutes_resources_linked',
+      entityType: 'meeting_minutes',
+      entityId: minutesId,
+      oldValueJson: result.oldValue,
+      newValueJson: {
+        linkedRecordingFileId: result.saved.linkedRecordingFileId,
+        linkedTranscriptId: result.saved.linkedTranscriptId,
+      },
+    });
+
+    return new LinkMinutesResourcesResponseDto({
+      id: result.saved.id,
+      linkedRecordingFileId: result.saved.linkedRecordingFileId,
+      linkedTranscriptId: result.saved.linkedTranscriptId,
+      updatedAt: result.saved.updatedAt,
+    });
   }
 
   async deleteDraft(
@@ -1575,6 +1849,257 @@ export class MinutesService {
       updatedAt: result.saved.updatedAt,
       notifiedParticipantCount,
     });
+  }
+
+  /* ================================================
+     Share Minutes (feat-share-meeting-minutes)
+     ================================================ */
+
+  /**
+   * Load biên bản + meeting và enforce ownership-or-admin cho các thao tác quản
+   * lý share (grant/revoke/list). Trả về minutes + meeting để caller dùng tiếp.
+   * KHÔNG kiểm tra status ở đây — mỗi caller tự quyết (grant/revoke cần published,
+   * list không cần).
+   */
+  private async loadMinutesForShareManagement(
+    minutesId: string,
+    authUserId: string,
+  ): Promise<{ minutes: MeetingMinutesEntity; meeting: MeetingEntity | null }> {
+    const minutes = await this.dataSource
+      .getRepository(MeetingMinutesEntity)
+      .findOne({ where: { id: minutesId } });
+    if (!minutes || minutes.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Bien ban hop khong ton tai hoac da bi xoa',
+        error: { code: 'MINUTES_NOT_FOUND', details: { minutesId } },
+      });
+    }
+
+    const meeting = await this.dataSource
+      .getRepository(MeetingEntity)
+      .findOne({ where: { id: minutes.meetingId } });
+
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(authUserId);
+    const isAdmin = roles.some(
+      (r) => r === 'SYSTEM_ADMIN' || r === 'BUSINESS_ADMIN',
+    );
+    if (!isAdmin) {
+      const isOwner =
+        minutes.preparedBy === authUserId || meeting?.hostId === authUserId;
+      if (!isOwner) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Ban khong co quyen quan ly chia se bien ban nay',
+          error: { code: 'NOT_MINUTES_OWNER', details: { minutesId } },
+        });
+      }
+    }
+
+    return { minutes, meeting };
+  }
+
+  /**
+   * Grant quyền xem 1 biên bản published cho 1 user nội bộ active bất kỳ.
+   * FR-001, FR-005, FR-006, FR-025.
+   */
+  async shareMinutes(
+    minutesId: string,
+    dto: CreateMinutesShareDto,
+    authUser: MinutesAuthUser,
+  ): Promise<MinutesShareResponseDto> {
+    const { minutes } = await this.loadMinutesForShareManagement(
+      minutesId,
+      authUser.userId,
+    );
+
+    // Chỉ share được khi published (FR-010)
+    if (minutes.status !== MeetingMinutesStatus.PUBLISHED) {
+      throw new ConflictException({
+        success: false,
+        message: 'Chi co the chia se bien ban da duoc ban hanh (published)',
+        error: {
+          code: 'MINUTES_NOT_PUBLISHED',
+          details: { minutesId, currentStatus: minutes.status },
+        },
+      });
+    }
+
+    // Validate target user (FR-016, FR-017)
+    const targetUser = await this.dataSource
+      .getRepository(UserEntity)
+      .findOne({ where: { id: dto.userId } });
+    if (!targetUser || targetUser.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Nguoi dung duoc chia se khong ton tai',
+        error: { code: 'USER_NOT_FOUND', details: { userId: dto.userId } },
+      });
+    }
+    if (targetUser.accountStatus !== AccountStatus.ACTIVE) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'Nguoi dung duoc chia se khong o trang thai hoat dong',
+        error: {
+          code: 'USER_INACTIVE',
+          details: {
+            userId: dto.userId,
+            accountStatus: targetUser.accountStatus,
+          },
+        },
+      });
+    }
+
+    // Insert — dựa vào UNIQUE constraint để chống race (FR-024, mục 9.2)
+    const shareRepo = this.dataSource.getRepository(MeetingMinutesShareEntity);
+    let saved: MeetingMinutesShareEntity;
+    try {
+      saved = await shareRepo.save(
+        shareRepo.create({
+          minutesId,
+          userId: dto.userId,
+          grantedBy: authUser.userId,
+        }),
+      );
+    } catch (e: unknown) {
+      if (this.isUniqueViolation(e)) {
+        throw new ConflictException({
+          success: false,
+          message: 'Bien ban da duoc chia se cho nguoi dung nay',
+          error: {
+            code: 'ALREADY_SHARED',
+            details: { minutesId, userId: dto.userId },
+          },
+        });
+      }
+      throw e;
+    }
+
+    await this.auditLogsService.logAction({
+      userId: authUser.userId,
+      actionType: 'meeting_minutes_shared',
+      entityType: 'meeting_minutes',
+      entityId: minutesId,
+      metadataJson: { targetUserId: dto.userId, grantedBy: authUser.userId },
+    });
+
+    return new MinutesShareResponseDto({
+      id: saved.id,
+      minutesId,
+      userId: dto.userId,
+      userFullName: targetUser.fullName,
+      grantedBy: authUser.userId,
+      grantedAt: saved.grantedAt,
+    });
+  }
+
+  /**
+   * Thu hồi (hard-delete) 1 lượt share. FR-003, FR-007, FR-008, FR-019.
+   */
+  async unshareMinutes(
+    minutesId: string,
+    targetUserId: string,
+    authUser: MinutesAuthUser,
+  ): Promise<UnshareMinutesResponseDto> {
+    const { minutes } = await this.loadMinutesForShareManagement(
+      minutesId,
+      authUser.userId,
+    );
+
+    if (minutes.status !== MeetingMinutesStatus.PUBLISHED) {
+      throw new ConflictException({
+        success: false,
+        message: 'Chi co the thu hoi chia se khi bien ban dang published',
+        error: {
+          code: 'MINUTES_NOT_PUBLISHED',
+          details: { minutesId, currentStatus: minutes.status },
+        },
+      });
+    }
+
+    const result = await this.dataSource
+      .getRepository(MeetingMinutesShareEntity)
+      .delete({ minutesId, userId: targetUserId });
+
+    if (!result.affected) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay ban ghi chia se cho nguoi dung nay',
+        error: {
+          code: 'SHARE_NOT_FOUND',
+          details: { minutesId, userId: targetUserId },
+        },
+      });
+    }
+
+    await this.auditLogsService.logAction({
+      userId: authUser.userId,
+      actionType: 'meeting_minutes_unshared',
+      entityType: 'meeting_minutes',
+      entityId: minutesId,
+      metadataJson: { targetUserId, revokedBy: authUser.userId },
+    });
+
+    return new UnshareMinutesResponseDto({
+      minutesId,
+      userId: targetUserId,
+      revoked: true,
+    });
+  }
+
+  /**
+   * Danh sách user đang được share (kèm tên/email). FR-004.
+   * KHÔNG chặn theo status (list được cả khi archived — mục 7.3 plan).
+   */
+  async listMinutesShares(
+    minutesId: string,
+    authUser: MinutesAuthUser,
+  ): Promise<MinutesShareListResponseDto> {
+    await this.loadMinutesForShareManagement(minutesId, authUser.userId);
+
+    const rows = await this.dataSource
+      .getRepository(MeetingMinutesShareEntity)
+      .createQueryBuilder('share')
+      .leftJoin('share.user', 'targetUser')
+      .leftJoin('share.grantedByUser', 'granter')
+      .where('share.minutesId = :minutesId', { minutesId })
+      .select([
+        'share.id',
+        'share.userId',
+        'share.grantedBy',
+        'share.grantedAt',
+        'targetUser.fullName',
+        'targetUser.email',
+        'granter.fullName',
+      ])
+      .orderBy('share.grantedAt', 'DESC')
+      .getRawAndEntities();
+
+    const shares = rows.entities.map((share, idx) => {
+      const raw = rows.raw[idx] as Record<string, unknown>;
+      return new MinutesShareListItemDto({
+        id: share.id,
+        userId: share.userId,
+        userFullName: (raw['targetUser_full_name'] as string) ?? '',
+        userEmail: (raw['targetUser_email'] as string) ?? '',
+        grantedBy: share.grantedBy,
+        grantedByName: (raw['granter_full_name'] as string) ?? '',
+        grantedAt: share.grantedAt,
+      });
+    });
+
+    return new MinutesShareListResponseDto({ minutesId, shares });
+  }
+
+  /** Postgres unique_violation = SQLSTATE 23505. */
+  private isUniqueViolation(e: unknown): boolean {
+    return (
+      typeof e === 'object' &&
+      e !== null &&
+      'code' in e &&
+      (e as { code?: string }).code === '23505'
+    );
   }
 
   async searchMinutesByPerson(

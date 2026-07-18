@@ -34,6 +34,7 @@ import {
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
 } from '../entities/meeting-minutes.entity.js';
+import { MeetingMinutesShareEntity } from '../entities/meeting-minutes-share.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { UserEntity } from '../../accounts/entities/user.entity.js';
 import { RoomEntity } from '../../rooms/entities/room.entity.js';
@@ -503,13 +504,13 @@ describe('listAttachments', () => {
     );
   });
   it('should return empty list when no attachments', async () => {
-    (service as any).loadMinutesForOwnerCheck = jest.fn().mockResolvedValue({});
+    (service as any).loadMinutesForReadCheck = jest.fn().mockResolvedValue({});
     const result = await service.listAttachments(minutesId, authUser);
     expect(result.items).toHaveLength(0);
     expect(result.total).toBe(0);
   });
   it('should return attachments list', async () => {
-    (service as any).loadMinutesForOwnerCheck = jest.fn().mockResolvedValue({});
+    (service as any).loadMinutesForReadCheck = jest.fn().mockResolvedValue({});
     const file1 = {
       id: 'f1',
       fileName: 'a.pdf',
@@ -524,6 +525,98 @@ describe('listAttachments', () => {
     const result = await service.listAttachments(minutesId, authUser);
     expect(result.items).toHaveLength(1);
     expect(result.total).toBe(1);
+  });
+});
+describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC-140)', () => {
+  let service: MinutesService;
+  let minutesQb: { leftJoinAndSelect: jest.Mock; where: jest.Mock; andWhere: jest.Mock; getOne: jest.Mock };
+  let participantRepo: { count: jest.Mock };
+  let shareRepo: { count: jest.Mock };
+  let authzRepo: { getEffectiveRolesAndPermissions: jest.Mock };
+  let mediaFileRepo: { findAndCount: jest.Mock };
+  const authUser = { userId: 'user-1' };
+  const minutesId = 'minutes-1';
+
+  const baseMinutes = (status: MeetingMinutesStatus, preparedBy = 'other-user') => ({
+    id: minutesId,
+    preparedBy,
+    status,
+    meetingId: 'meeting-1',
+    meeting: { id: 'meeting-1', hostId: 'host-1' },
+    deletedAt: null,
+  });
+
+  beforeEach(() => {
+    mediaFileRepo = { findAndCount: jest.fn().mockResolvedValue([[], 0]) };
+    minutesQb = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn(),
+    };
+    participantRepo = { count: jest.fn().mockResolvedValue(0) };
+    // feat-share-meeting-minutes: canAccessMinutes now also queries shares.
+    // Default 0 shares → không thay đổi kỳ vọng cũ (non-host/participant → denied).
+    shareRepo = { count: jest.fn().mockResolvedValue(0) };
+    authzRepo = {
+      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: ['EMPLOYEE'] }),
+    };
+    const dataSource = {
+      transaction: jest.fn(),
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingParticipantEntity) return participantRepo;
+        if (entity === MeetingMinutesShareEntity) return shareRepo;
+        return { createQueryBuilder: () => minutesQb };
+      }),
+    };
+    service = new MinutesService(
+      dataSource as any,
+      { logAction: jest.fn() } as any,
+      authzRepo as any,
+      { saveFile: jest.fn(), deleteFile: jest.fn() } as any,
+      { get: jest.fn().mockReturnValue(undefined) } as any,
+      mediaFileRepo as any,
+    );
+  });
+
+  it('published + participant → được phép xem', async () => {
+    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.PUBLISHED));
+    participantRepo.count.mockResolvedValue(1);
+    await expect(
+      service.listAttachments(minutesId, authUser),
+    ).resolves.toEqual(expect.objectContaining({ total: 0 }));
+  });
+
+  it('published + không phải host/participant → bị từ chối', async () => {
+    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.PUBLISHED));
+    participantRepo.count.mockResolvedValue(0);
+    await expect(
+      service.listAttachments(minutesId, authUser),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('draft + không phải preparedBy → bị từ chối dù là participant', async () => {
+    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.DRAFT));
+    participantRepo.count.mockResolvedValue(1);
+    await expect(
+      service.listAttachments(minutesId, authUser),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('BUSINESS_ADMIN → bỏ qua kiểm tra participant', async () => {
+    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.DRAFT));
+    authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({ roles: ['BUSINESS_ADMIN'] });
+    await expect(
+      service.listAttachments(minutesId, authUser),
+    ).resolves.toEqual(expect.objectContaining({ total: 0 }));
+    expect(participantRepo.count).not.toHaveBeenCalled();
+  });
+
+  it('bien ban khong ton tai → NotFoundException', async () => {
+    minutesQb.getOne.mockResolvedValue(null);
+    await expect(
+      service.listAttachments(minutesId, authUser),
+    ).rejects.toThrow(NotFoundException);
   });
 });
 describe('removeAttachment', () => {
@@ -812,6 +905,225 @@ describe('updateDraft service logic', () => {
       // meta phải được giữ nguyên, không cho ghi đè
       meta: { provider: 'mock', modelName: 'x', generatedByJobId: 'job-1' },
     });
+  });
+});
+
+describe('linkResources service logic (UC-141)', () => {
+  let service: MinutesService;
+  let dataSource: any;
+  let em: any;
+  let minutesRepo: any;
+  let meetingRepo: any;
+  let mediaFileRepo: any;
+  let transcriptRepo: any;
+  let auditLogsService: any;
+
+  const baseMinutes = () => ({
+    id: 'min-1',
+    meetingId: 'meet-1',
+    preparedBy: 'host-1',
+    status: MeetingMinutesStatus.DRAFT,
+    linkedRecordingFileId: null,
+    linkedTranscriptId: null,
+  });
+
+  beforeEach(() => {
+    minutesRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(baseMinutes()),
+      }),
+      save: jest.fn((m: any) => Promise.resolve({ ...m, updatedAt: new Date() })),
+    };
+    meetingRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'meet-1',
+        hostId: 'host-1',
+        status: MeetingStatus.COMPLETED,
+      }),
+    };
+    mediaFileRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'file-1',
+        meetingId: 'meet-1',
+        fileType: MediaFileType.VIDEO,
+        deletedAt: null,
+      }),
+    };
+    transcriptRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'transcript-1',
+        meetingId: 'meet-1',
+      }),
+    };
+    em = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === MediaFileEntity) return mediaFileRepo;
+        if (entity === TranscriptEntity) return transcriptRepo;
+        throw new Error('Unexpected entity: ' + entity);
+      }),
+    };
+    dataSource = {
+      transaction: jest.fn((cb) => cb(em)),
+    };
+    auditLogsService = {
+      logEntityChange: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      {} as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+  });
+
+  it('links a recording file successfully', async () => {
+    const result = await service.linkResources(
+      'min-1',
+      { recordingFileId: 'file-1' },
+      { userId: 'host-1' },
+    );
+    expect(result.linkedRecordingFileId).toBe('file-1');
+    expect(auditLogsService.logEntityChange).toHaveBeenCalledWith(
+      expect.objectContaining({ actionType: 'meeting_minutes_resources_linked' }),
+    );
+  });
+
+  it('links a transcript only, keeps recording untouched', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes(),
+      linkedRecordingFileId: 'old-file',
+    });
+    const result = await service.linkResources(
+      'min-1',
+      { transcriptId: 'transcript-1' },
+      { userId: 'host-1' },
+    );
+    expect(result.linkedTranscriptId).toBe('transcript-1');
+    expect(result.linkedRecordingFileId).toBe('old-file');
+  });
+
+  it('unlinks recording when recordingFileId = null', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes(),
+      linkedRecordingFileId: 'old-file',
+    });
+    const result = await service.linkResources(
+      'min-1',
+      { recordingFileId: null },
+      { userId: 'host-1' },
+    );
+    expect(result.linkedRecordingFileId).toBeNull();
+  });
+
+  it('throws BadRequestException when no field provided', async () => {
+    await expect(
+      service.linkResources('min-1', {}, { userId: 'host-1' }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('throws ForbiddenException when caller is not preparedBy nor host (Business Admin included)', async () => {
+    await expect(
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'business-admin-1' },
+      ),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('allows meeting.hostId even when not preparedBy', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes(),
+      preparedBy: 'someone-else',
+    });
+    const result = await service.linkResources(
+      'min-1',
+      { recordingFileId: 'file-1' },
+      { userId: 'host-1' },
+    );
+    expect(result.linkedRecordingFileId).toBe('file-1');
+  });
+
+  it('throws NotFoundException when minutes not found', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue(null);
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('throws ConflictException when minutes status is not draft', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes(),
+      status: MeetingMinutesStatus.PUBLISHED,
+    });
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('throws ConflictException when meeting is not completed', async () => {
+    meetingRepo.findOne.mockResolvedValue({
+      id: 'meet-1',
+      hostId: 'host-1',
+      status: MeetingStatus.IN_PROGRESS,
+    });
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('throws NotFoundException when recording file does not exist', async () => {
+    mediaFileRepo.findOne.mockResolvedValue(null);
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'missing' }, { userId: 'host-1' }),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('throws BadRequestException when file is not audio/video', async () => {
+    mediaFileRepo.findOne.mockResolvedValue({
+      id: 'file-1',
+      meetingId: 'meet-1',
+      fileType: MediaFileType.DOCUMENT,
+      deletedAt: null,
+    });
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('throws ConflictException when recording file belongs to a different meeting', async () => {
+    mediaFileRepo.findOne.mockResolvedValue({
+      id: 'file-1',
+      meetingId: 'other-meeting',
+      fileType: MediaFileType.VIDEO,
+      deletedAt: null,
+    });
+    await expect(
+      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('throws NotFoundException when transcript does not exist', async () => {
+    transcriptRepo.findOne.mockResolvedValue(null);
+    await expect(
+      service.linkResources('min-1', { transcriptId: 'missing' }, { userId: 'host-1' }),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('throws ConflictException when transcript belongs to a different meeting', async () => {
+    transcriptRepo.findOne.mockResolvedValue({
+      id: 'transcript-1',
+      meetingId: 'other-meeting',
+    });
+    await expect(
+      service.linkResources('min-1', { transcriptId: 'transcript-1' }, { userId: 'host-1' }),
+    ).rejects.toThrow(ConflictException);
   });
 });
 

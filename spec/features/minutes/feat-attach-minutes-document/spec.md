@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-02 | Khởi tạo spec, phát sinh từ gap analysis khi rà soát UC-MKM-03 (Xem chi tiết biên bản họp) — UC gốc mô tả "Danh sách file đính kèm" nhưng chưa có use case nào trong Feature Table tạo ra dữ liệu này | Toàn bộ file |
+| 2026-07-17 | **Mở rộng phạm vi quyền ĐỌC** (list) theo UC-139/UC-140 của Feature Table chính thức (Primary Actor: "Internal User (Host/Participant)/Business Admin") — trước đây chỉ `preparedBy` xem được (xem ghi chú "vì chưa có UC xem chi tiết chính thức" ở plan.md mục 6.2 bản gốc, nay UC đó đã có). Upload/Delete **giữ nguyên** preparedBy-only. Xem `feat-view-minutes-attachment-detail` cho phần UC-140 (xem chi tiết 1 file) và permission-seed gap fix (role `INTERNAL_USER` không tồn tại trong DB thật, phải dùng `EMPLOYEE`). | Mục 1.4, 2.1, 2.2, 2.3, 3.5 (FR-010), 7.2 (AC-004), 8.1 |
 
 > Nguồn gốc: **Không có UC gốc trong Feature Table.** Phát sinh từ phân tích UC-MKM-03 "Xem chi tiết biên bản họp": UC đó mô tả phần "File đính kèm: Danh sách các tài liệu, slide báo cáo, hình ảnh được tải lên đi kèm biên bản", nhưng rà soát code (`MeetingMinutesEntity`, `MinutesService.createDraft`) cho thấy không có bất kỳ luồng nào ghi dữ liệu vào đó — `CreateDraftMinutesDto` chỉ nhận `title`. Feature này bổ sung phần còn thiếu, tạm đặt tên **UC-MKM-0x (mới)**, chờ Product Owner gán số chính thức trong Feature Table.
 
@@ -21,7 +22,8 @@ Cho phép Host (người tạo/sở hữu biên bản, `preparedBy`) tải lên,
 
 ### 1.4 Giả định
 - Biên bản họp (`meeting_minutes`) đã tồn tại và ở trạng thái `draft`, được tạo qua `feat-create-draft-meeting-minutes` (UC-MKM-01).
-- Chỉ **Host/preparedBy** của biên bản được thao tác đính kèm (không mở rộng cho Participant, Business Admin ở phiên bản v1 — nhất quán với BR1 của UC-MKM-01: bản nháp chỉ Host thấy/sửa).
+- **Upload/Delete**: chỉ **Host/preparedBy** của biên bản được thao tác (không mở rộng cho Participant, Business Admin — nhất quán với BR1 của UC-MKM-01: bản nháp chỉ Host thấy/sửa).
+- **List (2026-07-17, xem changelog)**: KHÔNG còn giới hạn preparedBy-only. Theo UC-139 (Feature Table chính thức, Primary Actor "Internal User (Host/Participant)/Business Admin"), quyền đọc dùng lại đúng logic `canAccessMinutes` đã có ở `feat-view-meeting-minutes-detail`: biên bản `draft` → chỉ `preparedBy`; biên bản `published`/`archived` → Host hoặc Participant của cuộc họp; `SYSTEM_ADMIN`/`BUSINESS_ADMIN` → luôn được. Chi tiết xem `feat-view-minutes-attachment-detail`.
 - Việc đính kèm/gỡ file chỉ cho phép khi biên bản còn ở trạng thái `draft`. Sau khi ban hành (`published`)/lưu trữ (`archived`), biên bản coi như đóng băng — chỉnh sửa file đính kèm sau khi ban hành là ngoài phạm vi (xem mục 8).
 - Không dùng `meeting_minutes.file_id` trong feature này — cột đó để dành cho file biên bản chính thức export (feature khác, ngoài phạm vi).
 - Tái sử dụng `StorageService` hiện có (local/S3 theo `STORAGE_DRIVER`), không dùng Cloudinary (Cloudinary chỉ dành cho ảnh avatar/face theo CLAUDE.md).
@@ -34,7 +36,8 @@ Cho phép Host (người tạo/sở hữu biên bản, `preparedBy`) tải lên,
 ## 2. Actor & Roles
 
 ### 2.1 Danh sách actor
-- **Primary Actor**: Internal Employee giữ vai trò Host/`preparedBy` của biên bản.
+- **Primary Actor (Upload/Delete)**: Internal Employee giữ vai trò Host/`preparedBy` của biên bản.
+- **Primary Actor (List, từ 2026-07-17)**: Internal User (Host/Participant của cuộc họp)/Business Admin/System Admin — theo UC-139 Feature Table.
 - Secondary Actor: Không có.
 
 ### 2.2 Role & Permission Rules
@@ -42,12 +45,12 @@ Cho phép Host (người tạo/sở hữu biên bản, `preparedBy`) tải lên,
   - `meeting.minutes.attachment.create` (upload)
   - `meeting.minutes.attachment.read` (xem danh sách)
   - `meeting.minutes.attachment.delete` (gỡ file)
-- Role mặc định được cấp cả 3 permission: `INTERNAL_USER`, `MANAGER`, `BUSINESS_ADMIN`, `SYSTEM_ADMIN` (theo đúng convention của `meeting.minutes.create`/`meeting.minutes.read`).
-- Giống UC-MKM-01: sở hữu permission là điều kiện cần nhưng chưa đủ — service còn kiểm tra **resource ownership** (`minutes.preparedBy === authUser.userId`) theo SEC-02 của Constitution.
+- Role được cấp cả 3 permission: `EMPLOYEE`, `MANAGER`, `BUSINESS_ADMIN`, `SYSTEM_ADMIN`. **Lưu ý (2026-07-17)**: migration gốc `20260702020000-SeedMeetingMinutesAttachmentPermissions.ts` seed cho role code `INTERNAL_USER` — role đó **không tồn tại** trong DB thật (4 role thật: `BUSINESS_ADMIN`, `EMPLOYEE`, `MANAGER`, `SYSTEM_ADMIN`), nên `INSERT...SELECT` không match được dòng nào và âm thầm không cấp quyền gì cho Employee. Đã vá bằng migration `20260717000001-FixMinutesAttachmentEmployeeRole.ts` (cấp lại đúng cho `EMPLOYEE`).
+- Giống UC-MKM-01: sở hữu permission là điều kiện cần nhưng chưa đủ — với **upload/delete**, service còn kiểm tra **resource ownership** (`minutes.preparedBy === authUser.userId`) theo SEC-02 của Constitution. Với **list**, service kiểm tra quyền đọc rộng hơn — xem 2.3.
 
 ### 2.3 Actor Constraints
-- Người không phải `preparedBy` của biên bản (kể cả Business Admin/System Admin) **không** được upload/xóa attachment qua endpoint này ở v1 (nhất quán với việc chỉ Host được sửa bản nháp).
-- Nếu biên bản không còn ở trạng thái `draft`, mọi thao tác ghi (upload/xóa) đều bị từ chối — kể cả với đúng `preparedBy`.
+- **Upload/Delete**: người không phải `preparedBy` của biên bản (kể cả Business Admin/System Admin) **không** được thao tác qua endpoint này (nhất quán với việc chỉ Host được sửa bản nháp). Nếu biên bản không còn ở trạng thái `draft`, mọi thao tác ghi đều bị từ chối — kể cả với đúng `preparedBy`.
+- **List (2026-07-17)**: biên bản `draft` → chỉ `preparedBy` xem được (đồng nhất với upload/delete, vì bản nháp chỉ Host thấy). Biên bản `published`/`archived` → Host của cuộc họp hoặc bất kỳ Participant nào cũng xem được. `SYSTEM_ADMIN`/`BUSINESS_ADMIN` luôn xem được bất kể status. Xem `feat-view-minutes-attachment-detail` mục permission.
 
 ## 3. Functional Requirements
 
@@ -69,7 +72,8 @@ Cho phép Host (người tạo/sở hữu biên bản, `preparedBy`) tải lên,
 - **FR-009**: WHERE Host không truyền `description`/ghi chú cho file (nếu DTO hỗ trợ), THE system SHALL lưu `metadataJson = null`.
 
 ### 3.5 Unwanted Behavior Requirements
-- **FR-010**: IF người gọi không phải `preparedBy` của biên bản, THEN THE system SHALL từ chối request với 403 `NOT_MINUTES_OWNER`.
+- **FR-010**: IF người gọi thực hiện **upload/delete** và không phải `preparedBy` của biên bản, THEN THE system SHALL từ chối request với 403 `NOT_MINUTES_OWNER`.
+- **FR-010b** (2026-07-17): IF người gọi thực hiện **list** và không thỏa `canAccessMinutes` (không phải preparedBy khi draft; không phải Host/Participant/Admin khi published/archived), THEN THE system SHALL từ chối request với 403 `MEETING_MINUTES_ACCESS_DENIED`.
 - **FR-011**: IF file vượt quá `MINUTES_ATTACHMENT_MAX_BYTES`, THEN THE system SHALL từ chối với 400 `ATTACHMENT_FILE_TOO_LARGE`, KHÔNG lưu file lên storage.
 - **FR-012**: IF định dạng file (theo `mimetype` + extension) không thuộc allowlist (`pdf, doc, docx, ppt, pptx, xls, xlsx, png, jpg, jpeg`), THEN THE system SHALL từ chối với 400 `ATTACHMENT_FILE_TYPE_INVALID`.
 - **FR-013**: IF không có file nào trong request upload, THEN THE system SHALL từ chối với 400 `ATTACHMENT_FILE_REQUIRED`.
@@ -95,6 +99,7 @@ Cho phép Host (người tạo/sở hữu biên bản, `preparedBy`) tải lên,
 | :--- | :--- |
 | FR-001, FR-002, FR-003 | Gap analysis UC-MKM-03 mục "File đính kèm" |
 | FR-007, FR-010 | Giả định 1.4 (chỉ Host, chỉ khi draft) — nhất quán BR1 của UC-MKM-01 |
+| FR-010b | Feature Table UC-139 (2026-07-17) — Primary Actor Host/Participant/Business Admin cho quyền đọc |
 | FR-008, FR-011, FR-012, FR-013 | Business rule mới, đề xuất tại mục 1.5 (cần Product Owner xác nhận) |
 | FR-005, FR-015, FR-016 | Pattern kỹ thuật tái sử dụng từ `feat-user-avatar-submission-reminder`/`AvatarSubmissionService` |
 
@@ -216,7 +221,8 @@ Xem FR-001, FR-002, FR-003, FR-017, FR-018.
 ### 6.2 Authentication / Authorization Errors
 - Không có JWT hợp lệ → 401.
 - Thiếu permission tương ứng → 403 `FORBIDDEN`.
-- Có permission nhưng không phải `preparedBy` → 403 `NOT_MINUTES_OWNER`.
+- Upload/Delete: có permission nhưng không phải `preparedBy` → 403 `NOT_MINUTES_OWNER`.
+- List (2026-07-17): có permission nhưng không thỏa `canAccessMinutes` → 403 `MEETING_MINUTES_ACCESS_DENIED`.
 
 ### 6.3 Business Rule Errors
 - Biên bản không tồn tại/đã xóa mềm → 404 `MINUTES_NOT_FOUND`.
@@ -249,8 +255,9 @@ Theo format chuẩn dự án (giống spec `feat-create-draft-meeting-minutes` m
 - **AC-003**: GIVEN attachment `F` thuộc `M`, WHEN `U` gọi DELETE `F`, THEN trả 200, `F.deletedAt` được set, không còn xuất hiện trong GET list sau đó.
 
 ### 7.2 Authorization Cases
-- **AC-004**: GIVEN người gọi không phải `preparedBy` của `M` (kể cả Participant/Business Admin), WHEN gọi upload/delete, THEN trả 403 `NOT_MINUTES_OWNER`.
+- **AC-004**: GIVEN người gọi không phải `preparedBy` của `M`, WHEN gọi upload/delete, THEN trả 403 `NOT_MINUTES_OWNER` (kể cả nếu người đó là Participant/Business Admin/System Admin — upload/delete luôn preparedBy-only).
 - **AC-005**: GIVEN người gọi không có permission tương ứng, WHEN gọi bất kỳ endpoint nào trong feature, THEN trả 403 `FORBIDDEN`.
+- **AC-004b** (2026-07-17): GIVEN `M` có `status = published`, WHEN một Participant của cuộc họp (không phải `preparedBy`) gọi GET list, THEN trả 200 (không còn bị chặn). GIVEN `M` có `status = draft`, WHEN người không phải `preparedBy` (kể cả Participant) gọi GET list, THEN vẫn trả 403 `MEETING_MINUTES_ACCESS_DENIED`. GIVEN người gọi có role `SYSTEM_ADMIN`/`BUSINESS_ADMIN`, WHEN gọi GET list bất kỳ `M` nào, THEN luôn trả 200.
 
 ### 7.3 Business Rule Cases
 - **AC-006**: GIVEN `M` có `status = published`, WHEN `preparedBy` gọi upload, THEN trả 409 `MINUTES_NOT_DRAFT`.
@@ -278,6 +285,7 @@ Theo format chuẩn dự án (giống spec `feat-create-draft-meeting-minutes` m
 | AC-002 | FR-001 |
 | AC-003 | FR-006, FR-018 |
 | AC-004 | FR-010 |
+| AC-004b | FR-010b |
 | AC-005 | Permission guard (mục 2.2) |
 | AC-006 | FR-007 |
 | AC-007, AC-014 | FR-008, FR-016 |
@@ -290,15 +298,16 @@ Theo format chuẩn dự án (giống spec `feat-create-draft-meeting-minutes` m
 ## 8. Out of Scope
 
 ### 8.1 Không triển khai trong feature này
-- Xem chi tiết biên bản họp (UC-MKM-03) — feature này chỉ cung cấp dữ liệu, không dựng UI/API tổng hợp chi tiết.
-- Đính kèm/gỡ file sau khi biên bản đã `published`/`archived`.
-- Cho phép người khác ngoài `preparedBy` (Participant, Business Admin, System Admin) thao tác attachment.
+- Xem chi tiết 1 file đính kèm cụ thể (tên/loại/size/Signed URL) — thuộc UC-140, xem `feat-view-minutes-attachment-detail`.
+- Đính kèm/gỡ file sau khi biên bản đã `published`/`archived` (vẫn ngoài phạm vi — chỉ **List** được mở rộng quyền đọc, Upload/Delete giữ nguyên draft-only).
+- Cho phép người khác ngoài `preparedBy` (Participant, Business Admin, System Admin) **upload/xóa** attachment (vẫn ngoài phạm vi — chỉ quyền **đọc/list** được mở rộng từ 2026-07-17, xem changelog).
 - Đổi tên file, thêm mô tả/caption cho từng attachment, sắp xếp thứ tự hiển thị thủ công.
 - File biên bản chính thức export ra PDF/Word (`meeting_minutes.file_id`) — thuộc feature "ban hành biên bản" (issue), không liên quan tới attachment thủ công của Host.
 - Virus scanning / deep content inspection cho file upload.
 
 ### 8.2 Có thể xem xét ở feature khác
-- `feat-view-detail-meeting-minutes` (UC-MKM-03) — sẽ tiêu thụ dữ liệu từ feature này để hiển thị "File đính kèm".
+- `feat-view-meeting-minutes-detail` (UC-MKM-03) — tiêu thụ dữ liệu từ feature này để hiển thị "File đính kèm" (đã dùng chung `canAccessMinutes` với List từ 2026-07-17).
+- `feat-view-minutes-attachment-detail` (UC-140, mới 2026-07-17) — xem chi tiết 1 file cụ thể qua `GET /media-files/:fileId`, kèm Signed URL.
 - `feat-update-draft-meeting-minutes` — nếu sau này cho sửa nội dung minutes, có thể cân nhắc gộp UI nhưng API vẫn nên tách riêng.
 - `feat-issue-meeting-minutes` — nếu cần cho phép bổ sung tài liệu sau khi ban hành, làm feature riêng có audit chặt hơn.
 

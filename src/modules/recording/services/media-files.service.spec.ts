@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { MediaFilesService } from './media-files.service.js';
 import { MediaFileEntity } from '../entities/media-file.entity.js';
+import { StorageService } from '../../storage/storage.service.js';
 
 jest.mock('fs');
 const fsMock = fs as jest.Mocked<typeof fs>;
@@ -42,6 +43,8 @@ describe('MediaFilesService (REC-006)', () => {
     ...over,
   });
 
+  let storageServiceMock: any;
+
   beforeEach(async () => {
     qbMock = {
       where: jest.fn().mockReturnThis(),
@@ -61,14 +64,28 @@ describe('MediaFilesService (REC-006)', () => {
     fsMock.existsSync.mockReturnValue(true);
     fsMock.statSync.mockReturnValue({ size: 1048576 } as any);
 
+    storageServiceMock = {
+      generateSignedDownloadToken: jest.fn().mockReturnValue({
+        token: 'signed-token',
+        expiresAt: '2026-06-16T10:10:00.000Z',
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MediaFilesService,
         { provide: getRepositoryToken(MediaFileEntity), useValue: repoMock },
         {
           provide: ConfigService,
-          useValue: { get: () => 'storage/recordings' },
+          useValue: {
+            get: (key: string, defaultValue?: unknown) => {
+              if (key === 'API_PUBLIC_BASE_URL') return 'http://localhost:3000';
+              if (key === 'MEDIA_DOWNLOAD_TOKEN_TTL_SECONDS') return 600;
+              return defaultValue ?? 'storage/recordings';
+            },
+          },
         },
+        { provide: StorageService, useValue: storageServiceMock },
       ],
     }).compile();
     service = module.get(MediaFilesService);
@@ -136,6 +153,34 @@ describe('MediaFilesService (REC-006)', () => {
   it('detail: 404 nếu thiếu/đã xóa', async () => {
     repoMock.findOne.mockResolvedValue(null);
     await expect(service.detail('f1')).rejects.toThrow(NotFoundException);
+  });
+
+  it('detail: local storage → downloadUrl chứa signed token (UC-140)', async () => {
+    repoMock.findOne.mockResolvedValue(baseRow({ storageProvider: 'local' }));
+    const r = await service.detail('f1');
+    expect(storageServiceMock.generateSignedDownloadToken).toHaveBeenCalledWith(
+      'f1',
+      600,
+    );
+    expect(r.downloadUrl).toContain('/media-files/f1/secure-download?token=');
+  });
+
+  it('detail: cloud_provider storage → downloadUrl = fileUrl công khai', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 'cloud_provider', fileUrl: 'https://cdn/x.pdf' }),
+    );
+    const r = await service.detail('f1');
+    expect(r.downloadUrl).toBe('https://cdn/x.pdf');
+    expect(storageServiceMock.generateSignedDownloadToken).not.toHaveBeenCalled();
+  });
+
+  it('detail: signed token generation lỗi → downloadUrl null, không throw', async () => {
+    storageServiceMock.generateSignedDownloadToken.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    repoMock.findOne.mockResolvedValue(baseRow({ storageProvider: 'local' }));
+    const r = await service.detail('f1');
+    expect(r.downloadUrl).toBeNull();
   });
 
   // ─── PLAYBACK resolve ───

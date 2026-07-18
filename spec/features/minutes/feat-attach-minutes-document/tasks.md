@@ -5,6 +5,7 @@
 | :--- | :--- | :--- |
 | 2026-07-02 | Khởi tạo tasks cho feat-attach-minutes-document (chưa implement — chỉ lên spec/plan/tasks theo yêu cầu) | Toàn bộ file |
 | 2026-07-02 | QA review + fix 4 lỗi sau khi implement: (1) minutes.module.ts thiếu StorageModule/MediaFileEntity/ConfigModule, (2) migration SQL thiếu placeholder $1/$2/..., (3) minutes.service.spec.ts thiếu import ConflictException/BadRequestException, (4) spec file describe blocks nằm sai scope gây Jest worker crash. Build pass, 52 tests pass. | minutes.module.ts, 20260702020000-SeedMeetingMinutesAttachmentPermissions.ts, minutes.service.spec.ts |
+| 2026-07-17 | Gap fix khi build `feat-view-minutes-attachment-detail` (UC-140): (1) role `INTERNAL_USER` seed ở T008 không tồn tại trong DB thật → thêm migration `20260717000001-FixMinutesAttachmentEmployeeRole.ts` cấp lại cho `EMPLOYEE`; (2) `listAttachments` đổi từ `loadMinutesForOwnerCheck` sang `loadMinutesForReadCheck` (quyền đọc rộng hơn theo UC-139) — thêm 5 unit test mới; Upload/Delete không đổi. Full suite: 179/179 test pass module minutes+recording, không regression. | minutes.service.ts, minutes.service.spec.ts, migration mới |
 
 ## Checklist
 - [x] T001 [US1] Constants (giới hạn size/count, allowlist mimetype) → `src/modules/minutes/constants/minutes-attachment.constants.ts`
@@ -60,9 +61,9 @@ export const MINUTES_ATTACHMENT_ALLOWED_MIME_TYPES = [
 
 ### Task T004 [US2] — `MinutesService.listAttachments`
 **File**: `src/modules/minutes/services/minutes.service.ts`
-**Action**: Query `MediaFileEntity` theo `relatedEntityType='meeting_minutes' AND relatedEntityId=:minutesId AND deletedAt IS NULL`, `ORDER BY uploadedAt DESC`. Trước đó check tồn tại + ownership của `meeting_minutes` (không cần lock, chỉ đọc).
+**Action**: Query `MediaFileEntity` theo `relatedEntityType='meeting_minutes' AND relatedEntityId=:minutesId AND deletedAt IS NULL`, `ORDER BY uploadedAt DESC`. Trước đó check tồn tại + quyền đọc của `meeting_minutes` (không cần lock, chỉ đọc). **Cập nhật 2026-07-17**: quyền đọc đổi từ `loadMinutesForOwnerCheck` (preparedBy-only) sang `loadMinutesForReadCheck` (`canAccessMinutes` — Host/Participant khi published/archived, Admin luôn qua) — xem plan.md mục 6.2/7.3.
 **Outcome**: Trả về `{ items, total, maxCount }`.
-**Verification**: Unit test T009 pass các case list (rỗng, có dữ liệu, not-owner).
+**Verification**: Unit test T009 pass các case list (rỗng, có dữ liệu, not-owner cũ + 5 case quyền đọc mới 2026-07-17).
 
 ### Task T005 [US3] — `MinutesService.removeAttachment`
 **File**: `src/modules/minutes/services/minutes.service.ts`
@@ -122,6 +123,7 @@ Tất cả dùng `@UseGuards(JwtAuthGuard, PermissionsGuard)`, `@CurrentUser()`,
 | FR-005 | T003 (cleanup storage khi DB fail) |
 | FR-006, FR-014 | T005, T009 |
 | FR-007 | T003, T005, T009 |
+| FR-010b | T004, T009 (gap fix 2026-07-17) |
 | FR-008, FR-016 | T003, T009 (concurrency case) |
 | FR-015 | T003, T005 (transaction) |
 | FR-017 | Không có task riêng — không sửa entity |
@@ -136,6 +138,7 @@ Tất cả dùng `@UseGuards(JwtAuthGuard, PermissionsGuard)`, `@CurrentUser()`,
 | AC-002 | T004, T009 |
 | AC-003 | T005, T009 |
 | AC-004, AC-005 | T003, T004, T005, T009, T010 |
+| AC-004b | T004, T009 (gap fix 2026-07-17) |
 | AC-006 | T003, T005, T009 |
 | AC-007, AC-014 | T003, T009 |
 | AC-008, AC-009, AC-010 | T001, T003, T009 |
@@ -149,7 +152,8 @@ Tất cả dùng `@UseGuards(JwtAuthGuard, PermissionsGuard)`, `@CurrentUser()`,
 | ATTACHMENT_FILE_TOO_LARGE | 400 | T001, T003, T009 |
 | ATTACHMENT_FILE_TYPE_INVALID | 400 | T001, T003, T009 |
 | FORBIDDEN | 403 | T006 (guard) |
-| NOT_MINUTES_OWNER | 403 | T003, T004, T005, T009 |
+| NOT_MINUTES_OWNER | 403 | T003, T005, T009 |
+| MEETING_MINUTES_ACCESS_DENIED | 403 | T004, T009 (gap fix 2026-07-17, chỉ áp dụng cho List) |
 | MINUTES_NOT_FOUND | 404 | T003, T004, T005, T009 |
 | ATTACHMENT_NOT_FOUND | 404 | T005, T009 |
 | MINUTES_NOT_DRAFT | 409 | T003, T005, T009 |
