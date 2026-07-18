@@ -54,7 +54,10 @@ describe('MeetingMinutesListController', () => {
       }),
       findMinutesDetail: jest.fn().mockResolvedValue({ id: 'min-1' }),
     };
-    controller = new MeetingMinutesListController(minutesService);
+    controller = new MeetingMinutesListController(
+      minutesService,
+      { createExportJob: jest.fn() } as any,
+    );
   });
 
   it('should be defined', () => {
@@ -178,6 +181,27 @@ describe('MeetingMinutesListController', () => {
       expect(result.data.status).toBe('published');
       expect(result.data.issuedBy).toBe('user-1');
       expect(result.data.notifiedParticipantCount).toBe(2);
+    });
+  });
+
+  describe('linkResources', () => {
+    it('should link resources and wrap response (UC-141)', async () => {
+      const mockResult = {
+        id: 'min-1',
+        linkedRecordingFileId: 'file-1',
+        linkedTranscriptId: null,
+        updatedAt: new Date('2026-07-17T10:00:00Z'),
+      };
+      minutesService.linkResources = jest.fn().mockResolvedValue(mockResult);
+
+      const dto = { recordingFileId: 'file-1' };
+      const result = await controller.linkResources('min-1', dto, currentUser);
+
+      expect(minutesService.linkResources).toHaveBeenCalledWith('min-1', dto, {
+        userId: 'user-1',
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.linkedRecordingFileId).toBe('file-1');
     });
   });
 });

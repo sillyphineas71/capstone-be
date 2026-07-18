@@ -41,10 +41,24 @@ import { UpdateDraftMinutesDto } from '../dto/update-draft-minutes.dto.js';
 import { UpdateDraftMinutesResponseDto } from '../dto/update-draft-minutes-response.dto.js';
 import { SearchMinutesByPersonQueryDto } from '../dto/search-minutes-by-person-query.dto.js';
 import { IssueMinutesResponseDto } from '../dto/issue-minutes-response.dto.js';
+import { LinkMinutesResourcesDto } from '../dto/link-minutes-resources.dto.js';
+import { LinkMinutesResourcesResponseDto } from '../dto/link-minutes-resources-response.dto.js';
+import { CreateMinutesShareDto } from '../dto/create-minutes-share.dto.js';
+import {
+  MinutesShareResponseDto,
+  UnshareMinutesResponseDto,
+} from '../dto/minutes-share-response.dto.js';
+import { MinutesShareListResponseDto } from '../dto/minutes-share-list-response.dto.js';
+import { MinutesExportService } from '../services/minutes-export.service.js';
+import { CreateMinutesExportDto } from '../dto/create-minutes-export.dto.js';
+import { CreateMinutesExportResponseDto } from '../dto/create-minutes-export-response.dto.js';
 
 @Controller('meeting-minutes')
 export class MeetingMinutesListController {
-  constructor(private readonly minutesService: MinutesService) {}
+  constructor(
+    private readonly minutesService: MinutesService,
+    private readonly minutesExportService: MinutesExportService,
+  ) {}
 
   @Get()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -71,6 +85,12 @@ export class MeetingMinutesListController {
     enum: ['draft', 'published', 'archived', 'all'],
   })
   @ApiQuery({ name: 'roomId', required: false, type: String })
+  @ApiQuery({
+    name: 'meetingId',
+    required: false,
+    type: String,
+    description: 'Loc bien ban theo cuoc hop cu the',
+  })
   @ApiQuery({ name: 'from', required: false, type: String })
   @ApiQuery({ name: 'to', required: false, type: String })
   @ApiQuery({ name: 'q', required: false, type: String })
@@ -316,6 +336,219 @@ export class MeetingMinutesListController {
     return {
       success: true,
       message: 'Ban hanh bien ban cuoc hop thanh cong',
+      data,
+    };
+  }
+
+  // -- Link/unlink recording+transcript --
+  @Patch(':id/link-resources')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.link_resources')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Lien ket/huy lien ket recording va transcript voi bien ban (UC-141)',
+    description:
+      'Chi Host (preparedBy hoac meeting.hostId) cua bien ban dang draft, khi cuoc hop da completed. ' +
+      'Moi field: vang mat = giu nguyen, null = go lien ket, uuid = gan moi.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiBody({ type: LinkMinutesResourcesDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Da lien ket/huy lien ket thanh cong',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'NO_LINK_FIELD / INVALID_RECORDING_FILE_TYPE',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({
+    status: 404,
+    description:
+      'MINUTES_NOT_FOUND / RECORDING_FILE_NOT_FOUND / TRANSCRIPT_NOT_FOUND',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'MINUTES_NOT_DRAFT / MEETING_NOT_COMPLETED / RESOURCE_NOT_SAME_MEETING',
+  })
+  async linkResources(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true }))
+    dto: LinkMinutesResourcesDto,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: LinkMinutesResourcesResponseDto;
+  }> {
+    const data = await this.minutesService.linkResources(id, dto, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Da cap nhat lien ket tai nguyen cua bien ban',
+      data,
+    };
+  }
+
+  // ── Share: Grant ──
+  @Post(':id/shares')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.share.create')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Chia se bien ban cho 1 user noi bo cu the (feat-share-meeting-minutes)',
+    description:
+      'Host (preparedBy hoac meeting.hostId) hoac Admin cap quyen xem bien ban da published ' +
+      'cho 1 user noi bo active bat ky (ngoai danh sach participant). Chi quyen xem (read-only).',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiBody({ type: CreateMinutesShareDto })
+  @ApiResponse({ status: 201, description: 'Da chia se thanh cong' })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND / USER_NOT_FOUND' })
+  @ApiResponse({ status: 409, description: 'MINUTES_NOT_PUBLISHED / ALREADY_SHARED' })
+  @ApiResponse({ status: 422, description: 'USER_INACTIVE' })
+  async shareMinutes(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true }))
+    dto: CreateMinutesShareDto,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: MinutesShareResponseDto;
+  }> {
+    const data = await this.minutesService.shareMinutes(id, dto, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Da chia se bien ban thanh cong',
+      data,
+    };
+  }
+
+  // ── Share: List ──
+  @Get(':id/shares')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.share.read')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xem danh sach user dang duoc chia se bien ban',
+    description:
+      'Chi Host (preparedBy hoac meeting.hostId) hoac Admin xem duoc danh sach chia se.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Danh sach chia se' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND' })
+  async listMinutesShares(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: MinutesShareListResponseDto;
+  }> {
+    const data = await this.minutesService.listMinutesShares(id, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Lay danh sach chia se thanh cong',
+      data,
+    };
+  }
+
+  // ── Share: Revoke ──
+  @Delete(':id/shares/:userId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.share.delete')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Thu hoi quyen xem bien ban da chia se cho 1 user',
+    description:
+      'Host (preparedBy hoac meeting.hostId) hoac Admin thu hoi quyen xem. Chi khi bien ban dang published.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'userId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Da thu hoi quyen xem' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND / SHARE_NOT_FOUND' })
+  @ApiResponse({ status: 409, description: 'MINUTES_NOT_PUBLISHED' })
+  async unshareMinutes(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UnshareMinutesResponseDto;
+  }> {
+    const data = await this.minutesService.unshareMinutes(id, userId, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Da thu hoi quyen xem bien ban',
+      data,
+    };
+  }
+
+  // ── Export (UC-147) ──
+  @Post(':id/exports')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.export')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xuat bien ban ra PDF/Word (UC-147, bat dong bo)',
+    description:
+      'Host (preparedBy hoac meeting.hostId) hoac Admin tao job xuat bien ban da published ' +
+      'ra file PDF/DOCX, luu vao storage. Tra 202 + jobId; poll GET /background-jobs/:jobId ' +
+      'roi GET /media-files/:fileId de lay downloadUrl.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiBody({ type: CreateMinutesExportDto })
+  @ApiResponse({ status: 202, description: 'Da tao job xuat bien ban' })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND' })
+  @ApiResponse({ status: 409, description: 'MINUTES_NOT_PUBLISHED' })
+  async createExport(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true }))
+    dto: CreateMinutesExportDto,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: CreateMinutesExportResponseDto;
+  }> {
+    const data = await this.minutesExportService.createExportJob(id, dto, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Da tao yeu cau xuat bien ban, dang xu ly',
       data,
     };
   }

@@ -32,6 +32,10 @@ export class MinutesQueryDto {
   roomId?: string;
 
   @IsOptional()
+  @IsUUID('4')
+  meetingId?: string;
+
+  @IsOptional()
   @IsString()
   from?: string;
 
