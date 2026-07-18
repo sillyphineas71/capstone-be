@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -12,6 +17,7 @@ import {
 import { QueueService } from '../queue/queue.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
 import { BackgroundJobType } from '../administration/entities/background-job.entity.js';
+import { NotificationListItemDto } from './dto/notification-list-item.dto.js';
 
 export interface CreateNotificationDto {
   notificationType: NotificationType;
@@ -31,22 +37,18 @@ export interface CreateNotificationDto {
 }
 
 export interface EnqueueEmailNotificationDto extends CreateNotificationDto {
-  /** Email addresses to send to (overrides recipientEmails nếu cần) */
   toEmails: string[];
 }
 
 /**
- * NotificationsService — Service skeleton dùng chung.
+ * NotificationsService — Service gốc dùng chung.
  *
- * Entity NotificationEntity đã có sẵn trong DB v3.2 (bảng notifications).
+ * - createNotification/enqueueEmailNotification: đã có sẵn
+ * - listMyNotifications/getMyNotificationDetail: inbox (danh sách/chi tiết thông báo của user hiện tại)
  *
- * enqueueEmailNotification():
- * 1. Tạo notification row (status=draft)
- * 2. Tạo background_job row (type=send_email)
- * 3. Add BullMQ job vào QUEUE_NOTIFICATION
- * 4. Update notification status=queued
- *
- * Worker xử lý generic email — không implement business feature cụ thể ở đây.
+ * Không tracking "đã đọc" theo từng user — Product Owner quyết định 2026-07-18 không tạo
+ * bảng notification_reads, không cần theo dõi ai đã đọc (xem
+ * spec/features/notifications/feat-notification-inbox/spec.md mục 1.2).
  */
 @Injectable()
 export class NotificationsService {
@@ -66,9 +68,8 @@ export class NotificationsService {
     );
   }
 
-  /**
-   * Tạo notification record với status=draft.
-   */
+  // ── Existing methods ──
+
   async createNotification(
     dto: CreateNotificationDto,
   ): Promise<NotificationEntity> {
@@ -93,30 +94,24 @@ export class NotificationsService {
     });
     const saved = await this.repo.save(notification);
     this.logger.debug(
-      `[Notifications] Created notification ${saved.id} — type: ${saved.notificationType}`,
+      '[Notifications] Created notification ' +
+        saved.id +
+        ' — type: ' +
+        saved.notificationType,
     );
     return saved;
   }
 
-  /**
-   * Enqueue email notification:
-   * 1. Tạo notification row (status=draft)
-   * 2. Tạo background_job row (type=send_email, status=queued)
-   * 3. Add BullMQ job vào notification queue
-   * 4. Update notification status=queued
-   */
   async enqueueEmailNotification(dto: EnqueueEmailNotificationDto): Promise<{
     notification: NotificationEntity;
     jobId?: string;
   }> {
-    // 1. Tạo notification row
     const notification = await this.createNotification({
       ...dto,
       channel: NotificationChannel.EMAIL,
       recipientEmails: dto.toEmails,
     });
 
-    // 2. Tạo background_job row
     const bgJob = await this.backgroundJobsService.createQueuedJob({
       jobType: BackgroundJobType.SEND_EMAIL,
       queueName: this.notificationQueueName,
@@ -127,11 +122,9 @@ export class NotificationsService {
         notificationId: notification.id,
         toEmails: dto.toEmails,
         subject: dto.subject,
-        // Không lưu nội dung email vào input_json nếu quá dài
       },
     });
 
-    // 3. Add BullMQ job
     let bullJobId: string | undefined;
     try {
       bullJobId = await this.queueService.addJob(
@@ -147,40 +140,35 @@ export class NotificationsService {
         },
       );
     } catch (error) {
-      // Nếu enqueue thất bại, mark notification và background job là failed
       const message = error instanceof Error ? error.message : 'Unknown error';
-      await this.markFailed(notification.id, `Failed to enqueue: ${message}`);
+      await this.markFailed(notification.id, 'Failed to enqueue: ' + message);
       await this.backgroundJobsService.markFailed(
         bgJob.id,
-        `Failed to enqueue: ${message}`,
+        'Failed to enqueue: ' + message,
       );
       this.logger.error(
-        `[Notifications] Failed to enqueue email notification: ${message}`,
+        '[Notifications] Failed to enqueue email notification: ' + message,
       );
       return { notification };
     }
 
-    // 4. Update notification status=queued
     await this.markQueued(notification.id);
 
     this.logger.log(
-      `[Notifications] Enqueued email notification ${notification.id} → BullMQ job ${bullJobId}`,
+      '[Notifications] Enqueued email notification ' +
+        notification.id +
+        ' → BullMQ job ' +
+        bullJobId,
     );
     return { notification, jobId: bullJobId };
   }
 
-  /**
-   * Cập nhật trạng thái notification → queued.
-   */
   async markQueued(id: string): Promise<void> {
     await this.repo.update(id, {
       deliveryStatus: NotificationDeliveryStatus.QUEUED,
     });
   }
 
-  /**
-   * Cập nhật trạng thái notification → sent.
-   */
   async markSent(id: string): Promise<void> {
     await this.repo.update(id, {
       deliveryStatus: NotificationDeliveryStatus.SENT,
@@ -188,9 +176,6 @@ export class NotificationsService {
     });
   }
 
-  /**
-   * Cập nhật trạng thái notification → failed.
-   */
   async markFailed(id: string, reason: string): Promise<void> {
     await this.repo.update(id, {
       deliveryStatus: NotificationDeliveryStatus.FAILED,
@@ -198,10 +183,95 @@ export class NotificationsService {
     });
   }
 
-  /**
-   * Tìm notification theo ID.
-   */
   async findById(id: string): Promise<NotificationEntity | null> {
     return this.repo.findOne({ where: { id } });
+  }
+
+  // ── Inbox methods (danh sách/chi tiết thông báo của user hiện tại) ──
+
+  /**
+   * List notifications for current user (recipient).
+   * Dùng GIN index ix_notifications_recipients cho jsonb containment.
+   * Không có trạng thái "đã đọc" theo từng user (xem note đầu file).
+   */
+  async listMyNotifications(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<{
+    data: NotificationListItemDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await this.repo
+      .createQueryBuilder('n')
+      .where('n.recipient_user_ids_json @> :userIdJsonb', {
+        userIdJsonb: JSON.stringify([userId]),
+      })
+      .andWhere("n.channel IN ('in_app', 'websocket')")
+      .orderBy('n.created_at', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    const data: NotificationListItemDto[] = items.map((item) => ({
+      id: item.id,
+      notificationType: item.notificationType,
+      subject: item.subject,
+      content: item.content,
+      relatedEntityType: item.relatedEntityType,
+      relatedEntityId: item.relatedEntityId,
+      priority: item.priority,
+      createdAt: item.createdAt,
+    }));
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
+   * Get notification detail (only if user is recipient).
+   */
+  async getMyNotificationDetail(
+    id: string,
+    userId: string,
+  ): Promise<NotificationListItemDto> {
+    const notification = await this.repo.findOne({ where: { id } });
+
+    if (!notification) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Notification not found',
+        error: { code: 'NOTIFICATION_NOT_FOUND', details: {} },
+      });
+    }
+
+    const recipientIds = notification.recipientUserIdsJson ?? [];
+    if (!recipientIds.includes(userId)) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'You do not have access to this notification',
+        error: { code: 'NOTIFICATION_ACCESS_DENIED', details: {} },
+      });
+    }
+
+    return {
+      id: notification.id,
+      notificationType: notification.notificationType,
+      subject: notification.subject,
+      content: notification.content,
+      relatedEntityType: notification.relatedEntityType,
+      relatedEntityId: notification.relatedEntityId,
+      priority: notification.priority,
+      createdAt: notification.createdAt,
+    };
   }
 }
