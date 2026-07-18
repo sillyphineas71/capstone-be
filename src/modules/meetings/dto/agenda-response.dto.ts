@@ -39,3 +39,35 @@ export class ReplaceAgendaResponseDto {
     Object.assign(this, data);
   }
 }
+
+export class AgendaItemUpdateResponseDto {
+  id: string;
+  meetingId: string;
+  agendaOrder: number;
+  title: string;
+  description: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  plannedDurationMinutes: number;
+  status: string;
+  updatedAt: Date;
+  totalPlannedDurationMinutes: number;
+  remainingDurationMinutes: number;
+
+  constructor(data: Partial<AgendaItemUpdateResponseDto>) {
+    Object.assign(this, data);
+  }
+}
+
+export class DeleteAgendaItemResponseDto {
+  deleted: boolean;
+  agendaId: string;
+  meetingId: string;
+  totalPlannedDurationMinutes: number;
+  remainingDurationMinutes: number;
+  remainingItemCount: number;
+
+  constructor(data: Partial<DeleteAgendaItemResponseDto>) {
+    Object.assign(this, data);
+  }
+}

@@ -12,6 +12,7 @@ import {
   EntityManager,
   In,
   Not,
+  MoreThan,
   MoreThanOrEqual,
   LessThanOrEqual,
 } from 'typeorm';
@@ -129,10 +130,13 @@ import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
+import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
 import {
   AgendaItemResponseDto,
   AgendaListResponseDto,
   ReplaceAgendaResponseDto,
+  AgendaItemUpdateResponseDto,
+  DeleteAgendaItemResponseDto,
 } from '../dto/agenda-response.dto.js';
 export interface AuthUser {
   userId: string;
@@ -4615,6 +4619,437 @@ export class MeetingsService {
     });
 
     return result;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda item feature (UC-MM-10 — PATCH single item)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Check if PATCH payload has no field provided at all.
+   */
+  private isAgendaUpdatePayloadEmpty(dto: UpdateAgendaItemDto): boolean {
+    return (
+      dto.title === undefined &&
+      dto.description === undefined &&
+      dto.ownerId === undefined &&
+      dto.plannedDurationMinutes === undefined &&
+      dto.agendaOrder === undefined
+    );
+  }
+
+  /**
+   * Compute the agenda_order shift plan when moving one item to a new
+   * position within the same meeting's agenda list.
+   * Returns a map of agendaId -> newOrder for every item whose order changes
+   * (including the moved item itself).
+   */
+  private computeAgendaOrderShift(
+    items: MeetingAgendaEntity[],
+    itemId: string,
+    newOrder: number,
+  ): Map<string, number> {
+    if (
+      !Number.isInteger(newOrder) ||
+      newOrder < 1 ||
+      newOrder > items.length
+    ) {
+      throw new UnprocessableEntityException('AGENDA_INVALID_ORDER');
+    }
+
+    const sorted = [...items].sort((a, b) => a.agendaOrder - b.agendaOrder);
+    const currentIndex = sorted.findIndex((i) => i.id === itemId);
+    if (currentIndex === -1) {
+      throw new NotFoundException('AGENDA_ITEM_NOT_FOUND');
+    }
+
+    const reordered = [...sorted];
+    const [moved] = reordered.splice(currentIndex, 1);
+    reordered.splice(newOrder - 1, 0, moved);
+
+    const shiftMap = new Map<string, number>();
+    reordered.forEach((agendaItem, index) => {
+      const newOrderValue = index + 1;
+      if (agendaItem.agendaOrder !== newOrderValue) {
+        shiftMap.set(agendaItem.id, newOrderValue);
+      }
+    });
+    return shiftMap;
+  }
+
+  /**
+   * Build the response payload for a single agenda item, including
+   * meeting-level duration totals.
+   */
+  private async buildAgendaItemUpdateResponse(
+    em: EntityManager,
+    meeting: MeetingEntity,
+    item: MeetingAgendaEntity,
+  ): Promise<AgendaItemUpdateResponseDto> {
+    const allItems = await em.find(MeetingAgendaEntity, {
+      where: { meetingId: meeting.id },
+    });
+    const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+    const totalPlannedDurationMinutes = allItems.reduce(
+      (sum, i) => sum + (i.plannedDurationMinutes ?? 0),
+      0,
+    );
+
+    let ownerName: string | null = null;
+    if (item.ownerId) {
+      if (item.owner) {
+        ownerName = item.owner.fullName ?? null;
+      } else {
+        const owner = await em.findOne(UserEntity, {
+          where: { id: item.ownerId },
+        });
+        ownerName = owner?.fullName ?? null;
+      }
+    }
+
+    return new AgendaItemUpdateResponseDto({
+      id: item.id,
+      meetingId: meeting.id,
+      agendaOrder: item.agendaOrder,
+      title: item.title,
+      description: item.description,
+      ownerId: item.ownerId,
+      ownerName,
+      plannedDurationMinutes: item.plannedDurationMinutes ?? 0,
+      status: item.status,
+      updatedAt: item.updatedAt,
+      totalPlannedDurationMinutes,
+      remainingDurationMinutes: Math.max(
+        0,
+        meetingDurationMinutes - totalPlannedDurationMinutes,
+      ),
+    });
+  }
+
+  /**
+   * Partial update of a single agenda item (UC-MM-10).
+   * Coexists with replaceAgendas() (UC-MM-09, atomic bulk replace) — both
+   * share the same pessimistic_write lock on the meeting row to avoid
+   * lost updates between the two write paths.
+   */
+  async updateAgendaItem(
+    meetingId: string,
+    agendaId: string,
+    dto: UpdateAgendaItemDto,
+    userId: string,
+    clientContext?: ClientContext,
+  ): Promise<AgendaItemUpdateResponseDto> {
+    if (this.isAgendaUpdatePayloadEmpty(dto)) {
+      throw new BadRequestException('AGENDA_UPDATE_PAYLOAD_EMPTY');
+    }
+
+    return this.dataSource.transaction(async (em) => {
+      // Lock meeting row (shared lock resource with PUT /agendas)
+      const meeting = await em.findOne(MeetingEntity, {
+        where: { id: meetingId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!meeting || meeting.deletedAt) {
+        throw new NotFoundException('MEETING_NOT_FOUND');
+      }
+
+      // Load target agenda item
+      const item = await em.findOne(MeetingAgendaEntity, {
+        where: { id: agendaId, meetingId: meeting.id },
+      });
+      if (!item) {
+        throw new NotFoundException('AGENDA_ITEM_NOT_FOUND');
+      }
+
+      // Permission & state checks
+      this.checkAgendaWritePermission(meeting, userId);
+      this.validateMeetingTimeForAgenda(meeting);
+      this.validateMeetingStatusForAgendaWrite(meeting);
+
+      // Field-level validation (only for fields present in request)
+      let normalizedTitle: string | undefined;
+      if (dto.title !== undefined) {
+        normalizedTitle = dto.title.trim();
+        if (normalizedTitle.length === 0) {
+          throw new UnprocessableEntityException('AGENDA_TITLE_REQUIRED');
+        }
+        if (normalizedTitle.length > 255) {
+          throw new UnprocessableEntityException('AGENDA_TITLE_TOO_LONG');
+        }
+      }
+      if (
+        dto.description !== undefined &&
+        dto.description !== null &&
+        dto.description.length > 2000
+      ) {
+        throw new UnprocessableEntityException('AGENDA_DESCRIPTION_TOO_LONG');
+      }
+      if (
+        dto.plannedDurationMinutes !== undefined &&
+        (!Number.isInteger(dto.plannedDurationMinutes) ||
+          dto.plannedDurationMinutes <= 0)
+      ) {
+        throw new UnprocessableEntityException('AGENDA_INVALID_DURATION');
+      }
+
+      // Load all items of the meeting (needed for order shift + duration total)
+      const allItems = await em.find(MeetingAgendaEntity, {
+        where: { meetingId: meeting.id },
+        order: { agendaOrder: 'ASC' },
+      });
+
+      // agendaOrder validation + shift plan (only if order actually changes)
+      let orderShiftMap: Map<string, number> | null = null;
+      if (dto.agendaOrder !== undefined && dto.agendaOrder !== item.agendaOrder) {
+        orderShiftMap = this.computeAgendaOrderShift(
+          allItems,
+          item.id,
+          dto.agendaOrder,
+        );
+      }
+
+      // ownerId validation
+      if (dto.ownerId !== undefined && dto.ownerId !== null) {
+        const participantIds = await this.getParticipantUserIds(meeting.id);
+        if (!participantIds.has(dto.ownerId)) {
+          throw new UnprocessableEntityException(
+            'AGENDA_OWNER_NOT_PARTICIPANT',
+          );
+        }
+      }
+
+      // No-op detection
+      const isNoOp =
+        (dto.title === undefined || normalizedTitle === item.title) &&
+        (dto.description === undefined ||
+          (dto.description ?? null) === (item.description ?? null)) &&
+        (dto.ownerId === undefined ||
+          (dto.ownerId ?? null) === (item.ownerId ?? null)) &&
+        (dto.plannedDurationMinutes === undefined ||
+          dto.plannedDurationMinutes === item.plannedDurationMinutes) &&
+        !orderShiftMap;
+
+      if (isNoOp) {
+        return this.buildAgendaItemUpdateResponse(em, meeting, item);
+      }
+
+      // Duration overflow check (recompute total with the new value applied)
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const newPlannedDuration =
+        dto.plannedDurationMinutes !== undefined
+          ? dto.plannedDurationMinutes
+          : (item.plannedDurationMinutes ?? 0);
+      const totalOthers = allItems
+        .filter((i) => i.id !== item.id)
+        .reduce((sum, i) => sum + (i.plannedDurationMinutes ?? 0), 0);
+      if (totalOthers + newPlannedDuration > meetingDurationMinutes) {
+        throw new UnprocessableEntityException('AGENDA_DURATION_OVERFLOW');
+      }
+
+      // Build diff for audit log + update payload
+      const oldValueJson: Record<string, unknown> = {};
+      const newValueJson: Record<string, unknown> = {};
+      const updateFields: {
+        updatedBy: string;
+        title?: string;
+        description?: string | null;
+        ownerId?: string | null;
+        plannedDurationMinutes?: number;
+        agendaOrder?: number;
+      } = { updatedBy: userId };
+
+      if (dto.title !== undefined && normalizedTitle !== item.title) {
+        oldValueJson.title = item.title;
+        newValueJson.title = normalizedTitle;
+        updateFields.title = normalizedTitle;
+      }
+      if (
+        dto.description !== undefined &&
+        (dto.description ?? null) !== (item.description ?? null)
+      ) {
+        oldValueJson.description = item.description;
+        newValueJson.description = dto.description ?? null;
+        updateFields.description = dto.description ?? null;
+      }
+      if (
+        dto.ownerId !== undefined &&
+        (dto.ownerId ?? null) !== (item.ownerId ?? null)
+      ) {
+        oldValueJson.ownerId = item.ownerId;
+        newValueJson.ownerId = dto.ownerId ?? null;
+        updateFields.ownerId = dto.ownerId ?? null;
+      }
+      if (
+        dto.plannedDurationMinutes !== undefined &&
+        dto.plannedDurationMinutes !== item.plannedDurationMinutes
+      ) {
+        oldValueJson.plannedDurationMinutes = item.plannedDurationMinutes;
+        newValueJson.plannedDurationMinutes = dto.plannedDurationMinutes;
+        updateFields.plannedDurationMinutes = dto.plannedDurationMinutes;
+      }
+
+      const reorderedAgendaIds: string[] = [];
+      if (orderShiftMap) {
+        oldValueJson.agendaOrder = item.agendaOrder;
+        const newOwnOrder = orderShiftMap.get(item.id) ?? item.agendaOrder;
+        newValueJson.agendaOrder = newOwnOrder;
+        updateFields.agendaOrder = newOwnOrder;
+
+        for (const [otherId, newOrder] of orderShiftMap) {
+          if (otherId === item.id) continue;
+          await em.update(MeetingAgendaEntity, { id: otherId }, { agendaOrder: newOrder });
+          reorderedAgendaIds.push(otherId);
+        }
+      }
+
+      await em.update(MeetingAgendaEntity, { id: item.id }, updateFields);
+
+      // Audit log
+      const auditLog = em.create(AuditLogEntity, {
+        userId,
+        actionType: 'agenda_item_updated',
+        entityType: 'meeting_agenda',
+        entityId: item.id,
+        oldValueJson,
+        newValueJson:
+          reorderedAgendaIds.length > 0
+            ? { ...newValueJson, reorderedAgendaIds }
+            : newValueJson,
+        ipAddress: clientContext?.ipAddress ?? null,
+        userAgent: clientContext?.userAgent ?? null,
+        severity: AuditLogSeverity.INFO,
+      });
+      await em.save(AuditLogEntity, auditLog);
+
+      // Reload item with owner relation for response
+      const updatedItem = await em.findOne(MeetingAgendaEntity, {
+        where: { id: item.id },
+        relations: { owner: true },
+      });
+
+      return this.buildAgendaItemUpdateResponse(em, meeting, updatedItem!);
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda item feature (UC-MM-11 — DELETE single item)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Shift agenda_order of every item after the deleted position down by 1,
+   * keeping the remaining items sequential (1..N, no gaps).
+   * Returns the ids of the items that were shifted.
+   */
+  private async renormalizeAfterDelete(
+    em: EntityManager,
+    meetingId: string,
+    deletedOrder: number,
+  ): Promise<string[]> {
+    const affectedItems = await em.find(MeetingAgendaEntity, {
+      where: { meetingId, agendaOrder: MoreThan(deletedOrder) },
+    });
+    for (const affected of affectedItems) {
+      await em.update(
+        MeetingAgendaEntity,
+        { id: affected.id },
+        { agendaOrder: affected.agendaOrder - 1 },
+      );
+    }
+    return affectedItems.map((i) => i.id);
+  }
+
+  /**
+   * Hard delete a single agenda item (UC-MM-11).
+   * Coexists with replaceAgendas() (UC-MM-09) and updateAgendaItem()
+   * (UC-MM-10) — all three share the same pessimistic_write lock on the
+   * meeting row to avoid lost updates between write paths.
+   */
+  async deleteAgendaItem(
+    meetingId: string,
+    agendaId: string,
+    userId: string,
+    clientContext?: ClientContext,
+  ): Promise<DeleteAgendaItemResponseDto> {
+    return this.dataSource.transaction(async (em) => {
+      // Lock meeting row (shared lock resource with PUT/PATCH /agendas)
+      const meeting = await em.findOne(MeetingEntity, {
+        where: { id: meetingId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!meeting || meeting.deletedAt) {
+        throw new NotFoundException('MEETING_NOT_FOUND');
+      }
+
+      // Load target agenda item
+      const item = await em.findOne(MeetingAgendaEntity, {
+        where: { id: agendaId, meetingId: meeting.id },
+      });
+      if (!item) {
+        throw new NotFoundException('AGENDA_ITEM_NOT_FOUND');
+      }
+
+      // Permission & state checks
+      this.checkAgendaWritePermission(meeting, userId);
+      this.validateMeetingStatusForAgendaWrite(meeting);
+
+      // Snapshot the item before deletion (for audit old_value_json)
+      const oldValueJson: Record<string, unknown> = {
+        id: item.id,
+        agendaOrder: item.agendaOrder,
+        title: item.title,
+        description: item.description,
+        ownerId: item.ownerId,
+        plannedDurationMinutes: item.plannedDurationMinutes,
+        status: item.status,
+      };
+
+      await em.delete(MeetingAgendaEntity, { id: item.id });
+
+      const reorderedAgendaIds = await this.renormalizeAfterDelete(
+        em,
+        meeting.id,
+        item.agendaOrder,
+      );
+
+      // Audit log
+      const auditLog = em.create(AuditLogEntity, {
+        userId,
+        actionType: 'agenda_item_deleted',
+        entityType: 'meeting_agenda',
+        entityId: item.id,
+        oldValueJson:
+          reorderedAgendaIds.length > 0
+            ? { ...oldValueJson, reorderedAgendaIds }
+            : oldValueJson,
+        newValueJson: null,
+        ipAddress: clientContext?.ipAddress ?? null,
+        userAgent: clientContext?.userAgent ?? null,
+        severity: AuditLogSeverity.INFO,
+      });
+      await em.save(AuditLogEntity, auditLog);
+
+      // Compute remaining totals for the response
+      const remainingItems = await em.find(MeetingAgendaEntity, {
+        where: { meetingId: meeting.id },
+      });
+      const meetingDurationMinutes = this.getMeetingDurationMinutes(meeting);
+      const totalPlannedDurationMinutes = remainingItems.reduce(
+        (sum, i) => sum + (i.plannedDurationMinutes ?? 0),
+        0,
+      );
+
+      return new DeleteAgendaItemResponseDto({
+        deleted: true,
+        agendaId: item.id,
+        meetingId: meeting.id,
+        totalPlannedDurationMinutes,
+        remainingDurationMinutes: Math.max(
+          0,
+          meetingDurationMinutes - totalPlannedDurationMinutes,
+        ),
+        remainingItemCount: remainingItems.length,
+      });
+    });
   }
 
   async findMeetingRequests(

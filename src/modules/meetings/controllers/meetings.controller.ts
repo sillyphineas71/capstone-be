@@ -95,10 +95,13 @@ import { RemoveExternalParticipantBodyDto } from '../dto/remove-external-partici
 import { RemoveExternalParticipantResponseDto } from '../dto/remove-external-participant-response.dto.js';
 
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
+import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
 
 import {
   AgendaListResponseDto,
   ReplaceAgendaResponseDto,
+  AgendaItemUpdateResponseDto,
+  DeleteAgendaItemResponseDto,
 } from '../dto/agenda-response.dto.js';
 
 import { ClientContext } from '../services/meetings.service.js';
@@ -1019,6 +1022,141 @@ export class MeetingsController {
       success: true,
 
       message: 'Luu chuong trinh hop thanh cong',
+
+      data: result,
+    };
+  }
+
+  @Patch(':meetingId/agendas/:agendaId')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Cap nhat mot muc agenda cu the (partial update)' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'agendaId', type: 'string', format: 'uuid' })
+  @ApiBody({ type: UpdateAgendaItemDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Cap nhat muc agenda thanh cong',
+    type: AgendaItemUpdateResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'AGENDA_UPDATE_PAYLOAD_EMPTY / AGENDA_INVALID_PAYLOAD',
+  })
+  @ApiResponse({ status: 403, description: 'AGENDA_WRITE_FORBIDDEN' })
+  @ApiResponse({
+    status: 404,
+    description: 'MEETING_NOT_FOUND / AGENDA_ITEM_NOT_FOUND',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'AGENDA_MEETING_STATUS_BLOCKED / MEETING_TIME_INVALID_FOR_AGENDA',
+  })
+  @ApiResponse({ status: 422, description: 'Validation errors' })
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+
+      transform: true,
+
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async updateAgendaItem(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+
+    @Param('agendaId', ParseUUIDPipe) agendaId: string,
+
+    @Body() dto: UpdateAgendaItemDto,
+
+    @CurrentUser() currentUser: { userId: string },
+
+    @Ip() ipAddress: string,
+
+    @Headers('user-agent') userAgent: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: AgendaItemUpdateResponseDto;
+  }> {
+    const clientContext: ClientContext = {
+      ipAddress,
+
+      userAgent: userAgent || undefined,
+    };
+
+    const result = await this.meetingsService.updateAgendaItem(
+      meetingId,
+
+      agendaId,
+
+      dto,
+
+      currentUser.userId,
+
+      clientContext,
+    );
+
+    return {
+      success: true,
+
+      message: 'Cap nhat chuong trinh hop thanh cong',
+
+      data: result,
+    };
+  }
+
+  @Delete(':meetingId/agendas/:agendaId')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Xoa mot muc agenda cu the' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'agendaId', type: 'string', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Xoa muc agenda thanh cong',
+    type: DeleteAgendaItemResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'AGENDA_WRITE_FORBIDDEN' })
+  @ApiResponse({
+    status: 404,
+    description: 'MEETING_NOT_FOUND / AGENDA_ITEM_NOT_FOUND',
+  })
+  @ApiResponse({ status: 409, description: 'AGENDA_MEETING_STATUS_BLOCKED' })
+  async deleteAgendaItem(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+
+    @Param('agendaId', ParseUUIDPipe) agendaId: string,
+
+    @CurrentUser() currentUser: { userId: string },
+
+    @Ip() ipAddress: string,
+
+    @Headers('user-agent') userAgent: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DeleteAgendaItemResponseDto;
+  }> {
+    const clientContext: ClientContext = {
+      ipAddress,
+
+      userAgent: userAgent || undefined,
+    };
+
+    const result = await this.meetingsService.deleteAgendaItem(
+      meetingId,
+
+      agendaId,
+
+      currentUser.userId,
+
+      clientContext,
+    );
+
+    return {
+      success: true,
+
+      message: 'Xoa muc agenda thanh cong',
 
       data: result,
     };
