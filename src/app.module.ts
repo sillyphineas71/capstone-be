@@ -38,6 +38,7 @@ import { TranscriptionModule } from './modules/transcription/transcription.modul
 import { UtilizationModule } from './modules/utilization/utilization.module';
 import { IvssModule } from './modules/ivss/ivss.module';
 import { AnprModule } from './modules/anpr/anpr.module';
+import { ZonesModule } from './modules/zones/zones.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -108,6 +109,7 @@ void loadDevModule; // suppress unused warning
     AnalyticsModule,
     IvssModule,
     AnprModule,
+    ZonesModule, // schema-only: đăng ký entity scope Zone (SAVP)
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],

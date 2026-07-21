@@ -52,6 +52,14 @@ export class IoTDeviceEntity {
   @Column({ name: 'room_id', type: 'uuid', nullable: true })
   roomId: string | null;
 
+  /**
+   * SAVP Zone scope (migration 20260721000002) — zone chứa thiết bị.
+   * Song song với `room_id`, KHÔNG thay thế. Cột-only (không khai @ManyToOne)
+   * để tránh circular import giữa module `iot` và module `zones`.
+   */
+  @Column({ name: 'zone_id', type: 'uuid', nullable: true })
+  zoneId: string | null;
+
   @Column({ name: 'equipment_id', type: 'uuid', nullable: true })
   equipmentId: string | null;
 

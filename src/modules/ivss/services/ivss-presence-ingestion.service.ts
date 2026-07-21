@@ -107,7 +107,18 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       const direction =
         directionMap[String(evt.channelId)] ??
         this.normalizeDirection(evt.eventAction);
-      const matchState = this.matchStateOf(userId, roomId);
+      // Nợ #3: chỉ điểm danh người THỰC SỰ thuộc cuộc họp đang diễn ra tại room đó.
+      // meetingId null (không có họp lúc đi qua camera) → isParticipant=false → không matched.
+      let isParticipant = false;
+      if (userId && meetingId) {
+        const pr: IdRow[] = await this.dataSource.manager.query(
+          `SELECT id FROM meeting_participants
+           WHERE meeting_id = $1 AND user_id = $2 LIMIT 1`,
+          [meetingId, userId],
+        );
+        isParticipant = !!pr[0];
+      }
+      const matchState = this.matchStateOf(userId, roomId, isParticipant);
       const processedStatus =
         matchState === 'matched' ? 'processed' : 'unmatched';
 
@@ -210,12 +221,20 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     }
   }
 
-  /** C5: 4 trạng thái khớp, tách khỏi direction. */
+  /**
+   * C5: 4 trạng thái khớp, tách khỏi direction.
+   * Nợ #3: `matched` YÊU CẦU thêm `isParticipant` — nhận ra người + có room vẫn chưa đủ.
+   * Người còn mặt trên IVSS (deprovision lỗi) nhưng KHÔNG thuộc meeting đang diễn ra
+   * → 'unmatched_identity' → processed_status='unmatched' → KHÔNG được điểm danh.
+   */
   private matchStateOf(
     userId: string | null,
     roomId: string | null,
+    isParticipant: boolean,
   ): MatchState {
-    if (userId && roomId) return 'matched';
+    if (userId && roomId && isParticipant) return 'matched';
+    // Nhận ra người nhưng không có trong họp (hoặc không map được meeting).
+    if (userId && roomId && !isParticipant) return 'unmatched_identity';
     if (!userId && !roomId) return 'unmatched_both';
     if (!userId) return 'unmatched_identity';
     return 'unmatched_location';

@@ -83,16 +83,17 @@ export class IvssPersonSyncService {
     }
   }
 
-  /** OQ-2: createGroup idempotent — thử 1 lần/đời service (group có thể đã tồn tại). */
-  private async ensureGroup(): Promise<void> {
-    if (this.groupEnsured) return;
-    const r = await this.bridge.createGroup({ name: this.groupId });
-    if (!r.ok) {
-      this.logger.warn(
-        `ensureGroup createGroup not ok (${r.error.code}) — tiếp tục (group có thể đã tồn tại).`,
-      );
-    }
+  /**
+   * Nợ #1: KHÔNG gọi bridge.createGroup. Group đích được tạo THỦ CÔNG sẵn trong IVSS.
+   * Bridge createGroup KHÔNG idempotent → gọi lại mỗi lần service khởi động sẽ đẻ
+   * group trùng tên. enrollAttendee enroll thẳng vào `groupId`, không phụ thuộc bước này.
+   */
+  private ensureGroup(): Promise<void> {
+    // KHÔNG `async`: thân hàm không còn await nào sau khi bỏ createGroup
+    // (eslint require-await). Vẫn trả Promise để nơi gọi giữ nguyên `await`.
+    if (this.groupEnsured) return Promise.resolve();
     this.groupEnsured = true;
+    return Promise.resolve();
   }
 
   // ── PROVISION ──────────────────────────────────────────────────────────
@@ -171,6 +172,31 @@ export class IvssPersonSyncService {
     }
 
     const personUid = this.personUidOf(userId);
+
+    // Nợ #2: enroll idempotent — xoá person cũ trên IVSS trước khi enroll mới,
+    // tránh 1 user nhiều szUID khi mapping cũ ở trạng thái failed hoặc DB lệch IVSS.
+    // Chỉ chạy khi đã qua dedupe ở trên (mapping KHÔNG phải synced-sạch).
+    const stale: { device_person_id: string }[] =
+      await this.dataSource.manager.query(
+        `SELECT device_person_id FROM device_user_mappings
+         WHERE device_id = $1 AND user_id = $2
+           AND metadata_json->>'source' = 'ivss'
+           AND device_person_id IS NOT NULL AND deleted_at IS NULL`,
+        [deviceId, userId],
+      );
+    for (const s of stale) {
+      try {
+        await this.bridge.deleteFace({
+          groupId: this.groupId,
+          personUid: s.device_person_id,
+        });
+      } catch (e) {
+        this.logger.warn(
+          `IVSS cleanup stale person ${s.device_person_id} failed: ${this.msg(e)} — tiếp tục enroll.`,
+        );
+      }
+    }
+
     const r = await this.bridge.enrollFace({
       groupId: this.groupId,
       personUid,
@@ -238,7 +264,7 @@ export class IvssPersonSyncService {
     for (const mp of maps) {
       try {
         // C3: deleteFace theo personUid mình gửi (device_person_code).
-        const personUid = mp.device_person_code;
+        const personUid = mp.device_person_id;
         if (personUid) {
           const r = await this.bridge.deleteFace({
             groupId: this.groupId,
