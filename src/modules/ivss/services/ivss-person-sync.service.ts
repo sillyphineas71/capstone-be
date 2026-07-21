@@ -47,7 +47,7 @@ export class IvssPersonSyncService {
     private readonly faceProfileService: FaceProfileService,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
-  ) {}
+  ) { }
 
   private get groupId(): string {
     return this.configService.get<string>('IVSS_DEFAULT_GROUP', '');
@@ -86,12 +86,12 @@ export class IvssPersonSyncService {
   /** OQ-2: createGroup idempotent — thử 1 lần/đời service (group có thể đã tồn tại). */
   private async ensureGroup(): Promise<void> {
     if (this.groupEnsured) return;
-    const r = await this.bridge.createGroup({ name: this.groupId });
-    if (!r.ok) {
-      this.logger.warn(
-        `ensureGroup createGroup not ok (${r.error.code}) — tiếp tục (group có thể đã tồn tại).`,
-      );
-    }
+    //const r = await this.bridge.createGroup({ name: this.groupId });
+    // if (!r.ok) {
+    //   this.logger.warn(
+    //     `ensureGroup createGroup not ok (${r.error.code}) — tiếp tục (group có thể đã tồn tại).`,
+    //   );
+    // }
     this.groupEnsured = true;
   }
 
@@ -238,7 +238,7 @@ export class IvssPersonSyncService {
     for (const mp of maps) {
       try {
         // C3: deleteFace theo personUid mình gửi (device_person_code).
-        const personUid = mp.device_person_code;
+        const personUid = mp.device_person_id;
         if (personUid) {
           const r = await this.bridge.deleteFace({
             groupId: this.groupId,
