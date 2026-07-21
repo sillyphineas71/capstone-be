@@ -3,6 +3,7 @@
 ## CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí thay đổi |
 | :--- | :--- | :--- |
+| 2026-07-21 | Bổ sung Amendment MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án): 4 bảng mới `zones`, `gate_access_logs`, `zone_presence_events`, `vehicle_control_list` + 2 cột `zone_id` + 1 unique index, đã qua Team Approval Gate và áp lên RDS. Cập nhật mục 2 (Amendment), 3.1 (nhóm 9), 15.1 (T3) và 16. | Mục 2, 3.1, 15.1, 16 |
 | 2026-06-06 | Tạo tài liệu đối chiếu (Alignment Document) chính thức cho dự án Smart Meeting Room Monitoring and Presence Tracking System, căn cứ theo DB v3.2 Compact 39 Tables và Spec.md. | Toàn bộ file |
 
 ---
@@ -23,6 +24,14 @@ Nhóm thống nhất đưa ra quyết định tối hậu: **Giữ nguyên Datab
 - Mọi điều chỉnh (nếu có) đối với cơ sở dữ liệu vật lý chỉ giới hạn ở mức thêm cột nhỏ, index, hoặc ràng buộc (constraint) tối thiểu và **phải qua cổng phê duyệt của nhóm (Team Approval Gate)** trước khi thực hiện.
 - Hệ thống backend triển khai trên nền tảng **NestJS + TypeORM + PostgreSQL**, không sử dụng Prisma.
 
+> [!IMPORTANT]
+> **AMENDMENT 2026-07-21 — MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án):** Quyết định "Không thêm bất kỳ bảng mới nào" ở trên được nhóm **sửa đổi chính thức** khi dự án mở rộng scope thành **SAVP (Smart AI Vision Platform)**. Việc mở rộng **ĐÃ QUA cổng phê duyệt của nhóm (Team Approval Gate)**, do Hải thiết kế/thực thi, migration `20260721000001` → `20260721000007` đã merge vào `dev` và áp lên RDS chung. Cụ thể (ADD-ONLY, không đụng baseline 39 bảng):
+> - **4 bảng mới:** `zones`, `gate_access_logs`, `zone_presence_events`, `vehicle_control_list` (nhóm chức năng thứ 9 — SAVP Campus Extension).
+> - **2 cột mới:** `iot_devices.zone_id`, `iot_device_events.zone_id` (FK → zones, SET NULL, song song `room_id`).
+> - **1 unique index mới:** `device_user_mappings(device_id, user_id) WHERE deleted_at IS NULL`.
+>
+> Chi tiết cột/index: `database_v3_2_compact_39_tables.md` → section "PHẦN MỞ RỘNG SAVP" (bảng #40-43). Quy tắc No-New-Table (mục 4.2) **vẫn giữ hiệu lực** cho mọi bảng khác — bảng mới tiếp theo (ví dụ security alerts / alert rules / person watchlist cho UC-113/114/116) vẫn phải qua Team Approval Gate trước khi tạo.
+
 ---
 
 ## 3. Baseline Decisions
@@ -37,6 +46,7 @@ Cơ sở dữ liệu vật lý là PostgreSQL sử dụng cấu trúc **39 bản
 6. **Recording, Media & Transcription (5 bảng):** `recording_configs`, `recording_sessions`, `recording_segments`, `media_files`, `transcripts`.
 7. **Minutes & Knowledge Management (1 bảng):** `meeting_minutes`.
 8. **Notification, Reporting & Administration (4 bảng):** `notifications`, `background_jobs`, `system_configs`, `audit_logs`.
+9. **SAVP Campus Extension (4 bảng — Đây là phần mở rộng của dự án, thêm 2026-07-21):** `zones`, `gate_access_logs`, `zone_presence_events`, `vehicle_control_list`. Xem Amendment ở mục 2.
 
 ### 3.2 ORM Baseline
 Dự án sử dụng **TypeORM** làm ORM chính. Toàn bộ các định nghĩa model, mối quan hệ và cơ chế migration sẽ tuân thủ các decorator và quy tắc của TypeORM. Quyết định này đã được thông qua chính thức trong các quyết định kiến trúc từ `ADR-001` đến `ADR-007` trong `docs/ARCHITECTURE_DECISIONS.md`.
@@ -588,7 +598,7 @@ Việc sử dụng thiết kế rút gọn Database v3.2 Compact gồm 39 bảng
 
 - **T1 - Sử dụng UUID:** Toàn bộ khóa chính (PK) và khóa ngoại (FK) sử dụng kiểu dữ liệu UUID thay thế cho BIGINT. Quyết định này giúp nâng cao tính bảo mật và khả năng phân tán dữ liệu.
 - **T2 - Sử dụng TypeORM:** Dự án dùng TypeORM làm framework ánh xạ đối tượng cơ sở dữ liệu chính式, thay thế cho Prisma ORM đề xuất trong đặc tả gốc.
-- **T3 - Giới hạn 39 bảng vật lý:** Baseline cơ sở dữ liệu được chốt chặn cứng ở con số 39 bảng, không phát sinh thêm bảng mới trong giai đoạn phát triển Capstone hiện tại.
+- **T3 - Giới hạn 39 bảng vật lý:** Baseline cơ sở dữ liệu được chốt chặn cứng ở con số 39 bảng, không phát sinh thêm bảng mới trong giai đoạn phát triển Capstone hiện tại. *(Cập nhật 2026-07-21: nhóm phê duyệt thêm 4 bảng thuộc phần mở rộng SAVP — xem Amendment tại mục 2. Baseline 39 bảng gốc không đổi.)*
 - **T4 - Cơ chế Xóa mềm (Soft Delete):** Áp dụng nhất quán cột `deleted_at` có kiểu dữ liệu `timestamptz` trên tất cả các bảng nghiệp vụ quan trọng và sử dụng tính năng `@DeleteDateColumn()` của TypeORM để tự động lọc dữ liệu đã xóa.
 - **T5 - JWT Stateless Blacklist qua Redis:** Không tạo bảng quản lý session vật lý `refresh_tokens`. Thay vào đó sử dụng Redis để lưu trữ danh sách đen các token đã bị thu hồi hoặc đăng xuất.
 - **T6 - Cơ chế truy cập cơ sở dữ liệu hỗn hợp (Hybrid DB Access):** Module xác thực (`auth`) được phép sử dụng raw SQL query để tối ưu hiệu năng đăng nhập; các module nghiệp vụ khác bắt buộc tuân thủ giao thức TypeORM Entity/Repository chuẩn hóa.
@@ -615,6 +625,8 @@ Việc sử dụng thiết kế rút gọn Database v3.2 Compact gồm 39 bảng
 Tài liệu đối chiếu này khẳng định: **Cấu trúc Database v3.2 Compact gồm 39 bảng hoàn toàn đủ năng lực lưu trữ và đáp ứng toàn bộ các nghiệp vụ, quy tắc an toàn dữ liệu và danh sách Use Case quy định trong Capstone**. Sự cắt giảm số lượng bảng từ đặc tả gốc không làm gãy hay suy giảm tính đúng đắn của hệ thống, mà giúp tối giản hóa mã nguồn NestJS, tăng tốc độ phát triển và giảm thiểu rủi ro xung đột cơ sở dữ liệu khi làm việc nhóm.
 
 Mọi coding agent, trợ lý AI và lập trình viên tham gia dự án bắt buộc phải tuân thủ nghiêm ngặt cấu trúc 39 bảng baseline này, không tự ý đề xuất tạo thêm bảng vật lý mới và chỉ đề xuất các điều chỉnh tối thiểu đã liệt kê tại mục 10 sau khi được sự phê duyệt chính thức từ nhóm.
+
+*(Cập nhật 2026-07-21: kết luận trên áp dụng cho baseline 39 bảng. Phần mở rộng SAVP — 4 bảng `zones`, `gate_access_logs`, `zone_presence_events`, `vehicle_control_list` — là ngoại lệ ĐÃ ĐƯỢC PHÊ DUYỆT, xem Amendment tại mục 2. Đây là phần mở rộng của dự án.)*
 
 ---
 

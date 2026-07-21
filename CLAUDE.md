@@ -3,6 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-07-21 | Bổ sung MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án): ghi chú TL;DR, thêm module `zones`/`anpr` vào bảng module 4.1, cập nhật database baseline 5.1/5.2, thêm mục 5.5 mô tả 4 bảng mới + 2 cột zone_id + index mới + quy tắc làm việc trên phần mở rộng | TL;DR, mục 1 (thứ tự ưu tiên), 4.1, 5.1, 5.2, 5.5 (mới) |
 | 2026-06-06 | Sửa lỗi review: thêm device_user_mappings, cập nhật tech stack MQTT, update notification convention, xóa endpoint bảng đã remove | Các mục 3.1, 5.2, 18, 22 |
 | 2026-06-06 | Cập nhật toàn diện đồng bộ DB v3.2 Compact: loại bỏ 10 bảng đã removed khỏi tài liệu hướng dẫn, thêm mapping compact, cập nhật chuẩn Auth/MQTT/TypeORM | Toàn bộ file |
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
@@ -30,6 +31,8 @@ Hệ thống bao phủ:
 - Ghi âm/ghi hình, quản lý media, recording session, recording segment.
 - Quản lý transcript, minutes, action items, documents.
 - Notification, reporting, analytics, audit log, system configuration.
+
+> 🔺 **MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án — từ 2026-07-21):** Dự án được mở rộng thành **SAVP (Smart AI Vision Platform)** — bổ sung giám sát toàn khuôn viên: **khu vực (zone)** ngoài phòng họp (cổng/hành lang/sảnh/bãi xe), **điểm danh cổng bằng biển số (ANPR)**, **hiện diện khu vực công cộng (IVSS đếm người)**, **kiểm soát phương tiện (blocklist/watchlist)** và **cảnh báo an ninh khuôn viên** (UC-90 → UC-120). Việc mở rộng này **đã được team phê duyệt** — không vi phạm nguyên tắc "không tự ý mở rộng scope" bên dưới. Database bổ sung 4 bảng + 2 cột theo nguyên tắc ADD-ONLY, chi tiết ở **mục 5.5** và `database_v3_2_compact_39_tables.md` (section "PHẦN MỞ RỘNG SAVP").
 
 Dự án này **không phải chỉ là app lịch họp**.  
 Dự án này **không phải chỉ là app AI note-taking**.  
@@ -97,7 +100,7 @@ Khi có mâu thuẫn giữa các nguồn tài liệu, ưu tiên theo thứ tự:
 1. **Yêu cầu trực tiếp mới nhất của người dùng/team.**
 2. **Tài liệu đối chiếu `docs/SPEC_ALIGNMENT_WITH_DB_V3_2_COMPACT.md`** (nếu có).
 3. **Tài liệu spec đã align `docs/spec_typeorm_aligned.md`** (nếu có).
-4. **Database v3.2 Compact hiện tại** (39 bảng, loại bỏ user_sessions).
+4. **Database v3.2 Compact hiện tại** (39 bảng baseline, loại bỏ user_sessions) **+ phần mở rộng SAVP** (4 bảng `zones`, `gate_access_logs`, `zone_presence_events`, `vehicle_control_list` — xem mục 5.5).
 5. **Feature Table mới nhất** của dự án.
 6. **Use Case Specification mới nhất**.
 7. **API Contract mới nhất**.
@@ -222,6 +225,8 @@ Backend đi theo hướng **modular monolith**:
 | `reports`        | Report output via background_jobs + media_files                     | `/src/modules/reports`        |
 | `analytics`      | Dashboard, KPI, room utilization analytics                          | `/src/modules/analytics`      |
 | `administration` | System config, audit logs, admin operations                         | `/src/modules/administration` |
+| `zones`          | *(Mở rộng SAVP)* Khu vực khuôn viên: entity zones/gate_access_logs/zone_presence_events (hiện schema-only, nghiệp vụ bổ sung theo UC-90→94) | `/src/modules/zones`          |
+| `anpr`           | *(Mở rộng SAVP)* Nhận diện biển số: vehicle registration, webhook biển số, vehicle_control_list | `/src/modules/anpr`           |
 | `common`         | Shared decorators, guards, pipes, filters, utils                    | `/src/common`                 |
 | `database`       | Database module, migration config, seed scripts                     | `/src/database`               |
 
@@ -269,7 +274,7 @@ Các module này có ranh giới gần nhau nhưng không được trộn lẫn:
 
 Database hiện tại là **Database v3.2 Compact**.
 
-Thiết kế hiện tại có **39 bảng** (đã lược bỏ session DB, tinh gọn audit và một số bảng trung gian so với các bản trước).
+Thiết kế hiện tại có **39 bảng** (đã lược bỏ session DB, tinh gọn audit và một số bảng trung gian so với các bản trước) **+ 4 bảng thuộc phần mở rộng SAVP** (từ 2026-07-21, xem mục 5.5 — Đây là phần mở rộng của dự án).
 
 Database dùng:
 
@@ -338,6 +343,12 @@ Database dùng:
 - `system_configs`
 - `audit_logs`
 
+#### SAVP Campus Extension *(Đây là phần mở rộng của dự án — thêm 2026-07-21, xem mục 5.5)*
+- `zones`
+- `gate_access_logs`
+- `zone_presence_events`
+- `vehicle_control_list`
+
 ### 5.3. Mapping xử lý DB Compact cho 10 bảng đã bị loại bỏ
 
 - **`password_reset_requests`**: Dùng Redis/cache TTL kết hợp `users.must_change_password`, `users.password_updated_at` và `audit_logs`.
@@ -372,6 +383,38 @@ Khi cần thay đổi schema:
 4. Cập nhật DTO/API response nếu bị ảnh hưởng.
 5. Cập nhật seed/test nếu cần.
 6. Ghi chú breaking change nếu có.
+
+### 5.5. Phần mở rộng SAVP — Zone / Gate / Vehicle *(Đây là phần mở rộng của dự án)*
+
+**Bối cảnh:** Từ 2026-07-21, dự án mở rộng scope thành **SAVP (Smart AI Vision Platform)** theo kế hoạch nhóm SEP490_G61 (~20 UC bổ sung, UC-90 → UC-120). Schema do Hải thiết kế/thực thi, migration `20260721000001` → `20260721000007` **đã merge vào `dev` và đã áp lên RDS chung** — agent KHÔNG chạy lại các migration này.
+
+**Đã thêm (ADD-ONLY — không sửa/xóa baseline):**
+
+| Đối tượng | Loại | Mục đích |
+|---|---|---|
+| `zones` | Bảng mới | Khu vực vật lý: room / gate / corridor / lobby / parking. Bảng nền mọi bảng SAVP khác tham chiếu. |
+| `gate_access_logs` | Bảng mới | Nhật ký ra-vào cổng (người + xe), ghép cặp in/out qua `paired_log_id` + `duration_seconds`. KHÔNG soft-delete. |
+| `zone_presence_events` | Bảng mới | Hiện diện theo khu vực từ IVSS: appear / disappear / count (`occupancy_count`). KHÔNG soft-delete. |
+| `vehicle_control_list` | Bảng mới | Biển số blocklist/watchlist. Khác `vehicle_registrations` (xe hợp lệ). |
+| `iot_devices.zone_id` | Cột mới | FK → zones, SET NULL. Song song `room_id`, không thay thế. |
+| `iot_device_events.zone_id` | Cột mới | FK → zones, SET NULL. Event thiết bị (gồm ANPR) gắn được khu vực. |
+| `device_user_mappings` | Index mới | `UNIQUE(device_id, user_id) WHERE deleted_at IS NULL` — chặn enroll trùng. |
+
+Chi tiết cột/index đầy đủ: `database_v3_2_compact_39_tables.md` → section "PHẦN MỞ RỘNG SAVP" (bảng #40-43).
+
+**Entity đã tồn tại — KHÔNG tạo trùng:**
+- `ZoneEntity`, `GateAccessLogEntity`, `ZonePresenceEventEntity` → `src/modules/zones/entities/` (module `zones` hiện schema-only).
+- `VehicleControlListEntity` → `src/modules/anpr/entities/`.
+
+**Quy tắc bắt buộc khi code trên phần mở rộng SAVP:**
+
+1. Mọi query JOIN zone PHẢI kèm `zones.deleted_at IS NULL` — FK `zone_id` KHÔNG tự NULL khi zone bị xóa mềm.
+2. KHÔNG nhầm `zone_presence_events` (hiện diện KHU VỰC, không cần meeting) với `presence_snapshots` (gắn ngữ cảnh CUỘC HỌP). Hai bảng khác mục đích.
+3. `gate_access_logs` và `zone_presence_events` là append-only log — không thêm soft-delete, không update bừa.
+4. Endpoint mới phải seed permission bằng migration trong `src/database/migrations/` cùng commit với controller (folder `seeds/` không có runner), nếu không sẽ 403.
+5. Biển số phải chuẩn hóa qua `normalize-plate.ts` (module `anpr`) trước khi lưu/tra cứu; lưu cả `plate_raw`.
+6. Phân công đã chốt: **Hải (camera)** ghi event vào các bảng từ thiết bị/IVSS; **Tài (ngoài camera)** làm toàn bộ logic đọc + cảnh báo (đối chiếu control-list, ghép cặp in/out, dashboard khuôn viên, báo cáo).
+7. Các bảng phục vụ trung tâm cảnh báo an ninh (alert rules, security alerts, person watchlist — UC-113/114/116) **CHƯA có trong schema** — khi làm phải thiết kế mới theo convention repo và qua review của team trước khi áp lên RDS chung.
 
 ---
 
