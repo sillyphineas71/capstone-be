@@ -259,9 +259,10 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
     ]);
     const r = await service.cleanupEnded();
     expect(r).toMatchObject({ scanned: 1, removed: 1 });
+    // deleteFace theo device_person_id (szUid IVSS trả), KHÔNG phải device_person_code.
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'SMRMPTS',
-      personUid: 'PUID1',
+      personUid: 'SZ1',
     });
     const upd = captured.find(
       (c) =>
@@ -310,8 +311,9 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
         return Promise.resolve([{ id: 'bridge1' }]);
       if (sql.includes('FROM device_user_mappings mp'))
         return Promise.resolve([
-          { id: 'mp1', user_id: 'u1', device_person_code: 'P1' },
-          { id: 'mp2', user_id: 'u2', device_person_code: 'P2' },
+          // device_person_id BẮT BUỘC có — deleteFace chỉ được gọi khi mapping có szUid.
+          { id: 'mp1', user_id: 'u1', device_person_id: 'SZ1' },
+          { id: 'mp2', user_id: 'u2', device_person_id: 'SZ2' },
         ]);
       return Promise.resolve(undefined);
     });
