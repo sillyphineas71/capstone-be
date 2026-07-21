@@ -147,6 +147,12 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('accounts.user.import')
   @UseInterceptors(FileInterceptor('file'))
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  )
   @ApiBearerAuth()
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
