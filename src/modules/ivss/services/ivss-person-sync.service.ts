@@ -172,6 +172,31 @@ export class IvssPersonSyncService {
     }
 
     const personUid = this.personUidOf(userId);
+
+    // Nợ #2: enroll idempotent — xoá person cũ trên IVSS trước khi enroll mới,
+    // tránh 1 user nhiều szUID khi mapping cũ ở trạng thái failed hoặc DB lệch IVSS.
+    // Chỉ chạy khi đã qua dedupe ở trên (mapping KHÔNG phải synced-sạch).
+    const stale: { device_person_id: string }[] =
+      await this.dataSource.manager.query(
+        `SELECT device_person_id FROM device_user_mappings
+         WHERE device_id = $1 AND user_id = $2
+           AND metadata_json->>'source' = 'ivss'
+           AND device_person_id IS NOT NULL AND deleted_at IS NULL`,
+        [deviceId, userId],
+      );
+    for (const s of stale) {
+      try {
+        await this.bridge.deleteFace({
+          groupId: this.groupId,
+          personUid: s.device_person_id,
+        });
+      } catch (e) {
+        this.logger.warn(
+          `IVSS cleanup stale person ${s.device_person_id} failed: ${this.msg(e)} — tiếp tục enroll.`,
+        );
+      }
+    }
+
     const r = await this.bridge.enrollFace({
       groupId: this.groupId,
       personUid,

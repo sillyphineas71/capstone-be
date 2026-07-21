@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
 import { createHash } from 'crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
@@ -56,7 +56,9 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
 
   // ── provision routing ──
   // bridge seeded, 1 meeting, 1 participant, no live mapping, no existing → INSERT.
-  const wireProvision = (over: { live?: any[]; existing?: any[] } = {}) => {
+  const wireProvision = (
+    over: { live?: any[]; existing?: any[]; stale?: any[] } = {},
+  ) => {
     dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
       captured.push({ sql, params });
       if (sql.includes('FROM iot_devices WHERE device_code'))
@@ -64,6 +66,9 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
       if (sql.includes('FROM meetings')) return Promise.resolve([{ id: 'm1' }]);
       if (sql.includes('FROM meeting_participants'))
         return Promise.resolve([{ user_id: 'u1' }]);
+      // Nợ #2: stale person check (SELECT device_person_id …) — default không có stale.
+      if (sql.includes('SELECT device_person_id FROM device_user_mappings'))
+        return Promise.resolve(over.stale ?? []);
       // dedupe live check (có sync_status='synced' + deleted_at)
       if (
         sql.includes("sync_status = 'synced'") &&
@@ -192,6 +197,36 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
     expect(r.enrolled).toBe(1);
     expect(bridgeMock.enrollFace).toHaveBeenCalledTimes(1);
     expect(bridgeMock.enrollFace.mock.calls[0][0].groupId).toBe('SMRMPTS');
+  });
+
+  // ── Nợ #2: enroll idempotent ──
+  it('Nợ #2: mapping cũ còn device_person_id → deleteFace person cũ TRƯỚC enrollFace', async () => {
+    wireProvision({ stale: [{ device_person_id: 'SZ_OLD' }] });
+    const r = await service.provisionUpcoming();
+    expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
+      groupId: 'SMRMPTS',
+      personUid: 'SZ_OLD',
+    });
+    // Thứ tự bắt buộc: xoá sạch person cũ rồi mới enroll → 1 user chỉ còn 1 szUID.
+    expect(bridgeMock.deleteFace.mock.invocationCallOrder[0]).toBeLessThan(
+      bridgeMock.enrollFace.mock.invocationCallOrder[0],
+    );
+    expect(r.enrolled).toBe(1);
+  });
+
+  it('Nợ #2: KHÔNG có person cũ → KHÔNG gọi deleteFace, enroll như thường', async () => {
+    wireProvision({ stale: [] });
+    const r = await service.provisionUpcoming();
+    expect(bridgeMock.deleteFace).not.toHaveBeenCalled();
+    expect(r.enrolled).toBe(1);
+  });
+
+  it('Nợ #2: deleteFace person cũ throw → vẫn enroll (best-effort, KHÔNG chặn họp)', async () => {
+    wireProvision({ stale: [{ device_person_id: 'SZ_OLD' }] });
+    bridgeMock.deleteFace.mockRejectedValue(new Error('bridge down'));
+    const r = await service.provisionUpcoming();
+    expect(bridgeMock.enrollFace).toHaveBeenCalledTimes(1);
+    expect(r.enrolled).toBe(1);
   });
 
   it('enroll: mapping đã tồn tại (failed cũ) → UPDATE (revive) thay vì INSERT', async () => {
