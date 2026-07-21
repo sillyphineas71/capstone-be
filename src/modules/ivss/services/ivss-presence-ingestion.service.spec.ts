@@ -29,6 +29,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       user?: any[];
       channelMap?: Record<string, unknown> | null;
       meeting?: any[];
+      participant?: any[];
       insertThrows?: boolean;
       fullName?: any[];
       fullNameThrows?: boolean;
@@ -41,6 +42,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       captured.push({ sql, params });
       if (sql.includes('FROM iot_devices WHERE device_code'))
         return Promise.resolve(over.bridge ?? [{ id: 'bridge1' }]);
+      // Nợ #3: participant check — default LÀ participant ([{id}]); over.participant=[] → ngoài họp.
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(over.participant ?? [{ id: 'p1' }]);
       if (sql.includes('FROM device_user_mappings'))
         return Promise.resolve(over.user ?? [{ user_id: 'u1' }]);
       if (sql.includes("config_key = 'ivss.channel_direction_map'")) {
@@ -219,12 +223,47 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     expect(payloadOf().matchState).toBe('unmatched_location');
   });
 
-  it('room OK nhưng KHÔNG có meeting active → meetingId null, vẫn matched', async () => {
+  // ── Nợ #3: matched YÊU CẦU là participant của meeting đang diễn ra ──
+  // Test cũ "room OK + KHÔNG meeting active → vẫn matched" đã VIẾT LẠI: hành vi đó
+  // cho phép điểm danh khi không có họp nào — chính là lỗ hổng Nợ #3 cần bịt.
+  it('Nợ #3: room OK nhưng KHÔNG có meeting active → meetingId null → unmatched_identity', async () => {
     wire({ meeting: [] });
     await service.onFaceEvent(evt());
     const p = payloadOf();
-    expect(p.matchState).toBe('matched');
+    expect(p.matchState).toBe('unmatched_identity');
     expect(p.meetingId).toBeNull();
+    expect(insert()!.params[5]).toBe('unmatched');
+    // Không có meetingId → KHÔNG tốn query participant.
+    expect(
+      captured.some((c) => c.sql.includes('FROM meeting_participants')),
+    ).toBe(false);
+  });
+
+  it('Nợ #3: user nhận diện được + có meeting active nhưng KHÔNG phải participant → unmatched_identity + processed_status unmatched', async () => {
+    wire({ participant: [] }); // meeting m=MEETING_UUID active, user u1 KHÔNG trong danh sách
+    await service.onFaceEvent(evt());
+    const p = payloadOf();
+    expect(p.matchState).toBe('unmatched_identity');
+    expect(insert()!.params[5]).toBe('unmatched'); // KHÔNG được điểm danh
+    // Vẫn persist đủ ngữ cảnh để truy vết (OQ-5): biết là ai, ở đâu, họp nào.
+    expect(p.userId).toBe('u1');
+    expect(p.roomId).toBe(ROOM_UUID);
+    expect(p.meetingId).toBe(MEETING_UUID);
+    // Query participant bind đúng tham số (SEC-03).
+    const pq = captured.find((c) =>
+      c.sql.includes('FROM meeting_participants'),
+    );
+    expect(pq).toBeDefined();
+    expect(pq!.params).toEqual([MEETING_UUID, 'u1']);
+  });
+
+  it('Nợ #3: user LÀ participant của meeting active → matched + processed', async () => {
+    wire({ participant: [{ id: 'p1' }] });
+    await service.onFaceEvent(evt());
+    const p = payloadOf();
+    expect(p.matchState).toBe('matched');
+    expect(p.meetingId).toBe(MEETING_UUID);
+    expect(insert()!.params[5]).toBe('processed');
   });
 
   // ── IRP-001 (#40): broadcast realtime presence ──
