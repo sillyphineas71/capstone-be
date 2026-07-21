@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
 import { VEHICLE_EVENT_HANDLER } from '../../common/ports/vehicle-event-hook.js';
 import { VehicleRegistrationEntity } from './entities/vehicle-registration.entity.js';
+import { VehicleControlListEntity } from './entities/vehicle-control-list.entity.js';
 import { VehicleRegistrationController } from './controllers/vehicle-registration.controller.js';
 import { VehicleWebhookController } from './controllers/vehicle-webhook.controller.js';
 import { VehicleRegistrationService } from './services/vehicle-registration.service.js';
@@ -25,7 +26,15 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
  * Import AuthModule để dùng PermissionsGuard thật (gate route admin) — AuthModule export sẵn.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([VehicleRegistrationEntity]), AuthModule],
+  imports: [
+    // VehicleControlListEntity: schema-only (SAVP Zone scope) — chỉ đăng ký entity,
+    // chưa có service/controller; nghiệp vụ allowlist/blocklist làm ở UC sau.
+    TypeOrmModule.forFeature([
+      VehicleRegistrationEntity,
+      VehicleControlListEntity,
+    ]),
+    AuthModule,
+  ],
   controllers: [VehicleRegistrationController, VehicleWebhookController],
   providers: [
     VehicleRegistrationService,
