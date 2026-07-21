@@ -181,15 +181,17 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
     expect(r).toEqual({ scanned: 0, enrolled: 0, skipped: 0, failed: 0 });
   });
 
-  it('ensureGroup createGroup ok:false → vẫn enroll (group có thể đã tồn tại)', async () => {
+  // Nợ #1: test cũ "ensureGroup createGroup ok:false → vẫn enroll" đã bỏ — nó mock
+  // createGroup lỗi rồi assert enroll vẫn chạy, nhưng code KHÔNG còn gọi createGroup
+  // nên test đó không kiểm chứng gì (xanh giả). Thay bằng test chốt hành vi mới.
+  it('Nợ #1: provision KHÔNG gọi bridge.createGroup (group tạo thủ công; createGroup không idempotent)', async () => {
     wireProvision();
-    bridgeMock.createGroup.mockResolvedValue({
-      ok: false,
-      error: { code: 'BRIDGE_HTTP_ERROR', status: 409, message: 'exists' },
-    });
     const r = await service.provisionUpcoming();
+    expect(bridgeMock.createGroup).not.toHaveBeenCalled();
+    // Không tạo group vẫn enroll bình thường vào groupId có sẵn.
     expect(r.enrolled).toBe(1);
     expect(bridgeMock.enrollFace).toHaveBeenCalledTimes(1);
+    expect(bridgeMock.enrollFace.mock.calls[0][0].groupId).toBe('SMRMPTS');
   });
 
   it('enroll: mapping đã tồn tại (failed cũ) → UPDATE (revive) thay vì INSERT', async () => {

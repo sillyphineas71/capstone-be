@@ -47,7 +47,7 @@ export class IvssPersonSyncService {
     private readonly faceProfileService: FaceProfileService,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
-  ) { }
+  ) {}
 
   private get groupId(): string {
     return this.configService.get<string>('IVSS_DEFAULT_GROUP', '');
@@ -83,16 +83,17 @@ export class IvssPersonSyncService {
     }
   }
 
-  /** OQ-2: createGroup idempotent — thử 1 lần/đời service (group có thể đã tồn tại). */
-  private async ensureGroup(): Promise<void> {
-    if (this.groupEnsured) return;
-    //const r = await this.bridge.createGroup({ name: this.groupId });
-    // if (!r.ok) {
-    //   this.logger.warn(
-    //     `ensureGroup createGroup not ok (${r.error.code}) — tiếp tục (group có thể đã tồn tại).`,
-    //   );
-    // }
+  /**
+   * Nợ #1: KHÔNG gọi bridge.createGroup. Group đích được tạo THỦ CÔNG sẵn trong IVSS.
+   * Bridge createGroup KHÔNG idempotent → gọi lại mỗi lần service khởi động sẽ đẻ
+   * group trùng tên. enrollAttendee enroll thẳng vào `groupId`, không phụ thuộc bước này.
+   */
+  private ensureGroup(): Promise<void> {
+    // KHÔNG `async`: thân hàm không còn await nào sau khi bỏ createGroup
+    // (eslint require-await). Vẫn trả Promise để nơi gọi giữ nguyên `await`.
+    if (this.groupEnsured) return Promise.resolve();
     this.groupEnsured = true;
+    return Promise.resolve();
   }
 
   // ── PROVISION ──────────────────────────────────────────────────────────
