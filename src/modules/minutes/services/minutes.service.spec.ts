@@ -529,7 +529,12 @@ describe('listAttachments', () => {
 });
 describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC-140)', () => {
   let service: MinutesService;
-  let minutesQb: { leftJoinAndSelect: jest.Mock; where: jest.Mock; andWhere: jest.Mock; getOne: jest.Mock };
+  let minutesQb: {
+    leftJoinAndSelect: jest.Mock;
+    where: jest.Mock;
+    andWhere: jest.Mock;
+    getOne: jest.Mock;
+  };
   let participantRepo: { count: jest.Mock };
   let shareRepo: { count: jest.Mock };
   let authzRepo: { getEffectiveRolesAndPermissions: jest.Mock };
@@ -537,7 +542,10 @@ describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC
   const authUser = { userId: 'user-1' };
   const minutesId = 'minutes-1';
 
-  const baseMinutes = (status: MeetingMinutesStatus, preparedBy = 'other-user') => ({
+  const baseMinutes = (
+    status: MeetingMinutesStatus,
+    preparedBy = 'other-user',
+  ) => ({
     id: minutesId,
     preparedBy,
     status,
@@ -559,7 +567,9 @@ describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC
     // Default 0 shares → không thay đổi kỳ vọng cũ (non-host/participant → denied).
     shareRepo = { count: jest.fn().mockResolvedValue(0) };
     authzRepo = {
-      getEffectiveRolesAndPermissions: jest.fn().mockResolvedValue({ roles: ['EMPLOYEE'] }),
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: ['EMPLOYEE'] }),
     };
     const dataSource = {
       transaction: jest.fn(),
@@ -580,43 +590,49 @@ describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC
   });
 
   it('published + participant → được phép xem', async () => {
-    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.PUBLISHED));
+    minutesQb.getOne.mockResolvedValue(
+      baseMinutes(MeetingMinutesStatus.PUBLISHED),
+    );
     participantRepo.count.mockResolvedValue(1);
-    await expect(
-      service.listAttachments(minutesId, authUser),
-    ).resolves.toEqual(expect.objectContaining({ total: 0 }));
+    await expect(service.listAttachments(minutesId, authUser)).resolves.toEqual(
+      expect.objectContaining({ total: 0 }),
+    );
   });
 
   it('published + không phải host/participant → bị từ chối', async () => {
-    minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.PUBLISHED));
+    minutesQb.getOne.mockResolvedValue(
+      baseMinutes(MeetingMinutesStatus.PUBLISHED),
+    );
     participantRepo.count.mockResolvedValue(0);
-    await expect(
-      service.listAttachments(minutesId, authUser),
-    ).rejects.toThrow(ForbiddenException);
+    await expect(service.listAttachments(minutesId, authUser)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('draft + không phải preparedBy → bị từ chối dù là participant', async () => {
     minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.DRAFT));
     participantRepo.count.mockResolvedValue(1);
-    await expect(
-      service.listAttachments(minutesId, authUser),
-    ).rejects.toThrow(ForbiddenException);
+    await expect(service.listAttachments(minutesId, authUser)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('BUSINESS_ADMIN → bỏ qua kiểm tra participant', async () => {
     minutesQb.getOne.mockResolvedValue(baseMinutes(MeetingMinutesStatus.DRAFT));
-    authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({ roles: ['BUSINESS_ADMIN'] });
-    await expect(
-      service.listAttachments(minutesId, authUser),
-    ).resolves.toEqual(expect.objectContaining({ total: 0 }));
+    authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+      roles: ['BUSINESS_ADMIN'],
+    });
+    await expect(service.listAttachments(minutesId, authUser)).resolves.toEqual(
+      expect.objectContaining({ total: 0 }),
+    );
     expect(participantRepo.count).not.toHaveBeenCalled();
   });
 
   it('bien ban khong ton tai → NotFoundException', async () => {
     minutesQb.getOne.mockResolvedValue(null);
-    await expect(
-      service.listAttachments(minutesId, authUser),
-    ).rejects.toThrow(NotFoundException);
+    await expect(service.listAttachments(minutesId, authUser)).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });
 describe('removeAttachment', () => {
@@ -934,7 +950,9 @@ describe('linkResources service logic (UC-141)', () => {
         where: jest.fn().mockReturnThis(),
         getOne: jest.fn().mockResolvedValue(baseMinutes()),
       }),
-      save: jest.fn((m: any) => Promise.resolve({ ...m, updatedAt: new Date() })),
+      save: jest.fn((m: any) =>
+        Promise.resolve({ ...m, updatedAt: new Date() }),
+      ),
     };
     meetingRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -990,7 +1008,9 @@ describe('linkResources service logic (UC-141)', () => {
     );
     expect(result.linkedRecordingFileId).toBe('file-1');
     expect(auditLogsService.logEntityChange).toHaveBeenCalledWith(
-      expect.objectContaining({ actionType: 'meeting_minutes_resources_linked' }),
+      expect.objectContaining({
+        actionType: 'meeting_minutes_resources_linked',
+      }),
     );
   });
 
@@ -1053,7 +1073,11 @@ describe('linkResources service logic (UC-141)', () => {
   it('throws NotFoundException when minutes not found', async () => {
     minutesRepo.createQueryBuilder().getOne.mockResolvedValue(null);
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -1063,7 +1087,11 @@ describe('linkResources service logic (UC-141)', () => {
       status: MeetingMinutesStatus.PUBLISHED,
     });
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(ConflictException);
   });
 
@@ -1074,14 +1102,22 @@ describe('linkResources service logic (UC-141)', () => {
       status: MeetingStatus.IN_PROGRESS,
     });
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(ConflictException);
   });
 
   it('throws NotFoundException when recording file does not exist', async () => {
     mediaFileRepo.findOne.mockResolvedValue(null);
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'missing' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'missing' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -1093,7 +1129,11 @@ describe('linkResources service logic (UC-141)', () => {
       deletedAt: null,
     });
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -1105,14 +1145,22 @@ describe('linkResources service logic (UC-141)', () => {
       deletedAt: null,
     });
     await expect(
-      service.linkResources('min-1', { recordingFileId: 'file-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { recordingFileId: 'file-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(ConflictException);
   });
 
   it('throws NotFoundException when transcript does not exist', async () => {
     transcriptRepo.findOne.mockResolvedValue(null);
     await expect(
-      service.linkResources('min-1', { transcriptId: 'missing' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { transcriptId: 'missing' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -1122,7 +1170,11 @@ describe('linkResources service logic (UC-141)', () => {
       meetingId: 'other-meeting',
     });
     await expect(
-      service.linkResources('min-1', { transcriptId: 'transcript-1' }, { userId: 'host-1' }),
+      service.linkResources(
+        'min-1',
+        { transcriptId: 'transcript-1' },
+        { userId: 'host-1' },
+      ),
     ).rejects.toThrow(ConflictException);
   });
 });

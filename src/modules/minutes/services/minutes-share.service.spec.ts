@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument */
 import {
   ConflictException,
   ForbiddenException,
@@ -12,15 +12,16 @@ import { AuditLogsService } from '../../administration/services/audit-logs.servi
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { ConfigService } from '@nestjs/config';
-import {
-  MeetingEntity,
-} from '../../meetings/entities/meeting.entity.js';
+import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
 import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
 } from '../entities/meeting-minutes.entity.js';
 import { MeetingMinutesShareEntity } from '../entities/meeting-minutes-share.entity.js';
-import { UserEntity, AccountStatus } from '../../accounts/entities/user.entity.js';
+import {
+  UserEntity,
+  AccountStatus,
+} from '../../accounts/entities/user.entity.js';
 
 describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
   const minutesId = 'minutes-1';
@@ -42,17 +43,24 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
   function makeShareRepo() {
     return {
       findOne: jest.fn(),
-      count: jest.fn().mockImplementation(({ where }: any) =>
-        Promise.resolve(
-          shareRows.filter(
-            (s) => s.minutesId === where.minutesId && s.userId === where.userId,
-          ).length,
+      count: jest
+        .fn()
+        .mockImplementation(({ where }: any) =>
+          Promise.resolve(
+            shareRows.filter(
+              (s) =>
+                s.minutesId === where.minutesId && s.userId === where.userId,
+            ).length,
+          ),
         ),
-      ),
       create: jest.fn().mockImplementation((data: any) => ({ ...data })),
       save: jest.fn().mockImplementation((data: any) => {
         if (saveThrows) return Promise.reject(saveThrows);
-        const row = { id: 'share-new', grantedAt: new Date('2026-07-17T00:00:00Z'), ...data };
+        const row = {
+          id: 'share-new',
+          grantedAt: new Date('2026-07-17T00:00:00Z'),
+          ...data,
+        };
         shareRows.push(row);
         return Promise.resolve(row);
       }),
@@ -114,13 +122,25 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
     const dataSource = {
       getRepository: jest.fn().mockImplementation((entity: any) => {
         if (entity === MeetingMinutesEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(minutesRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(minutesRow)),
+          };
         }
         if (entity === MeetingEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(meetingRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(meetingRow)),
+          };
         }
         if (entity === UserEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(targetUserRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(targetUserRow)),
+          };
         }
         if (entity === MeetingMinutesShareEntity) {
           return shareRepo;
@@ -158,7 +178,13 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
     isAdmin: boolean,
     isParticipant: boolean,
   ): Promise<boolean> =>
-    (service as any).canAccessMinutes(minutes, meeting, userId, isAdmin, isParticipant);
+    (service as any).canAccessMinutes(
+      minutes,
+      meeting,
+      userId,
+      isAdmin,
+      isParticipant,
+    );
 
   it('[T013] shared user CAN view a published minutes even if not participant/host', async () => {
     shareRows = [{ minutesId, userId: 'target-1' }];
@@ -248,35 +274,55 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
 
   it('[AC-007] non-owner non-admin → 403 NOT_MINUTES_OWNER', async () => {
     await expect(
-      service.shareMinutes(minutesId, { userId: 'target-1' }, { userId: 'stranger' }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'target-1' },
+        { userId: 'stranger' },
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('[AC-009] grant on draft minutes → 409 MINUTES_NOT_PUBLISHED', async () => {
     minutesRow!.status = MeetingMinutesStatus.DRAFT;
     await expect(
-      service.shareMinutes(minutesId, { userId: 'target-1' }, { userId: preparedBy }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'target-1' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('[AC-011] grant to inactive user → 422 USER_INACTIVE', async () => {
     targetUserRow!.accountStatus = AccountStatus.INACTIVE;
     await expect(
-      service.shareMinutes(minutesId, { userId: 'target-1' }, { userId: preparedBy }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'target-1' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
   });
 
   it('[AC-012] grant to nonexistent user → 404 USER_NOT_FOUND', async () => {
     targetUserRow = null;
     await expect(
-      service.shareMinutes(minutesId, { userId: 'ghost' }, { userId: preparedBy }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'ghost' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('[AC-013] duplicate grant (unique violation 23505) → 409 ALREADY_SHARED', async () => {
     saveThrows = { code: '23505' };
     await expect(
-      service.shareMinutes(minutesId, { userId: 'target-1' }, { userId: preparedBy }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'target-1' },
+        { userId: preparedBy },
+      ),
     ).rejects.toMatchObject({
       response: { error: { code: 'ALREADY_SHARED' } },
     });
@@ -285,7 +331,11 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
   it('[AC-017] grant on nonexistent minutes → 404 MINUTES_NOT_FOUND', async () => {
     minutesRow = null;
     await expect(
-      service.shareMinutes(minutesId, { userId: 'target-1' }, { userId: preparedBy }),
+      service.shareMinutes(
+        minutesId,
+        { userId: 'target-1' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
@@ -324,9 +374,17 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
 
   it('[AC-003] list returns shares with names', async () => {
     shareRows = [
-      { id: 'share-1', minutesId, userId: 'target-1', grantedBy: hostId, grantedAt: new Date() },
+      {
+        id: 'share-1',
+        minutesId,
+        userId: 'target-1',
+        grantedBy: hostId,
+        grantedAt: new Date(),
+      },
     ];
-    const res = await service.listMinutesShares(minutesId, { userId: preparedBy });
+    const res = await service.listMinutesShares(minutesId, {
+      userId: preparedBy,
+    });
     expect(res.shares).toHaveLength(1);
     expect(res.shares[0].userFullName).toBe('Target User');
     expect(res.shares[0].grantedByName).toBe('Host User');
@@ -334,7 +392,9 @@ describe('MinutesService — share/unshare/list + canAccessMinutes', () => {
 
   it('list is NOT blocked when minutes archived', async () => {
     minutesRow!.status = MeetingMinutesStatus.ARCHIVED;
-    const res = await service.listMinutesShares(minutesId, { userId: preparedBy });
+    const res = await service.listMinutesShares(minutesId, {
+      userId: preparedBy,
+    });
     expect(res.minutesId).toBe(minutesId);
   });
 

@@ -1,4 +1,11 @@
-import { IsOptional, IsUUID, IsString, MaxLength, IsInt, Min } from 'class-validator';
+import {
+  IsOptional,
+  IsUUID,
+  IsString,
+  MaxLength,
+  IsInt,
+  Min,
+} from 'class-validator';
 
 export class UpdateAgendaItemDto {
   @IsOptional()
@@ -27,12 +34,10 @@ export class UpdateAgendaItemDto {
 
   @IsOptional()
   @IsInt({
-    message:
-      'Thời lượng dự kiến phải là số nguyên',
+    message: 'Thời lượng dự kiến phải là số nguyên',
   })
   @Min(1, {
-    message:
-      'Thời lượng dự kiến phải lớn hơn 0',
+    message: 'Thời lượng dự kiến phải lớn hơn 0',
   })
   plannedDurationMinutes?: number;
 

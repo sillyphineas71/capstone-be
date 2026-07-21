@@ -119,17 +119,19 @@ describe('MeetingsService.updateAgendaItem', () => {
     meetingStatus = MeetingStatus.SCHEDULED;
     participantIds = ['participant-1'];
 
-    (dataSource.transaction as jest.Mock).mockImplementation(
-      async (cb: any) => cb(em),
+    (dataSource.transaction as jest.Mock).mockImplementation(async (cb: any) =>
+      cb(em),
     );
 
     (dataSource.getRepository as jest.Mock).mockImplementation(
       (entity: any) => {
         if (entity === MeetingParticipantEntity) {
           return {
-            find: jest.fn().mockResolvedValue(
-              participantIds.map((userId) => ({ meetingId, userId })),
-            ),
+            find: jest
+              .fn()
+              .mockResolvedValue(
+                participantIds.map((userId) => ({ meetingId, userId })),
+              ),
           };
         }
         return {

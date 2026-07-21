@@ -80,9 +80,9 @@ describe('UpdateAgendaItemDto Validation', () => {
         plannedDurationMinutes: 0,
       });
       const errors = await validate(dto);
-      expect(
-        errors.some((e) => e.property === 'plannedDurationMinutes'),
-      ).toBe(true);
+      expect(errors.some((e) => e.property === 'plannedDurationMinutes')).toBe(
+        true,
+      );
     });
 
     it('[T007-11] should reject a non-integer value', async () => {
@@ -90,9 +90,9 @@ describe('UpdateAgendaItemDto Validation', () => {
         plannedDurationMinutes: 12.5,
       });
       const errors = await validate(dto);
-      expect(
-        errors.some((e) => e.property === 'plannedDurationMinutes'),
-      ).toBe(true);
+      expect(errors.some((e) => e.property === 'plannedDurationMinutes')).toBe(
+        true,
+      );
     });
 
     it('[T007-12] should accept a positive integer', async () => {
@@ -100,9 +100,9 @@ describe('UpdateAgendaItemDto Validation', () => {
         plannedDurationMinutes: 30,
       });
       const errors = await validate(dto);
-      expect(
-        errors.some((e) => e.property === 'plannedDurationMinutes'),
-      ).toBe(false);
+      expect(errors.some((e) => e.property === 'plannedDurationMinutes')).toBe(
+        false,
+      );
     });
   });
 

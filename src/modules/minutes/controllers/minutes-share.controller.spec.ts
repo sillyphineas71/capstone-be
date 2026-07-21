@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { MeetingMinutesListController } from './minutes-list.controller.js';
 import { MinutesShareResponseDto } from '../dto/minutes-share-response.dto.js';
 
@@ -21,17 +20,14 @@ describe('MeetingMinutesListController — share routes', () => {
           grantedAt: new Date('2026-07-17T00:00:00Z'),
         }),
       ),
-      listMinutesShares: jest
-        .fn()
-        .mockResolvedValue({ minutesId, shares: [] }),
+      listMinutesShares: jest.fn().mockResolvedValue({ minutesId, shares: [] }),
       unshareMinutes: jest
         .fn()
         .mockResolvedValue({ minutesId, userId: 'target-1', revoked: true }),
     };
-    controller = new MeetingMinutesListController(
-      minutesService,
-      { createExportJob: jest.fn() } as any,
-    );
+    controller = new MeetingMinutesListController(minutesService, {
+      createExportJob: jest.fn(),
+    } as any);
   });
 
   it('POST :id/shares calls shareMinutes and wraps 201 response', async () => {
@@ -62,7 +58,11 @@ describe('MeetingMinutesListController — share routes', () => {
   });
 
   it('DELETE :id/shares/:userId calls unshareMinutes and wraps response', async () => {
-    const res = await controller.unshareMinutes(minutesId, 'target-1', currentUser);
+    const res = await controller.unshareMinutes(
+      minutesId,
+      'target-1',
+      currentUser,
+    );
     expect(minutesService.unshareMinutes).toHaveBeenCalledWith(
       minutesId,
       'target-1',
@@ -76,7 +76,9 @@ describe('MeetingMinutesListController — share routes', () => {
   });
 
   it('propagates errors from service (e.g. 403)', async () => {
-    minutesService.shareMinutes.mockRejectedValue(new Error('NOT_MINUTES_OWNER'));
+    minutesService.shareMinutes.mockRejectedValue(
+      new Error('NOT_MINUTES_OWNER'),
+    );
     await expect(
       controller.shareMinutes(minutesId, { userId: 'x' }, currentUser),
     ).rejects.toThrow('NOT_MINUTES_OWNER');

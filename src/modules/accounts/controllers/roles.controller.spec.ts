@@ -49,7 +49,11 @@ describe('RolesController', () => {
 
   describe('GET /roles/:id', () => {
     it('[AC-003] should return role detail', async () => {
-      service.findOne.mockResolvedValue({ id: 'uuid', roleCode: 'TEST', assignedUserCount: 0 } as any);
+      service.findOne.mockResolvedValue({
+        id: 'uuid',
+        roleCode: 'TEST',
+        assignedUserCount: 0,
+      } as any);
 
       const result = await controller.findOne('uuid');
 
@@ -60,7 +64,11 @@ describe('RolesController', () => {
 
   describe('POST /roles', () => {
     it('[AC-001] should create role returning 201', async () => {
-      service.create.mockResolvedValue({ id: 'uuid', roleCode: 'TEST', roleName: 'Test' } as any);
+      service.create.mockResolvedValue({
+        id: 'uuid',
+        roleCode: 'TEST',
+        roleName: 'Test',
+      } as any);
       const user = { userId: 'user-uuid' };
 
       const result = await controller.create(
@@ -74,10 +82,17 @@ describe('RolesController', () => {
 
   describe('PATCH /roles/:id', () => {
     it('[AC-004] should update role', async () => {
-      service.update.mockResolvedValue({ id: 'uuid', roleName: 'Updated' } as any);
+      service.update.mockResolvedValue({
+        id: 'uuid',
+        roleName: 'Updated',
+      } as any);
       const user = { userId: 'user-uuid' };
 
-      const result = await controller.update('uuid', { roleName: 'Updated' }, user);
+      const result = await controller.update(
+        'uuid',
+        { roleName: 'Updated' },
+        user,
+      );
 
       expect(result.success).toBe(true);
     });

@@ -22,6 +22,8 @@ import { RoomDeleteNotificationProcessor } from './services/room-delete-notifica
 import { NoShowController } from './controllers/no-show.controller.js';
 import { NoShowConfigController } from './controllers/no-show-config.controller.js';
 import { EarlyVacancyConfigController } from './controllers/early-vacancy-config.controller.js';
+import { RoomBookingsController } from './controllers/room-bookings.controller.js';
+import { RoomBookingsService } from './services/room-bookings.service.js';
 import { NoShowService } from './services/no-show.service.js';
 import { NoShowDetectionService } from './services/no-show-detection.service.js';
 import { NoShowConfigService } from './services/no-show-config.service.js';
@@ -61,6 +63,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     NoShowController,
     NoShowConfigController,
     EarlyVacancyConfigController,
+    RoomBookingsController,
   ],
   providers: [
     RoomsService,
@@ -73,6 +76,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     NoShowLifecycleService,
     EarlyVacancyService,
     EarlyVacancyConfigService,
+    RoomBookingsService,
   ],
   exports: [
     TypeOrmModule,

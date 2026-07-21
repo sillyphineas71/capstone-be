@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Job } from 'bullmq';
 import { DataSource, Repository } from 'typeorm';
 
@@ -60,26 +59,42 @@ describe('MinutesExportWorkerProcessor', () => {
       issuedAt: new Date('2026-07-17T00:00:00Z'),
       deletedAt: null,
     };
-    transcriptRow = { id: 't-1', cleanedText: 'transcript text', rawText: null };
+    transcriptRow = {
+      id: 't-1',
+      cleanedText: 'transcript text',
+      rawText: null,
+    };
 
     markRunning = jest.fn().mockResolvedValue(undefined);
     markCompleted = jest.fn().mockResolvedValue(undefined);
     markFailed = jest.fn().mockResolvedValue(undefined);
     logAction = jest.fn().mockResolvedValue(undefined);
     managerUpdate = jest.fn().mockResolvedValue(undefined);
-    mediaSave = jest.fn().mockImplementation((e: any) => Promise.resolve({ ...e, id: 'media-1' }));
+    mediaSave = jest
+      .fn()
+      .mockImplementation((e: any) => Promise.resolve({ ...e, id: 'media-1' }));
     getDriver = jest.fn().mockReturnValue('local');
 
     const dataSource = {
       getRepository: jest.fn().mockImplementation((entity: any) => {
         if (entity === MeetingMinutesEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(minutesRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(minutesRow)),
+          };
         }
         if (entity === MeetingEntity) {
-          return { findOne: jest.fn().mockResolvedValue({ id: meetingId, title: 'M' }) };
+          return {
+            findOne: jest.fn().mockResolvedValue({ id: meetingId, title: 'M' }),
+          };
         }
         if (entity === TranscriptEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(transcriptRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(transcriptRow)),
+          };
         }
         return { findOne: jest.fn().mockResolvedValue(null) };
       }),

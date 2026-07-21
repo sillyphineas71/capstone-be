@@ -7,9 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Role cua UC-147). So huu permission la dieu kien can; service con kiem tra
  * ownership (preparedBy/hostId) / Admin bypass.
  */
-export class SeedMeetingMinutesExportPermission20260717100002
-  implements MigrationInterface
-{
+export class SeedMeetingMinutesExportPermission20260717100002 implements MigrationInterface {
   name = 'SeedMeetingMinutesExportPermission20260717100002';
 
   private readonly permission = {

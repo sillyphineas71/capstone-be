@@ -4800,7 +4800,10 @@ export class MeetingsService {
 
       // agendaOrder validation + shift plan (only if order actually changes)
       let orderShiftMap: Map<string, number> | null = null;
-      if (dto.agendaOrder !== undefined && dto.agendaOrder !== item.agendaOrder) {
+      if (
+        dto.agendaOrder !== undefined &&
+        dto.agendaOrder !== item.agendaOrder
+      ) {
         orderShiftMap = this.computeAgendaOrderShift(
           allItems,
           item.id,
@@ -4897,7 +4900,11 @@ export class MeetingsService {
 
         for (const [otherId, newOrder] of orderShiftMap) {
           if (otherId === item.id) continue;
-          await em.update(MeetingAgendaEntity, { id: otherId }, { agendaOrder: newOrder });
+          await em.update(
+            MeetingAgendaEntity,
+            { id: otherId },
+            { agendaOrder: newOrder },
+          );
           reorderedAgendaIds.push(otherId);
         }
       }

@@ -167,11 +167,16 @@ describe('MediaFilesService (REC-006)', () => {
 
   it('detail: cloud_provider storage → downloadUrl = fileUrl công khai', async () => {
     repoMock.findOne.mockResolvedValue(
-      baseRow({ storageProvider: 'cloud_provider', fileUrl: 'https://cdn/x.pdf' }),
+      baseRow({
+        storageProvider: 'cloud_provider',
+        fileUrl: 'https://cdn/x.pdf',
+      }),
     );
     const r = await service.detail('f1');
     expect(r.downloadUrl).toBe('https://cdn/x.pdf');
-    expect(storageServiceMock.generateSignedDownloadToken).not.toHaveBeenCalled();
+    expect(
+      storageServiceMock.generateSignedDownloadToken,
+    ).not.toHaveBeenCalled();
   });
 
   it('detail: signed token generation lỗi → downloadUrl null, không throw', async () => {

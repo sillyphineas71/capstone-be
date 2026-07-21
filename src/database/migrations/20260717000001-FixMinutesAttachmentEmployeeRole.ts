@@ -17,9 +17,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Phát hiện khi build tính năng "Xem chi tiết tệp đính kèm" (UC-140) và kiểm
  * tra role EMPLOYEE không gọi được GET /meeting-minutes.
  */
-export class FixMinutesAttachmentEmployeeRole20260717000001
-  implements MigrationInterface
-{
+export class FixMinutesAttachmentEmployeeRole20260717000001 implements MigrationInterface {
   name = 'FixMinutesAttachmentEmployeeRole20260717000001';
 
   private readonly permissionCodes = [

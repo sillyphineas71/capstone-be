@@ -110,8 +110,8 @@ describe('MeetingsService.deleteAgendaItem', () => {
     allItems = [makeAgendaItem()];
     meetingStatus = MeetingStatus.SCHEDULED;
 
-    (dataSource.transaction as jest.Mock).mockImplementation(
-      async (cb: any) => cb(em),
+    (dataSource.transaction as jest.Mock).mockImplementation(async (cb: any) =>
+      cb(em),
     );
 
     (em.findOne as jest.Mock).mockImplementation(
@@ -154,15 +154,17 @@ describe('MeetingsService.deleteAgendaItem', () => {
       return Promise.resolve([]);
     });
 
-    (em.delete as jest.Mock).mockImplementation((entity: any, criteria: any) => {
-      if (entity === MeetingAgendaEntity) {
-        const idx = allItems.findIndex((i) => i.id === criteria.id);
-        if (idx !== -1) {
-          allItems.splice(idx, 1);
+    (em.delete as jest.Mock).mockImplementation(
+      (entity: any, criteria: any) => {
+        if (entity === MeetingAgendaEntity) {
+          const idx = allItems.findIndex((i) => i.id === criteria.id);
+          if (idx !== -1) {
+            allItems.splice(idx, 1);
+          }
         }
-      }
-      return Promise.resolve({ affected: 1 });
-    });
+        return Promise.resolve({ affected: 1 });
+      },
+    );
 
     (em.update as jest.Mock).mockImplementation(
       (entity: any, criteria: any, partial: any) => {

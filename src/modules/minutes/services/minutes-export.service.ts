@@ -121,14 +121,18 @@ export class MinutesExportService {
     });
 
     // 6. Enqueue BullMQ job (queue đã đăng ký sẵn trong QueueModule)
-    await this.queueService.addJob(MINUTES_EXPORT_QUEUE_NAME, MINUTES_EXPORT_JOB_NAME, {
-      backgroundJobId: backgroundJob.id,
-      minutesId,
-      format: dto.format,
-      includeTranscript,
-      includeActionItems,
-      requestedByUserId: authUser.userId,
-    });
+    await this.queueService.addJob(
+      MINUTES_EXPORT_QUEUE_NAME,
+      MINUTES_EXPORT_JOB_NAME,
+      {
+        backgroundJobId: backgroundJob.id,
+        minutesId,
+        format: dto.format,
+        includeTranscript,
+        includeActionItems,
+        requestedByUserId: authUser.userId,
+      },
+    );
 
     this.logger.log(
       `Minutes export job queued — jobId=${backgroundJob.id} minutesId=${minutesId} format=${dto.format}`,

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   ConflictException,
   ForbiddenException,
@@ -50,10 +49,18 @@ describe('MinutesExportService.createExportJob', () => {
     const dataSource = {
       getRepository: jest.fn().mockImplementation((entity: any) => {
         if (entity === MeetingMinutesEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(minutesRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(minutesRow)),
+          };
         }
         if (entity === MeetingEntity) {
-          return { findOne: jest.fn().mockImplementation(() => Promise.resolve(meetingRow)) };
+          return {
+            findOne: jest
+              .fn()
+              .mockImplementation(() => Promise.resolve(meetingRow)),
+          };
         }
         return { findOne: jest.fn().mockResolvedValue(null) };
       }),
@@ -112,17 +119,28 @@ describe('MinutesExportService.createExportJob', () => {
   });
 
   it('applies defaults includeTranscript=false, includeActionItems=true', async () => {
-    await service.createExportJob(minutesId, { format: 'pdf' }, { userId: preparedBy });
+    await service.createExportJob(
+      minutesId,
+      { format: 'pdf' },
+      { userId: preparedBy },
+    );
     expect(addJob).toHaveBeenCalledWith(
       MINUTES_EXPORT_QUEUE_NAME,
       MINUTES_EXPORT_JOB_NAME,
-      expect.objectContaining({ includeTranscript: false, includeActionItems: true }),
+      expect.objectContaining({
+        includeTranscript: false,
+        includeActionItems: true,
+      }),
     );
   });
 
   it('[AC-007] non-owner non-admin → 403 NOT_MINUTES_OWNER', async () => {
     await expect(
-      service.createExportJob(minutesId, { format: 'pdf' }, { userId: 'stranger' }),
+      service.createExportJob(
+        minutesId,
+        { format: 'pdf' },
+        { userId: 'stranger' },
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(createQueuedJob).not.toHaveBeenCalled();
   });
@@ -130,21 +148,33 @@ describe('MinutesExportService.createExportJob', () => {
   it('[AC-010] draft minutes → 409 MINUTES_NOT_PUBLISHED', async () => {
     minutesRow!.status = MeetingMinutesStatus.DRAFT;
     await expect(
-      service.createExportJob(minutesId, { format: 'pdf' }, { userId: preparedBy }),
+      service.createExportJob(
+        minutesId,
+        { format: 'pdf' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('[AC-016] nonexistent minutes → 404 MINUTES_NOT_FOUND', async () => {
     minutesRow = null;
     await expect(
-      service.createExportJob(minutesId, { format: 'pdf' }, { userId: preparedBy }),
+      service.createExportJob(
+        minutesId,
+        { format: 'pdf' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('[AC-017] soft-deleted minutes → 404 MINUTES_NOT_FOUND', async () => {
     minutesRow!.deletedAt = new Date();
     await expect(
-      service.createExportJob(minutesId, { format: 'pdf' }, { userId: preparedBy }),
+      service.createExportJob(
+        minutesId,
+        { format: 'pdf' },
+        { userId: preparedBy },
+      ),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

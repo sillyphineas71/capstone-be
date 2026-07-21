@@ -620,7 +620,10 @@ describe('LiveMeetingService', () => {
       queryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM recording_configs')) {
           return Promise.resolve([
-            { enable_transcription: true, audio_source_mode: 'channel_by_zone' },
+            {
+              enable_transcription: true,
+              audio_source_mode: 'channel_by_zone',
+            },
           ]);
         }
         if (sql.includes('FROM meeting_participants')) {

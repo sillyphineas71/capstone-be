@@ -11,9 +11,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * được danh sách đính kèm (meeting.minutes.attachment.read) nhưng KHÔNG mở
  * được chi tiết/tải file (thiếu recording.files.read) — bất nhất quyền hạn.
  */
-export class SeedRecordingFilesReadBusinessAdmin20260717000002
-  implements MigrationInterface
-{
+export class SeedRecordingFilesReadBusinessAdmin20260717000002 implements MigrationInterface {
   name = 'SeedRecordingFilesReadBusinessAdmin20260717000002';
 
   private readonly permissionCode = 'recording.files.read';

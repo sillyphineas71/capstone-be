@@ -15,9 +15,7 @@ import {
   MediaVisibilityLevel,
   StorageProvider,
 } from '../../recording/entities/media-file.entity.js';
-import {
-  MeetingMinutesEntity,
-} from '../entities/meeting-minutes.entity.js';
+import { MeetingMinutesEntity } from '../entities/meeting-minutes.entity.js';
 import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
 import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
@@ -103,8 +101,7 @@ export class MinutesExportWorkerProcessor extends WorkerHost {
         const transcript = await this.dataSource
           .getRepository(TranscriptEntity)
           .findOne({ where: { id: minutes.linkedTranscriptId } });
-        transcriptText =
-          transcript?.cleanedText || transcript?.rawText || null;
+        transcriptText = transcript?.cleanedText || transcript?.rawText || null;
       }
 
       // 3. Chuẩn hóa dữ liệu render
@@ -183,7 +180,9 @@ export class MinutesExportWorkerProcessor extends WorkerHost {
 
       // 8. Export mặc định → cập nhật meeting_minutes.file_id (FR-006)
       const isDefaultExport =
-        format === 'pdf' && includeTranscript === true && includeActionItems === true;
+        format === 'pdf' &&
+        includeTranscript === true &&
+        includeActionItems === true;
       if (isDefaultExport) {
         await this.mediaFileRepo.manager.update(
           MeetingMinutesEntity,

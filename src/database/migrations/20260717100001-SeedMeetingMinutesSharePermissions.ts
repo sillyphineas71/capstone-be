@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Cap cho INTERNAL_USER, MANAGER, BUSINESS_ADMIN, SYSTEM_ADMIN — so huu permission
  * la dieu kien can, service con kiem tra ownership (preparedBy/hostId) / Admin bypass.
  */
-export class SeedMeetingMinutesSharePermissions20260717100001
-  implements MigrationInterface
-{
+export class SeedMeetingMinutesSharePermissions20260717100001 implements MigrationInterface {
   name = 'SeedMeetingMinutesSharePermissions20260717100001';
 
   private readonly permissions = [

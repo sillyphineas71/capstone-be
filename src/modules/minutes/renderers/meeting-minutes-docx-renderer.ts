@@ -62,9 +62,14 @@ export async function renderMeetingMinutesDocx(
 
   // ── Nội dung chính ──
   children.push(
-    new Paragraph({ heading: HeadingLevel.HEADING_1, text: '1. Nội dung biên bản' }),
+    new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      text: '1. Nội dung biên bản',
+    }),
   );
-  for (const line of (data.minutesContent || '(Chưa có nội dung)').split('\n')) {
+  for (const line of (data.minutesContent || '(Chưa có nội dung)').split(
+    '\n',
+  )) {
     children.push(new Paragraph({ text: line }));
   }
 
@@ -73,7 +78,11 @@ export async function renderMeetingMinutesDocx(
     new Paragraph({ heading: HeadingLevel.HEADING_1, text: '2. Quyết định' }),
   );
   if (data.decisions.length === 0) {
-    children.push(new Paragraph({ children: [new TextRun({ text: '(Không có)', italics: true })] }));
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: '(Không có)', italics: true })],
+      }),
+    );
   } else {
     data.decisions.forEach((d) =>
       children.push(new Paragraph({ text: d, bullet: { level: 0 } })),
@@ -90,7 +99,9 @@ export async function renderMeetingMinutesDocx(
     );
     if (data.actionItems.length === 0) {
       children.push(
-        new Paragraph({ children: [new TextRun({ text: '(Không có)', italics: true })] }),
+        new Paragraph({
+          children: [new TextRun({ text: '(Không có)', italics: true })],
+        }),
       );
     } else {
       data.actionItems.forEach((a) =>
@@ -108,7 +119,9 @@ export async function renderMeetingMinutesDocx(
       }),
     );
     for (const line of data.transcriptText.split('\n')) {
-      children.push(new Paragraph({ children: [new TextRun({ text: line, size: 20 })] }));
+      children.push(
+        new Paragraph({ children: [new TextRun({ text: line, size: 20 })] }),
+      );
     }
   }
 

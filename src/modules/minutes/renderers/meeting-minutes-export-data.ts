@@ -34,8 +34,10 @@ export function normalizeMinutesJsonList(value: unknown): string[] {
         if (typeof o.text === 'string') return o.text;
         if (typeof o.task === 'string') {
           const parts = [o.task];
-          if (typeof o.owner === 'string' && o.owner) parts.push(`(phụ trách: ${o.owner})`);
-          if (typeof o.deadline === 'string' && o.deadline) parts.push(`(hạn: ${o.deadline})`);
+          if (typeof o.owner === 'string' && o.owner)
+            parts.push(`(phụ trách: ${o.owner})`);
+          if (typeof o.deadline === 'string' && o.deadline)
+            parts.push(`(hạn: ${o.deadline})`);
           return parts.join(' ');
         }
         return JSON.stringify(o);

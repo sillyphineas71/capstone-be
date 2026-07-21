@@ -404,7 +404,8 @@ export class MeetingMinutesListController {
   @ApiTags('Minutes')
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Chia se bien ban cho 1 user noi bo cu the (feat-share-meeting-minutes)',
+    summary:
+      'Chia se bien ban cho 1 user noi bo cu the (feat-share-meeting-minutes)',
     description:
       'Host (preparedBy hoac meeting.hostId) hoac Admin cap quyen xem bien ban da published ' +
       'cho 1 user noi bo active bat ky (ngoai danh sach participant). Chi quyen xem (read-only).',
@@ -415,8 +416,14 @@ export class MeetingMinutesListController {
   @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
-  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND / USER_NOT_FOUND' })
-  @ApiResponse({ status: 409, description: 'MINUTES_NOT_PUBLISHED / ALREADY_SHARED' })
+  @ApiResponse({
+    status: 404,
+    description: 'MINUTES_NOT_FOUND / USER_NOT_FOUND',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'MINUTES_NOT_PUBLISHED / ALREADY_SHARED',
+  })
   @ApiResponse({ status: 422, description: 'USER_INACTIVE' })
   async shareMinutes(
     @Param('id', ParseUUIDPipe) id: string,
@@ -490,7 +497,10 @@ export class MeetingMinutesListController {
   @ApiResponse({ status: 200, description: 'Da thu hoi quyen xem' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
-  @ApiResponse({ status: 404, description: 'MINUTES_NOT_FOUND / SHARE_NOT_FOUND' })
+  @ApiResponse({
+    status: 404,
+    description: 'MINUTES_NOT_FOUND / SHARE_NOT_FOUND',
+  })
   @ApiResponse({ status: 409, description: 'MINUTES_NOT_PUBLISHED' })
   async unshareMinutes(
     @Param('id', ParseUUIDPipe) id: string,

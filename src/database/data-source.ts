@@ -23,6 +23,8 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME ?? 'postgres',
   password: process.env.DB_PASSWORD ?? '',
   database: process.env.DB_DATABASE ?? 'postgres',
+  ssl:
+    process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   synchronize: false,
   logging: process.env.NODE_ENV === 'development',
   entities: [path.join(__dirname, '../modules/**/*.entity.{ts,js}')],

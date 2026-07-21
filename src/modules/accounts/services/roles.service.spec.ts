@@ -1,6 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  ConflictException,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { RolesService } from './roles.service.js';
 import { RoleEntity } from '../entities/role.entity.js';
@@ -90,7 +94,10 @@ describe('RolesService', () => {
       roleRepo.findOne.mockResolvedValue(mockRole);
 
       await expect(
-        service.create({ roleCode: 'ROOM_COORDINATOR', roleName: 'Test' }, 'user-uuid'),
+        service.create(
+          { roleCode: 'ROOM_COORDINATOR', roleName: 'Test' },
+          'user-uuid',
+        ),
       ).rejects.toThrow(ConflictException);
     });
   });
@@ -108,7 +115,11 @@ describe('RolesService', () => {
     it('should filter by isActive', async () => {
       roleRepo.findAndCount.mockResolvedValue([[mockRole], 1]);
 
-      const result = await service.findAll({ page: 1, limit: 20, isActive: true });
+      const result = await service.findAll({
+        page: 1,
+        limit: 20,
+        isActive: true,
+      });
 
       expect(result.data.length).toBe(1);
     });
@@ -116,7 +127,11 @@ describe('RolesService', () => {
     it('should search by roleCode ILIKE', async () => {
       roleRepo.findAndCount.mockResolvedValue([[mockRole], 1]);
 
-      const result = await service.findAll({ page: 1, limit: 20, search: 'COORD' });
+      const result = await service.findAll({
+        page: 1,
+        limit: 20,
+        search: 'COORD',
+      });
 
       expect(result.data.length).toBe(1);
     });
@@ -136,16 +151,27 @@ describe('RolesService', () => {
     it('[AC-023] should throw NotFoundException when not found', async () => {
       roleRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.findOne('invalid-id')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('invalid-id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
   describe('update', () => {
     it('[AC-004] should update roleName/description/isActive', async () => {
       roleRepo.findOne.mockResolvedValue(mockRole);
-      roleRepo.save.mockResolvedValue({ ...mockRole, roleName: 'Updated Name', description: 'New desc', isActive: false });
+      roleRepo.save.mockResolvedValue({
+        ...mockRole,
+        roleName: 'Updated Name',
+        description: 'New desc',
+        isActive: false,
+      });
 
-      const result = await service.update('role-uuid', { roleName: 'Updated Name', description: 'New desc', isActive: false }, 'user-uuid');
+      const result = await service.update(
+        'role-uuid',
+        { roleName: 'Updated Name', description: 'New desc', isActive: false },
+        'user-uuid',
+      );
 
       expect(result.roleName).toBe('Updated Name');
       expect(auditLogs.logAction).toHaveBeenCalledWith(
@@ -163,9 +189,16 @@ describe('RolesService', () => {
 
     it('[AC-018] should allow updating name on system role', async () => {
       roleRepo.findOne.mockResolvedValue(mockSystemRole);
-      roleRepo.save.mockResolvedValue({ ...mockSystemRole, roleName: 'New Name' });
+      roleRepo.save.mockResolvedValue({
+        ...mockSystemRole,
+        roleName: 'New Name',
+      });
 
-      const result = await service.update('sys-role-uuid', { roleName: 'New Name' }, 'user-uuid');
+      const result = await service.update(
+        'sys-role-uuid',
+        { roleName: 'New Name' },
+        'user-uuid',
+      );
 
       expect(result.roleName).toBe('New Name');
     });
@@ -187,7 +220,9 @@ describe('RolesService', () => {
 
       await service.remove('role-uuid', 'user-uuid');
 
-      expect(roleRepo.save).toHaveBeenCalledWith(expect.objectContaining({ isActive: false }));
+      expect(roleRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ isActive: false }),
+      );
       expect(auditLogs.logAction).toHaveBeenCalledWith(
         expect.objectContaining({ actionType: 'DELETE_ROLE' }),
       );
@@ -196,20 +231,26 @@ describe('RolesService', () => {
     it('[AC-014] should reject deleting system role -> 422', async () => {
       roleRepo.findOne.mockResolvedValue(mockSystemRole);
 
-      await expect(service.remove('sys-role-uuid', 'user-uuid')).rejects.toThrow(UnprocessableEntityException);
+      await expect(
+        service.remove('sys-role-uuid', 'user-uuid'),
+      ).rejects.toThrow(UnprocessableEntityException);
     });
 
     it('[AC-016] should reject deleting role with active users -> 409', async () => {
       roleRepo.findOne.mockResolvedValue(mockRole);
       userRoleRepo.count.mockResolvedValue(2);
 
-      await expect(service.remove('role-uuid', 'user-uuid')).rejects.toThrow(ConflictException);
+      await expect(service.remove('role-uuid', 'user-uuid')).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('[AC-023] should throw NotFoundException if role not found', async () => {
       roleRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.remove('invalid-id', 'user-uuid')).rejects.toThrow(NotFoundException);
+      await expect(service.remove('invalid-id', 'user-uuid')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

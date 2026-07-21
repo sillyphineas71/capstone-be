@@ -54,10 +54,9 @@ describe('MeetingMinutesListController', () => {
       }),
       findMinutesDetail: jest.fn().mockResolvedValue({ id: 'min-1' }),
     };
-    controller = new MeetingMinutesListController(
-      minutesService,
-      { createExportJob: jest.fn() } as any,
-    );
+    controller = new MeetingMinutesListController(minutesService, {
+      createExportJob: jest.fn(),
+    } as any);
   });
 
   it('should be defined', () => {

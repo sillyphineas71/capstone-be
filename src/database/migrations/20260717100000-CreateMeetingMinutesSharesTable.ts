@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Mirror style 20260624000000-CreateVehicleRegistrationsTable.ts:
  * uuid_generate_v4(), timestamptz, PK/FK đặt tên rõ, index cho FK.
  */
-export class CreateMeetingMinutesSharesTable20260717100000
-  implements MigrationInterface
-{
+export class CreateMeetingMinutesSharesTable20260717100000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "meeting_minutes_shares" (
@@ -45,9 +43,7 @@ export class CreateMeetingMinutesSharesTable20260717100000
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP INDEX "idx_meeting_minutes_shares_user_id"`,
-    );
+    await queryRunner.query(`DROP INDEX "idx_meeting_minutes_shares_user_id"`);
     await queryRunner.query(
       `DROP INDEX "idx_meeting_minutes_shares_minutes_id"`,
     );

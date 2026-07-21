@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { MeetingMinutesListController } from './minutes-list.controller.js';
 import { CreateMinutesExportResponseDto } from '../dto/create-minutes-export-response.dto.js';
 

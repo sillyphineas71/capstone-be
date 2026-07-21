@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (xem uploadAudioTrack trong recording-session.service.ts). Phát hiện qua
  * chạy thử thật end-to-end luồng channel_zone (2026-07-11).
  */
-export class SeedRecordingUploadTrackEmployeeRole20260711000001
-  implements MigrationInterface
-{
+export class SeedRecordingUploadTrackEmployeeRole20260711000001 implements MigrationInterface {
   name = 'SeedRecordingUploadTrackEmployeeRole20260711000001';
 
   private readonly permissionCode = 'recording.upload_track';
