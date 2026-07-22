@@ -15,9 +15,30 @@ import { ZoneEntity } from '../entities/zone.entity.js';
 import { normalizeZoneCode } from '../utils/normalize-zone-code.js';
 import { ZonesAuditRepository } from '../repositories/zones-audit.repository.js';
 import { IotDevicesService } from '../../iot/services/iot-devices.service.js';
+import { IoTDeviceType } from '../../iot/entities/iot-device.entity.js';
 import type { CreateZoneDto } from '../dto/create-zone.dto.js';
 import type { UpdateZoneDto } from '../dto/update-zone.dto.js';
 import type { ListZonesQueryDto } from '../dto/list-zones-query.dto.js';
+import type { AssignZoneDevicesDto } from '../dto/assign-zone-devices.dto.js';
+
+/**
+ * Loại thiết bị được phép gán vào zone (ZNA-001 / UC-94, OQ-4).
+ *
+ * ⚠ CỐ Ý KHÁC allowlist của `IotDevicesService.assignRoom` (chỉ 3 loại): allowlist đó thiết kế
+ * cho PHÒNG HỌP, còn zone là KHUÔN VIÊN. Thiếu `DOOR_CAMERA` thì camera cổng không gán được
+ * zone cổng (chặn FT-20 điểm danh cổng); thiếu `OCCUPANCY_SENSOR` thì cảm biến đếm người không
+ * gán được zone hành lang (chặn FT-21 hiện diện khu vực). KHÔNG được copy allowlist của
+ * `assignRoom` sang đây.
+ *
+ * Loại trừ: `MICROPHONE`, `CAPTURE_AGENT`, `DISPLAY` — không sinh sự kiện theo khu vực.
+ */
+const ZONE_ASSIGNABLE_DEVICE_TYPES: readonly IoTDeviceType[] = [
+  IoTDeviceType.IP_CAMERA,
+  IoTDeviceType.DOOR_CAMERA,
+  IoTDeviceType.ROOM_CAMERA,
+  IoTDeviceType.OCCUPANCY_SENSOR,
+  IoTDeviceType.FACE_SERVER,
+];
 
 /**
  * Meta phân trang (ZNL-001 / UC-93) — shape khớp CLAUDE.md §8.4 và tiền lệ repo.
@@ -375,6 +396,164 @@ export class ZonesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  // ── UC-94 (ZNA-001): gán / gỡ thiết bị cho khu vực ──
+
+  /**
+   * Gán một lô thiết bị vào khu vực (UC-94).
+   *
+   * Thứ tự bắt buộc: 404 zone → 409 zone inactive → validate thiết bị → lọc idempotent →
+   * transaction { ghi zone_id + audit }. Toàn bộ validate nằm NGOÀI transaction (fail nhanh,
+   * không tốn connection) — mirror `remove()`.
+   *
+   * ALL-OR-NOTHING (OQ-1): chỉ cần 1 thiết bị lỗi là cả lô bị từ chối, `details` nêu rõ id nào.
+   *
+   * ⚠ LỆCH CÓ CHỦ ĐÍCH với `IotDevicesService.assignRoom` (OQ-3): thiết bị đang thuộc zone KHÁC
+   * thì UC-94 CHO ĐÈ (chuyển zone) và ghi `old_zone_id`→`new_zone_id` vào audit, trong khi
+   * `assignRoom` CHẶN chuyển room. Lý do: zone là NHÓM LOGIC (cổng/hành lang/bãi xe), room là
+   * VỊ TRÍ LẮP VẬT LÝ. KHÔNG được "sửa cho giống assignRoom".
+   *
+   * ARCH-01: mọi truy cập `iot_devices` đi qua `IotDevicesService`, KHÔNG query thẳng bảng.
+   */
+  async assignDevices(
+    zoneId: string,
+    dto: AssignZoneDevicesDto,
+    actorUserId: string,
+  ): Promise<{ zone: ZoneEntity; assignedDeviceIds: string[] }> {
+    // 1. Zone phải tồn tại và đang sống.
+    const zone = await this.loadActive(zoneId);
+
+    // 2. Zone ngừng sử dụng thì không nhận thiết bị mới (OQ-5): gán vào đây tạo cấu hình chết
+    //    — thiết bị sinh event mà FT-20/FT-21 phải bỏ qua.
+    if (zone.status === 'inactive') {
+      throw new ConflictException({
+        code: 'ZONE_INACTIVE',
+        message: 'Khu vực đang ngừng sử dụng, không thể gán thiết bị',
+      });
+    }
+
+    // 3. Validate thiết bị — NGOÀI transaction.
+    const devices = await this.iotDevicesService.findAssignableByIds(
+      dto.deviceIds,
+    );
+
+    // ⚠ Xác định id thiếu bằng HIỆU TẬP HỢP, KHÔNG so sánh số lượng: SQL `In()` tự khử trùng
+    // nên `[A, A, B]` chỉ trả 2 bản ghi và so độ dài sẽ báo 404 SAI dù thiết bị vẫn tồn tại.
+    // (DTO đã có `@ArrayUnique()` chặn lớp 1; đây là lớp 2 — defense-in-depth.)
+    const foundIds = new Set(devices.map((d) => d.id));
+    const missingIds = dto.deviceIds.filter((id) => !foundIds.has(id));
+    if (missingIds.length > 0) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'Không tìm thấy thiết bị',
+        details: { device_ids: missingIds },
+      });
+    }
+
+    const notAssignable = devices.filter(
+      (d) => !ZONE_ASSIGNABLE_DEVICE_TYPES.includes(d.deviceType),
+    );
+    if (notAssignable.length > 0) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_ASSIGNABLE_TO_ZONE',
+        message: 'Loại thiết bị này không thể gán vào khu vực',
+        details: { device_ids: notAssignable.map((d) => d.id) },
+      });
+    }
+
+    // 4. Idempotent (R7): thiết bị đã đúng zone thì bỏ qua — không ghi, không audit.
+    const changed = devices.filter((d) => d.zoneId !== zoneId);
+    if (changed.length === 0) {
+      return { zone, assignedDeviceIds: dto.deviceIds };
+    }
+
+    const changedIds = changed.map((d) => d.id);
+    const oldZoneIds: Record<string, string | null> = {};
+    for (const device of changed) {
+      oldZoneIds[device.id] = device.zoneId;
+    }
+
+    // 5. Transaction chỉ bọc phần ghi: zone_id và audit phải cùng sống hoặc cùng chết.
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await this.iotDevicesService.setZoneForDevices(
+        changedIds,
+        zoneId,
+        queryRunner.manager,
+      );
+      await this.zonesAuditRepository.logZoneAssignDevices(
+        queryRunner.manager,
+        { userId: actorUserId, zoneId, deviceIds: changedIds, oldZoneIds },
+      );
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      throw e;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return { zone, assignedDeviceIds: dto.deviceIds };
+  }
+
+  /**
+   * Gỡ một thiết bị khỏi khu vực (UC-94) — set `zone_id = NULL`.
+   *
+   * ⚠ CỐ Ý KHÔNG chặn zone `inactive` ở đây (khác route gán): nếu chặn thì zone `inactive` còn
+   * thiết bị sẽ KẸT CỨNG — vừa không gỡ được thiết bị, vừa không xóa được ở UC-92 (UC-92 chặn
+   * xóa khi `countByZoneId > 0`). KHÔNG được "sửa cho đối xứng với assignDevices".
+   */
+  async unassignDevice(
+    zoneId: string,
+    deviceId: string,
+    actorUserId: string,
+  ): Promise<{ zone: ZoneEntity; unassignedDeviceId: string }> {
+    const zone = await this.loadActive(zoneId);
+
+    const [device] = await this.iotDevicesService.findAssignableByIds([
+      deviceId,
+    ]);
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'Không tìm thấy thiết bị',
+        details: { device_ids: [deviceId] },
+      });
+    }
+    if (device.zoneId !== zoneId) {
+      throw new NotFoundException({
+        code: 'DEVICE_NOT_IN_ZONE',
+        message: 'Thiết bị không thuộc khu vực này',
+      });
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await this.iotDevicesService.setZoneForDevices(
+        [deviceId],
+        null,
+        queryRunner.manager,
+      );
+      await this.zonesAuditRepository.logZoneUnassignDevice(
+        queryRunner.manager,
+        { userId: actorUserId, zoneId, deviceId },
+      );
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      throw e;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return { zone, unassignedDeviceId: deviceId };
   }
 
   /** Postgres unique_violation = 23505 (TypeORM QueryFailedError.driverError.code). */

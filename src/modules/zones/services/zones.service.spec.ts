@@ -62,8 +62,16 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       logZoneCreation: jest.fn(),
       logZoneUpdate: jest.fn(),
       logZoneDeletion: jest.fn(),
+      // UC-94.
+      logZoneAssignDevices: jest.fn(),
+      logZoneUnassignDevice: jest.fn(),
     };
-    iotDevicesService = { countByZoneId: jest.fn().mockResolvedValue(0) };
+    iotDevicesService = {
+      countByZoneId: jest.fn().mockResolvedValue(0),
+      // UC-94: API đọc + ghi cho cross-module.
+      findAssignableByIds: jest.fn().mockResolvedValue([]),
+      setZoneForDevices: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -675,6 +683,323 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
 
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
       expect(auditRepo.logZoneDeletion).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── UC-94 (ZNA-001): gán / gỡ thiết bị ──
+  describe('assignDevices (ZNA-001 / UC-94)', () => {
+    const zone = (over: Record<string, any> = {}) => ({
+      id: 'z1',
+      zoneCode: 'GATE-01',
+      zoneName: 'Cổng chính',
+      zoneType: 'gate',
+      status: 'active',
+      deletedAt: null,
+      ...over,
+    });
+    const device = (id: string, over: Record<string, any> = {}) => ({
+      id,
+      deviceType: 'ip_camera',
+      zoneId: null,
+      ...over,
+    });
+    const dtoOf = (ids: string[]) => ({ deviceIds: ids }) as any;
+
+    // Case 1
+    it('gán thành công (batch 3) → setZoneForDevices + audit trong transaction, có release', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1'),
+        device('d2'),
+        device('d3'),
+      ]);
+
+      const r = await service.assignDevices(
+        'z1',
+        dtoOf(['d1', 'd2', 'd3']),
+        'u1',
+      );
+
+      expect(iotDevicesService.setZoneForDevices).toHaveBeenCalledWith(
+        ['d1', 'd2', 'd3'],
+        'z1',
+        queryRunner.manager,
+      );
+      expect(auditRepo.logZoneAssignDevices).toHaveBeenCalledTimes(1);
+      expect(
+        auditRepo.logZoneAssignDevices.mock.invocationCallOrder[0],
+      ).toBeLessThan(queryRunner.commitTransaction.mock.invocationCallOrder[0]);
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+      expect(r.assignedDeviceIds).toEqual(['d1', 'd2', 'd3']);
+    });
+
+    // Case 2
+    it('404 zone → không validate thiết bị, không mở transaction', async () => {
+      repo.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.assignDevices('missing', dtoOf(['d1']), 'u1'),
+      ).rejects.toMatchObject({ response: { code: 'ZONE_NOT_FOUND' } });
+      expect(iotDevicesService.findAssignableByIds).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 3 — all-or-nothing
+    it('1 id trong lô không tồn tại → CẢ LÔ fail, details nêu đúng id thiếu', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1'),
+        device('d2'),
+      ]);
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1', 'd2', 'd3']), 'u1'),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'IOT_DEVICE_NOT_FOUND',
+          details: { device_ids: ['d3'] },
+        },
+      });
+      expect(iotDevicesService.setZoneForDevices).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 3b — hiệu tập hợp: input trùng KHÔNG được coi là thiếu id
+    it('input trùng lặp (nếu lọt DTO) vẫn KHÔNG báo 404 sai — kiểm bằng hiệu tập hợp', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      // SQL In() khử trùng: [d1, d1, d2] → chỉ 2 bản ghi.
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1'),
+        device('d2'),
+      ]);
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1', 'd1', 'd2']), 'u1'),
+      ).resolves.toBeDefined();
+      expect(iotDevicesService.setZoneForDevices).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 4
+    it('409 DEVICE_TYPE_NOT_ASSIGNABLE_TO_ZONE khi sai loại, và 5 loại allowlist đều pass', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1', { deviceType: 'microphone' }),
+      ]);
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1']), 'u1'),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'DEVICE_TYPE_NOT_ASSIGNABLE_TO_ZONE',
+          details: { device_ids: ['d1'] },
+        },
+      });
+      expect(iotDevicesService.setZoneForDevices).not.toHaveBeenCalled();
+
+      // Case dương: cả 5 loại allowlist.
+      for (const deviceType of [
+        'ip_camera',
+        'door_camera',
+        'room_camera',
+        'occupancy_sensor',
+        'face_server',
+      ]) {
+        jest.clearAllMocks();
+        repo.findOne.mockResolvedValueOnce(zone());
+        iotDevicesService.findAssignableByIds.mockResolvedValue([
+          device('d1', { deviceType }),
+        ]);
+        dataSource.createQueryRunner.mockReturnValue(queryRunner);
+
+        await expect(
+          service.assignDevices('z1', dtoOf(['d1']), 'u1'),
+        ).resolves.toBeDefined();
+      }
+    });
+
+    // Case 5
+    it('409 ZONE_INACTIVE → không validate thiết bị, không mở transaction', async () => {
+      repo.findOne.mockResolvedValueOnce(zone({ status: 'inactive' }));
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1']), 'u1'),
+      ).rejects.toMatchObject({ response: { code: 'ZONE_INACTIVE' } });
+      expect(iotDevicesService.findAssignableByIds).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 6 — idempotent
+    it('cả lô đã đúng zone → NO-OP: không transaction, không ghi, không audit', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1', { zoneId: 'z1' }),
+        device('d2', { zoneId: 'z1' }),
+      ]);
+
+      const r = await service.assignDevices('z1', dtoOf(['d1', 'd2']), 'u1');
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(iotDevicesService.setZoneForDevices).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneAssignDevices).not.toHaveBeenCalled();
+      expect(r.assignedDeviceIds).toEqual(['d1', 'd2']);
+    });
+
+    // Case 7 — đè zone khác (OQ-3)
+    it('thiết bị đang thuộc zone KHÁC → đè thành công, audit có old_zone_id', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        device('d1', { zoneId: 'z-old' }),
+      ]);
+
+      await service.assignDevices('z1', dtoOf(['d1']), 'u1');
+
+      expect(iotDevicesService.setZoneForDevices).toHaveBeenCalledWith(
+        ['d1'],
+        'z1',
+        queryRunner.manager,
+      );
+      expect(auditRepo.logZoneAssignDevices).toHaveBeenCalledWith(
+        queryRunner.manager,
+        {
+          userId: 'u1',
+          zoneId: 'z1',
+          deviceIds: ['d1'],
+          oldZoneIds: { d1: 'z-old' },
+        },
+      );
+    });
+
+    // Case 8
+    it('audit lỗi → rollback, không commit, vẫn release', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([device('d1')]);
+      const auditError = new Error('audit failed');
+      auditRepo.logZoneAssignDevices.mockRejectedValue(auditError);
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1']), 'u1'),
+      ).rejects.toBe(auditError);
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 9
+    it('setZoneForDevices lỗi → rollback, không commit, vẫn release', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([device('d1')]);
+      const writeError = new Error('update failed');
+      iotDevicesService.setZoneForDevices.mockRejectedValue(writeError);
+
+      await expect(
+        service.assignDevices('z1', dtoOf(['d1']), 'u1'),
+      ).rejects.toBe(writeError);
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+      expect(auditRepo.logZoneAssignDevices).not.toHaveBeenCalled();
+    });
+
+    // Case 11 — ARCH-01
+    it('ARCH-01: không query thẳng bảng iot_devices (chỉ qua IotDevicesService)', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([device('d1')]);
+
+      await service.assignDevices('z1', dtoOf(['d1']), 'u1');
+
+      // repo của zones chỉ được dùng cho bảng `zones` (1 lần findOne ở loadActive).
+      expect(repo.findOne).toHaveBeenCalledTimes(1);
+      expect(repo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(queryRunner.manager.query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unassignDevice (ZNA-001 / UC-94)', () => {
+    const zone = (over: Record<string, any> = {}) => ({
+      id: 'z1',
+      zoneCode: 'GATE-01',
+      zoneType: 'gate',
+      status: 'active',
+      deletedAt: null,
+      ...over,
+    });
+
+    // Case 12
+    it('gỡ thành công → setZoneForDevices với null + audit + commit + release', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        { id: 'd1', deviceType: 'ip_camera', zoneId: 'z1' },
+      ]);
+
+      const r = await service.unassignDevice('z1', 'd1', 'u1');
+
+      expect(iotDevicesService.setZoneForDevices).toHaveBeenCalledWith(
+        ['d1'],
+        null,
+        queryRunner.manager,
+      );
+      expect(auditRepo.logZoneUnassignDevice).toHaveBeenCalledWith(
+        queryRunner.manager,
+        { userId: 'u1', zoneId: 'z1', deviceId: 'd1' },
+      );
+      expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+      expect(r.unassignedDeviceId).toBe('d1');
+    });
+
+    // Case 12b — bất đối xứng có chủ đích với route gán
+    it('zone inactive VẪN gỡ được (không chặn) — tránh kẹt cứng với UC-92', async () => {
+      repo.findOne.mockResolvedValueOnce(zone({ status: 'inactive' }));
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        { id: 'd1', deviceType: 'ip_camera', zoneId: 'z1' },
+      ]);
+
+      await expect(
+        service.unassignDevice('z1', 'd1', 'u1'),
+      ).resolves.toBeDefined();
+      expect(iotDevicesService.setZoneForDevices).toHaveBeenCalledWith(
+        ['d1'],
+        null,
+        queryRunner.manager,
+      );
+    });
+
+    // Case 13
+    it('404 zone → ZONE_NOT_FOUND', async () => {
+      repo.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.unassignDevice('missing', 'd1', 'u1'),
+      ).rejects.toMatchObject({ response: { code: 'ZONE_NOT_FOUND' } });
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 14
+    it('404 thiết bị không tồn tại → IOT_DEVICE_NOT_FOUND', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([]);
+
+      await expect(
+        service.unassignDevice('z1', 'd-missing', 'u1'),
+      ).rejects.toMatchObject({ response: { code: 'IOT_DEVICE_NOT_FOUND' } });
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 15
+    it('404 DEVICE_NOT_IN_ZONE khi thiết bị thuộc zone khác → không ghi gì', async () => {
+      repo.findOne.mockResolvedValueOnce(zone());
+      iotDevicesService.findAssignableByIds.mockResolvedValue([
+        { id: 'd1', deviceType: 'ip_camera', zoneId: 'z-other' },
+      ]);
+
+      await expect(
+        service.unassignDevice('z1', 'd1', 'u1'),
+      ).rejects.toMatchObject({ response: { code: 'DEVICE_NOT_IN_ZONE' } });
+      expect(iotDevicesService.setZoneForDevices).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneUnassignDevice).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
     });
   });
 

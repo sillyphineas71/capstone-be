@@ -80,6 +80,73 @@ export class ZonesAuditRepository {
     );
   }
 
+  /**
+   * Gán thiết bị vào khu vực (ZNA-001 / UC-94).
+   *
+   * 1 bản ghi cho CẢ LÔ: gán là all-or-nothing (OQ-1) nên cả lô là một sự kiện.
+   * `oldZoneIds` ghi lại zone cũ của từng thiết bị (null nếu chưa thuộc zone nào) — đây là
+   * bằng chứng DUY NHẤT cho lần chuyển zone, vì UC-94 cho phép đè zone khác (OQ-3).
+   *
+   * SEC-01: CHỈ ghi id. TUYỆT ĐỐI không ghi `metadata_json`/tên/IP/secret của thiết bị.
+   */
+  async logZoneAssignDevices(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      zoneId: string;
+      deviceIds: string[];
+      oldZoneIds: Record<string, string | null>;
+    },
+  ): Promise<void> {
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'assign_device', $2, $3, 'info', $4::jsonb)
+      `,
+      [
+        params.userId,
+        ZONE_ENTITY_TYPE,
+        params.zoneId,
+        JSON.stringify({
+          device_ids: params.deviceIds,
+          old_zone_ids: params.oldZoneIds,
+          new_zone_id: params.zoneId,
+        }),
+      ],
+    );
+  }
+
+  /**
+   * Gỡ thiết bị khỏi khu vực (ZNA-001 / UC-94) — `zone_id` về NULL.
+   *
+   * SEC-01: CHỈ ghi id, như `logZoneAssignDevices`.
+   */
+  async logZoneUnassignDevice(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      zoneId: string;
+      deviceId: string;
+    },
+  ): Promise<void> {
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'unassign_device', $2, $3, 'info', $4::jsonb)
+      `,
+      [
+        params.userId,
+        ZONE_ENTITY_TYPE,
+        params.zoneId,
+        JSON.stringify({
+          device_ids: [params.deviceId],
+          old_zone_id: params.zoneId,
+          new_zone_id: null,
+        }),
+      ],
+    );
+  }
+
   async logZoneDeletion(
     entityManager: EntityManager,
     params: {

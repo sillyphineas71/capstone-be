@@ -226,6 +226,76 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
     });
   });
 
+  // ── UC-94 (ZNA-001): route gán / gỡ thiết bị ──
+  describe('assignDevices & unassignDevice (ZNA-001 / UC-94)', () => {
+    const dto = { deviceIds: ['d1', 'd2'] } as any;
+
+    beforeEach(() => {
+      service.assignDevices = jest
+        .fn()
+        .mockResolvedValue({ zone: entity, assignedDeviceIds: ['d1', 'd2'] });
+      service.unassignDevice = jest
+        .fn()
+        .mockResolvedValue({ zone: entity, unassignedDeviceId: 'd1' });
+    });
+
+    // Case 20
+    it('PATCH :id/devices → service.assignDevices(id, dto, userId) + envelope không lộ dữ liệu thiết bị', async () => {
+      const r = await controller.assignDevices({ userId: 'u1' }, 'z1', dto);
+
+      expect(service.assignDevices).toHaveBeenCalledTimes(1);
+      expect(service.assignDevices).toHaveBeenCalledWith('z1', dto, 'u1');
+      expect(r.success).toBe(true);
+      expect(r.message).toBe('Devices assigned to zone successfully');
+      expect(r.data.zone).toMatchObject({ id: 'z1', zone_code: 'GATE-01' });
+      expect(r.data.zone).not.toHaveProperty('deleted_at');
+      expect(r.data.assigned_device_ids).toEqual(['d1', 'd2']);
+      // OQ-9: chỉ id, KHÔNG có tên/loại/trạng thái thiết bị.
+      expect(JSON.stringify(r.data)).not.toContain('device_type');
+      expect(JSON.stringify(r.data)).not.toContain('device_name');
+    });
+
+    // Case 21
+    it('DELETE :id/devices/:deviceId → service.unassignDevice(id, deviceId, userId)', async () => {
+      const r = await controller.unassignDevice({ userId: 'u1' }, 'z1', 'd1');
+
+      expect(service.unassignDevice).toHaveBeenCalledWith('z1', 'd1', 'u1');
+      expect(r.message).toBe('Device unassigned from zone successfully');
+      expect(r.data.unassigned_device_id).toBe('d1');
+      expect(r.data.zone).toMatchObject({ id: 'z1' });
+    });
+
+    // Case 22
+    it('gate THẬT trên CẢ 2 handler: 2 guard + @RequirePermissions("zones.zone.assign_device")', () => {
+      for (const handler of [
+        controller.assignDevices,
+        controller.unassignDevice,
+      ]) {
+        const guards = Reflect.getMetadata('__guards__', handler) ?? [];
+        expect(guards).toContain(JwtAuthGuard);
+        expect(guards).toContain(PermissionsGuard);
+        expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual([
+          'zones.zone.assign_device',
+        ]);
+      }
+    });
+
+    // Case 23
+    it('lỗi từ service propagate nguyên trạng (404 và 409)', async () => {
+      const notFound = new NotFoundException({ code: 'DEVICE_NOT_IN_ZONE' });
+      service.unassignDevice.mockRejectedValue(notFound);
+      await expect(
+        controller.unassignDevice({ userId: 'u1' }, 'z1', 'd1'),
+      ).rejects.toBe(notFound);
+
+      const conflict = new ConflictException({ code: 'ZONE_INACTIVE' });
+      service.assignDevices.mockRejectedValue(conflict);
+      await expect(
+        controller.assignDevices({ userId: 'u1' }, 'z1', dto),
+      ).rejects.toBe(conflict);
+    });
+  });
+
   // ── UC-92 (ZND-001): route DELETE /zones/:id ──
   describe('remove (ZND-001 / UC-92)', () => {
     beforeEach(() => {

@@ -94,6 +94,74 @@ describe('ZonesAuditRepository (ZND-001 / UC-92)', () => {
     });
   });
 
+  // ── UC-94 (ZNA-001): gán / gỡ thiết bị ──
+
+  it('logZoneAssignDevices → action_type=assign_device, entity_type=zones, đủ metadata', async () => {
+    await repo.logZoneAssignDevices(em as unknown as EntityManager, {
+      userId: 'u1',
+      zoneId: 'z1',
+      deviceIds: ['d1', 'd2'],
+      oldZoneIds: { d1: null, d2: 'z-old' },
+    });
+
+    expect(em.query).toHaveBeenCalledTimes(1);
+    const { sql, params } = callOf();
+    expect(sql).toContain("'assign_device'");
+    expect(sql).toContain("'info'");
+    expect(params[0]).toBe('u1');
+    expect(params[1]).toBe('zones');
+    expect(params[2]).toBe('z1');
+    expect(JSON.parse(params[3] as string)).toEqual({
+      device_ids: ['d1', 'd2'],
+      old_zone_ids: { d1: null, d2: 'z-old' },
+      new_zone_id: 'z1',
+    });
+  });
+
+  it('logZoneUnassignDevice → action_type=unassign_device, new_zone_id null', async () => {
+    await repo.logZoneUnassignDevice(em as unknown as EntityManager, {
+      userId: 'u1',
+      zoneId: 'z1',
+      deviceId: 'd1',
+    });
+
+    const { sql, params } = callOf();
+    expect(sql).toContain("'unassign_device'");
+    expect(params[1]).toBe('zones');
+    expect(JSON.parse(params[3] as string)).toEqual({
+      device_ids: ['d1'],
+      old_zone_id: 'z1',
+      new_zone_id: null,
+    });
+  });
+
+  // SEC-01: audit của UC-94 chỉ chở id, không chở dữ liệu thiết bị.
+  it('SEC-01: audit gán/gỡ KHÔNG chứa dữ liệu nhạy cảm của thiết bị', async () => {
+    // Dữ liệu thừa giả lập: repository KHÔNG được ghi ra dù caller lỡ truyền kèm.
+    const paramsWithExtra = {
+      userId: 'u1',
+      zoneId: 'z1',
+      deviceIds: ['d1'],
+      oldZoneIds: { d1: null },
+      deviceMetadata: { rtsp_password: 'super-secret', ip: '10.0.0.9' },
+    };
+
+    await repo.logZoneAssignDevices(
+      em as unknown as EntityManager,
+      paramsWithExtra,
+    );
+
+    const payload = callOf().params[3] as string;
+    expect(payload).not.toContain('rtsp_password');
+    expect(payload).not.toContain('super-secret');
+    expect(payload).not.toContain('10.0.0.9');
+    expect(JSON.parse(payload)).toEqual({
+      device_ids: ['d1'],
+      old_zone_ids: { d1: null },
+      new_zone_id: 'z1',
+    });
+  });
+
   it('SEC-03: mọi giá trị đi qua parameter binding ($1..$4), không nối chuỗi', async () => {
     await repo.logZoneCreation(em as unknown as EntityManager, {
       userId: "u1'; DROP TABLE zones; --",
