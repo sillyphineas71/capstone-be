@@ -19,7 +19,11 @@ import { ZoneEntity } from './zone.entity.js';
  * - `user_id` NULL cho event room-level (chỉ biết có người, không định danh);
  *   chỉ set khi nguồn có định danh (Face Server).
  * - `confidence_score` numeric(5,4): độ tin cậy 0.0000–1.0000 từ nguồn nhận diện.
- * - `zone_id` dùng ON DELETE RESTRICT: không cho xoá zone khi còn event.
+ * - `zone_id` khai ON DELETE RESTRICT ở DB, nhưng ràng buộc này CHỈ kích hoạt với hard-delete
+ *   — mà hard-delete bị DATA-01 cấm. Hệ thống xoá zone bằng soft-delete (`UPDATE deleted_at`)
+ *   nên hàng `zones` vẫn tồn tại và FK action KHÔNG BAO GIỜ chạy. Việc chặn hay không chặn xoá
+ *   zone hoàn toàn do tầng application quyết định: UC-92 chốt **chặn theo THIẾT BỊ đang gán,
+ *   KHÔNG chặn theo event** (event chỉ tăng, chặn theo event sẽ khiến zone bất tử).
  */
 @Entity('zone_presence_events')
 export class ZonePresenceEventEntity {

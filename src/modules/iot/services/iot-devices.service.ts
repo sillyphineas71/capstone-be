@@ -9,7 +9,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { DataSource, Not, In } from 'typeorm';
+import { DataSource, Not, In, type EntityManager } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FACE_VERIFY_HOOK } from '../../../common/ports/face-verify-hook.js';
 import type { FaceVerifyHook } from '../../../common/ports/face-verify-hook.js';
@@ -274,6 +274,71 @@ export class IotDevicesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * Đếm số thiết bị đang gán vào một zone.
+   *
+   * API đọc phục vụ UC-92 của module `zones` (kiểm tra trước khi xoá zone) — `iot` KHÔNG
+   * biết gì về nghiệp vụ zone, chỉ trả con số. Module `zones` gọi qua service này thay vì
+   * query thẳng bảng `iot_devices` (ARCH-01).
+   *
+   * Đếm MỌI thiết bị bất kể `status`: thiết bị `disabled`/`offline` vẫn là cấu hình đang trỏ
+   * vào zone, xoá zone sẽ để lại tham chiếu treo. `IoTDeviceEntity` không có soft-delete nên
+   * không cần lọc `deleted_at`.
+   */
+  async countByZoneId(zoneId: string): Promise<number> {
+    return this.dataSource.manager.count(IoTDeviceEntity, {
+      where: { zoneId },
+    });
+  }
+
+  /**
+   * Tìm thiết bị theo danh sách id — API đọc phục vụ UC-94 của module `zones`.
+   *
+   * Trả về ĐÚNG những gì tìm thấy (không ném lỗi khi thiếu): caller tự so sánh để biết id nào
+   * không tồn tại. Trả nguyên entity (có `zoneId`, `deviceType`) để caller tự quyết định — `iot`
+   * KHÔNG phán xét gì về zone.
+   *
+   * `IoTDeviceEntity` không có soft-delete nên không cần lọc `deleted_at`.
+   *
+   * ⚠ SQL `In()` TỰ KHỬ TRÙNG: truyền `[A, A, B]` chỉ trả 2 bản ghi. Caller PHẢI xác định id
+   * thiếu bằng hiệu tập hợp, KHÔNG so sánh số lượng.
+   */
+  async findAssignableByIds(deviceIds: string[]): Promise<IoTDeviceEntity[]> {
+    if (deviceIds.length === 0) return [];
+    return this.dataSource.manager.find(IoTDeviceEntity, {
+      where: { id: In(deviceIds) },
+    });
+  }
+
+  /**
+   * Đặt `zone_id` cho một tập thiết bị — API GHI phục vụ UC-94 của module `zones`.
+   *
+   * 1. API cho module khác: `iot` KHÔNG biết nghiệp vụ zone. `zoneId` được coi là giá trị ĐỤC —
+   *    không kiểm zone tồn tại, không kiểm `status`, không kiểm soft-delete. Mọi kiểm tra về
+   *    zone là trách nhiệm của CALLER.
+   * 2. ⚠ RANH GIỚI TRANSACTION DO CALLER KIỂM SOÁT: khi `manager` được truyền, method chạy
+   *    TRONG transaction của caller và TUYỆT ĐỐI KHÔNG tự `createQueryRunner`. Đây là điều kiện
+   *    để caller giữ nguyên tử giữa "ghi zone_id" và "ghi audit". KHÁC `assignRoom` — method đó
+   *    tự mở transaction riêng.
+   * 3. `zoneId: string | null` — một method cho CẢ gán (`zoneId`) lẫn gỡ (`null`).
+   */
+  async setZoneForDevices(
+    deviceIds: string[],
+    zoneId: string | null,
+    manager?: EntityManager,
+  ): Promise<{ affected: number }> {
+    if (deviceIds.length === 0) return { affected: 0 };
+
+    const em = manager ?? this.dataSource.manager;
+    const result = await em.update(
+      IoTDeviceEntity,
+      { id: In(deviceIds) },
+      { zoneId },
+    );
+
+    return { affected: result.affected ?? 0 };
   }
 
   async findAll(query: ListIotDevicesQueryDto): Promise<{

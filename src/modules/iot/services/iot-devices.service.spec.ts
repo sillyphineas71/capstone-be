@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { IotDevicesService } from './iot-devices.service.js';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 import { IotDeviceEventsService } from './iot-device-events.service.js';
@@ -12,7 +12,10 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { IoTDeviceType } from '../entities/iot-device.entity.js';
+import {
+  IoTDeviceType,
+  IoTDeviceEntity,
+} from '../entities/iot-device.entity.js';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
 import { probeRtspRuntime } from '../utils/rtsp-runtime-probe.util.js';
 import * as nodeCrypto from 'crypto';
@@ -58,6 +61,8 @@ describe('IotDevicesService', () => {
         findOne: jest.fn(),
         find: jest.fn(),
         query: jest.fn(),
+        count: jest.fn(),
+        update: jest.fn(),
       } as any,
     };
 
@@ -1446,6 +1451,99 @@ describe('IotDevicesService', () => {
         unknown: 0,
         byType: {},
       });
+    });
+  });
+
+  // ── ZND-001 / UC-92: API đọc cho module `zones` ──
+  describe('countByZoneId (ZND-001 / UC-92)', () => {
+    it('đếm theo zone_id, không lọc status/deletedAt', async () => {
+      (dataSourceMock.manager.count as jest.Mock).mockResolvedValue(3);
+
+      const result = await service.countByZoneId('z1');
+
+      expect(result).toBe(3);
+      expect(dataSourceMock.manager.count).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { where: { zoneId: 'z1' } },
+      );
+    });
+
+    it('zone không có thiết bị → 0', async () => {
+      (dataSourceMock.manager.count as jest.Mock).mockResolvedValue(0);
+
+      await expect(service.countByZoneId('z-empty')).resolves.toBe(0);
+    });
+  });
+
+  // ── ZNA-001 / UC-94: API đọc + GHI cho module `zones` ──
+  describe('findAssignableByIds / setZoneForDevices (ZNA-001 / UC-94)', () => {
+    // Case 28
+    it('findAssignableByIds → manager.find(IoTDeviceEntity, { where: { id: In(ids) } })', async () => {
+      const devices = [{ id: 'd1' }, { id: 'd2' }];
+      (dataSourceMock.manager.find as jest.Mock).mockResolvedValue(devices);
+
+      const r = await service.findAssignableByIds(['d1', 'd2']);
+
+      expect(r).toBe(devices);
+      expect(dataSourceMock.manager.find).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { where: { id: In(['d1', 'd2']) } },
+      );
+    });
+
+    // Case 29 — CÓ manager: chạy trong transaction của caller, KHÔNG tự mở tx
+    it('setZoneForDevices CÓ manager → dùng manager.update, KHÔNG createQueryRunner', async () => {
+      const managerMock = {
+        update: jest.fn().mockResolvedValue({ affected: 2 }),
+      };
+
+      const r = await service.setZoneForDevices(
+        ['d1', 'd2'],
+        'z1',
+        managerMock as any,
+      );
+
+      expect(r).toEqual({ affected: 2 });
+      expect(managerMock.update).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { id: In(['d1', 'd2']) },
+        { zoneId: 'z1' },
+      );
+      // Bằng chứng ranh giới transaction do caller kiểm soát:
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+      expect(dataSourceMock.manager.update).not.toHaveBeenCalled();
+    });
+
+    // Case 30 — KHÔNG manager: chạy standalone
+    it('setZoneForDevices KHÔNG manager → dùng dataSource.manager.update', async () => {
+      (dataSourceMock.manager.update as jest.Mock).mockResolvedValue({
+        affected: 1,
+      });
+
+      const r = await service.setZoneForDevices(['d1'], 'z1');
+
+      expect(r).toEqual({ affected: 1 });
+      expect(dataSourceMock.manager.update).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { id: In(['d1']) },
+        { zoneId: 'z1' },
+      );
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 31 — nhánh gỡ
+    it('setZoneForDevices(ids, null, m) → update với { zoneId: null }', async () => {
+      const managerMock = {
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+      };
+
+      await service.setZoneForDevices(['d1'], null, managerMock as any);
+
+      expect(managerMock.update).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { id: In(['d1']) },
+        { zoneId: null },
+      );
     });
   });
 });
