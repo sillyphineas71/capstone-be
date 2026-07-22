@@ -14,6 +14,7 @@ const evt = (over: any = {}) => ({
 describe('VehicleResolveService (VRE-001 / UC5)', () => {
   let service: VehicleResolveService;
   let dsMock: any;
+  let alertMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
 
   const wire = (
@@ -40,7 +41,8 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
 
   beforeEach(() => {
     dsMock = { manager: { query: jest.fn() } };
-    service = new VehicleResolveService(dsMock as DataSource);
+    alertMock = { evaluate: jest.fn().mockResolvedValue(undefined) };
+    service = new VehicleResolveService(dsMock as DataSource, alertMock);
   });
 
   it('matched: biển active → INSERT processed + payload.userId set', async () => {
@@ -149,5 +151,29 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     const p = payloadOf();
     expect(p.plateColor).toBe('white');
     expect(p.vehicleType).toBe('car');
+  });
+
+  // ── UC9 (VCC-001): wiring VehicleControlAlertService.evaluate ──
+  describe('UC9 control-list alert wiring', () => {
+    it('matched: evaluate được gọi với (plateNumber, {channelId, direction})', async () => {
+      wire();
+      await service.onVehicleEvent(evt({ eventAction: 'in' }));
+      expect(alertMock.evaluate).toHaveBeenCalledWith('30A12345', {
+        channelId: 5,
+        direction: 'enter',
+      });
+    });
+
+    it('unmatched: evaluate VẪN được gọi (độc lập matchState)', async () => {
+      wire({ user: [] });
+      await service.onVehicleEvent(evt());
+      expect(alertMock.evaluate).toHaveBeenCalledTimes(1);
+    });
+
+    it('NotThrow: alertMock.evaluate reject → onVehicleEvent KHÔNG throw', async () => {
+      wire();
+      alertMock.evaluate.mockRejectedValue(new Error('alert boom'));
+      await expect(service.onVehicleEvent(evt())).resolves.toBeUndefined();
+    });
   });
 });

@@ -1,15 +1,19 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { VEHICLE_EVENT_HANDLER } from '../../common/ports/vehicle-event-hook.js';
 import { VehicleRegistrationEntity } from './entities/vehicle-registration.entity.js';
 import { VehicleControlListEntity } from './entities/vehicle-control-list.entity.js';
 import { VehicleRegistrationController } from './controllers/vehicle-registration.controller.js';
 import { VehicleWebhookController } from './controllers/vehicle-webhook.controller.js';
+import { VehicleControlListController } from './controllers/vehicle-control-list.controller.js';
 import { VehicleRegistrationService } from './services/vehicle-registration.service.js';
 import { VehicleResolveService } from './services/vehicle-resolve.service.js';
 import { VehicleUnknownService } from './services/vehicle-unknown.service.js';
 import { VehicleHistoryService } from './services/vehicle-history.service.js';
+import { VehicleControlListService } from './services/vehicle-control-list.service.js';
+import { VehicleControlAlertService } from './services/vehicle-control-alert.service.js';
 import { AnprInternalTokenGuard } from './guards/anpr-internal-token.guard.js';
 import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.handler.js';
 
@@ -24,18 +28,29 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
  *   + persist iot_device_events, event_type='ivss_vehicle_event'). DefaultVehicleEventHandler giữ
  *   registered (fallback, mirror face giữ DefaultIvssEventHandler).
  * Import AuthModule để dùng PermissionsGuard thật (gate route admin) — AuthModule export sẵn.
+ * VCL-001 (UC8): CRUD `vehicle_control_list` (blocklist/watchlist) — `VehicleControlListService`
+ *   + `VehicleControlListController` (admin-gated, KHÔNG ownership). Entity đã `forFeature` sẵn
+ *   từ trước (schema-only), UC8 chỉ thêm provider/controller, KHÔNG đổi `imports`.
+ * VCC-001 (UC9): đối chiếu control-list khi xe qua cổng — `checkControlList` (pure lookup,
+ *   thêm vào `VehicleControlListService`) + `VehicleControlAlertService` (đích cảnh báo, sẽ
+ *   đổi ở Bước 3 sang `security_alerts`). `VehicleResolveService.onVehicleEvent` gọi
+ *   `VehicleControlAlertService.evaluate()`. Import `NotificationsModule` để lấy
+ *   `NotificationsService` — KHÔNG import ngược `AnprModule` nên không circular.
  */
 @Module({
   imports: [
-    // VehicleControlListEntity: schema-only (SAVP Zone scope) — chỉ đăng ký entity,
-    // chưa có service/controller; nghiệp vụ allowlist/blocklist làm ở UC sau.
     TypeOrmModule.forFeature([
       VehicleRegistrationEntity,
       VehicleControlListEntity,
     ]),
     AuthModule,
+    NotificationsModule,
   ],
-  controllers: [VehicleRegistrationController, VehicleWebhookController],
+  controllers: [
+    VehicleRegistrationController,
+    VehicleWebhookController,
+    VehicleControlListController,
+  ],
   providers: [
     VehicleRegistrationService,
     VehicleUnknownService,
@@ -43,6 +58,8 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
     AnprInternalTokenGuard,
     DefaultVehicleEventHandler,
     VehicleResolveService,
+    VehicleControlListService,
+    VehicleControlAlertService,
     // VRE-001 (UC5): handler thật thay default log-only (UC4).
     { provide: VEHICLE_EVENT_HANDLER, useExisting: VehicleResolveService },
   ],

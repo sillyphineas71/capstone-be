@@ -36,6 +36,8 @@ export enum NotificationType {
   // Gap fix (Nhóm A): nhắc participant upload audio track sau khi meeting
   // completed, chỉ khi recording_configs bật channel_by_zone STT.
   AUDIO_TRACK_UPLOAD_REQUESTED = 'audio_track_upload_requested',
+  // UC9 (VCC-001): bien so khop vehicle_control_list (blocklist/watchlist) khi qua cong.
+  VEHICLE_CONTROL_LIST_MATCH = 'vehicle_control_list_match',
 }
 
 export enum NotificationChannel {

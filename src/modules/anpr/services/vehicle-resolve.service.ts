@@ -4,6 +4,7 @@ import type {
   VehicleEventHandlerPort,
   VehicleEvent,
 } from '../../../common/ports/vehicle-event-hook.js';
+import { VehicleControlAlertService } from './vehicle-control-alert.service.js';
 
 interface IdRow {
   id: string;
@@ -38,7 +39,10 @@ const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
 export class VehicleResolveService implements VehicleEventHandlerPort {
   private readonly logger = new Logger(VehicleResolveService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly vehicleControlAlertService: VehicleControlAlertService,
+  ) {}
 
   async onVehicleEvent(evt: VehicleEvent): Promise<void> {
     try {
@@ -53,6 +57,14 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       // DATA-03: KHÔNG normalize lại — evt.plateNumber đã chuẩn từ UC4.
       const userId = await this.resolveUserByPlate(evt.plateNumber);
       const direction = this.normalizeVehicleDirection(evt.eventAction);
+
+      // UC9 (VCC-001): đối chiếu control-list — độc lập matchState (blocklist thường
+      // KHÔNG phải xe đã đăng ký hợp lệ), tự NotThrow, không phụ thuộc INSERT ingest bên dưới.
+      await this.vehicleControlAlertService.evaluate(evt.plateNumber, {
+        channelId: evt.channelId,
+        direction,
+      });
+
       const matchState = userId ? 'matched' : 'unmatched';
       const processedStatus = userId ? 'processed' : 'unmatched';
       const { eventTime } = this.parseUtc(evt.utc);
