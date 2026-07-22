@@ -2,9 +2,11 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { IsNull, Not } from 'typeorm';
+import { IsNull, Not, DataSource } from 'typeorm';
 import { ZoneEntity } from '../entities/zone.entity.js';
 import { ZonesService } from './zones.service.js';
+import { ZonesAuditRepository } from '../repositories/zones-audit.repository.js';
+import { IotDevicesService } from '../../iot/services/iot-devices.service.js';
 import type { CreateZoneDto } from '../dto/create-zone.dto.js';
 
 const dto = (over: Partial<CreateZoneDto> = {}): CreateZoneDto => ({
@@ -17,6 +19,10 @@ const dto = (over: Partial<CreateZoneDto> = {}): CreateZoneDto => ({
 describe('ZonesService (ZNC-001 / UC-90)', () => {
   let service: ZonesService;
   let repo: any;
+  let queryRunner: any;
+  let dataSource: any;
+  let auditRepo: any;
+  let iotDevicesService: any;
 
   beforeEach(async () => {
     repo = {
@@ -24,10 +30,36 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve({ id: 'z1', ...x })),
     };
+    // UC-92: ghi DB chuyển vào transaction ⇒ save/softDelete nằm ở qr.manager.
+    queryRunner = {
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        save: jest.fn((_entity: any, x: any) =>
+          Promise.resolve({ id: 'z1', ...x }),
+        ),
+        softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
+        query: jest.fn(),
+      },
+    };
+    dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
+    auditRepo = {
+      logZoneCreation: jest.fn(),
+      logZoneUpdate: jest.fn(),
+      logZoneDeletion: jest.fn(),
+    };
+    iotDevicesService = { countByZoneId: jest.fn().mockResolvedValue(0) };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ZonesService,
         { provide: getRepositoryToken(ZoneEntity), useValue: repo },
+        { provide: DataSource, useValue: dataSource },
+        { provide: ZonesAuditRepository, useValue: auditRepo },
+        { provide: IotDevicesService, useValue: iotDevicesService },
       ],
     }).compile();
     service = module.get(ZonesService);
@@ -35,9 +67,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
 
   // Case 1
   it('happy path → save 1 lần, zone_code chuẩn hóa, optional = null, KHÔNG set status/id/deletedAt', async () => {
-    const result = await service.create(dto({ zoneCode: ' gate-01 ' }));
+    const result = await service.create(dto({ zoneCode: ' gate-01 ' }), 'u1');
 
-    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
     const created = repo.create.mock.calls[0][0];
     expect(created.zoneCode).toBe('GATE-01');
     expect(created.zoneName).toBe('Cổng chính');
@@ -57,19 +89,19 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
   it('trùng zone_code đang sống → 409 ZONE_CODE_EXISTS, KHÔNG save', async () => {
     repo.findOne.mockResolvedValue({ id: 'old', zoneCode: 'GATE-01' });
 
-    await expect(service.create(dto())).rejects.toMatchObject({
+    await expect(service.create(dto(), 'u1')).rejects.toMatchObject({
       response: { code: 'ZONE_CODE_EXISTS' },
     });
-    await expect(service.create(dto())).rejects.toBeInstanceOf(
+    await expect(service.create(dto(), 'u1')).rejects.toBeInstanceOf(
       ConflictException,
     );
-    expect(repo.save).not.toHaveBeenCalled();
+    expect(queryRunner.manager.save).not.toHaveBeenCalled();
   });
 
   // Case 3
   it('race 23505 (pre-check lọt, DB chặn) → 409 ZONE_CODE_EXISTS, không rò driverError/stack', async () => {
     repo.findOne.mockResolvedValue(null);
-    repo.save.mockRejectedValue(
+    queryRunner.manager.save.mockRejectedValue(
       Object.assign(
         new Error('duplicate key value violates unique constraint'),
         {
@@ -82,7 +114,7 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     );
 
     try {
-      await service.create(dto());
+      await service.create(dto(), 'u1');
       fail('should throw');
     } catch (e: any) {
       expect(e).toBeInstanceOf(ConflictException);
@@ -102,10 +134,10 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     const dbError = Object.assign(new Error('fk violation'), {
       driverError: { code: '23503' },
     });
-    repo.save.mockRejectedValue(dbError);
+    queryRunner.manager.save.mockRejectedValue(dbError);
 
-    await expect(service.create(dto())).rejects.toBe(dbError);
-    await expect(service.create(dto())).rejects.not.toBeInstanceOf(
+    await expect(service.create(dto(), 'u1')).rejects.toBe(dbError);
+    await expect(service.create(dto(), 'u1')).rejects.not.toBeInstanceOf(
       ConflictException,
     );
   });
@@ -114,18 +146,18 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
   it('mã của zone đã soft-delete vẫn tạo được: pre-check lọc deletedAt IS NULL', async () => {
     repo.findOne.mockResolvedValue(null); // bản ghi cũ đã xóa-mềm → không lọt vào where
 
-    const result = await service.create(dto({ zoneCode: 'GATE-01' }));
+    const result = await service.create(dto({ zoneCode: 'GATE-01' }), 'u1');
 
     expect(repo.findOne).toHaveBeenCalledWith({
       where: { zoneCode: 'GATE-01', deletedAt: IsNull() },
     });
-    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
     expect(result.id).toBe('z1');
   });
 
   // Case 6
   it('chuẩn hóa nhất quán: cùng giá trị dùng cho CẢ pre-check và bản ghi lưu', async () => {
-    await service.create(dto({ zoneCode: '  gate-01  ' }));
+    await service.create(dto({ zoneCode: '  gate-01  ' }), 'u1');
 
     expect(repo.findOne.mock.calls[0][0].where.zoneCode).toBe('GATE-01');
     expect(repo.create.mock.calls[0][0].zoneCode).toBe('GATE-01');
@@ -133,11 +165,12 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     jest.clearAllMocks();
     repo.findOne.mockResolvedValue(null);
     repo.create.mockImplementation((x: any) => x);
-    repo.save.mockImplementation((x: any) =>
+    queryRunner.manager.save.mockImplementation((_e: any, x: any) =>
       Promise.resolve({ id: 'z2', ...x }),
     );
+    dataSource.createQueryRunner.mockReturnValue(queryRunner);
 
-    await service.create(dto({ zoneCode: 'GATE-01' }));
+    await service.create(dto({ zoneCode: 'GATE-01' }), 'u1');
     expect(repo.findOne.mock.calls[0][0].where.zoneCode).toBe('GATE-01');
     expect(repo.create.mock.calls[0][0].zoneCode).toBe('GATE-01');
   });
@@ -150,6 +183,7 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
         description: 'Cổng phía Đông',
         metadataJson: { lane: 2 },
       }),
+      'u1',
     );
 
     const created = repo.create.mock.calls[0][0];
@@ -176,8 +210,10 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     });
 
     beforeEach(() => {
-      // save mặc định trả về chính entity đã merge (giống TypeORM).
-      repo.save = jest.fn((x: any) => Promise.resolve(x));
+      // UC-92: ghi chuyển vào transaction ⇒ mock target là qr.manager.save(Entity, obj).
+      queryRunner.manager.save = jest.fn((_e: any, x: any) =>
+        Promise.resolve(x),
+      );
     });
 
     // Case 1
@@ -185,12 +221,13 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       const zone = makeZone();
       repo.findOne.mockResolvedValueOnce(zone);
 
-      const r = await service.update('z1', {
-        zoneName: 'Cổng chính (mới)',
-        building: 'A',
-      });
+      const r = await service.update(
+        'z1',
+        { zoneName: 'Cổng chính (mới)', building: 'A' },
+        'u1',
+      );
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.zoneName).toBe('Cổng chính (mới)');
       expect(r.building).toBe('A');
       expect(r.zoneCode).toBe('GATE-01');
@@ -203,9 +240,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       repo.findOne.mockResolvedValueOnce(null);
 
       await expect(
-        service.update('missing', { zoneName: 'x' }),
+        service.update('missing', { zoneName: 'x' }, 'u1'),
       ).rejects.toMatchObject({ response: { code: 'ZONE_NOT_FOUND' } });
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
     });
 
     // Case 3
@@ -213,12 +250,12 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       repo.findOne.mockResolvedValueOnce(null);
 
       await expect(
-        service.update('z-deleted', { zoneName: 'x' }),
+        service.update('z-deleted', { zoneName: 'x' }, 'u1'),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.findOne).toHaveBeenCalledWith({
         where: { id: 'z-deleted', deletedAt: IsNull() },
       });
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
     });
 
     // Case 4
@@ -228,25 +265,25 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
         .mockResolvedValueOnce({ id: 'z2', zoneCode: 'GATE-02' }); // pre-check
 
       await expect(
-        service.update('z1', { zoneCode: 'GATE-02' }),
+        service.update('z1', { zoneCode: 'GATE-02' }, 'u1'),
       ).rejects.toMatchObject({ response: { code: 'ZONE_CODE_EXISTS' } });
 
       // Pre-check PHẢI loại chính bản ghi đang sửa + lọc soft-delete.
       expect(repo.findOne).toHaveBeenLastCalledWith({
         where: { zoneCode: 'GATE-02', deletedAt: IsNull(), id: Not('z1') },
       });
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
     });
 
     // Case 5 — bảo vệ Not(id) + điều kiện "mã thực sự đổi"
     it('gửi lại ĐÚNG zone_code của chính nó → KHÔNG 409, KHÔNG chạy pre-check', async () => {
       repo.findOne.mockResolvedValueOnce(makeZone());
 
-      const r = await service.update('z1', { zoneCode: 'gate-01' });
+      const r = await service.update('z1', { zoneCode: 'gate-01' }, 'u1');
 
       // Chỉ 1 lần findOne = chỉ có lượt load, pre-check bị bỏ qua.
       expect(repo.findOne).toHaveBeenCalledTimes(1);
-      expect(repo.save).not.toHaveBeenCalled(); // mã sau chuẩn hóa không đổi → no-op
+      expect(queryRunner.manager.save).not.toHaveBeenCalled(); // mã sau chuẩn hóa không đổi → no-op
       expect(r.zoneCode).toBe('GATE-01');
     });
 
@@ -255,7 +292,7 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       repo.findOne
         .mockResolvedValueOnce(makeZone())
         .mockResolvedValueOnce(null);
-      repo.save.mockRejectedValue(
+      queryRunner.manager.save.mockRejectedValue(
         Object.assign(
           new Error('duplicate key value violates unique constraint'),
           { driverError: { code: '23505' } },
@@ -263,7 +300,7 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       );
 
       try {
-        await service.update('z1', { zoneCode: 'GATE-09' });
+        await service.update('z1', { zoneCode: 'GATE-09' }, 'u1');
         fail('should throw');
       } catch (e: any) {
         expect(e).toBeInstanceOf(ConflictException);
@@ -283,9 +320,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       const dbError = Object.assign(new Error('fk violation'), {
         driverError: { code: '23503' },
       });
-      repo.save.mockRejectedValue(dbError);
+      queryRunner.manager.save.mockRejectedValue(dbError);
 
-      await expect(service.update('z1', { zoneName: 'x' })).rejects.toBe(
+      await expect(service.update('z1', { zoneName: 'x' }, 'u1')).rejects.toBe(
         dbError,
       );
     });
@@ -295,9 +332,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       const zone = makeZone();
       repo.findOne.mockResolvedValueOnce(zone);
 
-      const r = await service.update('z1', {});
+      const r = await service.update('z1', {}, 'u1');
 
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
       expect(r).toBe(zone);
     });
 
@@ -306,13 +343,13 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       const zone = makeZone();
       repo.findOne.mockResolvedValueOnce(zone);
 
-      const r = await service.update('z1', {
-        zoneName: 'Cổng chính',
-        zoneType: 'gate',
-        status: 'active',
-      });
+      const r = await service.update(
+        'z1',
+        { zoneName: 'Cổng chính', zoneType: 'gate', status: 'active' },
+        'u1',
+      );
 
-      expect(repo.save).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
       expect(r).toBe(zone);
     });
 
@@ -326,7 +363,7 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       });
       repo.findOne.mockResolvedValueOnce(zone);
 
-      const r = await service.update('z1', { zoneName: 'Tên mới' });
+      const r = await service.update('z1', { zoneName: 'Tên mới' }, 'u1');
 
       expect(r.zoneName).toBe('Tên mới');
       expect(r.building).toBe('A');
@@ -341,9 +378,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     it('null → xóa giá trị (set NULL) cho field nullable', async () => {
       repo.findOne.mockResolvedValueOnce(makeZone({ building: 'A' }));
 
-      const r = await service.update('z1', { building: null });
+      const r = await service.update('z1', { building: null }, 'u1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.building).toBeNull();
     });
 
@@ -353,10 +390,12 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
         .mockResolvedValueOnce(makeZone())
         .mockResolvedValueOnce(null);
 
-      const r = await service.update('z1', { zoneCode: '  gate-02  ' });
+      const r = await service.update('z1', { zoneCode: '  gate-02  ' }, 'u1');
 
       expect(repo.findOne.mock.calls[1][0].where.zoneCode).toBe('GATE-02');
-      expect(repo.save.mock.calls[0][0].zoneCode).toBe('GATE-02');
+      expect(queryRunner.manager.save.mock.calls[0][1].zoneCode).toBe(
+        'GATE-02',
+      );
       expect(r.zoneCode).toBe('GATE-02');
     });
 
@@ -364,9 +403,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     it('metadata_json REPLACE toàn bộ (không merge sâu)', async () => {
       repo.findOne.mockResolvedValueOnce(makeZone({ metadataJson: { a: 1 } }));
 
-      const r = await service.update('z1', { metadataJson: { b: 2 } });
+      const r = await service.update('z1', { metadataJson: { b: 2 } }, 'u1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.metadataJson).toEqual({ b: 2 });
       expect(r.metadataJson).not.toHaveProperty('a');
     });
@@ -375,9 +414,9 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     it('đổi status active → inactive: save được gọi, field khác giữ nguyên', async () => {
       repo.findOne.mockResolvedValueOnce(makeZone());
 
-      const r = await service.update('z1', { status: 'inactive' });
+      const r = await service.update('z1', { status: 'inactive' }, 'u1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.status).toBe('inactive');
       expect(r.zoneCode).toBe('GATE-01');
       expect(r.zoneName).toBe('Cổng chính');
@@ -388,11 +427,254 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
     it('đổi zone_type room → gate: save được gọi, giá trị mới được ghi', async () => {
       repo.findOne.mockResolvedValueOnce(makeZone({ zoneType: 'room' }));
 
-      const r = await service.update('z1', { zoneType: 'gate' });
+      const r = await service.update('z1', { zoneType: 'gate' }, 'u1');
 
-      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.zoneType).toBe('gate');
       expect(r.zoneCode).toBe('GATE-01');
+    });
+  });
+
+  // ── UC-92 (ZND-001): audit cho create/update (OQ-2 mức 2) ──
+  describe('audit create/update (ZND-001 / UC-92)', () => {
+    const makeZone = (over: Record<string, any> = {}) => ({
+      id: 'z1',
+      zoneCode: 'GATE-01',
+      zoneName: 'Cổng chính',
+      zoneType: 'gate',
+      status: 'active',
+      building: null,
+      floor: null,
+      description: null,
+      metadataJson: null,
+      deletedAt: null,
+      ...over,
+    });
+
+    // Case 8
+    it('create() thành công → logZoneCreation 1 lần trong transaction + commit', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await service.create(dto(), 'u-actor');
+
+      expect(auditRepo.logZoneCreation).toHaveBeenCalledTimes(1);
+      expect(auditRepo.logZoneCreation).toHaveBeenCalledWith(
+        queryRunner.manager,
+        expect.objectContaining({ userId: 'u-actor', zoneId: 'z1' }),
+      );
+      expect(
+        auditRepo.logZoneCreation.mock.invocationCallOrder[0],
+      ).toBeLessThan(queryRunner.commitTransaction.mock.invocationCallOrder[0]);
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 9
+    it('create() trùng mã (pre-check) → 409 và KHÔNG audit, KHÔNG mở transaction', async () => {
+      repo.findOne.mockResolvedValue({ id: 'old', zoneCode: 'GATE-01' });
+
+      await expect(service.create(dto(), 'u1')).rejects.toMatchObject({
+        response: { code: 'ZONE_CODE_EXISTS' },
+      });
+      expect(auditRepo.logZoneCreation).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 12b — đối xứng case 12: race 23505 của create() PHẢI rollback
+    it('create() race 23505 → 409 cùng payload, rollback, không commit, vẫn release, KHÔNG audit', async () => {
+      repo.findOne.mockResolvedValue(null);
+      queryRunner.manager.save.mockRejectedValue(
+        Object.assign(new Error('duplicate key'), {
+          driverError: { code: '23505' },
+        }),
+      );
+
+      await expect(service.create(dto(), 'u1')).rejects.toMatchObject({
+        response: {
+          code: 'ZONE_CODE_EXISTS',
+          message: 'Mã khu vực đã tồn tại',
+        },
+      });
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+      expect(auditRepo.logZoneCreation).not.toHaveBeenCalled();
+    });
+
+    // Case 10
+    it('update() có thay đổi → logZoneUpdate với changes đúng field đã đổi', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      queryRunner.manager.save.mockImplementation((_e: any, x: any) =>
+        Promise.resolve(x),
+      );
+
+      await service.update('z1', { zoneName: 'Tên mới' }, 'u-actor');
+
+      expect(auditRepo.logZoneUpdate).toHaveBeenCalledTimes(1);
+      expect(auditRepo.logZoneUpdate).toHaveBeenCalledWith(
+        queryRunner.manager,
+        {
+          userId: 'u-actor',
+          zoneId: 'z1',
+          changes: { zoneName: { old: 'Cổng chính', new: 'Tên mới' } },
+        },
+      );
+    });
+
+    // Case 11 — bất biến UC-91
+    it('update() no-op → KHÔNG save VÀ KHÔNG audit', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+
+      await service.update('z1', {}, 'u1');
+
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneUpdate).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 12
+    it('update() race 23505 → rollback + 409 cùng payload, vẫn release', async () => {
+      repo.findOne
+        .mockResolvedValueOnce(makeZone())
+        .mockResolvedValueOnce(null);
+      queryRunner.manager.save.mockRejectedValue(
+        Object.assign(new Error('duplicate key'), {
+          driverError: { code: '23505' },
+        }),
+      );
+
+      await expect(
+        service.update('z1', { zoneCode: 'GATE-09' }, 'u1'),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'ZONE_CODE_EXISTS',
+          message: 'Mã khu vực đã tồn tại',
+        },
+      });
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── UC-92 (ZND-001): xoá khu vực ──
+  describe('remove (ZND-001 / UC-92)', () => {
+    const makeZone = (over: Record<string, any> = {}) => ({
+      id: 'z1',
+      zoneCode: 'GATE-01',
+      zoneName: 'Cổng chính',
+      zoneType: 'gate',
+      status: 'active',
+      deletedAt: null,
+      ...over,
+    });
+
+    // Case 1
+    it('xoá thành công: softDelete + audit trong transaction, có commit và release', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      iotDevicesService.countByZoneId.mockResolvedValue(0);
+
+      await service.remove('z1', 'u1');
+
+      expect(queryRunner.manager.softDelete).toHaveBeenCalledWith(
+        ZoneEntity,
+        'z1',
+      );
+      expect(auditRepo.logZoneDeletion).toHaveBeenCalledWith(
+        queryRunner.manager,
+        {
+          userId: 'u1',
+          zoneId: 'z1',
+          zoneCode: 'GATE-01',
+          zoneType: 'gate',
+        },
+      );
+      // audit phải ghi TRƯỚC khi commit
+      expect(
+        auditRepo.logZoneDeletion.mock.invocationCallOrder[0],
+      ).toBeLessThan(queryRunner.commitTransaction.mock.invocationCallOrder[0]);
+      expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 2
+    it('404 zone không tồn tại: KHÔNG đếm thiết bị, KHÔNG mở transaction', async () => {
+      repo.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.remove('missing', 'u1')).rejects.toMatchObject({
+        response: { code: 'ZONE_NOT_FOUND' },
+      });
+      expect(iotDevicesService.countByZoneId).not.toHaveBeenCalled();
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    // Case 3
+    it('404 zone đã xoá mềm (gồm DELETE lần 2): lookup lọc deletedAt IS NULL', async () => {
+      repo.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.remove('z-deleted', 'u1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(repo.findOne).toHaveBeenCalledWith({
+        where: { id: 'z-deleted', deletedAt: IsNull() },
+      });
+    });
+
+    // Case 4 — crux OQ-1 (vế chặn)
+    it('409 ZONE_HAS_DEVICES khi còn thiết bị: không mở transaction, không softDelete, không audit', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      iotDevicesService.countByZoneId.mockResolvedValue(3);
+
+      await expect(service.remove('z1', 'u1')).rejects.toMatchObject({
+        response: {
+          code: 'ZONE_HAS_DEVICES',
+          details: { device_count: 3 },
+        },
+      });
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(queryRunner.manager.softDelete).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneDeletion).not.toHaveBeenCalled();
+    });
+
+    // Case 5 — crux OQ-1 (vế KHÔNG chặn theo log)
+    it('còn LOG nhưng hết thiết bị → VẪN XOÁ (không chặn theo log)', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      iotDevicesService.countByZoneId.mockResolvedValue(0);
+
+      await service.remove('z1', 'u1');
+
+      // Service KHÔNG được truy vấn gate_access_logs / zone_presence_events:
+      // chỉ có đúng 1 findOne (lượt loadActive) và 0 query thô nào khác.
+      expect(repo.findOne).toHaveBeenCalledTimes(1);
+      expect(queryRunner.manager.query).not.toHaveBeenCalled();
+      expect(queryRunner.manager.softDelete).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 6
+    it('audit lỗi → rollback, KHÔNG commit, vẫn release, lỗi propagate', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      iotDevicesService.countByZoneId.mockResolvedValue(0);
+      const auditError = new Error('audit insert failed');
+      auditRepo.logZoneDeletion.mockRejectedValue(auditError);
+
+      await expect(service.remove('z1', 'u1')).rejects.toBe(auditError);
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 7
+    it('countByZoneId được gọi đúng 1 lần với đúng id', async () => {
+      repo.findOne.mockResolvedValueOnce(makeZone());
+      iotDevicesService.countByZoneId.mockResolvedValue(0);
+
+      await service.remove('z1', 'u1');
+
+      expect(iotDevicesService.countByZoneId).toHaveBeenCalledTimes(1);
+      expect(iotDevicesService.countByZoneId).toHaveBeenCalledWith('z1');
     });
   });
 });

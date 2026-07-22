@@ -276,6 +276,23 @@ export class IotDevicesService {
     }
   }
 
+  /**
+   * Đếm số thiết bị đang gán vào một zone.
+   *
+   * API đọc phục vụ UC-92 của module `zones` (kiểm tra trước khi xoá zone) — `iot` KHÔNG
+   * biết gì về nghiệp vụ zone, chỉ trả con số. Module `zones` gọi qua service này thay vì
+   * query thẳng bảng `iot_devices` (ARCH-01).
+   *
+   * Đếm MỌI thiết bị bất kể `status`: thiết bị `disabled`/`offline` vẫn là cấu hình đang trỏ
+   * vào zone, xoá zone sẽ để lại tham chiếu treo. `IoTDeviceEntity` không có soft-delete nên
+   * không cần lọc `deleted_at`.
+   */
+  async countByZoneId(zoneId: string): Promise<number> {
+    return this.dataSource.manager.count(IoTDeviceEntity, {
+      where: { zoneId },
+    });
+  }
+
   async findAll(query: ListIotDevicesQueryDto): Promise<{
     items: IotDeviceResponseDto[];
     meta: {

@@ -21,7 +21,11 @@ import { ZoneEntity } from './zone.entity.js';
  *   `duration_seconds` chỉ có giá trị khi đã ghép cặp.
  * - `plate_number` (normalized) snapshot tại thời điểm qua cổng — giữ được cả khi biển
  *   chưa/không map được về `vehicle_registrations`.
- * - `zone_id` dùng ON DELETE RESTRICT: không cho xoá zone khi còn log.
+ * - `zone_id` khai ON DELETE RESTRICT ở DB, nhưng ràng buộc này CHỈ kích hoạt với hard-delete
+ *   — mà hard-delete bị DATA-01 cấm. Hệ thống xoá zone bằng soft-delete (`UPDATE deleted_at`)
+ *   nên hàng `zones` vẫn tồn tại và FK action KHÔNG BAO GIỜ chạy. Việc chặn hay không chặn xoá
+ *   zone hoàn toàn do tầng application quyết định: UC-92 chốt **chặn theo THIẾT BỊ đang gán,
+ *   KHÔNG chặn theo log** (log chỉ tăng, chặn theo log sẽ khiến zone bất tử).
  */
 @Entity('gate_access_logs')
 export class GateAccessLogEntity {

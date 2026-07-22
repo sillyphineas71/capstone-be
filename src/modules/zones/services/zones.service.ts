@@ -4,9 +4,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, IsNull, Not, DataSource } from 'typeorm';
 import { ZoneEntity } from '../entities/zone.entity.js';
 import { normalizeZoneCode } from '../utils/normalize-zone-code.js';
+import { ZonesAuditRepository } from '../repositories/zones-audit.repository.js';
+import { IotDevicesService } from '../../iot/services/iot-devices.service.js';
 import type { CreateZoneDto } from '../dto/create-zone.dto.js';
 import type { UpdateZoneDto } from '../dto/update-zone.dto.js';
 
@@ -48,9 +50,21 @@ export class ZonesService {
   constructor(
     @InjectRepository(ZoneEntity)
     private readonly repo: Repository<ZoneEntity>,
+    private readonly dataSource: DataSource,
+    private readonly zonesAuditRepository: ZonesAuditRepository,
+    // ARCH-01: kiểm tra thiết bị của zone PHẢI qua service của module `iot`, KHÔNG query
+    // thẳng bảng `iot_devices`. Phụ thuộc `zones → iot` là MỘT CHIỀU, vĩnh viễn (OQ-1b).
+    private readonly iotDevicesService: IotDevicesService,
   ) {}
 
-  async create(dto: CreateZoneDto): Promise<ZoneEntity> {
+  /**
+   * Tạo khu vực (UC-90) — UC-92 bọc thêm transaction + audit, **hành vi nghiệp vụ KHÔNG đổi**.
+   *
+   * Pre-check trùng mã đặt NGOÀI transaction (nhất quán với `remove()`: fail nhanh, không tốn
+   * connection). Safety-net `23505` nằm TRONG transaction vẫn phủ race, và nhánh catch phải
+   * rollback — thiếu rollback là treo transaction → rò connection pool.
+   */
+  async create(dto: CreateZoneDto, actorUserId: string): Promise<ZoneEntity> {
     // OQ-5: chuẩn hóa TRƯỚC pre-check để pre-check và bản ghi lưu dùng cùng một giá trị.
     const zoneCode = normalizeZoneCode(dto.zoneCode);
 
@@ -73,15 +87,30 @@ export class ZonesService {
       metadataJson: dto.metadataJson ?? null,
     });
 
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      return await this.repo.save(entity);
+      const saved = await queryRunner.manager.save(ZoneEntity, entity);
+      await this.zonesAuditRepository.logZoneCreation(queryRunner.manager, {
+        userId: actorUserId,
+        zoneId: saved.id,
+        zoneCode: saved.zoneCode,
+        zoneType: saved.zoneType,
+      });
+      await queryRunner.commitTransaction();
+      return saved;
     } catch (e) {
+      await queryRunner.rollbackTransaction();
       // Safety-net race: hai request cùng mã cùng lọt pre-check → partial unique chặn ở DB.
       // Dịch thành 409 sạch, KHÔNG để lỗi driver/stack phọt ra client (ENG-03).
       if (this.isUniqueViolation(e)) {
         throw zoneCodeConflict();
       }
       throw e;
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -118,7 +147,11 @@ export class ZonesService {
    * hoặc gửi đúng giá trị đang có đều là **no-op trả 200**, KHÔNG `save`, `updated_at` không
    * nhảy. KHÔNG được "sửa cho giống iot-devices".
    */
-  async update(id: string, dto: UpdateZoneDto): Promise<ZoneEntity> {
+  async update(
+    id: string,
+    dto: UpdateZoneDto,
+    actorUserId: string,
+  ): Promise<ZoneEntity> {
     // 1. Load zone đang sống — 404 trước mọi thứ khác.
     const entity = await this.loadActive(id);
 
@@ -160,23 +193,95 @@ export class ZonesService {
       Object.keys(updates) as (keyof ZoneUpdatableFields)[]
     ).filter((key) => updates[key] !== entity[key]);
 
-    // 5. Không có thay đổi thực → no-op: KHÔNG save, `updated_at` không nhảy.
+    // 5. Không có thay đổi thực → no-op: KHÔNG save, KHÔNG audit (không có gì để ghi vết),
+    //    `updated_at` không nhảy. Bất biến từ UC-91, UC-92 giữ nguyên.
     if (changedKeys.length === 0) {
       return entity;
     }
 
+    // Gom changes {old, new} cho audit TRƯỚC khi ghi đè entity.
+    const changes: Record<string, { old: unknown; new: unknown }> = {};
     for (const key of changedKeys) {
+      changes[key] = { old: entity[key] ?? null, new: updates[key] ?? null };
       Object.assign(entity, { [key]: updates[key] });
     }
 
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      return await this.repo.save(entity);
+      const saved = await queryRunner.manager.save(ZoneEntity, entity);
+      await this.zonesAuditRepository.logZoneUpdate(queryRunner.manager, {
+        userId: actorUserId,
+        zoneId: id,
+        changes,
+      });
+      await queryRunner.commitTransaction();
+      return saved;
     } catch (e) {
+      await queryRunner.rollbackTransaction();
       // Safety-net race: hai request cùng đổi sang một mã, cùng lọt pre-check → DB chặn.
       if (this.isUniqueViolation(e)) {
         throw zoneCodeConflict();
       }
       throw e;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  // ── UC-92 (ZND-001): xoá khu vực ──
+
+  /**
+   * Xoá mềm khu vực (UC-92).
+   *
+   * Thứ tự bắt buộc:
+   * 1. `loadActive` → 404 `ZONE_NOT_FOUND` (phủ luôn lần gọi DELETE thứ hai — OQ-4).
+   * 2. Chặn theo THIẾT BỊ (OQ-1) — đặt NGOÀI transaction để fail nhanh, không tốn connection.
+   *    KHÔNG đếm `gate_access_logs`/`zone_presence_events`: log chỉ tăng, chặn theo log sẽ
+   *    khiến zone bất tử.
+   * 3. Transaction { softDelete + audit } — "đã xoá nhưng không có audit" là mất dấu vết
+   *    vĩnh viễn, nên hai việc phải cùng sống hoặc cùng chết.
+   *
+   * DATA-01: chỉ soft-delete, TUYỆT ĐỐI không hard-delete.
+   *
+   * ⚠ `ON DELETE RESTRICT` của `gate_access_logs`/`zone_presence_events` KHÔNG kích hoạt ở
+   * đây: soft-delete chỉ là `UPDATE deleted_at`, hàng `zones` vẫn tồn tại. Việc chặn/không
+   * chặn hoàn toàn do tầng application quyết định.
+   */
+  async remove(id: string, actorUserId: string): Promise<void> {
+    const entity = await this.loadActive(id);
+
+    // CRUX (OQ-1): chặn theo thiết bị — camera là cấu hình đang sống, phải do người vận hành
+    // gỡ có ý thức, tránh âm thầm để lại `iot_devices.zone_id` trỏ vào zone đã chết.
+    const deviceCount = await this.iotDevicesService.countByZoneId(id);
+    if (deviceCount > 0) {
+      throw new ConflictException({
+        code: 'ZONE_HAS_DEVICES',
+        message: 'Khu vực còn thiết bị được gán, hãy gỡ thiết bị trước khi xoá',
+        details: { device_count: deviceCount },
+      });
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager.softDelete(ZoneEntity, id);
+      await this.zonesAuditRepository.logZoneDeletion(queryRunner.manager, {
+        userId: actorUserId,
+        zoneId: id,
+        zoneCode: entity.zoneCode,
+        zoneType: entity.zoneType,
+      });
+      await queryRunner.commitTransaction();
+    } catch (e) {
+      await queryRunner.rollbackTransaction();
+      throw e;
+    } finally {
+      await queryRunner.release();
     }
   }
 

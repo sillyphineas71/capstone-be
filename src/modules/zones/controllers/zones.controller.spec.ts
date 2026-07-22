@@ -43,10 +43,10 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
   });
 
   it('POST /zones → service.create(dto) 1 lần + envelope {success,message,data} qua mapper', async () => {
-    const r = await controller.create(dto);
+    const r = await controller.create({ userId: 'u1' }, dto);
 
     expect(service.create).toHaveBeenCalledTimes(1);
-    expect(service.create).toHaveBeenCalledWith(dto);
+    expect(service.create).toHaveBeenCalledWith(dto, 'u1');
     expect(r.success).toBe(true);
     expect(r.message).toBe('Zone created successfully');
     expect(r.data).toMatchObject({
@@ -82,7 +82,9 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
     });
     service.create.mockRejectedValue(conflict);
 
-    await expect(controller.create(dto)).rejects.toBe(conflict);
+    await expect(controller.create({ userId: 'u1' }, dto)).rejects.toBe(
+      conflict,
+    );
   });
 
   // ── UC-91 (ZNU-001): route PATCH /zones/:id ──
@@ -96,10 +98,10 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
     });
 
     it('gọi service.update(id, dto) 1 lần + envelope qua mapper', async () => {
-      const r = await controller.update('z1', updateDto);
+      const r = await controller.update({ userId: 'u1' }, 'z1', updateDto);
 
       expect(service.update).toHaveBeenCalledTimes(1);
-      expect(service.update).toHaveBeenCalledWith('z1', updateDto);
+      expect(service.update).toHaveBeenCalledWith('z1', updateDto, 'u1');
       expect(r.success).toBe(true);
       expect(r.message).toBe('Zone updated successfully');
       expect(r.data).toMatchObject({
@@ -127,9 +129,9 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
       });
       service.update.mockRejectedValue(notFound);
 
-      await expect(controller.update('missing', updateDto)).rejects.toBe(
-        notFound,
-      );
+      await expect(
+        controller.update({ userId: 'u1' }, 'missing', updateDto),
+      ).rejects.toBe(notFound);
     });
 
     it('service ném ConflictException → propagate nguyên trạng', async () => {
@@ -139,13 +141,67 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
       });
       service.update.mockRejectedValue(conflict);
 
-      await expect(controller.update('z1', updateDto)).rejects.toBe(conflict);
+      await expect(
+        controller.update({ userId: 'u1' }, 'z1', updateDto),
+      ).rejects.toBe(conflict);
     });
 
     it(':id không phải UUID → ParseUUIDPipe reject (400)', async () => {
       await expect(
         new ParseUUIDPipe().transform('abc', { type: 'param' }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  // ── UC-92 (ZND-001): route DELETE /zones/:id ──
+  describe('remove (ZND-001 / UC-92)', () => {
+    beforeEach(() => {
+      service.remove = jest.fn().mockResolvedValue(undefined);
+    });
+
+    it('gọi service.remove(id, userId) 1 lần + envelope data:null', async () => {
+      const r = await controller.remove({ userId: 'u1' }, 'z1');
+
+      expect(service.remove).toHaveBeenCalledTimes(1);
+      expect(service.remove).toHaveBeenCalledWith('z1', 'u1');
+      expect(r).toEqual({
+        success: true,
+        message: 'Zone deleted successfully',
+        data: null,
+      });
+    });
+
+    it('gate THẬT: JwtAuthGuard + PermissionsGuard + @RequirePermissions("zones.zone.delete")', () => {
+      const guards = Reflect.getMetadata('__guards__', controller.remove) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).toContain(PermissionsGuard);
+
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.remove);
+      expect(perms).toEqual(['zones.zone.delete']);
+    });
+
+    it('service ném NotFoundException → propagate nguyên trạng', async () => {
+      const notFound = new NotFoundException({
+        code: 'ZONE_NOT_FOUND',
+        message: 'Không tìm thấy khu vực',
+      });
+      service.remove.mockRejectedValue(notFound);
+
+      await expect(controller.remove({ userId: 'u1' }, 'missing')).rejects.toBe(
+        notFound,
+      );
+    });
+
+    it('service ném ConflictException ZONE_HAS_DEVICES → propagate nguyên trạng', async () => {
+      const conflict = new ConflictException({
+        code: 'ZONE_HAS_DEVICES',
+        message: 'Khu vực còn thiết bị được gán, hãy gỡ thiết bị trước khi xoá',
+      });
+      service.remove.mockRejectedValue(conflict);
+
+      await expect(controller.remove({ userId: 'u1' }, 'z1')).rejects.toBe(
+        conflict,
+      );
     });
   });
 });

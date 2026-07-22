@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
+import { IotModule } from '../iot/iot.module.js';
 import { ZoneEntity } from './entities/zone.entity.js';
 import { GateAccessLogEntity } from './entities/gate-access-log.entity.js';
 import { ZonePresenceEventEntity } from './entities/zone-presence-event.entity.js';
 import { ZonesController } from './controllers/zones.controller.js';
 import { ZonesService } from './services/zones.service.js';
+import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
 
 /**
  * ZonesModule (SAVP Zone scope).
@@ -21,6 +23,15 @@ import { ZonesService } from './services/zones.service.js';
  * này là crash lúc boot (`UnknownDependenciesException`), KHÔNG phải lỗi 403. Mirror
  * `anpr.module.ts`.
  *
+ * ZND-001 (UC-92): thêm xoá mềm + audit — `ZonesAuditRepository` (ghi `audit_logs` với
+ * `entity_type='zones'`) và import `IotModule` để đếm thiết bị đang gán vào zone qua
+ * `IotDevicesService` (ARCH-01: KHÔNG query thẳng bảng `iot_devices`).
+ *
+ * ⚠ RÀNG BUỘC KIẾN TRÚC (OQ-1b) — phụ thuộc `zones → iot` là **MỘT CHIỀU, VĨNH VIỄN**:
+ * `IotModule` TUYỆT ĐỐI KHÔNG được import `ZonesModule`, và cấm dùng `forwardRef` để lách.
+ * Hệ quả cho UC-94 (gán camera vào zone): route đặt ở phía `zones`
+ * (`PATCH /api/v1/zones/:id/devices`), KHÔNG phải `PATCH /iot-devices/:id/zone`.
+ *
  * CLI DataSource (`src/database/data-source.ts`) đã glob `modules/**\/*.entity.{ts,js}`
  * nên KHÔNG cần khai thêm ở đó.
  */
@@ -32,9 +43,10 @@ import { ZonesService } from './services/zones.service.js';
       ZonePresenceEventEntity,
     ]),
     AuthModule,
+    IotModule,
   ],
   controllers: [ZonesController],
-  providers: [ZonesService],
+  providers: [ZonesService, ZonesAuditRepository],
   exports: [TypeOrmModule],
 })
 export class ZonesModule {}

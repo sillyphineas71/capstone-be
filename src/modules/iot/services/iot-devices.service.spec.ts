@@ -12,7 +12,10 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { IoTDeviceType } from '../entities/iot-device.entity.js';
+import {
+  IoTDeviceType,
+  IoTDeviceEntity,
+} from '../entities/iot-device.entity.js';
 import { probeTcp } from '../utils/rtsp-probe.util.js';
 import { probeRtspRuntime } from '../utils/rtsp-runtime-probe.util.js';
 import * as nodeCrypto from 'crypto';
@@ -58,6 +61,7 @@ describe('IotDevicesService', () => {
         findOne: jest.fn(),
         find: jest.fn(),
         query: jest.fn(),
+        count: jest.fn(),
       } as any,
     };
 
@@ -1446,6 +1450,27 @@ describe('IotDevicesService', () => {
         unknown: 0,
         byType: {},
       });
+    });
+  });
+
+  // ── ZND-001 / UC-92: API đọc cho module `zones` ──
+  describe('countByZoneId (ZND-001 / UC-92)', () => {
+    it('đếm theo zone_id, không lọc status/deletedAt', async () => {
+      (dataSourceMock.manager.count as jest.Mock).mockResolvedValue(3);
+
+      const result = await service.countByZoneId('z1');
+
+      expect(result).toBe(3);
+      expect(dataSourceMock.manager.count).toHaveBeenCalledWith(
+        IoTDeviceEntity,
+        { where: { zoneId: 'z1' } },
+      );
+    });
+
+    it('zone không có thiết bị → 0', async () => {
+      (dataSourceMock.manager.count as jest.Mock).mockResolvedValue(0);
+
+      await expect(service.countByZoneId('z-empty')).resolves.toBe(0);
     });
   });
 });

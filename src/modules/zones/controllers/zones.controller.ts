@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Param,
@@ -14,6 +15,7 @@ import {
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { ZonesService } from '../services/zones.service.js';
 import { CreateZoneDto } from '../dto/create-zone.dto.js';
 import { UpdateZoneDto } from '../dto/update-zone.dto.js';
@@ -42,8 +44,11 @@ export class ZonesController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('zones.zone.create')
   @UsePipes(ZONE_PIPE)
-  async create(@Body() dto: CreateZoneDto) {
-    const entity = await this.zonesService.create(dto);
+  async create(
+    @CurrentUser() user: { userId: string },
+    @Body() dto: CreateZoneDto,
+  ) {
+    const entity = await this.zonesService.create(dto, user.userId);
 
     return {
       success: true,
@@ -61,15 +66,36 @@ export class ZonesController {
   @RequirePermissions('zones.zone.update')
   @UsePipes(ZONE_PIPE)
   async update(
+    @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateZoneDto,
   ) {
-    const entity = await this.zonesService.update(id, dto);
+    const entity = await this.zonesService.update(id, dto, user.userId);
 
     return {
       success: true,
       message: 'Zone updated successfully',
       data: toZoneResponse(entity),
+    };
+  }
+
+  /**
+   * UC-92 (ZND-001): xoá mềm khu vực. KHÔNG `@HttpCode` — DELETE mặc định 200 (OQ-3:
+   * trả envelope với `data: null`, KHÔNG dùng 204). KHÔNG `ZONE_PIPE` vì không có body/query.
+   */
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('zones.zone.delete')
+  async remove(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.zonesService.remove(id, user.userId);
+
+    return {
+      success: true,
+      message: 'Zone deleted successfully',
+      data: null,
     };
   }
 }
