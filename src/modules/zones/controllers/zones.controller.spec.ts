@@ -153,6 +153,79 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
     });
   });
 
+  // ── UC-93 (ZNL-001): route GET /zones và GET /zones/:id ──
+  describe('list & detail (ZNL-001 / UC-93)', () => {
+    beforeEach(() => {
+      service.list = jest.fn().mockResolvedValue({
+        items: [entity],
+        meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+      });
+      service.getDetail = jest.fn().mockResolvedValue(entity);
+    });
+
+    // Case 22
+    it('GET /zones → service.list(query) 1 lần, envelope có meta NGANG HÀNG data', async () => {
+      const query = { page: 1, limit: 20 } as any;
+
+      const r = await controller.list(query);
+
+      expect(service.list).toHaveBeenCalledTimes(1);
+      expect(service.list).toHaveBeenCalledWith(query);
+      expect(r.success).toBe(true);
+      expect(r.message).toBe('Zones retrieved successfully');
+      expect(Array.isArray(r.data)).toBe(true);
+      expect(r.data[0]).toMatchObject({ id: 'z1', zone_code: 'GATE-01' });
+      expect(r.data[0]).not.toHaveProperty('deleted_at');
+      // meta ngang hàng data, KHÔNG lồng trong data.
+      expect(r.meta).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 });
+    });
+
+    it('GET /zones rỗng → data: [] và meta.total = 0 (không 404)', async () => {
+      service.list.mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      });
+
+      const r = await controller.list({} as any);
+
+      expect(r.data).toEqual([]);
+      expect(r.meta.total).toBe(0);
+    });
+
+    // Case 23
+    it('GET /zones/:id → service.getDetail(id), envelope KHÔNG có meta', async () => {
+      const r = await controller.detail('z1');
+
+      expect(service.getDetail).toHaveBeenCalledWith('z1');
+      expect(r.message).toBe('Zone retrieved successfully');
+      expect(r.data).toMatchObject({ id: 'z1', zone_code: 'GATE-01' });
+      expect(r).not.toHaveProperty('meta');
+    });
+
+    // Case 24
+    it('gate THẬT trên CẢ 2 handler: 2 guard + @RequirePermissions("zones.zone.read")', () => {
+      for (const handler of [controller.list, controller.detail]) {
+        const guards = Reflect.getMetadata('__guards__', handler) ?? [];
+        expect(guards).toContain(JwtAuthGuard);
+        expect(guards).toContain(PermissionsGuard);
+        expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual([
+          'zones.zone.read',
+        ]);
+      }
+    });
+
+    // Case 25
+    it('service.getDetail ném NotFoundException → propagate nguyên trạng', async () => {
+      const notFound = new NotFoundException({
+        code: 'ZONE_NOT_FOUND',
+        message: 'Không tìm thấy khu vực',
+      });
+      service.getDetail.mockRejectedValue(notFound);
+
+      await expect(controller.detail('missing')).rejects.toBe(notFound);
+    });
+  });
+
   // ── UC-92 (ZND-001): route DELETE /zones/:id ──
   describe('remove (ZND-001 / UC-92)', () => {
     beforeEach(() => {

@@ -19,16 +19,28 @@ const dto = (over: Partial<CreateZoneDto> = {}): CreateZoneDto => ({
 describe('ZonesService (ZNC-001 / UC-90)', () => {
   let service: ZonesService;
   let repo: any;
+  let queryBuilder: any;
   let queryRunner: any;
   let dataSource: any;
   let auditRepo: any;
   let iotDevicesService: any;
 
   beforeEach(async () => {
+    // UC-93 (read-only): bổ sung findAndCount + createQueryBuilder vào mock repo dùng chung.
+    queryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
     repo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve({ id: 'z1', ...x })),
+      findAndCount: jest.fn().mockResolvedValue([[], 0]),
+      createQueryBuilder: jest.fn(() => queryBuilder),
     };
     // UC-92: ghi DB chuyển vào transaction ⇒ save/softDelete nằm ở qr.manager.
     queryRunner = {
@@ -432,6 +444,237 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       expect(queryRunner.manager.save).toHaveBeenCalledTimes(1);
       expect(r.zoneType).toBe('gate');
       expect(r.zoneCode).toBe('GATE-01');
+    });
+  });
+
+  // ── UC-93 (ZNL-001): list & detail (READ-ONLY) ──
+  describe('list (ZNL-001 / UC-93)', () => {
+    const zone = (over: Record<string, any> = {}) => ({
+      id: 'z1',
+      zoneCode: 'GATE-01',
+      zoneName: 'Cổng chính',
+      zoneType: 'gate',
+      status: 'active',
+      building: null,
+      floor: null,
+      description: null,
+      metadataJson: null,
+      deletedAt: null,
+      ...over,
+    });
+
+    const q = (over: Record<string, any> = {}) => over as any;
+
+    // Case 1
+    it('list rỗng → 200 với items: [], meta.total = 0, KHÔNG ném 404', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+
+      const r = await service.list(q());
+
+      expect(r.items).toEqual([]);
+      expect(r.meta.total).toBe(0);
+      expect(r.meta.totalPages).toBe(0);
+    });
+
+    // Case 2
+    it('phân trang: page=3, limit=10 → skip=20, take=10', async () => {
+      repo.findAndCount.mockResolvedValue([[zone()], 1]);
+
+      await service.list(q({ page: 3, limit: 10 }));
+
+      const arg = repo.findAndCount.mock.calls[0][0];
+      expect(arg.skip).toBe(20);
+      expect(arg.take).toBe(10);
+    });
+
+    // Case 3
+    it('meta.totalPages = ceil(total/limit)', async () => {
+      repo.findAndCount.mockResolvedValue([[zone()], 25]);
+
+      const r = await service.list(q({ page: 1, limit: 10 }));
+
+      expect(r.meta.totalPages).toBe(3);
+      expect(r.meta.total).toBe(25);
+    });
+
+    // Case 4
+    it('default: không truyền page/limit → skip=0, take=20, meta 1/20', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+
+      const r = await service.list(q());
+
+      const arg = repo.findAndCount.mock.calls[0][0];
+      expect(arg.skip).toBe(0);
+      expect(arg.take).toBe(20);
+      expect(r.meta.page).toBe(1);
+      expect(r.meta.limit).toBe(20);
+    });
+
+    // Case 5
+    it('filter đơn: zone_type → where có zoneType + deletedAt IS NULL', async () => {
+      await service.list(q({ zoneType: 'gate' }));
+
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(where.zoneType).toBe('gate');
+      expect(where.deletedAt).toEqual(IsNull());
+    });
+
+    // Case 6
+    it('filter kết hợp (AND): building + floor + status', async () => {
+      await service.list(q({ building: 'A', floor: 'B1', status: 'active' }));
+
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(where.building).toBe('A');
+      expect(where.floor).toBe('B1');
+      expect(where.status).toBe('active');
+      expect(where.deletedAt).toEqual(IsNull());
+    });
+
+    // Case 7
+    it('filter KHÔNG gửi thì KHÔNG lọt vào where (kể cả undefined)', async () => {
+      await service.list(q({ zoneType: 'gate' }));
+
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty('building');
+      expect(where).not.toHaveProperty('floor');
+      expect(where).not.toHaveProperty('status');
+      expect(Object.keys(where).sort()).toEqual(['deletedAt', 'zoneType']);
+    });
+
+    // Case 8
+    it('soft-delete không lọt: where luôn có deletedAt IS NULL', async () => {
+      await service.list(q());
+      expect(repo.findAndCount.mock.calls[0][0].where.deletedAt).toEqual(
+        IsNull(),
+      );
+    });
+
+    // Case 9
+    it('sort zone_code ASC ở CẢ hai nhánh', async () => {
+      await service.list(q());
+      expect(repo.findAndCount.mock.calls[0][0].order).toEqual({
+        zoneCode: 'ASC',
+      });
+
+      await service.list(q({ search: 'gate' }));
+      expect(queryBuilder.orderBy).toHaveBeenCalledWith('z.zoneCode', 'ASC');
+    });
+
+    // Case 10
+    it('search dùng BOUND PARAM (assert tham số, không assert chuỗi nối)', async () => {
+      await service.list(q({ search: 'gate' }));
+
+      const ilikeCall = queryBuilder.andWhere.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('ILIKE'),
+      );
+      expect(ilikeCall).toBeDefined();
+      expect(ilikeCall[0]).toContain('ILIKE :s');
+      expect(ilikeCall[1]).toEqual({ s: '%gate%' });
+      // Giá trị input KHÔNG được nội suy vào câu SQL.
+      expect(String(ilikeCall[0])).not.toContain('gate');
+    });
+
+    // Case 10b — nhánh QueryBuilder phải gắn ĐỦ filter, không chỉ ILIKE
+    it('search KẾT HỢP filter: QueryBuilder nhận CẢ filter LẪN ILIKE', async () => {
+      await service.list(
+        q({ search: 'hall', zoneType: 'corridor', building: 'A' }),
+      );
+
+      // Filter đi vào qb.where(...) dưới dạng object điều kiện.
+      const whereArg = queryBuilder.where.mock.calls[0][0];
+      expect(whereArg.zoneType).toBe('corridor');
+      expect(whereArg.building).toBe('A');
+      expect(whereArg.deletedAt).toEqual(IsNull());
+
+      // Và điều kiện ILIKE vẫn được gắn kèm.
+      const ilikeCall = queryBuilder.andWhere.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('ILIKE'),
+      );
+      expect(ilikeCall).toBeDefined();
+      expect(ilikeCall[1]).toEqual({ s: '%hall%' });
+
+      expect(queryBuilder.orderBy).toHaveBeenCalledWith('z.zoneCode', 'ASC');
+    });
+
+    // Case 11
+    it('search KHÔNG normalize: gate vẫn là %gate%, không thành %GATE%', async () => {
+      await service.list(q({ search: 'gate' }));
+
+      const ilikeCall = queryBuilder.andWhere.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('ILIKE'),
+      );
+      expect(ilikeCall[1]).toEqual({ s: '%gate%' });
+      expect(ilikeCall[1].s).not.toBe('%GATE%');
+    });
+
+    // Case 12
+    it('nhánh QueryBuilder vẫn lọc soft-delete', async () => {
+      await service.list(q({ search: 'gate' }));
+
+      const whereArg = queryBuilder.where.mock.calls[0][0];
+      expect(whereArg.deletedAt).toEqual(IsNull());
+    });
+
+    // Case 13
+    it('chọn đúng nhánh: không search → findAndCount; có search → QueryBuilder', async () => {
+      await service.list(q());
+      expect(repo.findAndCount).toHaveBeenCalledTimes(1);
+      expect(repo.createQueryBuilder).not.toHaveBeenCalled();
+
+      jest.clearAllMocks();
+      repo.createQueryBuilder.mockReturnValue(queryBuilder);
+      queryBuilder.getManyAndCount.mockResolvedValue([[], 0]);
+
+      await service.list(q({ search: 'gate' }));
+      expect(repo.createQueryBuilder).toHaveBeenCalledTimes(1);
+      expect(repo.findAndCount).not.toHaveBeenCalled();
+    });
+
+    // READ-ONLY
+    it('READ-ONLY: KHÔNG mở transaction, KHÔNG ghi audit (cả 2 nhánh)', async () => {
+      await service.list(q());
+      await service.list(q({ search: 'gate' }));
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneCreation).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneUpdate).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneDeletion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getDetail (ZNL-001 / UC-93)', () => {
+    // Case 14
+    it('200: trả entity, lookup lọc deletedAt IS NULL', async () => {
+      const entity = { id: 'z1', zoneCode: 'GATE-01' };
+      repo.findOne.mockResolvedValueOnce(entity);
+
+      const r = await service.getDetail('z1');
+
+      expect(r).toBe(entity);
+      expect(repo.findOne).toHaveBeenCalledWith({
+        where: { id: 'z1', deletedAt: IsNull() },
+      });
+    });
+
+    // Case 15
+    it('404 ZONE_NOT_FOUND khi không tồn tại / đã xoá mềm', async () => {
+      repo.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.getDetail('missing')).rejects.toMatchObject({
+        response: { code: 'ZONE_NOT_FOUND' },
+      });
+      await expect(service.getDetail('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('READ-ONLY: KHÔNG mở transaction, KHÔNG ghi audit', async () => {
+      repo.findOne.mockResolvedValueOnce({ id: 'z1' });
+
+      await service.getDetail('z1');
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(auditRepo.logZoneDeletion).not.toHaveBeenCalled();
     });
   });
 

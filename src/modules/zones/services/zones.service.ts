@@ -4,13 +4,33 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not, DataSource } from 'typeorm';
+import {
+  Repository,
+  IsNull,
+  Not,
+  DataSource,
+  type FindOptionsWhere,
+} from 'typeorm';
 import { ZoneEntity } from '../entities/zone.entity.js';
 import { normalizeZoneCode } from '../utils/normalize-zone-code.js';
 import { ZonesAuditRepository } from '../repositories/zones-audit.repository.js';
 import { IotDevicesService } from '../../iot/services/iot-devices.service.js';
 import type { CreateZoneDto } from '../dto/create-zone.dto.js';
 import type { UpdateZoneDto } from '../dto/update-zone.dto.js';
+import type { ListZonesQueryDto } from '../dto/list-zones-query.dto.js';
+
+/**
+ * Meta phân trang (ZNL-001 / UC-93) — shape khớp CLAUDE.md §8.4 và tiền lệ repo.
+ *
+ * CỐ Ý khai lại trong module `zones`: interface cùng tên bên ANPR là **cục bộ, không export**,
+ * và import xuyên module sẽ vi phạm ARCH-01.
+ */
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
 
 /**
  * Conflict trùng mã khu vực — dùng CHUNG cho pre-check và safety-net 23505 để hai nhánh
@@ -229,6 +249,78 @@ export class ZonesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  // ── UC-93 (ZNL-001): xem & tra cứu khu vực (READ-ONLY) ──
+
+  /**
+   * Danh sách khu vực đang sống, phân trang + filter (UC-93).
+   *
+   * ⚠ READ-ONLY TUYỆT ĐỐI: constructor có `DataSource` (từ UC-92) nhưng method này KHÔNG
+   * `createQueryRunner`, KHÔNG transaction, KHÔNG ghi audit.
+   *
+   * 2 nhánh truy vấn (OQ-3):
+   * - không `search` → `findAndCount` (đơn giản, đủ dùng);
+   * - có `search`    → QueryBuilder vì cần `ILIKE ... OR ...`.
+   * CẢ HAI nhánh BẮT BUỘC có `deleted_at IS NULL` (vừa đúng nghiệp vụ, vừa là điều kiện để 3
+   * partial index của bảng `zones` có tác dụng) và `ORDER BY zone_code ASC` (OQ-4: hard-code,
+   * client KHÔNG điều khiển được sort).
+   *
+   * SEC-03: `search` đi qua bound param (`{ s: '%kw%' }`), KHÔNG nội suy chuỗi vào SQL.
+   * OQ-3: KHÔNG normalize `search` — `ILIKE` đã không phân biệt hoa/thường; normalize sẽ phá
+   * tìm kiếm theo tên có dấu.
+   */
+  async list(
+    query: ListZonesQueryDto,
+  ): Promise<{ items: ZoneEntity[]; meta: PaginationMeta }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    // Chỉ thêm khoá khi filter CÓ giá trị — không để `undefined` lọt vào `where`.
+    const where: FindOptionsWhere<ZoneEntity> = { deletedAt: IsNull() };
+    if (query.zoneType) where.zoneType = query.zoneType;
+    if (query.building) where.building = query.building;
+    if (query.floor) where.floor = query.floor;
+    if (query.status) where.status = query.status;
+
+    let items: ZoneEntity[];
+    let total: number;
+
+    if (query.search) {
+      // Nhánh QueryBuilder: PHẢI gắn ĐỦ filter, không chỉ điều kiện ILIKE — thiếu filter thì
+      // `search` sẽ trả về cả zone không khớp filter (sai âm thầm).
+      const qb = this.repo.createQueryBuilder('z').where(where);
+      qb.andWhere('(z.zoneCode ILIKE :s OR z.zoneName ILIKE :s)', {
+        s: `%${query.search}%`,
+      });
+      [items, total] = await qb
+        .orderBy('z.zoneCode', 'ASC')
+        .skip(skip)
+        .take(limit)
+        .getManyAndCount();
+    } else {
+      [items, total] = await this.repo.findAndCount({
+        where,
+        order: { zoneCode: 'ASC' },
+        skip,
+        take: limit,
+      });
+    }
+
+    return {
+      items,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /**
+   * Chi tiết 1 khu vực đang sống (UC-93) — tái dùng `loadActive` (404 `ZONE_NOT_FOUND` khi
+   * không tồn tại hoặc đã xóa mềm). KHÔNG viết lại logic lookup, KHÔNG đổi `loadActive` sang
+   * public. READ-ONLY: không transaction, không audit.
+   */
+  async getDetail(id: string): Promise<ZoneEntity> {
+    return this.loadActive(id);
   }
 
   // ── UC-92 (ZND-001): xoá khu vực ──
