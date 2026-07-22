@@ -101,6 +101,22 @@ describe('EquipmentController.reportFault (UC-62)', () => {
     expect(errAvailable.some((e) => e.property === 'assetStatus')).toBe(true);
   });
 
+  it('[C4b] DTO: assetStatus=active / retired → hop le (khong reject)', async () => {
+    const active = plainToInstance(ReportEquipmentFaultDto, {
+      assetStatus: 'active',
+      issueNote: 'x',
+    });
+    const errActive = await validate(active);
+    expect(errActive.some((e) => e.property === 'assetStatus')).toBe(false);
+
+    const retired = plainToInstance(ReportEquipmentFaultDto, {
+      assetStatus: 'retired',
+      issueNote: 'x',
+    });
+    const errRetired = await validate(retired);
+    expect(errRetired.some((e) => e.property === 'assetStatus')).toBe(false);
+  });
+
   it('[C5] DTO: issueNote rong → reject', async () => {
     const noNote = plainToInstance(ReportEquipmentFaultDto, {
       healthStatus: 'faulty',

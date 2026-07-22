@@ -191,6 +191,49 @@ describe('EquipmentService.reportFault (UC-62)', () => {
     expect(res.currentRoomId).toBe('room-1');
   });
 
+  it('[S9] assetStatus=active + currentRoomId null → AVAILABLE', async () => {
+    const { service } = setup({
+      equipment: makeEquipment({
+        assetStatus: AssetStatus.MAINTENANCE,
+        currentRoomId: null,
+      }),
+    });
+    const res = await service.reportFault(
+      equipmentId,
+      dto({ assetStatus: 'active' }),
+      userId,
+      ip,
+    );
+    expect(res.assetStatus).toBe(AssetStatus.AVAILABLE);
+  });
+
+  it('[S10] assetStatus=active + currentRoomId set → ASSIGNED', async () => {
+    const { service } = setup({
+      equipment: makeEquipment({
+        assetStatus: AssetStatus.MAINTENANCE,
+        currentRoomId: 'room-1',
+      }),
+    });
+    const res = await service.reportFault(
+      equipmentId,
+      dto({ assetStatus: 'active' }),
+      userId,
+      ip,
+    );
+    expect(res.assetStatus).toBe(AssetStatus.ASSIGNED);
+  });
+
+  it('[S11] assetStatus=retired → RETIRED', async () => {
+    const { service } = setup({});
+    const res = await service.reportFault(
+      equipmentId,
+      dto({ assetStatus: 'retired' }),
+      userId,
+      ip,
+    );
+    expect(res.assetStatus).toBe(AssetStatus.RETIRED);
+  });
+
   it('[S7] KHONG set lastMaintenanceAt', async () => {
     const old = new Date('2026-01-01T00:00:00Z');
     const { service, equipment } = setup({

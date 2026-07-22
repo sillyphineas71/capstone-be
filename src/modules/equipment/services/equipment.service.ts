@@ -18,7 +18,10 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
-import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
+import {
+  ReportEquipmentFaultDto,
+  ReportedAssetAction,
+} from '../dto/report-equipment-fault.dto.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
@@ -199,9 +202,32 @@ export class EquipmentService {
   }
 
   /**
+   * Resolve gia tri 'assetStatus' tu dropdown "Hanh dong" (UC-62) sang AssetStatus
+   * that cua entity. 'active' khong ton tai trong DB — quay lai ASSIGNED neu thiet
+   * bi dang gan phong, nguoc lai AVAILABLE.
+   */
+  private resolveAssetAction(
+    action: ReportedAssetAction,
+    currentRoomId: string | null,
+  ): AssetStatus {
+    switch (action) {
+      case 'active':
+        return currentRoomId ? AssetStatus.ASSIGNED : AssetStatus.AVAILABLE;
+      case 'retired':
+        return AssetStatus.RETIRED;
+      case 'maintenance':
+      default:
+        return AssetStatus.MAINTENANCE;
+    }
+  }
+
+  /**
    * UC-62 — Báo lỗi / chuyển bảo trì thiết bị.
-   * Chỉ chiều "xấu đi": set healthStatus (warning/faulty/offline) và/hoặc
-   * assetStatus (maintenance). Mirror create: transaction cập nhật + audit fail-separate.
+   * Set healthStatus (warning/faulty/offline) va/hoac assetStatus.
+   * assetStatus nhan 'active' | 'maintenance' | 'retired' tu FE, duoc resolve
+   * sang AssetStatus that: 'active' -> ASSIGNED (con currentRoomId) hoac AVAILABLE,
+   * 'maintenance' -> MAINTENANCE, 'retired' -> RETIRED.
+   * Mirror create: transaction cập nhật + audit fail-separate.
    * KHÔNG set lastMaintenanceAt; KHÔNG đụng currentRoomId (gỡ khỏi phòng là UC-65).
    */
   async reportFault(
@@ -268,7 +294,10 @@ export class EquipmentService {
         equipment.healthStatus = dto.healthStatus;
       }
       if (dto.assetStatus) {
-        equipment.assetStatus = dto.assetStatus;
+        equipment.assetStatus = this.resolveAssetAction(
+          dto.assetStatus,
+          equipment.currentRoomId,
+        );
       }
       equipment.lastIssueReportedAt = new Date();
       equipment.lastIssueNote = dto.issueNote;
