@@ -8,7 +8,7 @@ export class AuthConfigService {
   getAccessTokenTtlSeconds(): number {
     return this.configService.get<number>(
       'AUTH_ACCESS_TOKEN_TTL_SECONDS',
-      3600,
+      60 * 180,
     );
   }
 
@@ -19,7 +19,7 @@ export class AuthConfigService {
   getRefreshTokenTtlSeconds(): number {
     return this.configService.get<number>(
       'AUTH_REFRESH_TOKEN_TTL_SECONDS',
-      60 * 60 * 24 * 7,
+      60 * 60 * 24 * 30,
     );
   }
 

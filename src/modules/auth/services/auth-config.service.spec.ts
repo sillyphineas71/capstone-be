@@ -9,7 +9,7 @@ describe('AuthConfigService', () => {
 
     const service = new AuthConfigService(configService);
 
-    expect(service.getAccessTokenTtlSeconds()).toBe(3600);
-    expect(service.getRefreshTokenTtlSeconds()).toBe(604800);
+    expect(service.getAccessTokenTtlSeconds()).toBe(10800);
+    expect(service.getRefreshTokenTtlSeconds()).toBe(2592000);
   });
 });
