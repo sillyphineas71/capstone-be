@@ -2,6 +2,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service.js';
+import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
@@ -63,6 +64,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
           provide: ConfigService,
           useValue: { get: (k: string, d?: unknown) => cfg[k] ?? d },
         },
+        { provide: CheckInAlertService, useValue: {} },
         { provide: IotDevicesService, useValue: {} },
         { provide: NoShowDetectionService, useValue: detectMock },
         { provide: NoShowLifecycleService, useValue: lifecycleMock },
