@@ -5,13 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, type FindOptionsWhere } from 'typeorm';
+import { Repository, IsNull, ILike, type FindOptionsWhere } from 'typeorm';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
 import { normalizePlate } from '../utils/normalize-plate.js';
 import type { CreateVehicleRegistrationDto } from '../dto/create-vehicle-registration.dto.js';
 import type { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
 import type { VehicleStatus } from '../dto/update-vehicle-status.dto.js';
 import type { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
+import type { AdminListVehicleRegistrationsQueryDto } from '../dto/admin-list-vehicle-registrations-query.dto.js';
 
 /** Meta phân trang — mirror shape iot-devices (CLAUDE.md §8.4). */
 export interface PaginationMeta {
@@ -116,7 +117,11 @@ export class VehicleRegistrationService {
 
   /**
    * List biển của current user (SEC-01: lọc cứng userId + deletedAt IS NULL).
-   * Filter `status` optional. Phân trang mirror repo. Sort created_at DESC (OQ-5).
+   * Filter optional: `status`/`vehicle_type` (exact), `plate` (normalize + ILike).
+   * Phân trang mirror repo. Sort created_at DESC (OQ-5).
+   *
+   * UC-101: GIỮ findAndCount + toán tử ILike (route user không join/OR nên không cần
+   * QueryBuilder) ⇒ test cũ VPL-001 assert findAndCount.where vẫn đúng, KHÔNG hồi quy.
    */
   async list(
     userId: string,
@@ -125,13 +130,21 @@ export class VehicleRegistrationService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
-    // Build where: KHÔNG để status:undefined lọt vào (chỉ thêm khi có giá trị).
+    // Build where: KHÔNG để filter:undefined lọt vào (chỉ thêm khi có giá trị).
     const where: FindOptionsWhere<VehicleRegistrationEntity> = {
       userId,
       deletedAt: IsNull(),
     };
     if (query.status) {
       where.status = query.status;
+    }
+    if (query.vehicleType) {
+      where.vehicleType = query.vehicleType;
+    }
+    if (query.plate) {
+      // normalize trước ILike: '29a-123' → '%29A123%'. normalizePlate strip [^A-Z0-9]
+      // ⇒ %/_ người dùng không thể thành wildcard LIKE (tự vệ sinh).
+      where.plateNumber = ILike(`%${normalizePlate(query.plate)}%`);
     }
 
     const [items, total] = await this.repo.findAndCount({
@@ -140,6 +153,61 @@ export class VehicleRegistrationService {
       skip: (page - 1) * limit,
       take: limit,
     });
+
+    return {
+      items,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /**
+   * List biển của MỌI người — route admin (UC-101 / VPL-002). KHÔNG fold userId.
+   *
+   * QueryBuilder (thay findAndCount) vì cần leftJoinAndSelect chủ xe + điều kiện OR trên
+   * 2 cột đã join cho filter `owner`. LUÔN join `vr.user` (kể cả không lọc owner) vì response
+   * admin luôn cần owner ⇒ bớt một nhánh rẽ. An toàn phân trang vì vr.user là ManyToOne
+   * (không nhân dòng) ⇒ getManyAndCount() + skip/take vẫn đúng.
+   *
+   * Filter: `status`/`vehicle_type` exact, `plate` normalize+ILIKE, `user_id` exact,
+   * `owner` ILIKE trên full_name OR email (KHÔNG normalize — tên người, không phải biển).
+   * Mọi giá trị qua bound param (SEC-03). deletedAt IS NULL tường minh (DATA-01).
+   */
+  async listAll(
+    query: AdminListVehicleRegistrationsQueryDto,
+  ): Promise<{ items: VehicleRegistrationEntity[]; meta: PaginationMeta }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
+    const qb = this.repo
+      .createQueryBuilder('vr')
+      .leftJoinAndSelect('vr.user', 'u')
+      .where('vr.deletedAt IS NULL');
+
+    if (query.status) {
+      qb.andWhere('vr.status = :status', { status: query.status });
+    }
+    if (query.vehicleType) {
+      qb.andWhere('vr.vehicleType = :vt', { vt: query.vehicleType });
+    }
+    if (query.plate) {
+      qb.andWhere('vr.plateNumber ILIKE :p', {
+        p: `%${normalizePlate(query.plate)}%`,
+      });
+    }
+    if (query.userId) {
+      qb.andWhere('vr.userId = :uid', { uid: query.userId });
+    }
+    if (query.owner) {
+      qb.andWhere('(u.fullName ILIKE :o OR u.email ILIKE :o)', {
+        o: `%${query.owner}%`,
+      });
+    }
+
+    const [items, total] = await qb
+      .orderBy('vr.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
 
     return {
       items,

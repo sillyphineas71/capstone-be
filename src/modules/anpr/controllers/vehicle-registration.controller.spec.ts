@@ -173,6 +173,67 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
       expect(guards).toContain(JwtAuthGuard);
       expect(guards).not.toContain(PermissionsGuard);
     });
+
+    it('SEC-01: response route USER KHÔNG có khóa owner + KHÔNG gọi service.listAll', async () => {
+      service.listAll = jest.fn();
+      const r = await controller.list(
+        { userId: 'u-jwt' },
+        { page: 1, limit: 20 },
+      );
+      expect(r.data[0]).not.toHaveProperty('owner'); // dùng mapper user, không mapper admin
+      expect(service.list).toHaveBeenCalledTimes(1);
+      expect(service.list).toHaveBeenCalledWith('u-jwt', {
+        page: 1,
+        limit: 20,
+      });
+      expect(service.listAll).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── UC-101 (VPL-002): ADMIN list & tra cứu phương tiện ──
+  describe('UC-101 admin vehicle-registrations', () => {
+    const meta = { page: 1, limit: 20, total: 1, totalPages: 1 };
+    const adminEntity = {
+      ...entity,
+      user: { id: 'u1', fullName: 'Nguyen Van A', email: 'a@example.com' },
+    };
+    beforeEach(() => {
+      service.listAll = jest
+        .fn()
+        .mockResolvedValue({ items: [adminEntity], meta });
+    });
+
+    it('GET admin/vehicle-registrations → service.listAll(query) + mapper admin (có owner) + meta', async () => {
+      const query = { page: 1, limit: 20, user_id: 'u1' };
+      const r = await controller.listAll(query);
+      expect(service.listAll).toHaveBeenCalledWith(query);
+      expect(r.data).toHaveLength(1);
+      expect(r.data[0]).toMatchObject({
+        id: 'veh1',
+        plate_number: '30A12345',
+        owner: {
+          user_id: 'u1',
+          full_name: 'Nguyen Van A',
+          email: 'a@example.com',
+        },
+      });
+      expect(r.meta).toEqual(meta);
+      expect(r.message).toBe('Vehicle registrations retrieved');
+    });
+
+    it('admin-gate THẬT: JwtAuthGuard + PermissionsGuard + @RequirePermissions(admin_read)', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.listAll) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).toContain(PermissionsGuard);
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.listAll);
+      expect(perms).toEqual(['anpr.vehicle.admin_read']);
+    });
+
+    it('route USER list KHÔNG có PERMISSIONS_KEY (chỉ JwtAuthGuard)', () => {
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.list);
+      expect(perms).toBeUndefined();
+    });
   });
 
   // ── UC6 (VUN-001): admin xem biển lạ ──
