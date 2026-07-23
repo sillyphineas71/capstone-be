@@ -6,7 +6,9 @@ import { ZoneEntity } from './entities/zone.entity.js';
 import { GateAccessLogEntity } from './entities/gate-access-log.entity.js';
 import { ZonePresenceEventEntity } from './entities/zone-presence-event.entity.js';
 import { ZonesController } from './controllers/zones.controller.js';
+import { GateAccessLogController } from './controllers/gate-access-log.controller.js';
 import { ZonesService } from './services/zones.service.js';
+import { GateAccessLogService } from './services/gate-access-log.service.js';
 import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
 
 /**
@@ -45,8 +47,8 @@ import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
     AuthModule,
     IotModule,
   ],
-  controllers: [ZonesController],
-  providers: [ZonesService, ZonesAuditRepository],
+  controllers: [ZonesController, GateAccessLogController],
+  providers: [ZonesService, ZonesAuditRepository, GateAccessLogService],
   exports: [TypeOrmModule],
 })
 export class ZonesModule {}
