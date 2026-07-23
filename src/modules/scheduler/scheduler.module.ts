@@ -7,6 +7,7 @@ import { IotModule } from '../iot/iot.module.js';
 import { RoomsModule } from '../rooms/rooms.module.js';
 import { FaceAccessModule } from '../face-access/face-access.module.js';
 import { IvssModule } from '../ivss/ivss.module.js';
+import { ZonesModule } from '../zones/zones.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -29,6 +30,9 @@ import { IvssModule } from '../ivss/ivss.module.js';
     RoomsModule,
     FaceAccessModule,
     IvssModule,
+    // GAP-001 (UC-106): cron gate-log-pairing inject GateLogPairingService (zones export).
+    // Cạnh scheduler → zones MỘT CHIỀU (zones KHÔNG import scheduler) ⇒ không circular.
+    ZonesModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

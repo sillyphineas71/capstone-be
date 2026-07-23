@@ -8,6 +8,7 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -33,6 +34,7 @@ export class SchedulerService {
   private readonly faceSyncEnabled: boolean;
   private readonly earlyVacancyEnabled: boolean;
   private readonly ivssSyncEnabled: boolean;
+  private readonly gatePairingEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -43,6 +45,7 @@ export class SchedulerService {
     private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
     private readonly ivssPersonSyncService: IvssPersonSyncService,
+    private readonly gateLogPairingService: GateLogPairingService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -76,9 +79,13 @@ export class SchedulerService {
       'SCHEDULER_IVSS_SYNC_ENABLED',
       false,
     );
+    this.gatePairingEnabled = this.configService.get<boolean>(
+      'SCHEDULER_GATE_PAIRING_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | gate-pairing=${this.gatePairingEnabled}`,
     );
   }
 
@@ -223,6 +230,29 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] ivss-sync failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * GAP-001 (UC-106) — ghép cặp enter/leave ở cổng, ghi paired_log_id + duration_seconds.
+   * Gate SCHEDULER_ENABLED && SCHEDULER_GATE_PAIRING_ENABLED (default OFF). KHÔNG ném ra cron
+   * (ARCH-02). Bảng gate_access_logs rỗng tới khi UC-105 (writer) hoạt động → scanned=0.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'gate-log-pairing' })
+  async gateLogPairing(): Promise<void> {
+    if (!this.schedulerEnabled || !this.gatePairingEnabled) return;
+
+    try {
+      const r = await this.gateLogPairingService.pairBatch();
+      this.logger.log(
+        `[Scheduler] gate-log-pairing: scanned=${r.scanned} paired=${r.paired} skipped=${r.skipped}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] gate-log-pairing failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

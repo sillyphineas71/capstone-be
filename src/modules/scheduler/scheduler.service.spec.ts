@@ -9,12 +9,14 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
   let detectMock: any;
   let lifecycleMock: any;
   let earlyVacancyMock: any;
   let ivssMock: any;
+  let gatePairingMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -57,6 +59,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
         failed: 0,
       })),
     };
+    gatePairingMock = {
+      pairBatch: jest.fn(async () => ({ scanned: 0, paired: 0, skipped: 0 })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -71,6 +76,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
         { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
         { provide: IvssPersonSyncService, useValue: ivssMock },
+        { provide: GateLogPairingService, useValue: gatePairingMock },
       ],
     }).compile();
     return module.get(SchedulerService);
@@ -149,5 +155,27 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
     const s = await build();
     ivssMock.provisionUpcoming.mockRejectedValueOnce(new Error('boom'));
     await expect(s.ivssSync()).resolves.toBeUndefined();
+  });
+
+  // ── GAP-001 gateLogPairing cron (UC-106) ──
+  it('gateLogPairing gate OFF (default) → KHÔNG gọi pairBatch', async () => {
+    cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_GATE_PAIRING_ENABLED default false
+    const s = await build();
+    await s.gateLogPairing();
+    expect(gatePairingMock.pairBatch).not.toHaveBeenCalled();
+  });
+
+  it('gateLogPairing ON → gọi pairBatch 1 lần', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_GATE_PAIRING_ENABLED: true };
+    const s = await build();
+    await s.gateLogPairing();
+    expect(gatePairingMock.pairBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('gateLogPairing: pairBatch throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_GATE_PAIRING_ENABLED: true };
+    const s = await build();
+    gatePairingMock.pairBatch.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.gateLogPairing()).resolves.toBeUndefined();
   });
 });

@@ -9,6 +9,7 @@ import { ZonesController } from './controllers/zones.controller.js';
 import { GateAccessLogController } from './controllers/gate-access-log.controller.js';
 import { ZonesService } from './services/zones.service.js';
 import { GateAccessLogService } from './services/gate-access-log.service.js';
+import { GateLogPairingService } from './services/gate-log-pairing.service.js';
 import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
 
 /**
@@ -48,7 +49,13 @@ import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
     IotModule,
   ],
   controllers: [ZonesController, GateAccessLogController],
-  providers: [ZonesService, ZonesAuditRepository, GateAccessLogService],
-  exports: [TypeOrmModule],
+  providers: [
+    ZonesService,
+    ZonesAuditRepository,
+    GateAccessLogService,
+    GateLogPairingService,
+  ],
+  // Export GateLogPairingService để SchedulerModule (cron gate-log-pairing) inject được.
+  exports: [TypeOrmModule, GateLogPairingService],
 })
 export class ZonesModule {}
