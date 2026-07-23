@@ -187,4 +187,26 @@ export class IotAuditRepository {
       [params.userId, params.deviceId, JSON.stringify(safeMetadata)],
     );
   }
+
+  /**
+   * IAC-001 (UC-96) — audit cấu hình chức năng AI của camera. SEC-01: `configMetadata` CHỈ chứa
+   * cụm `ai_config` (3 cờ boolean + configured_at) do service truyền — KHÔNG có phần khác của
+   * `metadata_json` (rtsp_config...) và KHÔNG có secret. Mirror `logConfigureRtsp`.
+   */
+  async logConfigureAi(
+    entityManager: EntityManager,
+    params: {
+      userId: string | null;
+      deviceId: string;
+      configMetadata: Record<string, any>;
+    },
+  ): Promise<void> {
+    await entityManager.query(
+      `
+        INSERT INTO audit_logs (user_id, action_type, entity_type, entity_id, severity, metadata_json)
+        VALUES ($1, 'configure_ai', 'iot_devices', $2, 'info', $3::jsonb)
+      `,
+      [params.userId, params.deviceId, JSON.stringify(params.configMetadata)],
+    );
+  }
 }

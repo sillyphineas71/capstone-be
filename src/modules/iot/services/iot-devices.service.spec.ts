@@ -74,6 +74,7 @@ describe('IotDevicesService', () => {
       logDeviceUpdate: jest.fn(),
       logDeviceStatusChange: jest.fn(),
       logConfigureRtsp: jest.fn(),
+      logConfigureAi: jest.fn(),
       logRevokeFaceServerToken: jest.fn(),
       logRotateFaceServerToken: jest.fn(),
     };
@@ -1544,6 +1545,133 @@ describe('IotDevicesService', () => {
         { id: In(['d1']) },
         { zoneId: null },
       );
+    });
+  });
+
+  // ── IAC-001 (UC-96): configureAiConfig ──
+  describe('configureAiConfig (IAC-001 / UC-96)', () => {
+    const dev = (metadataJson: any = null, type = IoTDeviceType.IP_CAMERA) =>
+      ({ id: 'dev-1', deviceType: type, metadataJson }) as any;
+
+    it('MERGE giữ cờ kia: gửi people_counting, face/plate cũ giữ nguyên', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev({ ai_config: { face_recognition: true, plate_recognition: true } }),
+      );
+      await service.configureAiConfig('u1', 'dev-1', { peopleCounting: false });
+
+      const saved = queryRunnerMock.manager.save.mock.calls[0][1];
+      expect(saved.metadataJson.ai_config).toMatchObject({
+        face_recognition: true,
+        plate_recognition: true,
+        people_counting: false,
+      });
+      expect(saved.metadataJson.ai_config.configured_at).toBeDefined();
+      expect(auditRepoMock.logConfigureAi).toHaveBeenCalledTimes(1);
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('absent ≠ false: gửi 1 cờ khi chưa có ai_config → 2 cờ kia VẮNG MẶT (không auto-false)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(dev(null));
+      await service.configureAiConfig('u1', 'dev-1', { faceRecognition: true });
+
+      const saved = queryRunnerMock.manager.save.mock.calls[0][1];
+      expect(saved.metadataJson.ai_config.face_recognition).toBe(true);
+      expect('plate_recognition' in saved.metadataJson.ai_config).toBe(false);
+      expect('people_counting' in saved.metadataJson.ai_config).toBe(false);
+    });
+
+    it('KHÔNG đụng khoá khác của metadata_json (rtsp_config/face_server_config nguyên vẹn)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev({ rtsp_config: { x: 1 }, face_server_config: { y: 2 } }),
+      );
+      await service.configureAiConfig('u1', 'dev-1', { faceRecognition: true });
+
+      const saved = queryRunnerMock.manager.save.mock.calls[0][1];
+      expect(saved.metadataJson.rtsp_config).toEqual({ x: 1 });
+      expect(saved.metadataJson.face_server_config).toEqual({ y: 2 });
+      expect(saved.metadataJson.ai_config.face_recognition).toBe(true);
+    });
+
+    it('⭐ no-op body rỗng {}: KHÔNG save/audit/createQueryRunner, configured_at KHÔNG đổi', async () => {
+      const device = dev({
+        ai_config: { face_recognition: true, configured_at: 'OLD' },
+      });
+      dataSourceMock.manager.findOne.mockResolvedValue(device);
+      const r = await service.configureAiConfig('u1', 'dev-1', {});
+
+      expect(queryRunnerMock.manager.save).not.toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureAi).not.toHaveBeenCalled();
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+      expect(r.metadataJson.ai_config.configured_at).toBe('OLD');
+    });
+
+    it('⭐ no-op cờ trùng giá trị hiện tại: KHÔNG save/audit/transaction', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev({ ai_config: { face_recognition: true, configured_at: 'OLD' } }),
+      );
+      await service.configureAiConfig('u1', 'dev-1', { faceRecognition: true });
+
+      expect(queryRunnerMock.manager.save).not.toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureAi).not.toHaveBeenCalled();
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('đổi thật → transaction: save + logConfigureAi + commit, configured_at mới', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev({ ai_config: { face_recognition: true, configured_at: 'OLD' } }),
+      );
+      await service.configureAiConfig('u1', 'dev-1', {
+        faceRecognition: false,
+      });
+
+      const saved = queryRunnerMock.manager.save.mock.calls[0][1];
+      expect(saved.metadataJson.ai_config.face_recognition).toBe(false);
+      expect(saved.metadataJson.ai_config.configured_at).not.toBe('OLD');
+      expect(auditRepoMock.logConfigureAi).toHaveBeenCalledTimes(1);
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('device type ngoài allowlist (MICROPHONE) → 409, KHÔNG save', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev(null, IoTDeviceType.MICROPHONE),
+      );
+      await expect(
+        service.configureAiConfig('u1', 'dev-1', { faceRecognition: true }),
+      ).rejects.toMatchObject({
+        response: { code: 'DEVICE_TYPE_NOT_AI_CAPABLE' },
+      });
+      expect(queryRunnerMock.manager.save).not.toHaveBeenCalled();
+    });
+
+    it('device không tồn tại → 404', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(null);
+      await expect(
+        service.configureAiConfig('u1', 'dev-1', { faceRecognition: true }),
+      ).rejects.toMatchObject({ response: { code: 'IOT_DEVICE_NOT_FOUND' } });
+    });
+
+    it('finally release(): save ném → rollback + release', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        dev({ ai_config: { face_recognition: true } }),
+      );
+      queryRunnerMock.manager.save.mockRejectedValueOnce(new Error('db down'));
+      await expect(
+        service.configureAiConfig('u1', 'dev-1', { faceRecognition: false }),
+      ).rejects.toThrow('db down');
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.release).toHaveBeenCalled();
+    });
+
+    it('allowlist: OCCUPANCY_SENSOR và FACE_SERVER đều qua type-check (không 409)', async () => {
+      for (const t of [
+        IoTDeviceType.OCCUPANCY_SENSOR,
+        IoTDeviceType.FACE_SERVER,
+      ]) {
+        dataSourceMock.manager.findOne.mockResolvedValue(dev(null, t));
+        await expect(
+          service.configureAiConfig('u1', 'dev-1', { peopleCounting: true }),
+        ).resolves.toBeDefined();
+      }
     });
   });
 });

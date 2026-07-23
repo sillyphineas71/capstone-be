@@ -19,6 +19,7 @@ import { UpdateIotDeviceDto } from '../dto/update-iot-device.dto.js';
 import { ListIotDevicesQueryDto } from '../dto/list-iot-devices-query.dto.js';
 import { AssignRoomDto } from '../dto/assign-room.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
+import { ConfigureAiConfigDto } from '../dto/configure-ai-config.dto.js';
 import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js';
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
@@ -200,6 +201,37 @@ export class IotDevicesController {
     return {
       success: true,
       message: 'RTSP configuration updated successfully',
+      data: toIotDeviceResponse(device),
+    };
+  }
+
+  // IAC-001 (UC-96): bật/tắt chức năng AI của camera. Ghi metadata_json.ai_config (chỉ ghi DB,
+  // KHÔNG đẩy xuống thiết bị). Route 2-segment ':id/ai-config' không đụng ':id'. Pipe
+  // forbidNonWhitelisted=false (mirror rtsp-config). Permission dấu chấm iot.device.configure_ai.
+  @Patch(':id/ai-config')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot.device.configure_ai')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async configureAiConfig(
+    @CurrentUser() user: { userId: string },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfigureAiConfigDto,
+  ) {
+    const device = await this.iotDevicesService.configureAiConfig(
+      user.userId,
+      id,
+      dto,
+    );
+
+    return {
+      success: true,
+      message: 'AI configuration updated successfully',
       data: toIotDeviceResponse(device),
     };
   }
