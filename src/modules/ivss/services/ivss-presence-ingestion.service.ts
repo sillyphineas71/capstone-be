@@ -307,6 +307,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
    * (value lạ → bỏ entry). Lookup dùng String(channelId) — nhất quán channel_room_map.
    * Đọc config lỗi → trả rỗng (KHÔNG throw): map-miss = đường cũ (eventAction/'seen').
    */
+  // ⚠ NỢ A.6: bản đọc THỨ HAI cùng config ở vehicle-resolve.service.ts (getChannelDirectionMap, luồng xe) — sửa validate ở đây phải sửa cả bên đó.
   private async getChannelDirectionMap(): Promise<Record<string, Direction>> {
     const out: Record<string, Direction> = {};
     try {

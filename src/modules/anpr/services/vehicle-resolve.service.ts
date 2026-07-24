@@ -5,12 +5,29 @@ import type {
   VehicleEvent,
 } from '../../../common/ports/vehicle-event-hook.js';
 import { VehicleControlAlertService } from './vehicle-control-alert.service.js';
+import { GateAccessLogService } from '../../zones/services/gate-access-log.service.js';
+import { GateLogPairingService } from '../../zones/services/gate-log-pairing.service.js';
+import {
+  IVSS_CHANNEL_ZONE_MAP_KEY,
+  IVSS_CHANNEL_DIRECTION_MAP_KEY,
+  type GateLogSkippedReason,
+} from '../constants/gate-writer.constant.js';
 
 interface IdRow {
   id: string;
 }
 interface UserRow {
+  id: string;
   user_id: string;
+}
+interface ConfigRow {
+  config_json: Record<string, unknown> | null;
+}
+
+/** Kết quả resolve biển → chủ xe (QC-7): user + đăng ký xe (cho gate_access_logs). */
+interface ResolvedVehicle {
+  userId: string;
+  vehicleRegistrationId: string;
 }
 
 type Direction = 'enter' | 'leave' | 'seen';
@@ -21,6 +38,8 @@ const SKEW_MS = 60 * 60 * 1000; // 1h
 // OQ-3: eventAction → direction. Owed: chốt giá trị thật khi live (UC9).
 const ENTER_ACTIONS = new Set(['enter', 'in', 'entry', '1']);
 const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * VehicleResolveService (VRE-001 / UC5) — handler thật cho VEHICLE_EVENT_HANDLER (override UC4).
@@ -42,6 +61,8 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
   constructor(
     private readonly dataSource: DataSource,
     private readonly vehicleControlAlertService: VehicleControlAlertService,
+    private readonly gateAccessLogService: GateAccessLogService,
+    private readonly gateLogPairingService: GateLogPairingService,
   ) {}
 
   async onVehicleEvent(evt: VehicleEvent): Promise<void> {
@@ -55,11 +76,12 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       }
 
       // DATA-03: KHÔNG normalize lại — evt.plateNumber đã chuẩn từ UC4.
-      const userId = await this.resolveUserByPlate(evt.plateNumber);
+      const resolved = await this.resolveUserByPlate(evt.plateNumber);
+      const userId = resolved?.userId ?? null;
       const direction = this.normalizeVehicleDirection(evt.eventAction);
 
-      // UC9 (VCC-001): đối chiếu control-list — độc lập matchState (blocklist thường
-      // KHÔNG phải xe đã đăng ký hợp lệ), tự NotThrow, không phụ thuộc INSERT ingest bên dưới.
+      // ĐIỂM CHÈN 1 (QĐ-9) — UC9/UC-108 (VCC-001): đối chiếu control-list, GIỮ NGUYÊN vị trí
+      // + tham số. Tự NotThrow (evaluate() có outer try/catch), không phá INSERT bên dưới.
       await this.vehicleControlAlertService.evaluate(evt.plateNumber, {
         channelId: evt.channelId,
         direction,
@@ -67,7 +89,25 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
 
       const matchState = userId ? 'matched' : 'unmatched';
       const processedStatus = userId ? 'processed' : 'unmatched';
-      const { eventTime } = this.parseUtc(evt.utc);
+      const { eventTime, utcFallback } = this.parseUtc(evt.utc);
+
+      // GAW-001 (UC-105): resolve zone (QĐ-2) + gate-direction (QĐ-3, channel_direction_map
+      // TRƯỚC → eventAction). gateDirection CHỈ dùng cho gate log — KHÔNG đổi `direction` cũ
+      // (payload/evaluate giữ nguyên → AC-BACKCOMPAT). dirMap chỉ đọc khi zone mapped.
+      const zoneMap = await this.getChannelZoneMap();
+      const zoneId = zoneMap[String(evt.channelId)] ?? null;
+      let gateDirection: Direction = direction;
+      if (zoneId) {
+        const dirMap = await this.getChannelDirectionMap();
+        gateDirection = dirMap[String(evt.channelId)] ?? direction;
+      }
+
+      // Skip biết-TRƯỚC INSERT (QĐ-10): zone_unmapped → bad_utc → direction_seen → plate_too_long.
+      let preSkip: GateLogSkippedReason | null = null;
+      if (!zoneId) preSkip = 'zone_unmapped';
+      else if (utcFallback) preSkip = 'bad_utc';
+      else if (gateDirection === 'seen') preSkip = 'direction_seen';
+      else if (evt.plateNumber.length > 16) preSkip = 'plate_too_long';
 
       // SEC-01: KHÔNG imageBase64. userId nằm trong payload (schema KHÔNG có cột user_id).
       const payload = {
@@ -83,21 +123,69 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
         vehicleType: evt.vehicleType ?? null,
         utc: evt.utc,
         receivedAt: new Date().toISOString(),
+        // QĐ-10: lý do skip biết-trước (null nếu sẽ ghi gate log). zone_not_gate/duplicate
+        // ghi SAU qua UPDATE (markGateLogSkipped).
+        gateLogSkipped: preSkip,
       };
 
-      // OQ-2: room_id/meeting_id literal NULL (ANPR không gắn phòng/họp).
-      await this.dataSource.manager.query(
+      // OQ-2: room_id/meeting_id literal NULL. QĐ-6: RETURNING id → event_id cho gate log.
+      const insRows: IdRow[] = await this.dataSource.manager.query(
         `INSERT INTO iot_device_events
            (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
-         VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4)`,
+         VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4)
+         RETURNING id`,
         [deviceId, eventTime, JSON.stringify(payload), processedStatus],
       );
+      const eventId = insRows[0]?.id ?? null;
 
       if (matchState !== 'matched') {
         // OQ-4: biển lạ — vẫn persist row unmatched (UC6/UC7 đọc).
         this.logger.warn(
           `Vehicle event unmatched (channel=${evt.channelId} plate=${evt.plateNumber}).`,
         );
+      }
+
+      // ĐIỂM CHÈN 2 (QĐ-9) — GAW-001 writer. Skip biết-trước → KHÔNG ghi (AC-BACKCOMPAT khi
+      // channel_zone_map trống → luôn zone_unmapped → hành vi giống hệt trước UC-105). `|| !zoneId`
+      // thừa về logic (đã bao ở preSkip) nhưng để TS narrow zoneId → string.
+      if (preSkip || !zoneId) return;
+
+      // seen đã bị chặn (preSkip='direction_seen') ⇒ ở đây chỉ enter|leave.
+      const gateDir: 'enter' | 'leave' =
+        gateDirection === 'leave' ? 'leave' : 'enter';
+      // Biển rỗng sau chuẩn hoá → NULL (vẫn ghi, B′ không bảo vệ — QC-1/A.5).
+      const plateForGate = evt.plateNumber === '' ? null : evt.plateNumber;
+
+      const result = await this.gateAccessLogService.writeGateLog({
+        zoneId,
+        direction: gateDir,
+        accessTime: eventTime, // QC-8: TỪ evt.utc (parseUtc), KHÔNG now().
+        deviceId,
+        eventId,
+        userId,
+        vehicleRegistrationId: resolved?.vehicleRegistrationId ?? null,
+        plateNumber: plateForGate,
+        metadata: { channelId: evt.channelId, plateRaw: evt.plateRaw },
+      });
+
+      if (!result.written) {
+        // zone_not_gate / duplicate: biết SAU khi gọi zones → UPDATE bổ sung (QC-7/A.4).
+        await this.markGateLogSkipped(eventId, result.skipReason);
+        return;
+      }
+
+      // QĐ-8: pairing tx RIÊNG (không manager), try/catch NUỐT — KHÔNG kéo rollback gate log.
+      // Chỉ leave kích hoạt ghép (enter chờ leave của nó — FR-07).
+      if (gateDir === 'leave') {
+        try {
+          await this.gateLogPairingService.pairForLeaveLog(result.logId);
+        } catch (e) {
+          this.logger.error(
+            `gate-log pairing failed (logId=${result.logId}): ${
+              e instanceof Error ? e.message : 'unknown'
+            }`,
+          );
+        }
       }
     } catch (e) {
       // NotThrow — webhook UC4 always-ack. SEC-01: chỉ metadata, KHÔNG imageBase64.
@@ -109,6 +197,20 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
     }
   }
 
+  /** QC-7/A.4: ghi gateLogSkipped biết-SAU (zone_not_gate/duplicate) vào raw event đã INSERT. */
+  private async markGateLogSkipped(
+    eventId: string | null,
+    reason: GateLogSkippedReason,
+  ): Promise<void> {
+    if (!eventId) return;
+    await this.dataSource.manager.query(
+      `UPDATE iot_device_events
+         SET payload_json = jsonb_set(payload_json, '{gateLogSkipped}', to_jsonb($1::text))
+       WHERE id = $2`,
+      [reason, eventId],
+    );
+  }
+
   private async resolveBridgeDeviceId(): Promise<string | null> {
     const rows: IdRow[] = await this.dataSource.manager.query(
       `SELECT id FROM iot_devices WHERE device_code = $1 AND device_type = $2 LIMIT 1`,
@@ -117,17 +219,21 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
     return rows[0]?.id ?? null;
   }
 
-  /** OQ-1: biển active đang sống → userId; disabled/đã-xóa/không-có → null (unmatched). */
+  /**
+   * OQ-1: biển active đang sống → {userId, vehicleRegistrationId}; disabled/đã-xóa/không-có → null.
+   * QC-7: trả thêm `id` (vehicle_registration_id) cho gate_access_logs — cùng MỘT query.
+   */
   private async resolveUserByPlate(
     plateNumber: string,
-  ): Promise<string | null> {
+  ): Promise<ResolvedVehicle | null> {
     const rows: UserRow[] = await this.dataSource.manager.query(
-      `SELECT user_id FROM vehicle_registrations
+      `SELECT id, user_id FROM vehicle_registrations
        WHERE plate_number = $1 AND status = 'active' AND deleted_at IS NULL
        LIMIT 1`,
       [plateNumber],
     );
-    return rows[0]?.user_id ?? null;
+    if (!rows[0]) return null;
+    return { userId: rows[0].user_id, vehicleRegistrationId: rows[0].id };
   }
 
   /** OQ-3 defensive: eventAction biết → enter/leave; lạ/thiếu → seen. Owed chốt live (UC9). */
@@ -150,5 +256,65 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       return { eventTime: t, utcFallback: false };
     }
     return { eventTime: new Date(), utcFallback: true };
+  }
+
+  /**
+   * GAW-001 (QĐ-2): system_configs[ivss.channel_zone_map] {channelId: zone_uuid}; validate uuid.
+   * Không cache. Đọc lỗi → trả {} (KHÔNG throw): map-miss = zone_unmapped (AC-BACKCOMPAT).
+   */
+  private async getChannelZoneMap(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    try {
+      const rows: ConfigRow[] = await this.dataSource.manager.query(
+        `SELECT config_json FROM system_configs
+         WHERE config_key = $1 AND is_active = true LIMIT 1`,
+        [IVSS_CHANNEL_ZONE_MAP_KEY],
+      );
+      const raw = rows[0]?.config_json;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === 'string' && UUID_RE.test(v)) out[k] = v;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `IVSS channel_zone_map read failed (→ zone_unmapped): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * GAW-001 (QĐ-3): system_configs[ivss.channel_direction_map] {channelId: enter|leave|seen}.
+   * Chỉ nhận value ∈ {enter,leave,seen}; value lạ → bỏ entry. Đọc lỗi → {} (KHÔNG throw).
+   *
+   * ⚠ NỢ A.6 — BẢN ĐỌC THỨ HAI của cùng config `ivss.channel_direction_map`. Bản kia ở
+   * ivss-presence-ingestion.service.ts:310 (getChannelDirectionMap, luồng khuôn mặt). Sửa logic
+   * validate ở đây thì PHẢI sửa cả bên đó (và ngược lại), nếu không hai luồng diễn giải lệch nhau.
+   */
+  private async getChannelDirectionMap(): Promise<Record<string, Direction>> {
+    const out: Record<string, Direction> = {};
+    try {
+      const rows: ConfigRow[] = await this.dataSource.manager.query(
+        `SELECT config_json FROM system_configs
+         WHERE config_key = $1 AND is_active = true LIMIT 1`,
+        [IVSS_CHANNEL_DIRECTION_MAP_KEY],
+      );
+      const raw = rows[0]?.config_json;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (v === 'enter' || v === 'leave' || v === 'seen') out[k] = v;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `IVSS channel_direction_map read failed (fallback eventAction): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+    return out;
   }
 }

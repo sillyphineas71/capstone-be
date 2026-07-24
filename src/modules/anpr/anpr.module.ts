@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AlertsModule } from '../alerts/alerts.module.js';
+import { ZonesModule } from '../zones/zones.module.js';
 import { VEHICLE_EVENT_HANDLER } from '../../common/ports/vehicle-event-hook.js';
 import { VehicleRegistrationEntity } from './entities/vehicle-registration.entity.js';
 import { VehicleControlListEntity } from './entities/vehicle-control-list.entity.js';
@@ -50,6 +51,9 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
     AuthModule,
     NotificationsModule,
     AlertsModule,
+    // GAW-001 (UC-105): lấy GateAccessLogService (writer gate_access_logs) từ zones.
+    // Cạnh anpr → zones một chiều (zones import Auth+Iot, KHÔNG import anpr) ⇒ không circular.
+    ZonesModule,
   ],
   controllers: [
     VehicleRegistrationController,
