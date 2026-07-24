@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { GateAccessLogEntity } from '../entities/gate-access-log.entity.js';
 import { GateAccessLogService } from './gate-access-log.service.js';
 
@@ -8,6 +9,8 @@ describe('GateAccessLogService (GAL-001 / UC-107)', () => {
   let service: GateAccessLogService;
   let repo: any;
   let qb: any;
+  let ds: any;
+  let qr: any;
 
   beforeEach(async () => {
     qb = {
@@ -20,10 +23,24 @@ describe('GateAccessLogService (GAL-001 / UC-107)', () => {
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
     repo = { createQueryBuilder: jest.fn(() => qb) };
+    // queryRunner mock (writeGateLog dùng cho INSERT). manager.query đặt per-test.
+    qr = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      startTransaction: jest.fn().mockResolvedValue(undefined),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+      manager: { query: jest.fn().mockResolvedValue([{ id: 'gate-log-1' }]) },
+    };
+    ds = {
+      manager: { query: jest.fn().mockResolvedValue([{ zone_type: 'gate' }]) },
+      createQueryRunner: jest.fn(() => qr),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         GateAccessLogService,
         { provide: getRepositoryToken(GateAccessLogEntity), useValue: repo },
+        { provide: DataSource, useValue: ds },
       ],
     }).compile();
     service = module.get(GateAccessLogService);
@@ -161,6 +178,93 @@ describe('GateAccessLogService (GAL-001 / UC-107)', () => {
       expect(findAndWhere('gal.accessTime <= :to')[1]).toEqual({
         to: '2026-07-31T00:00:00Z',
       });
+    });
+  });
+
+  // ── writeGateLog (GAW-001 / UC-105) — WRITER ──
+  describe('writeGateLog (GAW-001 / UC-105)', () => {
+    const input = (over: any = {}) => ({
+      zoneId: 'z-gate',
+      direction: 'enter' as const,
+      accessTime: new Date('2026-07-24T09:00:00.000Z'),
+      deviceId: 'dev1',
+      eventId: 'evt1',
+      userId: 'u1',
+      vehicleRegistrationId: 'reg1',
+      plateNumber: '51F12345',
+      metadata: { channelId: 3, plateRaw: '51F-123.45' },
+      ...over,
+    });
+
+    it('zone gate hợp lệ → INSERT + trả logId; access_time = accessTime truyền vào', async () => {
+      const r = await service.writeGateLog(input());
+      expect(r).toEqual({ written: true, logId: 'gate-log-1' });
+      // INSERT gọi qua queryRunner (KHÔNG raw ngoài tx), có RETURNING id.
+      const insertCall = qr.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO gate_access_logs'),
+      );
+      expect(insertCall).toBeDefined();
+      expect(String(insertCall[0])).toContain('RETURNING id');
+      // access_time (param thứ 8, index 7) = accessTime truyền vào (KHÔNG now()).
+      expect(insertCall[1][7]).toEqual(new Date('2026-07-24T09:00:00.000Z'));
+      expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
+      expect(qr.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('zone type=room → zone_not_gate, KHÔNG insert, KHÔNG mở queryRunner', async () => {
+      ds.manager.query.mockResolvedValueOnce([{ zone_type: 'room' }]);
+      const r = await service.writeGateLog(input());
+      expect(r).toEqual({ written: false, skipReason: 'zone_not_gate' });
+      expect(ds.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('zone không tồn tại / đã xoá mềm → zone_not_gate (SELECT lọc deleted_at IS NULL)', async () => {
+      ds.manager.query.mockResolvedValueOnce([]);
+      const r = await service.writeGateLog(input());
+      expect(r).toEqual({ written: false, skipReason: 'zone_not_gate' });
+      const zoneSql = String(ds.manager.query.mock.calls[0][0]);
+      expect(zoneSql).toContain('deleted_at IS NULL');
+      expect(ds.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('23505 → duplicate, rollback + release, KHÔNG ném', async () => {
+      qr.manager.query.mockRejectedValueOnce({
+        driverError: { code: '23505' },
+      });
+      const r = await service.writeGateLog(input());
+      expect(r).toEqual({ written: false, skipReason: 'duplicate' });
+      expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(qr.commitTransaction).not.toHaveBeenCalled();
+      expect(qr.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('lỗi THƯỜNG (không 23505) → rollback + release + NÉM lại', async () => {
+      qr.manager.query.mockRejectedValueOnce(new Error('connection lost'));
+      await expect(service.writeGateLog(input())).rejects.toThrow(
+        'connection lost',
+      );
+      expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(qr.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('plateNumber=null → INSERT vẫn chạy (param plate = null)', async () => {
+      const r = await service.writeGateLog(input({ plateNumber: null }));
+      expect(r.written).toBe(true);
+      const insertCall = qr.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO gate_access_logs'),
+      );
+      // plate_number là param thứ 6 (index 5).
+      expect(insertCall[1][5]).toBeNull();
+    });
+
+    it('metadata rỗng → metadata_json param = null (không ép jsonb rỗng)', async () => {
+      const r = await service.writeGateLog(input({ metadata: {} }));
+      expect(r.written).toBe(true);
+      const insertCall = qr.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO gate_access_logs'),
+      );
+      // metadata_json là param thứ 9 (index 8).
+      expect(insertCall[1][8]).toBeNull();
     });
   });
 });

@@ -56,6 +56,7 @@ import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
     GateLogPairingService,
   ],
   // Export GateLogPairingService để SchedulerModule (cron gate-log-pairing) inject được.
-  exports: [TypeOrmModule, GateLogPairingService],
+  // Export GateAccessLogService để AnprModule (UC-105 writer) gọi writeGateLog (QC-3).
+  exports: [TypeOrmModule, GateLogPairingService, GateAccessLogService],
 })
 export class ZonesModule {}
