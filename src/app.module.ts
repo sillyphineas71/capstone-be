@@ -1,4 +1,4 @@
-import { APP_GUARD } from '@nestjs/core';
+﻿import { APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
@@ -39,6 +39,11 @@ import { UtilizationModule } from './modules/utilization/utilization.module';
 import { IvssModule } from './modules/ivss/ivss.module';
 import { AnprModule } from './modules/anpr/anpr.module';
 import { ZonesModule } from './modules/zones/zones.module';
+import { AlertsModule } from './modules/alerts/alerts.module';
+import { GateAccessModule } from './modules/gate-access/gate-access.module';
+import { RestrictedZoneModule } from './modules/restricted-zone/restricted-zone.module';
+import { CampusDashboardModule } from './modules/campus-dashboard/campus-dashboard.module';
+import { CrowdAlertModule } from './modules/crowd-alert/crowd-alert.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -110,6 +115,11 @@ void loadDevModule; // suppress unused warning
     IvssModule,
     AnprModule,
     ZonesModule, // schema-only: đăng ký entity scope Zone (SAVP)
+    AlertsModule, // schema-only: đăng ký entity Security Alert Center (SAVP)
+    GateAccessModule, // Bước 2 SAVP: ghép cặp + tra cứu + thống kê gate access (GAP-001/GAH-001/VTS-001)
+    RestrictedZoneModule, // Bước 3 SAVP (ARZ-001/UC-124): cron xâm nhập khu vực hạn chế
+    CampusDashboardModule, // Bước 4 SAVP (CDB-001/UC-126, ZPT-001/UC-119, ZTH-001/UC-120): dashboard + timeline + heatmap khu vực
+    CrowdAlertModule, // Bước 4 SAVP (ACR-001/UC-121): cron cảnh báo tụ tập đông người
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],
@@ -132,3 +142,5 @@ void loadDevModule; // suppress unused warning
   ],
 })
 export class AppModule {}
+
+

@@ -5,6 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import { StrangerAlertService } from './stranger-alert.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
+import { AlertsService } from '../../alerts/services/alerts.service.js';
 
 const evt = (over: any = {}) => ({
   deviceId: 'dev1',
@@ -21,6 +23,8 @@ describe('StrangerAlertService (SAL-001)', () => {
   let dsMock: any;
   let wsMock: any;
   let notifMock: any;
+  let alertRulesMock: any;
+  let alertsMock: any;
   let cfg: Record<string, unknown>;
 
   const adminRows = [{ id: 'a1', email: 'a1@x.com' }];
@@ -40,6 +44,12 @@ describe('StrangerAlertService (SAL-001)', () => {
       createNotification: jest.fn().mockResolvedValue({}),
       enqueueEmailNotification: jest.fn().mockResolvedValue({}),
     };
+    alertRulesMock = {
+      findEffectiveRule: jest
+        .fn()
+        .mockResolvedValue({ rule: null, suppressed: false }),
+    };
+    alertsMock = { recordAlert: jest.fn().mockResolvedValue({ isNew: true }) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StrangerAlertService,
@@ -50,6 +60,8 @@ describe('StrangerAlertService (SAL-001)', () => {
         },
         { provide: WebsocketService, useValue: wsMock },
         { provide: NotificationsService, useValue: notifMock },
+        { provide: AlertRulesService, useValue: alertRulesMock },
+        { provide: AlertsService, useValue: alertsMock },
       ],
     }).compile();
     service = module.get(StrangerAlertService);
@@ -118,6 +130,46 @@ describe('StrangerAlertService (SAL-001)', () => {
     );
     await expect(service.onStranger(evt())).resolves.toBeUndefined();
     expect(notifMock.createNotification).not.toHaveBeenCalled();
+  });
+
+  // ── ASM-001 (Bước 3 / 3d) — recordAlert wiring ──
+  it('suppressed=true → KHÔNG WS, KHÔNG recordAlert, KHÔNG notification (AF1)', async () => {
+    alertRulesMock.findEffectiveRule.mockResolvedValue({
+      rule: null,
+      suppressed: true,
+    });
+    await service.onStranger(evt());
+    expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    expect(notifMock.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('không suppressed → recordAlert gọi với alertType=stranger, zoneId=null, payload=meta', async () => {
+    await service.onStranger(evt());
+    expect(alertsMock.recordAlert).toHaveBeenCalledTimes(1);
+    const input = alertsMock.recordAlert.mock.calls[0][0];
+    expect(input.alertType).toBe('stranger');
+    expect(input.zoneId).toBeNull();
+    expect(input.payloadJson).toMatchObject({
+      deviceId: 'dev1',
+      roomId: 'room1',
+    });
+  });
+
+  it('recordAlert lỗi → NotThrow riêng, WS/notification VẪN chạy như cũ', async () => {
+    alertsMock.recordAlert.mockRejectedValue(new Error('db down'));
+    await expect(service.onStranger(evt())).resolves.toBeUndefined();
+    expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+    expect(notifMock.createNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('ruleId truyền từ findEffectiveRule khi có rule', async () => {
+    alertRulesMock.findEffectiveRule.mockResolvedValue({
+      rule: { id: 'rule-9' },
+      suppressed: false,
+    });
+    await service.onStranger(evt());
+    expect(alertsMock.recordAlert.mock.calls[0][0].ruleId).toBe('rule-9');
   });
 
   // ── list ──

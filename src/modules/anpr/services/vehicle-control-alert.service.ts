@@ -8,6 +8,8 @@ import {
   NotificationChannel,
   NotificationPriority,
 } from '../../notifications/entities/notification.entity.js';
+import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
+import { AlertsService } from '../../alerts/services/alerts.service.js';
 
 export interface VehicleControlAlertContext {
   channelId: number;
@@ -16,9 +18,14 @@ export interface VehicleControlAlertContext {
 
 /**
  * VehicleControlAlertService (VCC-001 / UC9) — "đích cảnh báo" khi biển số khớp
- * `vehicle_control_list`. Tách biệt khỏi `checkControlList` (pure lookup) theo chủ đích:
- * Bước 3 (owed) chỉ cần sửa NỘI BỘ service này để trỏ sang bảng `security_alerts` — chỗ
- * gọi (`VehicleResolveService`) và `checkControlList` KHÔNG cần đổi.
+ * `vehicle_control_list`. Tách biệt khỏi `checkControlList` (pure lookup) theo chủ đích.
+ *
+ * ASM-001 (Bước 3 / 3d): trước khi gửi notification (giữ nguyên 100%), gọi
+ * `AlertRulesService.findEffectiveRule('vehicle_control_match', null)` — `suppressed` (rule
+ * tắt tường minh) → dừng CẢ recordAlert lẫn notification (AF1). Không suppressed →
+ * `AlertsService.recordAlert()` TRƯỚC (severity theo `listType`, bọc try/catch NotThrow
+ * RIÊNG — lỗi ghi `security_alerts` KHÔNG được chặn notification cũ), rồi mới notification
+ * như cũ. `zoneId: null` cố định (residual: `VehicleResolveService` chưa ghi `zone_id`).
  *
  * NotThrow toàn bộ `evaluate()`: lỗi cảnh báo KHÔNG được phá luồng ingest event chính
  * (mirror `VehicleResolveService`/`StrangerAlertService`). Throttle in-memory theo plate
@@ -35,6 +42,8 @@ export class VehicleControlAlertService {
     private readonly notificationsService: NotificationsService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly alertRulesService: AlertRulesService,
+    private readonly alertsService: AlertsService,
   ) {}
 
   async evaluate(
@@ -58,6 +67,39 @@ export class VehicleControlAlertService {
       }
       this.lastAlertAt.set(plateNumber, now);
 
+      const isBlocklist = match.listType === 'blocklist';
+
+      const { suppressed, rule } =
+        await this.alertRulesService.findEffectiveRule(
+          'vehicle_control_match',
+          null,
+        );
+      if (suppressed) return; // AF1: rule tắt tường minh — dừng cả recordAlert lẫn notification.
+
+      try {
+        await this.alertsService.recordAlert({
+          alertType: 'vehicle_control_match',
+          zoneId: null,
+          severity: isBlocklist ? 'high' : 'medium',
+          ruleId: rule?.id ?? null,
+          payloadJson: {
+            plateNumber: match.plateNumber,
+            listType: match.listType,
+            reason: match.reason,
+            channelId: context.channelId,
+            direction: context.direction,
+            controlListEntryId: match.id,
+          },
+        });
+      } catch (e) {
+        // NotThrow riêng — lỗi ghi security_alerts KHÔNG được chặn notification cũ (spec R5).
+        this.logger.error(
+          `recordAlert failed (plate=${plateNumber}): ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+
       const recipients = await this.resolveRecipients();
       if (recipients.length === 0) {
         this.logger.warn(
@@ -66,7 +108,6 @@ export class VehicleControlAlertService {
         return;
       }
 
-      const isBlocklist = match.listType === 'blocklist';
       const subject = isBlocklist
         ? 'Cảnh báo: xe trong danh sách chặn'
         : 'Cảnh báo: xe cần theo dõi';

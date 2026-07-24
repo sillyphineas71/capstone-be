@@ -14,6 +14,7 @@ import { STRANGER_ALERT_HOOK } from '../../common/ports/stranger-alert-hook.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AlertsModule } from '../alerts/alerts.module.js';
 
 /**
  * FaceAccessModule — adapter thiết bị face (FGC-001/A) + per-meeting provisioning
@@ -24,6 +25,9 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
  *
  * @Global() (như StorageModule) + provide FACE_VERIFY_HOOK = useExisting
  * FaceAttendanceService → `iot` inject hook mà KHÔNG import module này (NC-4 no-cycle).
+ *
+ * ASM-001 (Bước 3 / 3d): import `AlertsModule` để `StrangerAlertService` inject
+ * `AlertRulesService`/`AlertsService` — chiều `face-access → alerts` một chiều đã chốt.
  */
 @Global()
 @Module({
@@ -34,6 +38,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     JwtModule.register({}),
     WebsocketModule,
     NotificationsModule,
+    AlertsModule,
   ],
   controllers: [UnmappedReviewController, StrangerAlertController],
   providers: [

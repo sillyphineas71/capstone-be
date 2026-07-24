@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
@@ -8,6 +8,9 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { GateAccessPairingService } from '../gate-access/services/gate-access-pairing.service.js';
+import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
+import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -33,6 +36,9 @@ export class SchedulerService {
   private readonly faceSyncEnabled: boolean;
   private readonly earlyVacancyEnabled: boolean;
   private readonly ivssSyncEnabled: boolean;
+  private readonly gateAccessPairingEnabled: boolean;
+  private readonly restrictedZoneEnabled: boolean;
+  private readonly crowdAlertEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -43,6 +49,9 @@ export class SchedulerService {
     private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
     private readonly ivssPersonSyncService: IvssPersonSyncService,
+    private readonly gateAccessPairingService: GateAccessPairingService,
+    private readonly crowdAlertService: CrowdAlertService,
+    private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -76,9 +85,21 @@ export class SchedulerService {
       'SCHEDULER_IVSS_SYNC_ENABLED',
       false,
     );
+    this.gateAccessPairingEnabled = this.configService.get<boolean>(
+      'SCHEDULER_GATE_ACCESS_PAIRING_ENABLED',
+      false,
+    );
+    this.restrictedZoneEnabled = this.configService.get<boolean>(
+      'SCHEDULER_RESTRICTED_ZONE_ENABLED',
+      false,
+    );
+    this.crowdAlertEnabled = this.configService.get<boolean>(
+      'SCHEDULER_CROWD_ALERT_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | gate-access-pairing=${this.gateAccessPairingEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled}`,
     );
   }
 
@@ -223,6 +244,78 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] ivss-sync failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * GAP-001 (UC-116) — ghép cặp bản ghi ra/vào cổng (`gate_access_logs`).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_GATE_ACCESS_PAIRING_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'gate-access-pairing' })
+  /**
+   * @deprecated Chờ Hải merge GateLogPairingService (UC-106).
+   * Tạm giữ code — cron mặc định OFF. Xoá khi Hải merge xong.
+   */
+  async pairGateAccessLogs(): Promise<void> {
+    if (!this.schedulerEnabled || !this.gateAccessPairingEnabled) return;
+
+    try {
+      const r = await this.gateAccessPairingService.pairPendingLogs();
+      this.logger.log(
+        `[Scheduler] gate-access-pairing: scanned=${r.scanned} paired=${r.paired} unmatched=${r.unmatched}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] gate-access-pairing failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * ARZ-001 (UC-124) — đối chiếu `gate_access_logs`/`zone_presence_events` với rule
+   * `intrusion` gắn zone cụ thể, phát hiện xâm nhập khu vực hạn chế.
+   * Gate SCHEDULER_ENABLED && SCHEDULER_RESTRICTED_ZONE_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'restricted-zone-intrusion' })
+  async evaluateRestrictedZoneIntrusions(): Promise<void> {
+    if (!this.schedulerEnabled || !this.restrictedZoneEnabled) return;
+
+    try {
+      const r = await this.restrictedZoneIntrusionService.evaluateIntrusions();
+      this.logger.log(
+        `[Scheduler] restricted-zone-intrusion: zones=${r.zonesScanned} gateLogs=${r.gateLogsChecked} presenceEvents=${r.presenceEventsChecked} violations=${r.violationsFound}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] restricted-zone-intrusion failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * ACR-001 (UC-121) — đối chiếu `zone_presence_events` (`event_type='count'`) với rule
+   * `crowd` gắn zone cụ thể, phát hiện tụ tập đông người.
+   * Gate SCHEDULER_ENABLED && SCHEDULER_CROWD_ALERT_ENABLED (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'crowd-alert' })
+  async evaluateCrowdAlerts(): Promise<void> {
+    if (!this.schedulerEnabled || !this.crowdAlertEnabled) return;
+
+    try {
+      const r = await this.crowdAlertService.evaluateCrowdAlerts();
+      this.logger.log(
+        `[Scheduler] crowd-alert: zones=${r.zonesScanned} events=${r.eventsChecked} violations=${r.violationsFound}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] crowd-alert failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

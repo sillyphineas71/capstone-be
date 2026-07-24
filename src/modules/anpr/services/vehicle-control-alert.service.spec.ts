@@ -6,6 +6,8 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
   let controlListMock: any;
   let notifMock: any;
   let dsMock: any;
+  let alertRulesMock: any;
+  let alertsMock: any;
   let cfg: Record<string, unknown>;
 
   const adminRows = [{ id: 'admin1' }, { id: 'admin2' }];
@@ -28,12 +30,20 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
     dsMock = {
       manager: { query: jest.fn().mockResolvedValue(adminRows) },
     };
+    alertRulesMock = {
+      findEffectiveRule: jest
+        .fn()
+        .mockResolvedValue({ rule: null, suppressed: false }),
+    };
+    alertsMock = { recordAlert: jest.fn().mockResolvedValue({ isNew: true }) };
     const cfgMock = { get: (k: string, d?: unknown) => cfg[k] ?? d };
     service = new VehicleControlAlertService(
       controlListMock,
       notifMock,
       cfgMock as any,
       dsMock,
+      alertRulesMock,
+      alertsMock,
     );
   };
 
@@ -134,6 +144,62 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockRejectedValue(new Error('conn refused'));
       await expect(service.evaluate('30A12345', ctx)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('ASM-001 (Bước 3 / 3d) — recordAlert wiring', () => {
+    it('suppressed=true → KHÔNG gọi recordAlert lẫn createNotification (AF1)', async () => {
+      controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
+      alertRulesMock.findEffectiveRule.mockResolvedValue({
+        rule: null,
+        suppressed: true,
+      });
+      await service.evaluate('30A12345', ctx);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+      expect(notifMock.createNotification).not.toHaveBeenCalled();
+    });
+
+    it('không suppressed → recordAlert gọi TRƯỚC createNotification, severity đúng theo listType', async () => {
+      controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
+      const callOrder: string[] = [];
+      alertsMock.recordAlert.mockImplementation(() => {
+        callOrder.push('recordAlert');
+        return Promise.resolve({ isNew: true });
+      });
+      notifMock.createNotification.mockImplementation(() => {
+        callOrder.push('createNotification');
+        return Promise.resolve({});
+      });
+      await service.evaluate('30A12345', ctx);
+      expect(callOrder).toEqual(['recordAlert', 'createNotification']);
+      const input = alertsMock.recordAlert.mock.calls[0][0];
+      expect(input.alertType).toBe('vehicle_control_match');
+      expect(input.zoneId).toBeNull();
+      expect(input.severity).toBe('high'); // blocklist
+      expect(input.payloadJson).toMatchObject({ plateNumber: '30A12345' });
+    });
+
+    it('watchlist match → severity medium', async () => {
+      controlListMock.checkControlList.mockResolvedValue(watchlistMatch);
+      await service.evaluate('30A12345', ctx);
+      expect(alertsMock.recordAlert.mock.calls[0][0].severity).toBe('medium');
+    });
+
+    it('recordAlert lỗi → NotThrow riêng, createNotification VẪN được gọi', async () => {
+      controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
+      alertsMock.recordAlert.mockRejectedValue(new Error('db down'));
+      await expect(service.evaluate('30A12345', ctx)).resolves.toBeUndefined();
+      expect(notifMock.createNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('ruleId truyền từ findEffectiveRule khi có rule', async () => {
+      controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
+      alertRulesMock.findEffectiveRule.mockResolvedValue({
+        rule: { id: 'rule-1' },
+        suppressed: false,
+      });
+      await service.evaluate('30A12345', ctx);
+      expect(alertsMock.recordAlert.mock.calls[0][0].ruleId).toBe('rule-1');
     });
   });
 });

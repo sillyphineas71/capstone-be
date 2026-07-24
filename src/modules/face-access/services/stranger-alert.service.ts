@@ -12,6 +12,8 @@ import {
   NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
 import { ListStrangerAlertsQueryDto } from '../dto/list-stranger-alerts.query.dto.js';
+import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
+import { AlertsService } from '../../alerts/services/alerts.service.js';
 
 interface StrangerRow {
   device_id: string;
@@ -28,6 +30,12 @@ interface StrangerRow {
  * onStranger: throttle in-memory (gate ALERT, KHÔNG gate raw — raw đã lưu ở iot) →
  * WS room-scoped (null-room-safe) + in-app notification cho admins + email opt-in.
  * NC-1 không deny. Metadata-only (KHÔNG base64). DATA-01 no migration, SEC-03 raw param.
+ *
+ * ASM-001 (Bước 3 / 3d): sau throttle pass, gọi `AlertRulesService.findEffectiveRule
+ * ('stranger', null)` — `suppressed` → dừng CẢ WS lẫn notification (AF1 áp dụng toàn bộ
+ * luồng, không riêng 1 kênh). Không suppressed → `AlertsService.recordAlert()` TRƯỚC (bọc
+ * try/catch NotThrow RIÊNG, KHÔNG chặn WS/notification cũ), rồi mới luồng cũ như nguyên
+ * trạng. `zoneId: null` cố định (residual: `roomId` không map sang `zoneId`).
  */
 @Injectable()
 export class StrangerAlertService implements StrangerAlertHook {
@@ -42,6 +50,8 @@ export class StrangerAlertService implements StrangerAlertHook {
     private readonly configService: ConfigService,
     private readonly websocketService: WebsocketService,
     private readonly notificationsService: NotificationsService,
+    private readonly alertRulesService: AlertRulesService,
+    private readonly alertsService: AlertsService,
   ) {}
 
   async onStranger(evt: StrangerAlertInput): Promise<void> {
@@ -66,6 +76,28 @@ export class StrangerAlertService implements StrangerAlertHook {
       similarity: evt.similarity,
       capturedAt: evt.capturedAt.toISOString(),
     };
+
+    const { suppressed, rule } = await this.alertRulesService.findEffectiveRule(
+      'stranger',
+      null,
+    );
+    if (suppressed) return; // AF1: rule tắt tường minh — dừng CẢ WS lẫn notification.
+
+    try {
+      await this.alertsService.recordAlert({
+        alertType: 'stranger',
+        zoneId: null,
+        ruleId: rule?.id ?? null,
+        payloadJson: meta,
+      });
+    } catch (e) {
+      // NotThrow riêng — lỗi ghi security_alerts KHÔNG được chặn WS/notification cũ.
+      this.logger.error(
+        `recordAlert failed (device=${evt.deviceId}): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
 
     // WS room-scoped (null-room-safe: bỏ emit room, vẫn notify admins).
     if (evt.roomId) {

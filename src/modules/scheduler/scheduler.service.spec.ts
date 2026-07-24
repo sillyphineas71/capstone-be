@@ -8,12 +8,20 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
+import { GateAccessPairingService } from '../gate-access/services/gate-access-pairing.service.js';
+import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
+import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 
-describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
+describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
   let detectMock: any;
   let lifecycleMock: any;
   let earlyVacancyMock: any;
   let ivssMock: any;
+  let checkInAlertMock: any;
+  let gateAccessPairingMock: any;
+  let restrictedZoneMock: any;
+  let crowdAlertMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -56,6 +64,31 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
         failed: 0,
       })),
     };
+    checkInAlertMock = {
+      processMeetings: jest.fn(async () => undefined),
+    };
+    gateAccessPairingMock = {
+      pairPendingLogs: jest.fn(async () => ({
+        scanned: 0,
+        paired: 0,
+        unmatched: 0,
+      })),
+    };
+    restrictedZoneMock = {
+      evaluateIntrusions: jest.fn(async () => ({
+        zonesScanned: 0,
+        gateLogsChecked: 0,
+        presenceEventsChecked: 0,
+        violationsFound: 0,
+      })),
+    };
+    crowdAlertMock = {
+      evaluateCrowdAlerts: jest.fn(async () => ({
+        zonesScanned: 0,
+        eventsChecked: 0,
+        violationsFound: 0,
+      })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -63,12 +96,19 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
           provide: ConfigService,
           useValue: { get: (k: string, d?: unknown) => cfg[k] ?? d },
         },
+        { provide: CheckInAlertService, useValue: checkInAlertMock },
         { provide: IotDevicesService, useValue: {} },
         { provide: NoShowDetectionService, useValue: detectMock },
         { provide: NoShowLifecycleService, useValue: lifecycleMock },
         { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
         { provide: IvssPersonSyncService, useValue: ivssMock },
+        { provide: GateAccessPairingService, useValue: gateAccessPairingMock },
+        {
+          provide: RestrictedZoneIntrusionService,
+          useValue: restrictedZoneMock,
+        },
+        { provide: CrowdAlertService, useValue: crowdAlertMock },
       ],
     }).compile();
     return module.get(SchedulerService);
@@ -147,5 +187,93 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 cron wiring)', () => {
     const s = await build();
     ivssMock.provisionUpcoming.mockRejectedValueOnce(new Error('boom'));
     await expect(s.ivssSync()).resolves.toBeUndefined();
+  });
+
+  // ── GAP-001 pairGateAccessLogs cron ──
+  it('pairGateAccessLogs gate OFF (default) → KHÔNG gọi pairPendingLogs', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.pairGateAccessLogs();
+    expect(gateAccessPairingMock.pairPendingLogs).not.toHaveBeenCalled();
+  });
+
+  it('pairGateAccessLogs ON → gọi pairPendingLogs 1 lần', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_GATE_ACCESS_PAIRING_ENABLED: true,
+    };
+    const s = await build();
+    await s.pairGateAccessLogs();
+    expect(gateAccessPairingMock.pairPendingLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it('pairGateAccessLogs: pairPendingLogs throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_GATE_ACCESS_PAIRING_ENABLED: true,
+    };
+    const s = await build();
+    gateAccessPairingMock.pairPendingLogs.mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(s.pairGateAccessLogs()).resolves.toBeUndefined();
+  });
+
+  // ── ARZ-001 evaluateRestrictedZoneIntrusions cron ──
+  it('evaluateRestrictedZoneIntrusions gate OFF (default) → KHÔNG gọi evaluateIntrusions', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.evaluateRestrictedZoneIntrusions();
+    expect(restrictedZoneMock.evaluateIntrusions).not.toHaveBeenCalled();
+  });
+
+  it('evaluateRestrictedZoneIntrusions ON → gọi evaluateIntrusions 1 lần', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_RESTRICTED_ZONE_ENABLED: true,
+    };
+    const s = await build();
+    await s.evaluateRestrictedZoneIntrusions();
+    expect(restrictedZoneMock.evaluateIntrusions).toHaveBeenCalledTimes(1);
+  });
+
+  it('evaluateRestrictedZoneIntrusions: evaluateIntrusions throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_RESTRICTED_ZONE_ENABLED: true,
+    };
+    const s = await build();
+    restrictedZoneMock.evaluateIntrusions.mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(s.evaluateRestrictedZoneIntrusions()).resolves.toBeUndefined();
+  });
+
+  // ── ACR-001 evaluateCrowdAlerts cron ──
+  it('evaluateCrowdAlerts gate OFF (default) → KHÔNG gọi evaluateCrowdAlerts', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.evaluateCrowdAlerts();
+    expect(crowdAlertMock.evaluateCrowdAlerts).not.toHaveBeenCalled();
+  });
+
+  it('evaluateCrowdAlerts ON → gọi evaluateCrowdAlerts 1 lần', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_CROWD_ALERT_ENABLED: true,
+    };
+    const s = await build();
+    await s.evaluateCrowdAlerts();
+    expect(crowdAlertMock.evaluateCrowdAlerts).toHaveBeenCalledTimes(1);
+  });
+
+  it('evaluateCrowdAlerts: evaluateCrowdAlerts throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_CROWD_ALERT_ENABLED: true,
+    };
+    const s = await build();
+    crowdAlertMock.evaluateCrowdAlerts.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.evaluateCrowdAlerts()).resolves.toBeUndefined();
   });
 });

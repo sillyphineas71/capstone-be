@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AlertsModule } from '../alerts/alerts.module.js';
 import { VEHICLE_EVENT_HANDLER } from '../../common/ports/vehicle-event-hook.js';
 import { VehicleRegistrationEntity } from './entities/vehicle-registration.entity.js';
 import { VehicleControlListEntity } from './entities/vehicle-control-list.entity.js';
@@ -32,10 +33,13 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
  *   + `VehicleControlListController` (admin-gated, KHÔNG ownership). Entity đã `forFeature` sẵn
  *   từ trước (schema-only), UC8 chỉ thêm provider/controller, KHÔNG đổi `imports`.
  * VCC-001 (UC9): đối chiếu control-list khi xe qua cổng — `checkControlList` (pure lookup,
- *   thêm vào `VehicleControlListService`) + `VehicleControlAlertService` (đích cảnh báo, sẽ
- *   đổi ở Bước 3 sang `security_alerts`). `VehicleResolveService.onVehicleEvent` gọi
- *   `VehicleControlAlertService.evaluate()`. Import `NotificationsModule` để lấy
- *   `NotificationsService` — KHÔNG import ngược `AnprModule` nên không circular.
+ *   thêm vào `VehicleControlListService`) + `VehicleControlAlertService` (đích cảnh báo).
+ *   `VehicleResolveService.onVehicleEvent` gọi `VehicleControlAlertService.evaluate()`.
+ *   Import `NotificationsModule` để lấy `NotificationsService` — KHÔNG import ngược
+ *   `AnprModule` nên không circular.
+ * ASM-001 (Bước 3 / 3d): import `AlertsModule` để `VehicleControlAlertService` inject
+ *   `AlertRulesService`/`AlertsService` (ghi `security_alerts` song song notification cũ) —
+ *   chiều `anpr → alerts` một chiều đã chốt, `AlertsModule` KHÔNG import ngược.
  */
 @Module({
   imports: [
@@ -45,6 +49,7 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
     ]),
     AuthModule,
     NotificationsModule,
+    AlertsModule,
   ],
   controllers: [
     VehicleRegistrationController,
