@@ -115,7 +115,16 @@ export class StrangerAlertService implements StrangerAlertHook {
     }
   }
 
-  /** Admin recipients (id + email) — roles.role_code='admin' (stable), user_roles active. */
+  /**
+   * Admin recipients (id + email) — `roles.role_code` IN ('SYSTEM_ADMIN','BUSINESS_ADMIN'),
+   * user_roles active.
+   *
+   * ⚠ FIX: trước đây lọc `role_code = 'admin'` (chữ thường). Hệ CHỈ có 4 role thật —
+   * SYSTEM_ADMIN / BUSINESS_ADMIN / MANAGER / EMPLOYEE — nên 'admin' KHÔNG khớp role nào,
+   * truy vấn trả rỗng và cảnh báo khuôn mặt lạ KHÔNG gửi cho ai (hỏng âm thầm, không lỗi).
+   *
+   * Residual: `MANAGER` có thể được thêm sau khi chốt với phần cảnh báo an ninh.
+   */
   private async resolveAdmins(): Promise<{ ids: string[]; emails: string[] }> {
     const rows: Array<{ id: string; email: string | null }> =
       await this.dataSource.manager.query(
@@ -123,7 +132,8 @@ export class StrangerAlertService implements StrangerAlertHook {
            FROM users u
            JOIN user_roles ur ON ur.user_id = u.id AND ur.is_active = true
            JOIN roles r ON r.id = ur.role_id
-          WHERE r.role_code = 'admin' AND u.deleted_at IS NULL`,
+          WHERE r.role_code IN ('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
+            AND u.deleted_at IS NULL`,
       );
     return {
       ids: rows.map((r) => r.id),
