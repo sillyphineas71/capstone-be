@@ -49,6 +49,18 @@ import { seedMeetingMinutesAiDraftPermission } from '../src/database/seeds/20260
 import { seedAiMinutesSummaryConfig } from '../src/database/seeds/20260707000002-SeedAiMinutesSummaryConfig';
 import { seedImportParticipantsPermission } from '../src/database/seeds/20260710000001-SeedImportParticipantsPermission';
 import { seedImportAccountsPermission } from '../src/database/seeds/20260710000002-SeedImportAccountsPermission';
+import { seedUserUpdateRolesPermission } from '../src/database/seeds/20260712000001-SeedUserUpdateRolesPermission';
+import { seedUserUpdatePermission } from '../src/database/seeds/20260712000002-SeedUserUpdatePermission';
+import { seedUserDeletePermission } from '../src/database/seeds/20260712000003-SeedUserDeletePermission';
+import { seedUserUpdateStatusPermission } from '../src/database/seeds/20260712000004-SeedUserUpdateStatusPermission';
+import { seedUserLockPermissions } from '../src/database/seeds/20260712000005-SeedUserLockPermissions';
+import { seedUserManagePermission } from '../src/database/seeds/20260713000001-SeedUserManagePermission';
+import { seedMeetingTimelinePermission } from '../src/database/seeds/20260713000002-SeedMeetingTimelinePermission';
+import { seedEquipmentCreatePermission } from '../src/database/seeds/20260713000003-SeedEquipmentCreatePermission';
+import { seedEquipmentReportFaultPermission } from '../src/database/seeds/20260713000004-SeedEquipmentReportFaultPermission';
+import { seedEquipmentDeletePermission } from '../src/database/seeds/20260713000005-SeedEquipmentDeletePermission';
+import { seedEquipmentReadPermission } from '../src/database/seeds/20260713000006-SeedEquipmentReadPermission';
+import { seedEquipmentAssignPermission } from '../src/database/seeds/20260713000007-SeedEquipmentAssignPermission';
 
 // ── Danh sách seeds theo thứ tự ─────────────────────────────────────────────
 const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<void> }> = [
@@ -94,6 +106,18 @@ const seeds: Array<{ name: string; fn: (ds: typeof AppDataSource) => Promise<voi
   { name: '20260707000002 - SeedAiMinutesSummaryConfig', fn: seedAiMinutesSummaryConfig },
   { name: '20260710000001 - SeedImportParticipantsPermission', fn: seedImportParticipantsPermission },
   { name: '20260710000002 - SeedImportAccountsPermission', fn: seedImportAccountsPermission },
+  { name: '20260712000001 - SeedUserUpdateRolesPermission', fn: seedUserUpdateRolesPermission },
+  { name: '20260712000002 - SeedUserUpdatePermission', fn: seedUserUpdatePermission },
+  { name: '20260712000003 - SeedUserDeletePermission', fn: seedUserDeletePermission },
+  { name: '20260712000004 - SeedUserUpdateStatusPermission', fn: seedUserUpdateStatusPermission },
+  { name: '20260712000005 - SeedUserLockPermissions', fn: seedUserLockPermissions },
+  { name: '20260713000001 - SeedUserManagePermission', fn: seedUserManagePermission },
+  { name: '20260713000002 - SeedMeetingTimelinePermission', fn: seedMeetingTimelinePermission },
+  { name: '20260713000003 - SeedEquipmentCreatePermission', fn: seedEquipmentCreatePermission },
+  { name: '20260713000004 - SeedEquipmentReportFaultPermission', fn: seedEquipmentReportFaultPermission },
+  { name: '20260713000005 - SeedEquipmentDeletePermission', fn: seedEquipmentDeletePermission },
+  { name: '20260713000006 - SeedEquipmentReadPermission', fn: seedEquipmentReadPermission },
+  { name: '20260713000007 - SeedEquipmentAssignPermission', fn: seedEquipmentAssignPermission },
 ];
 
 // ── Main runner ──────────────────────────────────────────────────────────────
