@@ -99,12 +99,12 @@ describe('CampusDashboardRepository (CDB-001 / UC-126)', () => {
   it('countGateLogsToday: gọi repo.count với zoneId/direction/accessTime đúng', async () => {
     gateLogRepo.count.mockResolvedValue(5);
     const startOfDay = new Date('2026-07-23T00:00:00Z');
-    const result = await repo.countGateLogsToday('zone-1', 'in', startOfDay);
+    const result = await repo.countGateLogsToday('zone-1', 'enter', startOfDay);
     expect(result).toBe(5);
     expect(gateLogRepo.count).toHaveBeenCalledWith({
       where: {
         zoneId: 'zone-1',
-        direction: 'in',
+        direction: 'enter',
         accessTime: expect.anything(),
       },
     });

@@ -13,7 +13,7 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
 
   const event = (over: any = {}): any => ({
     id: 'evt-1',
-    eventType: 'enter',
+    eventType: 'appear',
     occupancyCount: null,
     userId: null,
     eventTime: new Date('2026-07-23T08:00:00Z'),
@@ -76,7 +76,7 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
   it('không truyền userId, toàn bộ event userId=NULL → personDataAvailable=false, totalDurationSeconds=null', async () => {
     presenceRepo.find.mockResolvedValue([
       event(),
-      event({ eventType: 'exit' }),
+      event({ eventType: 'disappear' }),
     ]);
     const result = await service.getTimeline('zone-1', from, to);
     expect(result.personDataAvailable).toBe(false);
@@ -86,12 +86,12 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
   it('có userId + 1 cặp enter/exit → tính đúng totalDurationSeconds, ongoing=false', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
       }),
       event({
-        eventType: 'exit',
+        eventType: 'disappear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:10:00Z'),
       }),
@@ -105,22 +105,22 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
   it('nhiều cặp liên tiếp → cộng dồn đúng tổng', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
       }),
       event({
-        eventType: 'exit',
+        eventType: 'disappear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:05:00Z'),
       }),
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T09:00:00Z'),
       }),
       event({
-        eventType: 'exit',
+        eventType: 'disappear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T09:20:00Z'),
       }),
@@ -132,17 +132,17 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
   it('enter cuối KHÔNG có exit theo sau → ongoing=true, KHÔNG cộng vào tổng', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
       }),
       event({
-        eventType: 'exit',
+        eventType: 'disappear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:05:00Z'),
       }),
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T09:00:00Z'),
       }),
@@ -155,17 +155,17 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
   it('2 enter liên tiếp không exit ở giữa → enter mới đè enter cũ (chỉ 1 phiên mở)', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
       }),
       event({
-        eventType: 'enter',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:30:00Z'),
       }),
       event({
-        eventType: 'exit',
+        eventType: 'disappear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:40:00Z'),
       }),

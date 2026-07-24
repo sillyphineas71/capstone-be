@@ -274,7 +274,7 @@ describe('RestrictedZoneIntrusionService (ARZ-001 / UC-124)', () => {
       await service.evaluateIntrusions();
       const where = gateLogRepo.find.mock.calls[0][0].where;
       expect(where.zoneId).toBe('zone-1');
-      expect(where.direction).toBe('in');
+      expect(where.direction).toBe('enter');
       expect(where.accessTime).toBeDefined();
     });
   });

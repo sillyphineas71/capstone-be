@@ -78,8 +78,8 @@ export class DashboardOverviewService {
     );
     const cameraStatus = resolveCameraStatus(devicesInZone);
     const [entriesToday, exitsToday] = await Promise.all([
-      this.repo.countGateLogsToday(zone.id, 'in', todayStart),
-      this.repo.countGateLogsToday(zone.id, 'out', todayStart),
+      this.repo.countGateLogsToday(zone.id, 'enter', todayStart),
+      this.repo.countGateLogsToday(zone.id, 'leave', todayStart),
     ]);
 
     return {

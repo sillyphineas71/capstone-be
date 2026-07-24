@@ -105,9 +105,9 @@ export class ZonePresenceTimelineService {
     let totalDurationSeconds = 0;
 
     for (const event of events) {
-      if (event.eventType === 'enter') {
+      if (event.eventType === 'appear') {
         pendingEnter = event.eventTime;
-      } else if (event.eventType === 'exit' && pendingEnter) {
+      } else if (event.eventType === 'disappear' && pendingEnter) {
         totalDurationSeconds +=
           (event.eventTime.getTime() - pendingEnter.getTime()) / 1000;
         pendingEnter = null;

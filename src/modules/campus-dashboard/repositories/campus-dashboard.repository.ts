@@ -4,6 +4,7 @@ import { DataSource, In, IsNull, MoreThanOrEqual, Repository } from 'typeorm';
 import { ZoneEntity } from '../../zones/entities/zone.entity.js';
 import { ZonePresenceEventEntity } from '../../zones/entities/zone-presence-event.entity.js';
 import { GateAccessLogEntity } from '../../zones/entities/gate-access-log.entity.js';
+import type { GateDirection } from '../../zones/constants/gate-direction.constant.js';
 import { IoTDeviceEntity } from '../../iot/entities/iot-device.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 
@@ -67,7 +68,7 @@ export class CampusDashboardRepository {
 
   async countGateLogsToday(
     zoneId: string,
-    direction: 'in' | 'out',
+    direction: GateDirection,
     startOfDay: Date,
   ): Promise<number> {
     return this.gateLogRepo.count({

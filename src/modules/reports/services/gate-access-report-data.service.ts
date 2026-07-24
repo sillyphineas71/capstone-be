@@ -76,10 +76,10 @@ export class GateAccessReportDataService {
       `WITH sessions AS (
          SELECT
            l.id, l.zone_id, z.zone_code, z.zone_name, l.user_id, l.plate_number,
-           CASE WHEN l.direction = 'in' THEN l.access_time ELSE NULL END AS check_in_time,
+           CASE WHEN l.direction = 'enter' THEN l.access_time ELSE NULL END AS check_in_time,
            CASE
-             WHEN l.direction = 'out' THEN l.access_time
-             WHEN l.direction = 'in' AND paired.id IS NOT NULL THEN paired.access_time
+             WHEN l.direction = 'leave' THEN l.access_time
+             WHEN l.direction = 'enter' AND paired.id IS NOT NULL THEN paired.access_time
              ELSE NULL
            END AS check_out_time,
            l.duration_seconds,
@@ -87,7 +87,7 @@ export class GateAccessReportDataService {
          FROM gate_access_logs l
          LEFT JOIN zones z ON z.id = l.zone_id AND z.deleted_at IS NULL
          LEFT JOIN gate_access_logs paired ON paired.id = l.paired_log_id
-         WHERE (l.direction = 'in' OR l.paired_log_id IS NULL)
+         WHERE (l.direction = 'enter' OR l.paired_log_id IS NULL)
        )
        SELECT
          sessions.zone_code, sessions.zone_name,
