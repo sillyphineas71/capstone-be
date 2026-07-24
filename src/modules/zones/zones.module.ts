@@ -6,7 +6,10 @@ import { ZoneEntity } from './entities/zone.entity.js';
 import { GateAccessLogEntity } from './entities/gate-access-log.entity.js';
 import { ZonePresenceEventEntity } from './entities/zone-presence-event.entity.js';
 import { ZonesController } from './controllers/zones.controller.js';
+import { GateAccessLogController } from './controllers/gate-access-log.controller.js';
 import { ZonesService } from './services/zones.service.js';
+import { GateAccessLogService } from './services/gate-access-log.service.js';
+import { GateLogPairingService } from './services/gate-log-pairing.service.js';
 import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
 
 /**
@@ -45,8 +48,14 @@ import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
     AuthModule,
     IotModule,
   ],
-  controllers: [ZonesController],
-  providers: [ZonesService, ZonesAuditRepository],
-  exports: [TypeOrmModule],
+  controllers: [ZonesController, GateAccessLogController],
+  providers: [
+    ZonesService,
+    ZonesAuditRepository,
+    GateAccessLogService,
+    GateLogPairingService,
+  ],
+  // Export GateLogPairingService để SchedulerModule (cron gate-log-pairing) inject được.
+  exports: [TypeOrmModule, GateLogPairingService],
 })
 export class ZonesModule {}

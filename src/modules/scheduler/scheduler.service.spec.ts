@@ -2,16 +2,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service.js';
+import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
 import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.service.js';
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
-import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
-import { GateAccessPairingService } from '../gate-access/services/gate-access-pairing.service.js';
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
+import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
   let detectMock: any;
@@ -19,9 +19,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let earlyVacancyMock: any;
   let ivssMock: any;
   let checkInAlertMock: any;
-  let gateAccessPairingMock: any;
   let restrictedZoneMock: any;
   let crowdAlertMock: any;
+  let gatePairingMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -67,13 +67,6 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     checkInAlertMock = {
       processMeetings: jest.fn(async () => undefined),
     };
-    gateAccessPairingMock = {
-      pairPendingLogs: jest.fn(async () => ({
-        scanned: 0,
-        paired: 0,
-        unmatched: 0,
-      })),
-    };
     restrictedZoneMock = {
       evaluateIntrusions: jest.fn(async () => ({
         zonesScanned: 0,
@@ -89,6 +82,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         violationsFound: 0,
       })),
     };
+    gatePairingMock = {
+      pairBatch: jest.fn(async () => ({ scanned: 0, paired: 0, skipped: 0 })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -103,12 +99,12 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
         { provide: IvssPersonSyncService, useValue: ivssMock },
-        { provide: GateAccessPairingService, useValue: gateAccessPairingMock },
         {
           provide: RestrictedZoneIntrusionService,
           useValue: restrictedZoneMock,
         },
         { provide: CrowdAlertService, useValue: crowdAlertMock },
+        { provide: GateLogPairingService, useValue: gatePairingMock },
       ],
     }).compile();
     return module.get(SchedulerService);
@@ -189,36 +185,6 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     await expect(s.ivssSync()).resolves.toBeUndefined();
   });
 
-  // ── GAP-001 pairGateAccessLogs cron ──
-  it('pairGateAccessLogs gate OFF (default) → KHÔNG gọi pairPendingLogs', async () => {
-    cfg = { SCHEDULER_ENABLED: true };
-    const s = await build();
-    await s.pairGateAccessLogs();
-    expect(gateAccessPairingMock.pairPendingLogs).not.toHaveBeenCalled();
-  });
-
-  it('pairGateAccessLogs ON → gọi pairPendingLogs 1 lần', async () => {
-    cfg = {
-      SCHEDULER_ENABLED: true,
-      SCHEDULER_GATE_ACCESS_PAIRING_ENABLED: true,
-    };
-    const s = await build();
-    await s.pairGateAccessLogs();
-    expect(gateAccessPairingMock.pairPendingLogs).toHaveBeenCalledTimes(1);
-  });
-
-  it('pairGateAccessLogs: pairPendingLogs throw → KHÔNG ném ra cron (ARCH-02)', async () => {
-    cfg = {
-      SCHEDULER_ENABLED: true,
-      SCHEDULER_GATE_ACCESS_PAIRING_ENABLED: true,
-    };
-    const s = await build();
-    gateAccessPairingMock.pairPendingLogs.mockRejectedValueOnce(
-      new Error('boom'),
-    );
-    await expect(s.pairGateAccessLogs()).resolves.toBeUndefined();
-  });
-
   // ── ARZ-001 evaluateRestrictedZoneIntrusions cron ──
   it('evaluateRestrictedZoneIntrusions gate OFF (default) → KHÔNG gọi evaluateIntrusions', async () => {
     cfg = { SCHEDULER_ENABLED: true };
@@ -275,5 +241,27 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     const s = await build();
     crowdAlertMock.evaluateCrowdAlerts.mockRejectedValueOnce(new Error('boom'));
     await expect(s.evaluateCrowdAlerts()).resolves.toBeUndefined();
+  });
+
+  // ── GAP-001 gateLogPairing cron (UC-106) ──
+  it('gateLogPairing gate OFF (default) → KHÔNG gọi pairBatch', async () => {
+    cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_GATE_PAIRING_ENABLED default false
+    const s = await build();
+    await s.gateLogPairing();
+    expect(gatePairingMock.pairBatch).not.toHaveBeenCalled();
+  });
+
+  it('gateLogPairing ON → gọi pairBatch 1 lần', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_GATE_PAIRING_ENABLED: true };
+    const s = await build();
+    await s.gateLogPairing();
+    expect(gatePairingMock.pairBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('gateLogPairing: pairBatch throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_GATE_PAIRING_ENABLED: true };
+    const s = await build();
+    gatePairingMock.pairBatch.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.gateLogPairing()).resolves.toBeUndefined();
   });
 });

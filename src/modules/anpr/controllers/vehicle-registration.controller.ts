@@ -24,9 +24,11 @@ import { AdminCreateVehicleRegistrationDto } from '../dto/admin-create-vehicle-r
 import { UpdateVehicleRegistrationDto } from '../dto/update-vehicle-registration.dto.js';
 import { UpdateVehicleStatusDto } from '../dto/update-vehicle-status.dto.js';
 import { ListVehicleRegistrationsQueryDto } from '../dto/list-vehicle-registrations-query.dto.js';
+import { AdminListVehicleRegistrationsQueryDto } from '../dto/admin-list-vehicle-registrations-query.dto.js';
 import { ListUnknownVehiclesQueryDto } from '../dto/list-unknown-vehicles-query.dto.js';
 import { ListVehicleHistoryQueryDto } from '../dto/list-vehicle-history-query.dto.js';
 import { toVehicleRegistrationResponse } from '../dto/vehicle-registration-response.dto.js';
+import { toAdminVehicleRegistrationResponse } from '../dto/admin-vehicle-registration-response.dto.js';
 import { VehicleUnknownService } from '../services/vehicle-unknown.service.js';
 import { VehicleHistoryService } from '../services/vehicle-history.service.js';
 
@@ -97,6 +99,29 @@ export class VehicleRegistrationController {
       success: true,
       message: 'Unknown vehicles retrieved',
       data: items,
+      meta,
+    };
+  }
+
+  // ── UC-101 (VPL-002): ADMIN xem/tra cứu biển của MỌI người — read-only, admin-gated ──
+  //
+  // ⚠ THỨ TỰ KHAI: đặt TRƯỚC @Get('vehicle-registrations/:id'). Tiêu chí xung đột route
+  // ĐÚNG là "cùng literal prefix + có :param ở vị trí khác biệt", KHÔNG phải "cùng số segment":
+  //   admin/vehicle-registrations  vs  vehicle-registrations/:id  → KHÔNG xung đột (segment
+  //   đầu literal khác nhau: 'admin' ≠ 'vehicle-registrations').
+  //   vehicle-registrations/summary vs vehicle-registrations/:id  → XUNG ĐỘT (cùng prefix).
+  // Kỹ thuật không bắt buộc đặt trước, nhưng khai trong nhóm admin cho nhất quán tiền lệ.
+  @Get('admin/vehicle-registrations')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('anpr.vehicle.admin_read')
+  @UsePipes(REGISTER_PIPE)
+  async listAll(@Query() query: AdminListVehicleRegistrationsQueryDto) {
+    const { items, meta } =
+      await this.vehicleRegistrationService.listAll(query);
+    return {
+      success: true,
+      message: 'Vehicle registrations retrieved',
+      data: items.map(toAdminVehicleRegistrationResponse),
       meta,
     };
   }

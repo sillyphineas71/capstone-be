@@ -8,9 +8,9 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
-import { GateAccessPairingService } from '../gate-access/services/gate-access-pairing.service.js';
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
+import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -36,9 +36,9 @@ export class SchedulerService {
   private readonly faceSyncEnabled: boolean;
   private readonly earlyVacancyEnabled: boolean;
   private readonly ivssSyncEnabled: boolean;
-  private readonly gateAccessPairingEnabled: boolean;
   private readonly restrictedZoneEnabled: boolean;
   private readonly crowdAlertEnabled: boolean;
+  private readonly gatePairingEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -49,9 +49,9 @@ export class SchedulerService {
     private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
     private readonly ivssPersonSyncService: IvssPersonSyncService,
-    private readonly gateAccessPairingService: GateAccessPairingService,
     private readonly crowdAlertService: CrowdAlertService,
     private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
+    private readonly gateLogPairingService: GateLogPairingService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -85,10 +85,6 @@ export class SchedulerService {
       'SCHEDULER_IVSS_SYNC_ENABLED',
       false,
     );
-    this.gateAccessPairingEnabled = this.configService.get<boolean>(
-      'SCHEDULER_GATE_ACCESS_PAIRING_ENABLED',
-      false,
-    );
     this.restrictedZoneEnabled = this.configService.get<boolean>(
       'SCHEDULER_RESTRICTED_ZONE_ENABLED',
       false,
@@ -97,9 +93,13 @@ export class SchedulerService {
       'SCHEDULER_CROWD_ALERT_ENABLED',
       false,
     );
+    this.gatePairingEnabled = this.configService.get<boolean>(
+      'SCHEDULER_GATE_PAIRING_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | gate-access-pairing=${this.gateAccessPairingEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled}`,
     );
   }
 
@@ -251,32 +251,6 @@ export class SchedulerService {
   }
 
   /**
-   * GAP-001 (UC-116) — ghép cặp bản ghi ra/vào cổng (`gate_access_logs`).
-   * Gate SCHEDULER_ENABLED && SCHEDULER_GATE_ACCESS_PAIRING_ENABLED (default OFF). KHÔNG ném ra cron.
-   */
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'gate-access-pairing' })
-  /**
-   * @deprecated Chờ Hải merge GateLogPairingService (UC-106).
-   * Tạm giữ code — cron mặc định OFF. Xoá khi Hải merge xong.
-   */
-  async pairGateAccessLogs(): Promise<void> {
-    if (!this.schedulerEnabled || !this.gateAccessPairingEnabled) return;
-
-    try {
-      const r = await this.gateAccessPairingService.pairPendingLogs();
-      this.logger.log(
-        `[Scheduler] gate-access-pairing: scanned=${r.scanned} paired=${r.paired} unmatched=${r.unmatched}`,
-      );
-    } catch (e) {
-      this.logger.error(
-        `[Scheduler] gate-access-pairing failed: ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-    }
-  }
-
-  /**
    * ARZ-001 (UC-124) — đối chiếu `gate_access_logs`/`zone_presence_events` với rule
    * `intrusion` gắn zone cụ thể, phát hiện xâm nhập khu vực hạn chế.
    * Gate SCHEDULER_ENABLED && SCHEDULER_RESTRICTED_ZONE_ENABLED (default OFF). KHÔNG ném ra cron.
@@ -316,6 +290,29 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] crowd-alert failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * GAP-001 (UC-106) — ghép cặp enter/leave ở cổng, ghi paired_log_id + duration_seconds.
+   * Gate SCHEDULER_ENABLED && SCHEDULER_GATE_PAIRING_ENABLED (default OFF). KHÔNG ném ra cron
+   * (ARCH-02). Bảng gate_access_logs rỗng tới khi UC-105 (writer) hoạt động → scanned=0.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'gate-log-pairing' })
+  async gateLogPairing(): Promise<void> {
+    if (!this.schedulerEnabled || !this.gatePairingEnabled) return;
+
+    try {
+      const r = await this.gateLogPairingService.pairBatch();
+      this.logger.log(
+        `[Scheduler] gate-log-pairing: scanned=${r.scanned} paired=${r.paired} skipped=${r.skipped}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] gate-log-pairing failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

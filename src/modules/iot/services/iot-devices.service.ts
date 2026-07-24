@@ -44,6 +44,8 @@ import {
 import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
 import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
+import { ConfigureAiConfigDto } from '../dto/configure-ai-config.dto.js';
+import { AI_CONFIGURABLE_DEVICE_TYPES } from '../constants/ai-configurable-device-types.constant.js';
 import { IotAuditRepository } from '../repositories/iot-audit.repository.js';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
 import { IotDeviceEventsService } from './iot-device-events.service.js';
@@ -1233,6 +1235,102 @@ export class IotDevicesService {
       await queryRunner.release();
     }
   }
+
+  /**
+   * IAC-001 (UC-96) — bật/tắt chức năng AI của camera, ghi `metadata_json.ai_config`.
+   *
+   * MERGE từng cờ (cờ không gửi giữ nguyên; `absent` ≠ `false`). So sánh GIÁ TRỊ THẬT trước khi
+   * ghi (dùng chung UC-91/UC-94): 3 cờ sau merge giống hệt `ai_config` hiện tại ⇒ NO-OP hoàn toàn
+   * (KHÔNG save/audit/transaction, KHÔNG đụng configured_at). Body rỗng tự rơi vào no-op.
+   *
+   * ⚠⚠ CHỈ ghi DB — KHÔNG đẩy xuống thiết bị (BE không có kênh). Config là tuyên bố ý định,
+   * KHÔNG dùng để lọc/chặn event. Giữ nguyên các khoá khác của metadata_json (rtsp_config...).
+   */
+  async configureAiConfig(
+    userId: string | null,
+    deviceId: string,
+    dto: ConfigureAiConfigDto,
+  ): Promise<IoTDeviceEntity> {
+    const device = await this.dataSource.manager.findOne(IoTDeviceEntity, {
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new NotFoundException({
+        code: 'IOT_DEVICE_NOT_FOUND',
+        message: 'IoT Device not found.',
+      });
+    }
+
+    if (
+      !(AI_CONFIGURABLE_DEVICE_TYPES as readonly IoTDeviceType[]).includes(
+        device.deviceType,
+      )
+    ) {
+      throw new ConflictException({
+        code: 'DEVICE_TYPE_NOT_AI_CAPABLE',
+        message: 'This device type does not support AI configuration.',
+      });
+    }
+
+    const currentMetadata = device.metadataJson || {};
+    const currentAiConfig =
+      (currentMetadata.ai_config as Record<string, unknown>) || {};
+
+    // MERGE từng cờ — chỉ khoá gửi (!== undefined) mới ghi đè; CHƯA đụng configured_at.
+    const mergedFlags: Record<string, unknown> = { ...currentAiConfig };
+    delete mergedFlags.configured_at;
+    if (dto.faceRecognition !== undefined) {
+      mergedFlags.face_recognition = dto.faceRecognition;
+    }
+    if (dto.plateRecognition !== undefined) {
+      mergedFlags.plate_recognition = dto.plateRecognition;
+    }
+    if (dto.peopleCounting !== undefined) {
+      mergedFlags.people_counting = dto.peopleCounting;
+    }
+
+    // SO SÁNH GIÁ TRỊ THẬT (bỏ qua configured_at): giống ⇒ NO-OP, trả device nguyên trạng.
+    const currentFlags: Record<string, unknown> = { ...currentAiConfig };
+    delete currentFlags.configured_at;
+    if (JSON.stringify(mergedFlags) === JSON.stringify(currentFlags)) {
+      return device;
+    }
+
+    const merged = {
+      ...mergedFlags,
+      configured_at: new Date().toISOString(),
+    };
+    // Giữ nguyên rtsp_config/face_server_config/last_availability_check/khoá khác.
+    device.metadataJson = { ...currentMetadata, ai_config: merged };
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const savedDevice = await queryRunner.manager.save(
+        IoTDeviceEntity,
+        device,
+      );
+
+      await this.iotAuditRepository.logConfigureAi(queryRunner.manager, {
+        userId,
+        deviceId: savedDevice.id,
+        configMetadata: merged,
+      });
+
+      await queryRunner.commitTransaction();
+
+      return savedDevice;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async checkAvailability(
     userId: string | null,
     deviceId: string,

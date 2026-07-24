@@ -42,7 +42,7 @@ describe('IotDevicesController — check-availability (A5)', () => {
   });
 
   beforeEach(async () => {
-    service = { checkAvailability: jest.fn() };
+    service = { checkAvailability: jest.fn(), configureAiConfig: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IotDevicesController],
       providers: [{ provide: IotDevicesService, useValue: service }],
@@ -94,5 +94,29 @@ describe('IotDevicesController — check-availability (A5)', () => {
       controller.checkAvailability,
     );
     expect(perms).toEqual(['iot.device.check_availability']);
+  });
+
+  // ── IAC-001 (UC-96): PATCH :id/ai-config ──
+  it('UC-96: gọi service.configureAiConfig(userId, id, dto) + envelope', async () => {
+    service.configureAiConfig.mockResolvedValue(deviceEntity());
+    const res: any = await controller.configureAiConfig(
+      { userId: 'actor-1' },
+      'cam-1',
+      { faceRecognition: true },
+    );
+    expect(service.configureAiConfig).toHaveBeenCalledWith('actor-1', 'cam-1', {
+      faceRecognition: true,
+    });
+    expect(res.success).toBe(true);
+    expect(res.message).toBe('AI configuration updated successfully');
+    expect(res.data).toBeDefined();
+  });
+
+  it('UC-96: metadata @RequirePermissions = iot.device.configure_ai', () => {
+    const perms = reflector.get<string[]>(
+      PERMISSIONS_KEY,
+      controller.configureAiConfig,
+    );
+    expect(perms).toEqual(['iot.device.configure_ai']);
   });
 });

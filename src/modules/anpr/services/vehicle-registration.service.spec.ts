@@ -6,20 +6,32 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ILike } from 'typeorm';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
 import { VehicleRegistrationService } from './vehicle-registration.service.js';
 
 describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
   let service: VehicleRegistrationService;
   let repo: any;
+  let qb: any; // UC-101: mock QueryBuilder cho listAll (dựng mock — không đụng test cũ)
 
   beforeEach(async () => {
+    qb = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    };
     repo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve({ id: 'veh1', ...x })),
       softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
       findAndCount: jest.fn().mockResolvedValue([[], 0]),
+      createQueryBuilder: jest.fn(() => qb),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -286,6 +298,122 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       await expect(
         service.getDetail('veh1', 'attacker'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    // ── UC-101 (VPL-002): filter THÊM cho list() — vẫn findAndCount, KHÔNG QueryBuilder ──
+
+    it('UC-101: plate → where.plateNumber = ILike(%NORMALIZED%) (normalize trước match)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ plate: '29a-123' }));
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      // ILike('%29A123%') — chứng minh normalize (strip '-', upper) + không phải '%29a-123%'.
+      expect(where.plateNumber).toEqual(ILike('%29A123%'));
+    });
+
+    it('UC-101: vehicle_type → where.vehicleType exact', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ vehicleType: 'car' }));
+      expect(repo.findAndCount.mock.calls[0][0].where.vehicleType).toBe('car');
+    });
+
+    it('UC-101: filter kết hợp status+vehicleType+plate → where đủ 3 khóa + userId + deletedAt', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list(
+        'u1',
+        q({ status: 'active', vehicleType: 'car', plate: '30A1' }),
+      );
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect(where.status).toBe('active');
+      expect(where.vehicleType).toBe('car');
+      expect(where.plateNumber).toEqual(ILike('%30A1%'));
+      expect(where.userId).toBe('u1');
+      expect(where.deletedAt).toBeDefined();
+    });
+
+    it('UC-101: filter vắng mặt KHÔNG lọt vào where (chỉ gửi plate)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ plate: '30A1' }));
+      const where = repo.findAndCount.mock.calls[0][0].where;
+      expect('status' in where).toBe(false);
+      expect('vehicleType' in where).toBe(false);
+    });
+
+    it('UC-101: list() KHÔNG dùng createQueryBuilder (giữ findAndCount)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.list('u1', q({ plate: '30A1', vehicleType: 'car' }));
+      expect(repo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── UC-101 (VPL-002): listAll (route admin) — QueryBuilder, KHÔNG fold userId ──
+  describe('UC-101 listAll (admin)', () => {
+    const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
+    // Tìm lần gọi andWhere theo mảnh chuỗi SQL.
+    const findCall = (frag: string) =>
+      qb.andWhere.mock.calls.find((c: any[]) => String(c[0]).includes(frag));
+
+    it('LUÔN leftJoinAndSelect(vr.user) kể cả KHÔNG gửi owner', async () => {
+      await service.listAll(q());
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('vr.user', 'u');
+    });
+
+    it('KHÔNG fold userId: where chỉ deletedAt IS NULL, không userId từ current', async () => {
+      await service.listAll(q());
+      expect(qb.where).toHaveBeenCalledWith('vr.deletedAt IS NULL');
+      // không có andWhere userId khi client không gửi user_id
+      expect(findCall('vr.userId')).toBeUndefined();
+    });
+
+    it('user_id exact → andWhere vr.userId bound param', async () => {
+      await service.listAll(q({ userId: 'u9' }));
+      const call = findCall('vr.userId');
+      expect(call).toBeDefined();
+      expect(call[1]).toEqual({ uid: 'u9' });
+    });
+
+    it('owner → ILIKE trên full_name OR email, KHÔNG normalize', async () => {
+      await service.listAll(q({ owner: 'Nguyen Van' }));
+      const call = findCall('u.fullName ILIKE');
+      expect(call).toBeDefined();
+      expect(String(call[0])).toContain('u.email ILIKE');
+      expect(call[1]).toEqual({ o: '%Nguyen Van%' }); // giữ hoa/thường/dấu cách
+    });
+
+    it('plate → normalize + ILIKE (khác owner)', async () => {
+      await service.listAll(q({ plate: '29a-123' }));
+      const call = findCall('vr.plateNumber ILIKE');
+      expect(call[1]).toEqual({ p: '%29A123%' });
+    });
+
+    it('search + filter KẾT HỢP: gắn CẢ ILIKE LẪN filter (bài học UC-93)', async () => {
+      await service.listAll(
+        q({ plate: '29A', userId: 'u9', status: 'active' }),
+      );
+      expect(findCall('vr.plateNumber ILIKE')).toBeDefined(); // search
+      expect(findCall('vr.userId')).toBeDefined(); // filter
+      expect(findCall('vr.status')).toBeDefined(); // filter
+    });
+
+    it('deletedAt IS NULL tường minh + sort createdAt DESC + skip/take', async () => {
+      await service.listAll(q({ page: 2, limit: 10 }));
+      expect(qb.where).toHaveBeenCalledWith('vr.deletedAt IS NULL');
+      expect(qb.orderBy).toHaveBeenCalledWith('vr.createdAt', 'DESC');
+      expect(qb.skip).toHaveBeenCalledWith(10);
+      expect(qb.take).toHaveBeenCalledWith(10);
+    });
+
+    it('list rỗng → items:[], meta.total=0, totalPages=0 (KHÔNG throw)', async () => {
+      qb.getManyAndCount.mockResolvedValue([[], 0]);
+      const r = await service.listAll(q());
+      expect(r.items).toEqual([]);
+      expect(r.meta.total).toBe(0);
+      expect(r.meta.totalPages).toBe(0);
+    });
+
+    it('meta đúng: total=25 limit=20 → totalPages=2', async () => {
+      qb.getManyAndCount.mockResolvedValue([[{ id: 'v1' }], 25]);
+      const r = await service.listAll(q({ page: 1, limit: 20 }));
+      expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
     });
   });
 });

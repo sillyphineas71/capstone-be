@@ -172,6 +172,26 @@ describe('StrangerAlertService (SAL-001)', () => {
     expect(alertsMock.recordAlert.mock.calls[0][0].ruleId).toBe('rule-9');
   });
 
+  // FIX: role_code cũ là 'admin' (chữ thường) — KHÔNG khớp role nào trong 4 role thật
+  // (SYSTEM_ADMIN/BUSINESS_ADMIN/MANAGER/EMPLOYEE) ⇒ cảnh báo không gửi cho ai.
+  it('resolveAdmins lọc SYSTEM_ADMIN + BUSINESS_ADMIN, KHÔNG dùng literal chữ thường', async () => {
+    await service.onStranger(evt());
+
+    const adminSql = (dsMock.manager.query.mock.calls as Array<[string]>)
+      .map((c) => c[0])
+      .find((sql) => sql.includes('FROM users'));
+
+    expect(adminSql).toBeDefined();
+    expect(adminSql).toContain('SYSTEM_ADMIN');
+    expect(adminSql).toContain('BUSINESS_ADMIN');
+    // literal cũ gây bug phải biến mất hoàn toàn
+    expect(adminSql).not.toContain("'admin'");
+    // MANAGER CHƯA được thêm (chờ chốt với phần cảnh báo an ninh)
+    expect(adminSql).not.toContain('MANAGER');
+    // giữ nguyên điều kiện soft-delete
+    expect(adminSql).toContain('u.deleted_at IS NULL');
+  });
+
   // ── list ──
   it('list: query face_stranger + window; KHÔNG select payload base64; map field', async () => {
     let captured = '';
