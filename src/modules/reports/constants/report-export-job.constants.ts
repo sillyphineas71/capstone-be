@@ -14,3 +14,12 @@ export const MEETING_ACTIVITY_EXPORT_JOB_NAME = 'export:meeting-activity';
 
 /** Job name cho room utilization export (UC-RUM-16) */
 export const ROOM_UTILIZATION_EXPORT_JOB_NAME = 'export:room-utilization';
+
+/** Job name cho gate access export (UC-127, Bước 5 SAVP) */
+export const GATE_ACCESS_EXPORT_JOB_NAME = 'export:gate-access';
+
+/** Job name cho vehicle export (UC-128, Bước 5 SAVP) */
+export const VEHICLE_EXPORT_JOB_NAME = 'export:vehicle';
+
+/** Job name cho security alert export (UC-129, Bước 5 SAVP) */
+export const SECURITY_ALERT_EXPORT_JOB_NAME = 'export:security-alert';

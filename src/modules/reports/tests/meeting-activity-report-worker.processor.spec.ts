@@ -17,6 +17,9 @@ import { MeetingActivityReportDataService } from '../services/meeting-activity-r
 import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { RoomUtilizationReportWorkerProcessor } from '../processors/room-utilization-report-worker.processor.js';
+import { GateAccessReportWorkerProcessor } from '../processors/gate-access-report-worker.processor.js';
+import { VehicleReportWorkerProcessor } from '../processors/vehicle-report-worker.processor.js';
+import { SecurityAlertReportWorkerProcessor } from '../processors/security-alert-report-worker.processor.js';
 
 // Mock renderers — must be defined BEFORE module imports
 const mockRenderPdf = jest.fn().mockResolvedValue(Buffer.from('PDF_CONTENT'));
@@ -27,6 +30,29 @@ jest.mock('../renderers/meeting-activity-pdf-renderer.js', () => ({
 }));
 jest.mock('../renderers/meeting-activity-xlsx-renderer.js', () => ({
   renderMeetingActivityXlsx: (...args: unknown[]) => mockRenderXlsx(...args),
+}));
+
+// Bước 5 SAVP: GateAccessReportWorkerProcessor is mocked via DI below (dispatch
+// test only), but its static import chain still pulls in the real renderers
+// (incl. exceljs) at module-load time — mock them too so the partial `fs` mock
+// above doesn't break exceljs' internal `tmp` dependency (fs.constants.O_CREAT).
+jest.mock('../renderers/gate-access-pdf-renderer.js', () => ({
+  renderGateAccessPdf: jest.fn().mockResolvedValue(Buffer.from('PDF')),
+}));
+jest.mock('../renderers/gate-access-xlsx-renderer.js', () => ({
+  renderGateAccessXlsx: jest.fn().mockResolvedValue(Buffer.from('XLSX')),
+}));
+jest.mock('../renderers/vehicle-pdf-renderer.js', () => ({
+  renderVehiclePdf: jest.fn().mockResolvedValue(Buffer.from('PDF')),
+}));
+jest.mock('../renderers/vehicle-xlsx-renderer.js', () => ({
+  renderVehicleXlsx: jest.fn().mockResolvedValue(Buffer.from('XLSX')),
+}));
+jest.mock('../renderers/security-alert-pdf-renderer.js', () => ({
+  renderSecurityAlertPdf: jest.fn().mockResolvedValue(Buffer.from('PDF')),
+}));
+jest.mock('../renderers/security-alert-xlsx-renderer.js', () => ({
+  renderSecurityAlertXlsx: jest.fn().mockResolvedValue(Buffer.from('XLSX')),
 }));
 
 // Mock fs
@@ -97,6 +123,18 @@ describe('MeetingActivityReportWorkerProcessor', () => {
     processExport: jest.fn().mockResolvedValue(undefined),
   };
 
+  // Bước 5 SAVP (UC-127): mock rỗng — dispatch correctness verified in a
+  // dedicated 'dispatch' describe block below, not by exercising real logic here.
+  const mockGateAccessWorker = {
+    processExport: jest.fn().mockResolvedValue(undefined),
+  };
+  const mockVehicleWorker = {
+    processExport: jest.fn().mockResolvedValue(undefined),
+  };
+  const mockSecurityAlertWorker = {
+    processExport: jest.fn().mockResolvedValue(undefined),
+  };
+
   const makeJob = (
     data: Partial<{
       backgroundJobId: string;
@@ -142,6 +180,18 @@ describe('MeetingActivityReportWorkerProcessor', () => {
         {
           provide: RoomUtilizationReportWorkerProcessor,
           useValue: mockRoomUtilizationWorker,
+        },
+        {
+          provide: GateAccessReportWorkerProcessor,
+          useValue: mockGateAccessWorker,
+        },
+        {
+          provide: VehicleReportWorkerProcessor,
+          useValue: mockVehicleWorker,
+        },
+        {
+          provide: SecurityAlertReportWorkerProcessor,
+          useValue: mockSecurityAlertWorker,
         },
       ],
     }).compile();
@@ -270,6 +320,73 @@ describe('MeetingActivityReportWorkerProcessor', () => {
       // Should complete normally, not fail
       expect(mockBackgroundJobsService.markCompleted).toHaveBeenCalled();
       expect(mockBackgroundJobsService.markFailed).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Bước 5 SAVP: Dispatch regression (⚠️ CRITICAL) ───────────────────────────
+  // Nếu nhánh job.name mới bị đặt sai vị trí (sau dòng return im lặng cuối
+  // process()), job sẽ KHÔNG BAO GIỜ được markRunning — treo mãi ở queued.
+
+  describe('Dispatch — job.name routing (Bước 5 SAVP)', () => {
+    it('dispatches export:gate-access to GateAccessReportWorkerProcessor, not the meeting-activity path', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:gate-access';
+
+      await processor.process(job);
+
+      expect(mockGateAccessWorker.processExport).toHaveBeenCalledWith(job);
+      expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
+      expect(mockDataService.getReportMetadata).not.toHaveBeenCalled();
+    });
+
+    it('dispatches export:vehicle to VehicleReportWorkerProcessor', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:vehicle';
+
+      await processor.process(job);
+
+      expect(mockVehicleWorker.processExport).toHaveBeenCalledWith(job);
+      expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
+      expect(mockGateAccessWorker.processExport).not.toHaveBeenCalled();
+    });
+
+    it('dispatches export:security-alert to SecurityAlertReportWorkerProcessor', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:security-alert';
+
+      await processor.process(job);
+
+      expect(mockSecurityAlertWorker.processExport).toHaveBeenCalledWith(job);
+      expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
+      expect(mockVehicleWorker.processExport).not.toHaveBeenCalled();
+    });
+
+    it('still dispatches export:room-utilization correctly (no regression from adding gate-access branch)', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:room-utilization';
+
+      await processor.process(job);
+
+      expect(mockRoomUtilizationWorker.processExport).toHaveBeenCalledWith(job);
+      expect(mockGateAccessWorker.processExport).not.toHaveBeenCalled();
+    });
+
+    it('still processes export:meeting-activity correctly (no regression)', async () => {
+      await processor.process(makeJob() as any);
+
+      expect(mockBackgroundJobsService.markRunning).toHaveBeenCalled();
+      expect(mockGateAccessWorker.processExport).not.toHaveBeenCalled();
+      expect(mockRoomUtilizationWorker.processExport).not.toHaveBeenCalled();
+      expect(mockVehicleWorker.processExport).not.toHaveBeenCalled();
+      expect(mockSecurityAlertWorker.processExport).not.toHaveBeenCalled();
+    });
+
+    it('returns silently for unknown job.name (no crash)', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:unknown-type';
+
+      await expect(processor.process(job)).resolves.toBeUndefined();
+      expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
     });
   });
 });

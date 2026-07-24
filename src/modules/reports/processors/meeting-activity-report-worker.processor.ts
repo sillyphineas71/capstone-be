@@ -21,6 +21,9 @@ import { renderMeetingActivityXlsx } from '../renderers/meeting-activity-xlsx-re
 import { REPORT_EXPORT_QUEUE_NAME } from '../constants/report-export-job.constants.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { RoomUtilizationReportWorkerProcessor } from './room-utilization-report-worker.processor.js';
+import { GateAccessReportWorkerProcessor } from './gate-access-report-worker.processor.js';
+import { VehicleReportWorkerProcessor } from './vehicle-report-worker.processor.js';
+import { SecurityAlertReportWorkerProcessor } from './security-alert-report-worker.processor.js';
 
 interface MeetingActivityExportJobData {
   backgroundJobId: string;
@@ -63,6 +66,9 @@ export class MeetingActivityReportWorkerProcessor extends WorkerHost {
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
     private readonly roomUtilizationWorker: RoomUtilizationReportWorkerProcessor,
+    private readonly gateAccessWorker: GateAccessReportWorkerProcessor,
+    private readonly vehicleWorker: VehicleReportWorkerProcessor,
+    private readonly securityAlertWorker: SecurityAlertReportWorkerProcessor,
   ) {
     super();
   }
@@ -72,10 +78,37 @@ export class MeetingActivityReportWorkerProcessor extends WorkerHost {
    * job.name thay vì đăng ký nhiều @Processor cạnh tranh trên cùng 1 queue
    * (BullMQ Worker không tự lọc theo job.name, xem ghi chú ở
    * room-utilization-report-worker.processor.ts).
+   *
+   * Bước 5 SAVP (UC-127/128/129) thêm nhánh mới TẠI ĐÂY, KHÔNG đăng ký
+   * @Processor riêng — mirror cách 'export:room-utilization' đã làm.
    */
   async process(job: Job<MeetingActivityExportJobData>): Promise<void> {
     if (job.name === 'export:room-utilization') {
       return this.roomUtilizationWorker.processExport(job);
+    }
+    if (job.name === 'export:gate-access') {
+      // Cast an toàn: job.data thực tế là GateAccessExportJobData (khác shape
+      // scope so với MeetingActivityExportJobData) — job.name đã phân biệt đúng
+      // luồng tại runtime, TypeScript không tự suy luận được qua discriminated union.
+      return this.gateAccessWorker.processExport(
+        job as unknown as Parameters<
+          GateAccessReportWorkerProcessor['processExport']
+        >[0],
+      );
+    }
+    if (job.name === 'export:vehicle') {
+      return this.vehicleWorker.processExport(
+        job as unknown as Parameters<
+          VehicleReportWorkerProcessor['processExport']
+        >[0],
+      );
+    }
+    if (job.name === 'export:security-alert') {
+      return this.securityAlertWorker.processExport(
+        job as unknown as Parameters<
+          SecurityAlertReportWorkerProcessor['processExport']
+        >[0],
+      );
     }
     if (job.name !== 'export:meeting-activity') return;
 

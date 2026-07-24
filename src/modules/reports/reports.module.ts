@@ -26,19 +26,43 @@ import { AnalyticsModule } from '../analytics/analytics.module.js';
 // StorageModule cung cấp StorageService để lưu file xuất báo cáo
 import { StorageModule } from '../storage/storage.module.js';
 
+// Bước 5 SAVP (UC-127): entity nguồn cho GateAccessReportDataService
+import { GateAccessLogEntity } from '../zones/entities/gate-access-log.entity.js';
+import { ZoneEntity } from '../zones/entities/zone.entity.js';
+
+// Bước 5 SAVP (UC-128): entity nguồn cho VehicleReportDataService +
+// GateAccessModule (export VehicleTrafficStatsService qua DI)
+import { VehicleRegistrationEntity } from '../anpr/entities/vehicle-registration.entity.js';
+import { GateAccessModule } from '../gate-access/gate-access.module.js';
+
+// Bước 5 SAVP (UC-129): entity nguồn cho SecurityAlertReportDataService
+import { SecurityAlertEntity } from '../alerts/entities/security-alert.entity.js';
+
 // Controllers
 import { MeetingActivityReportController } from './controllers/meeting-activity-report.controller.js';
 import { RoomUtilizationReportController } from './controllers/room-utilization-report.controller.js';
+import { GateAccessReportController } from './controllers/gate-access-report.controller.js';
+import { VehicleReportController } from './controllers/vehicle-report.controller.js';
+import { SecurityAlertReportController } from './controllers/security-alert-report.controller.js';
 
 // Services
 import { MeetingActivityReportService } from './services/meeting-activity-report.service.js';
 import { MeetingActivityReportDataService } from './services/meeting-activity-report-data.service.js';
 import { RoomUtilizationReportService } from './services/room-utilization-report.service.js';
 import { RoomUtilizationReportDataService } from './services/room-utilization-report-data.service.js';
+import { GateAccessReportService } from './services/gate-access-report.service.js';
+import { GateAccessReportDataService } from './services/gate-access-report-data.service.js';
+import { VehicleReportService } from './services/vehicle-report.service.js';
+import { VehicleReportDataService } from './services/vehicle-report-data.service.js';
+import { SecurityAlertReportService } from './services/security-alert-report.service.js';
+import { SecurityAlertReportDataService } from './services/security-alert-report-data.service.js';
 
 // Processor
 import { MeetingActivityReportWorkerProcessor } from './processors/meeting-activity-report-worker.processor.js';
 import { RoomUtilizationReportWorkerProcessor } from './processors/room-utilization-report-worker.processor.js';
+import { GateAccessReportWorkerProcessor } from './processors/gate-access-report-worker.processor.js';
+import { VehicleReportWorkerProcessor } from './processors/vehicle-report-worker.processor.js';
+import { SecurityAlertReportWorkerProcessor } from './processors/security-alert-report-worker.processor.js';
 
 /**
  * ReportsModule — UC-AA-12 / UC-158: Xuất báo cáo tổng hợp hoạt động cuộc họp.
@@ -59,6 +83,9 @@ import { RoomUtilizationReportWorkerProcessor } from './processors/room-utilizat
     AuthModule,
     AnalyticsModule,
     StorageModule,
+    // Bước 5 SAVP (UC-128): lấy VehicleTrafficStatsService qua DI (đã export ở
+    // gate-access.module.ts), KHÔNG fork logic UC-114.
+    GateAccessModule,
     TypeOrmModule.forFeature([
       // Entities cho data aggregation
       MeetingEntity,
@@ -73,11 +100,21 @@ import { RoomUtilizationReportWorkerProcessor } from './processors/room-utilizat
       DepartmentEntity,
       // Entity cho worker processor (lưu media file)
       MediaFileEntity,
+      // Bước 5 SAVP (UC-127): nguồn dữ liệu GateAccessReportDataService
+      GateAccessLogEntity,
+      ZoneEntity,
+      // Bước 5 SAVP (UC-128): nguồn dữ liệu VehicleReportDataService
+      VehicleRegistrationEntity,
+      // Bước 5 SAVP (UC-129): nguồn dữ liệu SecurityAlertReportDataService
+      SecurityAlertEntity,
     ]),
   ],
   controllers: [
     MeetingActivityReportController,
     RoomUtilizationReportController,
+    GateAccessReportController,
+    VehicleReportController,
+    SecurityAlertReportController,
   ],
   providers: [
     MeetingActivityReportService,
@@ -85,10 +122,20 @@ import { RoomUtilizationReportWorkerProcessor } from './processors/room-utilizat
     MeetingActivityReportWorkerProcessor,
     RoomUtilizationReportService,
     RoomUtilizationReportDataService,
-    // RoomUtilizationReportWorkerProcessor là plain @Injectable(), KHÔNG phải
-    // @Processor — được MeetingActivityReportWorkerProcessor (giữ @Processor
-    // duy nhất trên queue 'report-export') gọi qua DI, xem ghi chú trong file đó.
+    // RoomUtilizationReportWorkerProcessor/GateAccessReportWorkerProcessor/
+    // VehicleReportWorkerProcessor/SecurityAlertReportWorkerProcessor là plain
+    // @Injectable(), KHÔNG phải @Processor — được MeetingActivityReportWorkerProcessor
+    // (giữ @Processor duy nhất trên queue 'report-export') gọi qua DI, xem ghi chú trong file đó.
     RoomUtilizationReportWorkerProcessor,
+    GateAccessReportService,
+    GateAccessReportDataService,
+    GateAccessReportWorkerProcessor,
+    VehicleReportService,
+    VehicleReportDataService,
+    VehicleReportWorkerProcessor,
+    SecurityAlertReportService,
+    SecurityAlertReportDataService,
+    SecurityAlertReportWorkerProcessor,
   ],
 })
 export class ReportsModule {}
