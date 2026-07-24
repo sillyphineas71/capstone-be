@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
 import { GateAccessLogEntity } from '../zones/entities/gate-access-log.entity.js';
-import { GateAccessPairingService } from './services/gate-access-pairing.service.js';
 import { GateAccessHistoryService } from './services/gate-access-history.service.js';
 import { VehicleTrafficStatsService } from './services/vehicle-traffic-stats.service.js';
 import { GateAccessHistoryController } from './controllers/gate-access-history.controller.js';
@@ -26,13 +25,9 @@ import { VehicleTrafficStatsController } from './controllers/vehicle-traffic-sta
 @Module({
   imports: [TypeOrmModule.forFeature([GateAccessLogEntity]), AuthModule],
   controllers: [GateAccessHistoryController, VehicleTrafficStatsController],
-  providers: [
-    GateAccessPairingService,
-    GateAccessHistoryService,
-    VehicleTrafficStatsService,
-  ],
+  providers: [GateAccessHistoryService, VehicleTrafficStatsService],
   // VehicleTrafficStatsService exported cho VehicleReportDataService (UC-128,
   // Bước 5 SAVP) gọi getStats() qua DI — KHÔNG fork logic, chỉ tái sử dụng.
-  exports: [GateAccessPairingService, VehicleTrafficStatsService],
+  exports: [VehicleTrafficStatsService],
 })
 export class GateAccessModule {}
