@@ -41,6 +41,31 @@ export class ZoneEntity {
   @Column({ name: 'description', type: 'varchar', length: 255, nullable: true })
   description: string | null;
 
+  /**
+   * Toạ độ GPS (migration 20260722000010) — dashboard/heatmap khuôn viên (UC-126/UC-120)
+   * và sơ đồ lắp đặt camera (UC-95). KHÔNG phải toạ độ pixel trên sơ đồ mặt bằng.
+   *
+   * ⚠ Chưa có endpoint nào GHI 2 field này (UpdateZoneDto không có, toZoneResponse không
+   * trả ra) — sẽ NULL cho tới khi điền SQL tay hoặc bổ sung vào luồng cập nhật zone.
+   */
+  @Column({
+    name: 'latitude',
+    type: 'numeric',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+  })
+  latitude: number | null;
+
+  @Column({
+    name: 'longitude',
+    type: 'numeric',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+  })
+  longitude: number | null;
+
   @Column({ name: 'metadata_json', type: 'jsonb', nullable: true })
   metadataJson: Record<string, unknown> | null;
 
