@@ -38,6 +38,10 @@ export enum NotificationType {
   AUDIO_TRACK_UPLOAD_REQUESTED = 'audio_track_upload_requested',
   // UC9 (VCC-001): bien so khop vehicle_control_list (blocklist/watchlist) khi qua cong.
   VEHICLE_CONTROL_LIST_MATCH = 'vehicle_control_list_match',
+  // UC-108: unknown vehicle alert
+  UNKNOWN_VEHICLE_ALERT = 'unknown_vehicle_alert',
+  // UC-108: unauthorized vehicle (pending/rejected registration)
+  VEHICLE_UNAUTHORIZED_ALERT = 'vehicle_unauthorized_alert',
   // UC-125 (PWL-001): nguoi khop person_control_list (watchlist/blocklist) khi nhan dien.
   PERSON_WATCHLIST_MATCH = 'person_watchlist_match',
 }
