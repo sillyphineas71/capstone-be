@@ -10,6 +10,7 @@ import { GateAccessLogController } from './controllers/gate-access-log.controlle
 import { ZonesService } from './services/zones.service.js';
 import { GateAccessLogService } from './services/gate-access-log.service.js';
 import { GateLogPairingService } from './services/gate-log-pairing.service.js';
+import { ZonePresenceWriterService } from './services/zone-presence-writer.service.js';
 import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
 
 /**
@@ -54,9 +55,16 @@ import { ZonesAuditRepository } from './repositories/zones-audit.repository.js';
     ZonesAuditRepository,
     GateAccessLogService,
     GateLogPairingService,
+    ZonePresenceWriterService,
   ],
   // Export GateLogPairingService để SchedulerModule (cron gate-log-pairing) inject được.
   // Export GateAccessLogService để AnprModule (UC-105 writer) gọi writeGateLog (QC-3).
-  exports: [TypeOrmModule, GateLogPairingService, GateAccessLogService],
+  // Export ZonePresenceWriterService để IvssModule (UC-109 writer) gọi writeAppearEvent (QC-4).
+  exports: [
+    TypeOrmModule,
+    GateLogPairingService,
+    GateAccessLogService,
+    ZonePresenceWriterService,
+  ],
 })
 export class ZonesModule {}
