@@ -89,7 +89,7 @@ export class VehicleRegistrationController {
   // ── UC6 (VUN-001): admin xem danh sách biển lạ (unmatched) — read-only, admin-gated ──
   @Get('admin/unknown-vehicles')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('anpr.vehicle.unknown_view')
+  @RequirePermissions('anpr.vehicle.unknown_view', 'vehicle_alert.read')
   @UsePipes(REGISTER_PIPE)
   async listUnknown(@Query() query: ListUnknownVehiclesQueryDto) {
     const { items, meta } = await this.vehicleUnknownService.listUnknown(query);

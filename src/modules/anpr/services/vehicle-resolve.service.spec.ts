@@ -158,10 +158,11 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     it('matched: evaluate được gọi với (plateNumber, {channelId, direction})', async () => {
       wire();
       await service.onVehicleEvent(evt({ eventAction: 'in' }));
-      expect(alertMock.evaluate).toHaveBeenCalledWith('30A12345', {
-        channelId: 5,
-        direction: 'enter',
-      });
+      expect(alertMock.evaluate).toHaveBeenCalledWith(
+        '30A12345',
+        { channelId: 5, direction: 'enter' },
+        expect.any(String),
+      );
     });
 
     it('unmatched: evaluate VẪN được gọi (độc lập matchState)', async () => {
@@ -176,4 +177,59 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       await expect(service.onVehicleEvent(evt())).resolves.toBeUndefined();
     });
   });
+
+  // === UC-108: INSERT before evaluate (FR-004, FR-008b) ===
+  describe("UC-108 INSERT before evaluate", () => {
+    it("FR-004: evaluate called AFTER INSERT, with eventId param", async () => {
+      let callOrder: string[] = [];
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes("INSERT INTO iot_device_events")) {
+          callOrder.push("INSERT");
+          return Promise.resolve([{ id: "evt-abc-123" }]);
+        }
+        return undefined;
+      });
+      alertMock.evaluate.mockImplementation(() => {
+        callOrder.push("evaluate");
+        return Promise.resolve();
+      });
+      await service.onVehicleEvent(evt());
+      expect(callOrder).toEqual(["INSERT", "evaluate"]);
+    });
+
+    it("FR-008b: eventId from RETURNING passed to evaluate", async () => {
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes("INSERT INTO iot_device_events"))
+          return Promise.resolve([{ id: "evt-returned-456" }]);
+        return undefined;
+      });
+      await service.onVehicleEvent(evt());
+      expect(alertMock.evaluate).toHaveBeenCalledWith(
+        "30A12345",
+        { channelId: 5, direction: "enter" },
+        "evt-returned-456",
+      );
+    });
+
+    it("AC-006: INSERT fails -> eventId undefined, evaluate still called", async () => {
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes("INSERT INTO iot_device_events"))
+          return Promise.reject(new Error("DB down"));
+        return undefined;
+      });
+      await expect(service.onVehicleEvent(evt())).resolves.toBeUndefined();
+      expect(alertMock.evaluate).toHaveBeenCalled();
+    });
+
+    it("INSERT uses RETURNING id", async () => {
+      await service.onVehicleEvent(evt());
+      const calls = dsMock.manager.query.mock.calls;
+      const insertCall = calls.find(
+        (call: any[]) => typeof call[0] === "string" && call[0].includes("INSERT INTO iot_device_events"),
+      );
+      expect(insertCall).toBeDefined();
+      expect(insertCall[0]).toContain("RETURNING id");
+    });
+  });
+
 });

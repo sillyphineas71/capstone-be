@@ -58,13 +58,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       const userId = await this.resolveUserByPlate(evt.plateNumber);
       const direction = this.normalizeVehicleDirection(evt.eventAction);
 
-      // UC9 (VCC-001): đối chiếu control-list — độc lập matchState (blocklist thường
-      // KHÔNG phải xe đã đăng ký hợp lệ), tự NotThrow, không phụ thuộc INSERT ingest bên dưới.
-      await this.vehicleControlAlertService.evaluate(evt.plateNumber, {
-        channelId: evt.channelId,
-        direction,
-      });
-
+      // FR-008b: INSERT iot_device_events TR\u01af\u1edaC evaluate() \u0111\u1ec3 l\u1ea5y source_event_id
       const matchState = userId ? 'matched' : 'unmatched';
       const processedStatus = userId ? 'processed' : 'unmatched';
       const { eventTime } = this.parseUtc(evt.utc);
@@ -85,12 +79,26 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
         receivedAt: new Date().toISOString(),
       };
 
-      // OQ-2: room_id/meeting_id literal NULL (ANPR không gắn phòng/họp).
-      await this.dataSource.manager.query(
-        `INSERT INTO iot_device_events
-           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
-         VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4)`,
-        [deviceId, eventTime, JSON.stringify(payload), processedStatus],
+      // FR-008b: INSERT with eventId capture
+      let eventId: string | null = null;
+      try {
+        const result = await this.dataSource.manager.query(
+          `INSERT INTO iot_device_events
+             (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
+           VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4)
+           RETURNING id`,
+          [deviceId, eventTime, JSON.stringify(payload), processedStatus],
+        );
+        eventId = result[0]?.id ?? null;
+      } catch (e) {
+        this.logger.error(`Failed to INSERT iot_device_events (plate=${evt.plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`,);
+      }
+
+      // FR-004: G\u1ecdi evaluate() SAU KHI INSERT, v\u1edbi eventId
+      await this.vehicleControlAlertService.evaluate(
+        evt.plateNumber,
+        { channelId: evt.channelId, direction },
+        eventId ?? undefined,
       );
 
       if (matchState !== 'matched') {
