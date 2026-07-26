@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { PresenceModule } from '../presence/presence.module.js';
+import { ZonesModule } from '../zones/zones.module.js';
 import { IVSS_EVENT_HANDLER } from '../../common/ports/ivss-event-hook.js';
 import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
@@ -26,7 +27,15 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
  * IVSS_EVENT_HANDLER bind DefaultIvssEventHandler (log-only); #38–40 override.
  */
 @Module({
-  imports: [AuthModule, AccountsModule, WebsocketModule, PresenceModule],
+  imports: [
+    AuthModule,
+    AccountsModule,
+    WebsocketModule,
+    PresenceModule,
+    // ZPW-001 (UC-109): lấy ZonePresenceWriterService (writer zone_presence_events) từ zones.
+    // Cạnh ivss → zones một chiều (zones import Auth+Iot, KHÔNG import ivss) ⇒ không circular.
+    ZonesModule,
+  ],
   controllers: [
     IvssWebhookController,
     IvssHealthController,
