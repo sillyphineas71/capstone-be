@@ -1,5 +1,10 @@
 ﻿# Tasks: UC-IMM-08 Xem trang thai diem danh nguoi tham du
 
+## CHANGELOG & REVISION HISTORY
+| Ngay | Tom tat | Vi tri |
+| :--- | :--- | :--- |
+| 2026-07-27 | [P1 BE-05] Doi path GET /api/v1/meetings/{meetingId}/attendance -> GET /api/v1/live-meetings/{meetingId}/attendance, go trung route voi AttendanceController (UC-APM-02). Chi tiet: PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md muc 2B. | Phase 4 (dong 139, 142), Phase 5 (dong 187) |
+
 **Input**: spec.md, plan.md, research.md, data-model.md, contracts/attendance-api.md
 **Branch**: feat-view-participant-attendance-status
 **Module**: live-meeting (NestJS, TypeORM)
@@ -136,10 +141,10 @@ steps WITHIN that single method, implemented together in one file change.
 
 ## Phase 4: Controller Endpoint
 
-**Purpose**: HTTP endpoint GET /api/v1/meetings/{meetingId}/attendance
+**Purpose**: HTTP endpoint GET /api/v1/live-meetings/{meetingId}/attendance
 
 - [x] T012 Them method getAttendance() trong src/modules/live-meeting/controllers/live-meeting.controller.ts
-    - Route: @Get('meetings/:meetingId/attendance')
+    - Route: @Get('live-meetings/:meetingId/attendance')
     - Guard: @UseGuards(JwtAuthGuard, PermissionsGuard)
     - Permission: @RequirePermissions('attendance.read')
     - Params:
@@ -184,7 +189,7 @@ steps WITHIN that single method, implemented together in one file change.
 
 - [x] T014 [P] Them test suite getAttendance vao src/modules/live-meeting/tests/live-meeting.controller.spec.ts
     - Test cases:
-      1. Happy path: GET /meetings/:meetingId/attendance -> 200, response shape matches DTO
+      1. Happy path: GET /live-meetings/:meetingId/attendance -> 200, response shape matches DTO
       2. Invalid UUID -> 422 VALIDATION_ERROR
       3. Without JWT -> 401 UNAUTHORIZED
       4. Without attendance.read -> 403 PERMISSION_DENIED

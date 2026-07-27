@@ -1,5 +1,10 @@
 # Implementation Plan: Xem trang thai diem danh cua nguoi tham du (View Participant Attendance Status)
 
+## CHANGELOG & REVISION HISTORY
+| Ngay | Tom tat | Vi tri |
+| :--- | :--- | :--- |
+| 2026-07-27 | [P1 BE-05] Doi path GET /api/v1/meetings/{meetingId}/attendance -> GET /api/v1/live-meetings/{meetingId}/attendance - go trung route voi AttendanceController (UC-APM-02). Chi tiet: PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md muc 2B. | Toan bo |
+
 **Branch**: eat-view-participant-attendance-status | **Date**: 2026-06-17 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification UC-IMM-08, API Contract UC-81/UC-101
 
@@ -7,7 +12,7 @@
 
 ## 1. Feature Summary
 
-Endpoint GET /api/v1/meetings/{meetingId}/attendance cho phep Host/Business Admin
+Endpoint GET /api/v1/live-meetings/{meetingId}/attendance cho phep Host/Business Admin
 xem trang thai diem danh cua toan bo internal participants trong meeting.
 He thong tong hop tu attendance_records, meeting_participants, users, departments,
 tinh late threshold tu system_configs, va tra ve 3 trang thai: checked_in, late, absent.
@@ -47,7 +52,7 @@ Read-only: khong thay doi trang thai he thong.
 
 ### In Scope
 
-- Tao/update endpoint GET /api/v1/meetings/{meetingId}/attendance
+- Tao/update endpoint GET /api/v1/live-meetings/{meetingId}/attendance
 - Xac thuc + permission attendance.read
 - Kiem tra ownership: Host cua meeting (host_id hoac participant_role=host)
 - Business Admin co quyen xem bat ky meeting (attendance.read system)
@@ -101,7 +106,7 @@ KHONG thay doi schema (khong them bang, khong them cot, khong migration).
 
 ### Endpoint
 
-GET /api/v1/meetings/{meetingId}/attendance
+GET /api/v1/live-meetings/{meetingId}/attendance
 (Su dung lai endpoint UC-81 theo UC-101)
 
 Permission: attendance.read

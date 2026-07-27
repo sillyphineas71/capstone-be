@@ -26,6 +26,13 @@ import { AttendanceListResponseDto } from '../dto/attendance-list-response.dto.j
 import { AttendanceItemDto } from '../dto/attendance-item.dto.js';
 import { AttendanceRecordDetailResponseDto } from '../dto/attendance-record-detail-response.dto.js';
 
+/**
+ * [P1 BE-05, 2026-07-27] Route `GET /meetings/:meetingId/attendance` (UC-APM-02, dưới đây)
+ * là danh sách điểm danh chung có phân trang — KHÔNG gắn ràng buộc trạng thái phiên đang chạy.
+ * Route điểm danh TRONG một live-meeting session đang chạy (UC-IMM-08, có audit + 409 nếu
+ * meeting chưa `in_progress`/đã kết thúc) nằm ở `LiveMeetingController` dưới path
+ * `GET /live-meetings/:meetingId/attendance` — KHÔNG tạo lại route trùng ở đây.
+ */
 @ApiTags('Attendance')
 @ApiBearerAuth()
 @Controller('meetings/:meetingId/attendance')
