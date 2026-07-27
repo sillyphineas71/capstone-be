@@ -557,3 +557,56 @@ describe('MeetingsController', () => {
     });
   });
 });
+
+describe('[BE-06] MeetingsController route path prefix "meetings/"', () => {
+  // Doc metadata truc tiep tren prototype, KHONG qua TestingModule.compile()
+  // vi describe('MeetingsController') o tren dang loi DI san co (thieu
+  // provider ParticipantImportService trong beforeEach) - khong lien quan
+  // den BE-06. Tach thanh describe rieng de test nay khong bi anh huong.
+  const PATH_METADATA = require('@nestjs/common/constants').PATH_METADATA;
+
+  const getPath = (methodName: keyof MeetingsController) =>
+    Reflect.getMetadata(
+      PATH_METADATA,
+      MeetingsController.prototype[methodName],
+    );
+
+  it('removeParticipant dang ky path co prefix meetings/', () => {
+    expect(getPath('removeParticipant')).toBe(
+      'meetings/:meetingId/participants/:participantUserId',
+    );
+  });
+
+  it('getAgendas dang ky path co prefix meetings/', () => {
+    expect(getPath('getAgendas')).toBe('meetings/:meetingId/agendas');
+  });
+
+  it('replaceAgendas dang ky path co prefix meetings/', () => {
+    expect(getPath('replaceAgendas')).toBe('meetings/:meetingId/agendas');
+  });
+
+  it('updateAgendaItem dang ky path co prefix meetings/', () => {
+    expect(getPath('updateAgendaItem')).toBe(
+      'meetings/:meetingId/agendas/:agendaId',
+    );
+  });
+
+  it('deleteAgendaItem dang ky path co prefix meetings/', () => {
+    expect(getPath('deleteAgendaItem')).toBe(
+      'meetings/:meetingId/agendas/:agendaId',
+    );
+  });
+
+  it('khong con route nao dang ky path cu KHONG co prefix meetings/', () => {
+    const legacyPaths = [
+      getPath('removeParticipant'),
+      getPath('getAgendas'),
+      getPath('replaceAgendas'),
+      getPath('updateAgendaItem'),
+      getPath('deleteAgendaItem'),
+    ];
+    legacyPaths.forEach((p) => {
+      expect(p.startsWith('meetings/')).toBe(true);
+    });
+  });
+});

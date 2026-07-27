@@ -27,6 +27,8 @@ export enum MeetingEventType {
   WARNING_SCHEDULED = 'warning_scheduled',
   WARNING_SCHEDULING_SKIPPED = 'warning_scheduling_skipped',
   EXTERNAL_PARTICIPANT_REMOVED = 'external_participant_removed',
+  // BE-03 (2026-07-26): PATCH /meetings/:meetingId — chi title/description.
+  METADATA_UPDATED = 'metadata_updated',
 }
 
 export enum MeetingEventSourceType {

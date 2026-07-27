@@ -8,6 +8,8 @@ import { MeetingsController } from '../controllers/meetings.controller.js';
 import { MeetingsService } from '../services/meetings.service.js';
 import { MeetingRequestReviewService } from '../services/meeting-request-review.service.js';
 import { ParticipantImportService } from '../services/participant-import.service.js';
+import { MeetingListService } from '../services/meeting-list.service.js';
+import { MeetingUpdateService } from '../services/meeting-update.service.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { DeleteAgendaItemResponseDto } from '../dto/agenda-response.dto.js';
@@ -39,6 +41,8 @@ describe('MeetingsController.deleteAgendaItem', () => {
         { provide: MeetingsService, useValue: meetingsService },
         { provide: MeetingRequestReviewService, useValue: {} },
         { provide: ParticipantImportService, useValue: {} },
+        { provide: MeetingListService, useValue: {} },
+        { provide: MeetingUpdateService, useValue: {} },
       ],
     })
       .overrideGuard(JwtAuthGuard)
