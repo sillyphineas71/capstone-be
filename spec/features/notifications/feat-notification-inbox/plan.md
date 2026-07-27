@@ -5,6 +5,7 @@
 | :--- | :--- | :--- |
 | 2026-07-18 | Khởi tạo plan cho feat-notification-inbox | Toàn bộ file |
 | 2026-07-18 | **[QUYẾT ĐỊNH PRODUCT OWNER]** Product Owner từ chối bảng `notification_reads`. Viết lại toàn bộ plan: bỏ Phase 1 (Data Model/migration), bỏ `markAsRead()`, chỉ còn 2 endpoint đọc thuần túy. Code đã rollback tương ứng (xem tasks.md). | Toàn bộ file |
+| 2026-07-27 | **[ĐỢT P1, BE-07]** Thêm §14 — tái áp dụng mark-read qua Redis (KHÔNG bảng/cột DB mới, tôn trọng vế "không schema mới" của quyết định PO). Xem spec.md §1.2 (cập nhật) để biết phạm vi đảo ngược quyết định. | §14 (mới) |
 
 ## 1. Feature Summary
 Thêm 2 endpoint (`GET /notifications`, `GET /notifications/:id`) vào `NotificationsController` (đã tạo ở `feat-send-meeting-invitation`), 2 method trong `NotificationsService` hiện có. **Không thêm bảng, không thêm cột** — Product Owner xác nhận không cần tracking "đã đọc" theo từng user (xem spec.md mục 1.2).
@@ -129,6 +130,45 @@ Migration seed `notification.read.self` (role `EMPLOYEE`, cấp cho mọi role).
 
 ## 13. Acceptance Criteria Traceability
 Xem spec.md mục 7.4.
+
+## 14. [BE-07, 2026-07-27] Mark-read qua Redis — bổ sung KHÔNG mở lại §1-13
+
+### 14.1 File
+```
+src/modules/redis/redis.service.ts                                  (thêm sadd/sismember/smembers)
+src/modules/notifications/services/notification-read-state.service.ts  (mới)
+src/modules/notifications/notifications.service.ts                  (listMyNotifications/getMyNotificationDetail thêm isRead; +markNotificationRead/markAllNotificationsRead)
+src/modules/notifications/notifications.controller.ts               (thêm PATCH read-all TRƯỚC PATCH :id/read)
+src/modules/notifications/dto/notification-list-item.dto.ts         (thêm isRead: boolean)
+src/modules/notifications/notifications.module.ts                   (đăng ký NotificationReadStateService)
+src/database/migrations/20260727000002-SeedNotificationUpdateSelfPermission.ts (mới)
+```
+
+### 14.2 Redis key design
+Xem spec.md §5.1b. `READ_SET_TTL_SECONDS = 90 * 24 * 60 * 60`.
+
+### 14.3 `NotificationReadStateService`
+`markRead(userId, id)` → `sadd` + `expire` (refresh TTL). `markAllRead(userId)` → `set(notif:readall:{userId}, ISO now)`. `getReadState(userId)` → đọc `smembers` + `get` MỘT LẦN (Promise.all), trả `{readIds: Set, readAllAt: Date|null}`. `computeIsRead(state, id, createdAt)` → hàm thuần, dùng cho cả batch (list) và đơn (detail). `isRead(userId, id, createdAt)` → gọi `getReadState` + `computeIsRead`, dùng cho 1 item (detail).
+
+Toàn bộ method fail-soft: `try/catch`, log lỗi, KHÔNG throw. `getReadState` lỗi → trả state rỗng (mọi thứ coi như chưa đọc).
+
+### 14.4 Wiring vào `NotificationsService`
+`listMyNotifications`: gọi `getReadState()` **1 LẦN** sau khi có `items`, map `isRead` bằng `computeIsRead()` cho từng phần tử — **cấm N+1** (không gọi Redis riêng từng notification trong vòng lặp).
+`getMyNotificationDetail`: sau khi xác nhận recipient, gọi `readStateService.isRead()`.
+`markNotificationRead(id, userId)`: gọi `getMyNotificationDetail(id, userId)` trước (ném 404/403 nếu cần) rồi mới `readStateService.markRead()` — đảm bảo không đánh dấu đọc hộ người khác.
+`markAllNotificationsRead(userId)`: gọi thẳng `readStateService.markAllRead()`.
+
+### 14.5 Controller
+`PATCH notifications/read-all` khai **TRƯỚC** `PATCH notifications/:id/read` (path tĩnh trước path động, tránh Nest hiểu nhầm `read-all` là 1 giá trị `:id`). Cả 2 route `@RequirePermissions('notification.update.self')`, lấy `userId` qua `@CurrentUser()` (từ token).
+
+### 14.6 Migration
+`20260727000002-SeedNotificationUpdateSelfPermission.ts` — role đối chiếu đúng `notification.read.self` trong `20260720000005-BackfillRolePermissions.ts`: `BUSINESS_ADMIN`, `EMPLOYEE`, `MANAGER`, `SYSTEM_ADMIN`.
+
+### 14.7 Test
+`redis.service.spec.ts` (+3 method mới, kể cả lỗi propagate). `notification-read-state.service.spec.ts` (mới, 100% stmt/func/line, 91.66% branch). `notifications.service.spec.ts` (mới — trước đây CHƯA có file test cho service này; cover listMyNotifications/getMyNotificationDetail/markNotificationRead/markAllNotificationsRead). `notifications.controller.spec.ts` (thêm 2 test route mới, cập nhật mock `isRead`).
+
+### 14.8 Gate
+`tsc --noEmit` sạch; `npx jest notifications redis` xanh (90/90); coverage `notification-read-state.service.ts` 100%/91.66%, `redis.service.ts` 95%/83.33% (≥80%).
 
 ## Artifacts Produced
 `spec.md`, `plan.md`, `tasks.md`.

@@ -5,6 +5,7 @@ import { NotificationEntity } from './entities/notification.entity.js';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationWorkerService } from './notification-worker.service.js';
 import { MeetingNotificationsService } from './services/meeting-notifications.service.js';
+import { NotificationReadStateService } from './services/notification-read-state.service.js';
 import { NotificationsController } from './notifications.controller.js';
 import { BackgroundJobEntity } from '../administration/entities/background-job.entity.js';
 import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
@@ -22,11 +23,14 @@ import { AuthModule } from '../auth/auth.module.js';
  * - NotificationsService: service gốc (create/enqueue/lifecycle + inbox list/detail)
  * - NotificationWorkerService: BullMQ worker xử lý send-email
  * - MeetingNotificationsService: service cho UC-143..146 (invite/reminder/cancel/distribute)
+ * - NotificationReadStateService (BE-07): trạng thái đã đọc theo user, lưu ở Redis
  * - NotificationsController: REST endpoints cho cả meeting notifications và inbox
  *
- * Không tracking trạng thái đã đọc theo từng user (Product Owner quyết định 2026-07-18:
- * không tạo bảng notification_reads, không cần theo dõi "ai đã đọc" — xem
- * spec/features/notifications/feat-notification-inbox/spec.md mục 1.2).
+ * [Đính chính 2026-07-27, BE-07] Bảng `notifications` KHÔNG có cột đã đọc theo user
+ * (Product Owner từ chối bảng `notification_reads`, 2026-07-18) — NHƯNG trạng thái đã đọc
+ * NAY ĐƯỢC theo dõi ở Redis qua NotificationReadStateService, không phải "không tracking"
+ * như ghi chú cũ. Xem spec/features/notifications/feat-notification-inbox/spec.md.
+ * RedisService là @Global() (RedisModule) nên không cần import RedisModule ở đây.
  *
  * KHÔNG import MeetingsModule/AccountsModule/MinutesModule (tránh circular).
  * TypeOrmModule.forFeature chỉ inject entity để đọc, không ghi.
@@ -56,6 +60,7 @@ import { AuthModule } from '../auth/auth.module.js';
     NotificationsService,
     NotificationWorkerService,
     MeetingNotificationsService,
+    NotificationReadStateService,
   ],
   exports: [TypeOrmModule, NotificationsService],
 })

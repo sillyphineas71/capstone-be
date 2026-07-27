@@ -6,6 +6,7 @@
 | 2026-07-18 | Khởi tạo tasks — chưa implement, chỉ lên spec/plan/tasks | Toàn bộ file |
 | 2026-07-18 | Implement 3 endpoint đầy đủ (list/detail/mark-read) + bảng `notification_reads`. QA review phát hiện 4 bug logic ở nhóm UC-143..146 (đã fix riêng, không liên quan feature này). | `notifications.service.ts`, `notifications.controller.ts`, migration, entity |
 | 2026-07-18 | **[QUYẾT ĐỊNH PRODUCT OWNER]** Product Owner từ chối bảng `notification_reads`, xác nhận không cần tracking "đã đọc". Rollback: xóa migration `20260718000001-CreateNotificationReadsTable.ts`, xóa `notification-read.entity.ts`, xóa `mark-notification-read-response.dto.ts`, xóa `markAsRead()` khỏi `NotificationsService`, xóa route `PATCH notifications/:id/read` khỏi `NotificationsController`, bỏ field `isRead`/`readAt` khỏi `NotificationListItemDto`, bỏ query param `isRead` khỏi `ListNotificationsQueryDto`. Build pass, 47/47 test pass sau rollback. | `notifications.module.ts`, `notifications.service.ts`, `notifications.controller.ts`, `notifications.controller.spec.ts`, các DTO liên quan |
+| 2026-07-27 | **[ĐỢT P1, BE-07]** Thêm T007→T012 — tái áp dụng mark-read qua Redis (không bảng/cột DB mới). Xem plan.md §14. | Checklist, T007→T012 (mới) |
 
 ## Checklist
 - [x] T001 [US1][US2] DTO → `src/modules/notifications/dto/list-notifications-query.dto.ts`, `notification-list-item.dto.ts`
@@ -16,7 +17,13 @@
 - [x] T006 Lint/build/test toàn repo (build + test pass; lint formatting còn tồn đọng ngoài phạm vi feature này)
 - [x] ~~T000 [BLOCKER] Xác nhận Product Owner phương án bảng `notification_reads`~~ — **Đã xác nhận: TỪ CHỐI**, không tạo bảng. Task này coi như đã giải quyết theo hướng "không làm".
 - [x] ~~T-migration [US3] Migration `CREATE TABLE notification_reads`~~ — **Đã xóa** theo quyết định Product Owner.
-- [x] ~~T-markread [US3] Service/Controller `markAsRead()` + route `PATCH .../read`~~ — **Đã xóa** theo quyết định Product Owner.
+- [x] ~~T-markread [US3] Service/Controller `markAsRead()` + route `PATCH .../read`~~ — **Đã xóa** theo quyết định Product Owner (2026-07-18); **tái áp dụng qua Redis ở T007→T012 (2026-07-27, BE-07)** — không phải hồi tố lại thiết kế cũ (bảng DB), mà thiết kế mới không đụng schema.
+- [x] T007 [BE-07] `RedisService.sadd/sismember/smembers` → `src/modules/redis/redis.service.ts`
+- [x] T008 [BE-07] `NotificationReadStateService` (mới) → `src/modules/notifications/services/notification-read-state.service.ts`
+- [x] T009 [BE-07] `NotificationsService` — thêm `isRead` vào list/detail, `markNotificationRead`, `markAllNotificationsRead`
+- [x] T010 [BE-07] `NotificationsController` — `PATCH notifications/read-all` (trước) + `PATCH notifications/:id/read`
+- [x] T011 [BE-07] Migration `20260727000002-SeedNotificationUpdateSelfPermission.ts`
+- [x] T012 [BE-07] Test: `redis.service.spec.ts`, `notification-read-state.service.spec.ts` (mới), `notifications.service.spec.ts` (mới), `notifications.controller.spec.ts` (cập nhật)
 
 ## Phase 1: DTO
 
