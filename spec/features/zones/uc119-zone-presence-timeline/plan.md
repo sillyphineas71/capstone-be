@@ -4,6 +4,7 @@
 | Ngày | Tóm tắt | Vị trí |
 | :--- | :--- | :--- |
 | 2026-07-23 | Tạo plan ZPT-001 cùng lượt với spec. THÊM controller/service/dto vào module `campus-dashboard` đã scaffold ở UC-126 — KHÔNG tạo module mới, KHÔNG DDL. | Toàn bộ |
+| 2026-07-27 | **Đính chính P1 (A.2)**: bỏ `pairEnterExit`/`totalDurationSeconds`/`ongoing` (thuật toán dùng nhầm `enter`/`exit` — giá trị không tồn tại trong `zone_presence_events`), thay bằng `sightingCount` (đếm event). Xem spec.md đính chính cùng ngày, `PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md` §2A. | §1, §3, §4, §7-8 |
 
 > Spec: [spec.md](./spec.md). Plan KHÔNG mở lại quyết định đã chốt ở spec §1/§2. **Điều kiện tiên quyết: `../uc126-campus-dashboard/` xong trước** (cần module `campus-dashboard` + `CampusDashboardRepository` đã tồn tại).
 
@@ -27,17 +28,16 @@ src/modules/campus-dashboard/services/zone-presence-timeline.service.ts
   2. `this.validateRange(from, to);` (throw `400 INVALID_TIMELINE_RANGE` nếu > 31 ngày).
   3. `const where: FindOptionsWhere<ZonePresenceEventEntity> = {zoneId, eventTime: Between(from, to)}; if (userId) where.userId = userId;`
   4. `const events = await this.presenceRepo.find({where, order: {eventTime: 'ASC'}});`
-  5. `if (events.length === 0) return {events: [], personDataAvailable: null, totalDurationSeconds: null, ongoing: false, message: 'Không có dữ liệu hiện diện trong khoảng thời gian này.'};`
+  5. `if (events.length === 0) return {events: [], personDataAvailable: null, sightingCount: null, message: 'Không có dữ liệu hiện diện trong khoảng thời gian này.'};`
   6. `const personDataAvailable = userId ? true : events.some(e => e.userId !== null);`
-  7. `if (userId) { const {totalDurationSeconds, ongoing} = this.pairEnterExit(events); return {events: this.toDto(events), personDataAvailable, totalDurationSeconds, ongoing}; }`
-  8. `return {events: this.toDto(events), personDataAvailable, totalDurationSeconds: null, ongoing: false};`
-- `private pairEnterExit(events: ZonePresenceEventEntity[]): {totalDurationSeconds: number; ongoing: boolean}` — duyệt tuần tự (đã `ORDER BY eventTime ASC`), giữ biến `pendingEnter: Date | null`; gặp `eventType='enter'` → set `pendingEnter = eventTime` (nếu đang có `pendingEnter` cũ chưa đóng, GHI ĐÈ — enter mới nhất thắng, mirror log "chỉ 1 phiên đang mở tại 1 thời điểm"); gặp `eventType='exit'` VÀ có `pendingEnter` → cộng `(exitTime - pendingEnter) / 1000` vào tổng, reset `pendingEnter = null`; kết thúc vòng lặp, nếu `pendingEnter !== null` → `ongoing = true` (KHÔNG cộng vào tổng).
+  7. `return {events: this.toDto(events), personDataAvailable, sightingCount: userId ? events.length : null};`
+- **[Đính chính 2026-07-27]** `pairEnterExit` đã bị loại bỏ — `enter`/`exit` không phải giá trị hợp lệ của `zone_presence_events.event_type` (thật ra là `appear`/`disappear`/`count`, xem `zones/constants/zone-presence-event-type.constant.ts`). `sightingCount` thay thế toàn bộ logic ghép cặp.
 - `private validateRange(from: Date, to: Date): void` — `to.getTime() - from.getTime() > 31 * 24 * 60 * 60 * 1000` → throw `BadRequestException({code: 'INVALID_TIMELINE_RANGE', message: 'Khoảng thời gian tối đa 31 ngày'})`.
 
 ## 4. DTO
 ```
 src/modules/campus-dashboard/dto/query-zone-timeline.dto.ts       (from, to: ISO date string bắt buộc; userId?: UUID optional)
-src/modules/campus-dashboard/dto/zone-timeline-response.dto.ts    (events: TimelineEventDto[], personDataAvailable, totalDurationSeconds, ongoing, message?)
+src/modules/campus-dashboard/dto/zone-timeline-response.dto.ts    (events: TimelineEventDto[], personDataAvailable, sightingCount, message?)
 ```
 
 ## 5. Controller — thêm route vào module `campus-dashboard`
@@ -65,8 +65,7 @@ src/database/migrations/20260723000009-SeedCampusDashboardTimelinePermission.ts
 > Tổng **7 net-new + 1 modified**. 0 entity, 1 migration (seed permission only).
 
 ## 8. Test (mock repo — KHÔNG DB)
-- `pairEnterExit`: cặp đơn giản 1 enter+1 exit; nhiều cặp liên tiếp; enter cuối không có exit → `ongoing=true`, không cộng tổng; enter mới đè enter cũ chưa đóng (2 enter liên tiếp không exit ở giữa).
-- `getTimeline`: zone không tồn tại → 404; range >31 ngày → 400; rỗng → EX1 message; có `userId` → gọi đúng `pairEnterExit`; không `userId` → `totalDurationSeconds=null`; `personDataAvailable=false` khi toàn bộ event `userId=NULL`.
+- `getTimeline`: zone không tồn tại → 404; range >31 ngày → 400; rỗng → EX1 message (`sightingCount: null`); có `userId` → `sightingCount = events.length`; không `userId` → `sightingCount=null`; `personDataAvailable=false` khi toàn bộ event `userId=NULL`; `personDataAvailable=true` khi có event có `userId`.
 - Coverage **≥80%** file mới.
 
 ## 9. Gate (STOP, KHÔNG commit)

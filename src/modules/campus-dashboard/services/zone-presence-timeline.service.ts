@@ -16,14 +16,19 @@ const MAX_RANGE_MS = 31 * 24 * 60 * 60 * 1000; // 31 ngày (spec §2.5)
 const NO_DATA_MESSAGE =
   'Không có dữ liệu hiện diện trong khoảng thời gian này.';
 
-interface PairResult {
-  totalDurationSeconds: number;
-  ongoing: boolean;
-}
-
 /**
- * ZonePresenceTimelineService (ZPT-001 / UC-119) — timeline + tổng thời gian lưu lại theo cá
- * nhân (BR1). 100% READ-ONLY, tính ghép cặp TẠM trong request — KHÔNG persist (DATA-01).
+ * ZonePresenceTimelineService (ZPT-001 / UC-119) — timeline hiện diện theo khu vực.
+ *
+ * Mô hình dữ liệu là NHẬT KÝ BẮT GẶP (sighting log): camera IVSS bắn `zone_presence_events`
+ * mỗi khi *thấy* một người trong khung hình (giá trị hợp lệ duy nhất là
+ * `ZONE_PRESENCE_EVENT_TYPES` = `appear`/`disappear`/`count` — xem
+ * `zones/constants/zone-presence-event-type.constant.ts`), KHÔNG bắn khi người đó rời khung.
+ * Vì vậy service này KHÔNG thể (và không cố) ghép cặp "vào/ra" để tính thời lượng lưu lại —
+ * nguồn dữ liệu không đủ thông tin cho việc đó. `enter`/`exit` là giá trị của
+ * `gate_access_logs.direction` (một bảng khác, ngữ nghĩa khác: đi qua ranh giới cổng) —
+ * không được dùng nhầm ở đây.
+ *
+ * 100% READ-ONLY, không persist gì thêm (DATA-01).
  */
 @Injectable()
 export class ZonePresenceTimelineService {
@@ -67,8 +72,7 @@ export class ZonePresenceTimelineService {
       return {
         events: [],
         personDataAvailable: null,
-        totalDurationSeconds: null,
-        ongoing: false,
+        sightingCount: null,
         message: NO_DATA_MESSAGE,
       };
     }
@@ -77,44 +81,11 @@ export class ZonePresenceTimelineService {
       ? true
       : events.some((e) => e.userId !== null);
 
-    if (userId) {
-      const { totalDurationSeconds, ongoing } = this.pairEnterExit(events);
-      return {
-        events: this.toDto(events),
-        personDataAvailable,
-        totalDurationSeconds,
-        ongoing,
-      };
-    }
-
     return {
       events: this.toDto(events),
       personDataAvailable,
-      totalDurationSeconds: null,
-      ongoing: false,
+      sightingCount: userId ? events.length : null,
     };
-  }
-
-  /**
-   * pairEnterExit (spec §2.3) — FIFO tuần tự (input đã ORDER BY eventTime ASC): `enter` mới
-   * GHI ĐÈ `pendingEnter` cũ chưa đóng (chỉ 1 phiên đang mở tại 1 thời điểm); `exit` khi CÓ
-   * `pendingEnter` → cộng dồn; `enter` cuối chưa có `exit` → `ongoing=true`, KHÔNG cộng tổng.
-   */
-  private pairEnterExit(events: ZonePresenceEventEntity[]): PairResult {
-    let pendingEnter: Date | null = null;
-    let totalDurationSeconds = 0;
-
-    for (const event of events) {
-      if (event.eventType === 'enter') {
-        pendingEnter = event.eventTime;
-      } else if (event.eventType === 'exit' && pendingEnter) {
-        totalDurationSeconds +=
-          (event.eventTime.getTime() - pendingEnter.getTime()) / 1000;
-        pendingEnter = null;
-      }
-    }
-
-    return { totalDurationSeconds, ongoing: pendingEnter !== null };
   }
 
   private validateRange(from: Date, to: Date): void {

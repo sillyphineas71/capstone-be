@@ -11,8 +11,7 @@ describe('ZonePresenceTimelineController (ZPT-001 / UC-119)', () => {
   const responseData = {
     events: [],
     personDataAvailable: null,
-    totalDurationSeconds: null,
-    ongoing: false,
+    sightingCount: null,
   };
 
   beforeEach(() => {
