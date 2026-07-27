@@ -15,6 +15,8 @@
 | Ngày | Tóm tắt | Ghi chú |
 |---|---|---|
 | 2026-06-03 | Tạo mới toàn bộ API Contract v1.0 từ UseCase_List_SMRMPTS.xlsx + Database v3.2 Compact | Tạo mới |
+| 2026-07-26 | BE-01: Thêm UC mới `POST /api/v1/auth/refresh` (sau UC-02), đồng bộ với `API_CONTRACT_v1.0.md`. Sửa câu sai ở Business rules của UC-02 — "không còn `sessionId`/`refreshToken`" chỉ đúng với `sessionId`/bảng `user_sessions`; `refreshToken` vẫn dùng. | Section UC-02, UC mới sau UC-02 |
+| 2026-07-27 | Đợt P1 (BE-05): gỡ trùng route `GET /meetings/{meetingId}/attendance` — UC-81 (danh sách chung) và UC-101/UC-IMM-08 (điểm danh trong live-meeting session) từng cùng khai path này. Thêm UC-81b `GET /api/v1/live-meetings/{meetingId}/attendance`; đính chính ghi chú sai ở UC-101. Ghi chú residual: UC-17b/UC-18b (đợt P0) vẫn CHƯA có trong file này dù đã có ở `API_CONTRACT_v1.0.md` — nợ tài liệu từ đợt trước, ngoài phạm vi đợt này. | UC-81 (sau, mới UC-81b), UC-101 |
 
 ---
 
@@ -219,7 +221,51 @@
 **Business rules:**
 - Blacklist access token trong Redis (TTL = thời gian còn lại của token)
 - Ghi `audit_logs` (action_type: `logout`)
-- Không cần body — không còn `sessionId`/`refreshToken` theo v3.2 Compact
+- Không cần body — không còn `sessionId`/bảng `user_sessions` theo v3.2 Compact (Đính chính 2026-07-26: `refreshToken` **vẫn được dùng** trong hệ thống, chỉ riêng bảng `user_sessions` là bị loại bỏ khỏi DB Compact. Đọc UC-02b bên dưới về refresh token.)
+
+---
+
+### UC-02b — Làm mới access token (Refresh Token)
+
+| Field | Value |
+|---|---|
+| Method | `POST` |
+| Endpoint | `/api/v1/auth/refresh` |
+| Permission | Public (không cần `JwtAuthGuard` — access token đã hết hạn là lý do gọi endpoint này) |
+| System Role | Không yêu cầu đăng nhập (public) |
+| Async | No |
+
+**Request:**
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Refresh token thanh cong",
+  "data": {
+    "accessToken": "eyJ...",
+    "refreshToken": "eyJ...",
+    "expiresIn": 10800
+  }
+}
+```
+
+**Response 401 (REFRESH_TOKEN_INVALID):** sai chữ ký, hết hạn, malformed, hoặc user không tồn tại/không còn `active`.
+
+**Response 401 (REFRESH_TOKEN_REVOKED):** `jti` của refresh token đã có trong Redis blacklist (đã dùng để rotation hoặc đã logout).
+
+**Business rules:**
+- Xác thực chữ ký refresh token bằng secret riêng (`AUTH_REFRESH_TOKEN_SECRET`, khác secret access token).
+- Rotation: mỗi lần refresh phát `jti` mới cho cả access + refresh token mới; `jti` cũ bị blacklist ngay (TTL = thời gian còn lại của refresh token cũ) — chống replay.
+- Vì login phát access+refresh **cùng một `jti`**, blacklist `jti` cũ khi rotation cũng khai tử access token cũ tương ứng.
+- Redis không phản hồi được → fail-closed, trả 401.
+- Không dùng bảng `user_sessions` — trạng thái revoke hoàn toàn dựa vào Redis blacklist theo `jti`.
+- Chi tiết: `spec/features/auth/feat-refresh-token/spec.md`.
 
 ---
 
@@ -3100,6 +3146,29 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 
 ---
 
+### UC-81b — Xem điểm danh trong phiên họp đang diễn ra (mới, 2026-07-27; = UC-101/UC-IMM-08)
+
+> [P1 BE-05] Trước đợt này, `live-meeting.controller.ts` đăng ký TRÙNG path với UC-81 ở trên
+> (`GET /meetings/{meetingId}/attendance`) — NestJS chỉ route tới 1 trong 2 handler tùy thứ tự
+> import module, gãy âm thầm nếu đổi thứ tự. Đã tách path riêng. UC-81 (trên) là danh sách điểm
+> danh chung, phân trang, không ràng buộc trạng thái phiên. UC-81b (dưới) là điểm danh TRONG một
+> live-meeting session đang chạy — có audit ghi `ipAddress`/`userAgent`, trả `409` nếu meeting
+> chưa `in_progress`/đã kết thúc. Spec: `spec/features/live-meeting/feat-view-participant-attendance-status/`.
+
+| Field | Value |
+|---|---|
+| Method | `GET` |
+| Endpoint | `/api/v1/live-meetings/{meetingId}/attendance` |
+| Permission | `attendance.read` |
+| System Role | `INTERNAL_USER`, `MANAGER`, `BUSINESS_ADMIN`, `SYSTEM_ADMIN` |
+| Async | No |
+
+**Query:** `?q=&status=checked_in,late,absent&page=1&pageSize=20&sortBy=full_name&sortOrder=asc`
+
+**Response 200:** cùng shape UC-81 (`participants[]` + `meta`), thêm ràng buộc: `409` nếu meeting chưa `in_progress`/đã `completed` mà chưa có bản ghi nào.
+
+---
+
 ### UC-82 — Xem chi tiết một bản ghi điểm danh
 
 | Field | Value |
@@ -3570,7 +3639,11 @@ Sau khi nhận raw event từ UC-70/71/72, backend normalize payload:
 ### UC-101 — Xem trạng thái điểm danh người tham dự
 **System Role:** `INTERNAL_USER`, `MANAGER`, `BUSINESS_ADMIN`, `SYSTEM_ADMIN`
 
-> Sử dụng `GET /api/v1/meetings/{meetingId}/attendance` (UC-81) với filter realtime.
+> [P1 BE-05, 2026-07-27 — đính chính] Trước đây tài liệu ghi "dùng chung endpoint UC-81" —
+> KHÔNG còn đúng. `live-meeting.controller.ts` từng đăng ký TRÙNG path với UC-81
+> (`GET /meetings/{meetingId}/attendance`), NestJS chỉ route tới 1 trong 2 handler tùy thứ tự
+> import module. Đã tách path riêng, xem chi tiết đầy đủ ở **UC-81b** (ngay sau UC-81). Endpoint
+> thật: `GET /api/v1/live-meetings/{meetingId}/attendance`.
 
 ---
 
