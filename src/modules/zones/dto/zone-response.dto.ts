@@ -1,9 +1,18 @@
 import type { ZoneEntity } from '../entities/zone.entity.js';
+import type { IoTDeviceEntity } from '../../iot/entities/iot-device.entity.js';
+import {
+  toIotDeviceResponse,
+  type IotDeviceResponseDto,
+} from '../../iot/dto/iot-device-response.dto.js';
 
 /**
  * ZoneResponse (ZNC-001 / UC-90) — shape trả ra client, field snake_case.
  *
  * KHÔNG trả `deleted_at` (chi tiết nội bộ của soft-delete).
+ *
+ * BE-fix: `iot_devices`/`equipments` CHỈ được điền khi caller truyền `devices` vào
+ * `toZoneResponse` (route GET /zones/:id — UC-93). Route GET /zones (list) không truyền
+ * để tránh N+1 query — 2 field này sẽ là `undefined` và bị lược khi serialize JSON.
  */
 export interface ZoneResponse {
   id: string;
@@ -17,10 +26,29 @@ export interface ZoneResponse {
   status: string;
   created_at: Date;
   updated_at: Date;
+  iot_devices?: IotDeviceResponseDto[];
+  equipments?: EquipmentSummary[];
 }
 
-export function toZoneResponse(entity: ZoneEntity): ZoneResponse {
-  return {
+/**
+ * Tóm tắt equipment gắn với zone — suy ra từ quan hệ có sẵn
+ * `iot_devices.equipment_id -> equipments` (schema hiện tại KHÔNG có `equipments.zone_id`,
+ * nên đây là đường liên kết zone -> equipment duy nhất, xem `IotDevicesService.findByZoneId`).
+ */
+export interface EquipmentSummary {
+  id: string;
+  equipment_code: string;
+  equipment_name: string;
+  equipment_type: string;
+  asset_status: string;
+  health_status: string;
+}
+
+export function toZoneResponse(
+  entity: ZoneEntity,
+  devices?: IoTDeviceEntity[],
+): ZoneResponse {
+  const response: ZoneResponse = {
     id: entity.id,
     zone_code: entity.zoneCode,
     zone_name: entity.zoneName,
@@ -33,4 +61,27 @@ export function toZoneResponse(entity: ZoneEntity): ZoneResponse {
     created_at: entity.createdAt,
     updated_at: entity.updatedAt,
   };
+
+  if (devices) {
+    response.iot_devices = devices.map(toIotDeviceResponse);
+
+    // Dedupe theo equipment.id — nhiều thiết bị lý thuyết có thể trỏ cùng 1 equipment.
+    const equipmentById = new Map<string, EquipmentSummary>();
+    for (const device of devices) {
+      const eq = device.equipment;
+      if (eq && !equipmentById.has(eq.id)) {
+        equipmentById.set(eq.id, {
+          id: eq.id,
+          equipment_code: eq.equipmentCode,
+          equipment_name: eq.equipmentName,
+          equipment_type: eq.equipmentType,
+          asset_status: eq.assetStatus,
+          health_status: eq.healthStatus,
+        });
+      }
+    }
+    response.equipments = Array.from(equipmentById.values());
+  }
+
+  return response;
 }

@@ -63,7 +63,7 @@ export class ZonesController {
     return {
       success: true,
       message: 'Zones retrieved successfully',
-      data: items.map(toZoneResponse),
+      data: items.map((item) => toZoneResponse(item)),
       meta,
     };
   }
@@ -73,12 +73,12 @@ export class ZonesController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('zones.zone.read')
   async detail(@Param('id', ParseUUIDPipe) id: string) {
-    const entity = await this.zonesService.getDetail(id);
+    const { zone, devices } = await this.zonesService.getDetail(id);
 
     return {
       success: true,
       message: 'Zone retrieved successfully',
-      data: toZoneResponse(entity),
+      data: toZoneResponse(zone, devices),
     };
   }
 

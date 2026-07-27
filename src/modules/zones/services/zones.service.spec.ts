@@ -71,6 +71,8 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
       // UC-94: API đọc + ghi cho cross-module.
       findAssignableByIds: jest.fn().mockResolvedValue([]),
       setZoneForDevices: jest.fn().mockResolvedValue({ affected: 0 }),
+      // UC-93 (BE-fix): GET /zones/:id trả kèm danh sách thiết bị.
+      findByZoneId: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -658,10 +660,23 @@ describe('ZonesService (ZNC-001 / UC-90)', () => {
 
       const r = await service.getDetail('z1');
 
-      expect(r).toBe(entity);
+      expect(r.zone).toBe(entity);
       expect(repo.findOne).toHaveBeenCalledWith({
         where: { id: 'z1', deletedAt: IsNull() },
       });
+    });
+
+    // BE-fix: response kèm danh sách thiết bị gán vào zone (qua IotDevicesService, ARCH-01).
+    it('200: kèm danh sách thiết bị lấy từ IotDevicesService.findByZoneId', async () => {
+      const entity = { id: 'z1', zoneCode: 'GATE-01' };
+      const devices = [{ id: 'd1' }, { id: 'd2' }];
+      repo.findOne.mockResolvedValueOnce(entity);
+      iotDevicesService.findByZoneId.mockResolvedValueOnce(devices);
+
+      const r = await service.getDetail('z1');
+
+      expect(r.devices).toBe(devices);
+      expect(iotDevicesService.findByZoneId).toHaveBeenCalledWith('z1');
     });
 
     // Case 15

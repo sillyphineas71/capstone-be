@@ -315,6 +315,23 @@ export class IotDevicesService {
   }
 
   /**
+   * Liet ke thiet bi dang gan vao mot zone — API doc phuc vu UC-93 (GET /zones/:id) cua
+   * module `zones`, cung ranh gioi ARCH-01 nhu `countByZoneId`/`findAssignableByIds`:
+   * `zones` khong duoc query thang bang `iot_devices`.
+   *
+   * Nap kem relation `equipment` (FK co san `iot_devices.equipment_id`) de caller lay duoc
+   * ca danh sach equipment gan voi zone ma khong phai tu mo query rieng vao bang
+   * `equipments` — day la duong lien ket DUY NHAT giua zone va equipment trong schema hien
+   * tai (bang `equipments` KHONG co cot `zone_id`).
+   */
+  async findByZoneId(zoneId: string): Promise<IoTDeviceEntity[]> {
+    return this.dataSource.manager.find(IoTDeviceEntity, {
+      where: { zoneId },
+      relations: { equipment: true },
+    });
+  }
+
+  /**
    * Đặt `zone_id` cho một tập thiết bị — API GHI phục vụ UC-94 của module `zones`.
    *
    * 1. API cho module khác: `iot` KHÔNG biết nghiệp vụ zone. `zoneId` được coi là giá trị ĐỤC —
