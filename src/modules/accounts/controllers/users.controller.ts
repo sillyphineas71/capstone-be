@@ -59,6 +59,8 @@ import { ListUsersQueryDto } from '../dto/list-users-query.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
 import { ManageUsersQueryDto } from '../dto/manage-users-query.dto.js';
 import { ManageUserItemDto } from '../dto/manage-user-item.dto.js';
+import { ExportUsersQueryDto } from '../dto/export-users-query.dto.js';
+import { UserExportService } from '../../reports/services/user-export.service.js';
 
 @ApiTags('Accounts')
 @Controller('users')
@@ -66,6 +68,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly accountImportService: AccountImportService,
+    private readonly userExportService: UserExportService,
   ) {}
 
   @Post()
@@ -741,6 +744,54 @@ export class UsersController {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  // [BE-04, Đợt P1] Route order: khai báo path tĩnh 'export' TRƯỚC ':userId' —
+  // nếu không, 'export' sẽ bị pattern ':userId' nuốt (đúng lỗi plan gốc mô tả),
+  // Nest sẽ thử parse "export" như 1 UUID và trả 400 thay vì chạy route này.
+  @Get('export')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.export')
+  @ApiBearerAuth()
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  @ApiOperation({
+    summary: 'Xuất danh sách người dùng ra file Excel',
+    description:
+      'Render đồng bộ và trả thẳng file XLSX theo filter (search/departmentId/roleId/locked). [Quyết định 2026-07-27 của Hải] Đổi từ background job (202 {jobId} + poll) sang trả file trực tiếp — xem UserExportService docblock.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'File XLSX danh sách người dùng (trả trực tiếp trong body).',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.export).',
+  })
+  async exportUsers(
+    @Query() query: ExportUsersQueryDto,
+    @Req() request: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const user = request['user'] as
+      | { userId: string; email: string }
+      | undefined;
+
+    const { buffer, fileName } = await this.userExportService.exportUsersXlsx(
+      { userId: user?.userId ?? 'system', email: user?.email ?? '' },
+      query,
+    );
+
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(buffer);
   }
 
   @Get(':userId')

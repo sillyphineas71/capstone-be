@@ -7,6 +7,7 @@ import { plainToInstance } from 'class-transformer';
 import { UsersController } from './users.controller.js';
 import { UsersService } from '../services/users.service.js';
 import { AccountImportService } from '../services/account-import.service.js';
+import { UserExportService } from '../../reports/services/user-export.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
@@ -31,6 +32,7 @@ describe('UsersController', () => {
     unlockUser: jest.Mock;
     listUsersForManagement: jest.Mock;
   };
+  let userExportService: { exportUsersXlsx: jest.Mock };
 
   beforeEach(async () => {
     service = {
@@ -45,6 +47,7 @@ describe('UsersController', () => {
       unlockUser: jest.fn(),
       listUsersForManagement: jest.fn(),
     };
+    userExportService = { exportUsersXlsx: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
@@ -59,6 +62,10 @@ describe('UsersController', () => {
             generateTemplate: jest.fn(),
             importAccounts: jest.fn(),
           },
+        },
+        {
+          provide: UserExportService,
+          useValue: userExportService,
         },
       ],
     })
@@ -793,6 +800,65 @@ describe('UsersController', () => {
       const errors = await validate(dto);
       const sortByError = errors.find((e) => e.property === 'sortBy');
       expect(sortByError?.constraints).toHaveProperty('isIn');
+    });
+  });
+
+  describe('exportUsers (BE-04)', () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { exportUsers } = UsersController.prototype;
+
+    it('[EX1] Success — gọi userExportService đúng filter + userId/email từ token, set 2 header rồi res.send(buffer)', async () => {
+      const buffer = Buffer.from('XLSX_CONTENT');
+      userExportService.exportUsersXlsx.mockResolvedValue({
+        buffer,
+        fileName: 'danh-sach-nguoi-dung-20260727-090000.xlsx',
+      });
+
+      const request = {
+        user: { userId: 'admin-uuid', email: 'admin@test.com' },
+      } as unknown as Request;
+      const res = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+      } as unknown as Response;
+
+      await controller.exportUsers(
+        { search: 'nguyen', departmentId: 'dept-1' },
+        request,
+        res,
+      );
+
+      expect(userExportService.exportUsersXlsx).toHaveBeenCalledWith(
+        { userId: 'admin-uuid', email: 'admin@test.com' },
+        { search: 'nguyen', departmentId: 'dept-1' },
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="danh-sach-nguoi-dung-20260727-090000.xlsx"',
+      );
+      expect(res.send).toHaveBeenCalledWith(buffer);
+    });
+
+    it('[EX2] Endpoint áp dụng JwtAuthGuard + PermissionsGuard', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        exportUsers,
+      ) as unknown[];
+
+      expect(guards).toEqual([JwtAuthGuard, PermissionsGuard]);
+    });
+
+    it('[EX3] Yêu cầu permission accounts.user.export', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        exportUsers,
+      ) as string[];
+
+      expect(permissions).toEqual(['accounts.user.export']);
     });
   });
 });

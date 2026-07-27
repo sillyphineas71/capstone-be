@@ -12,6 +12,7 @@ import { NoShowCaseEntity } from '../rooms/entities/no-show-case.entity.js';
 import { RoomEventEntity } from '../rooms/entities/room-event.entity.js';
 import { AttendanceRecordEntity } from '../attendance/entities/attendance-record.entity.js';
 import { UserEntity } from '../accounts/entities/user.entity.js';
+import { UserRoleEntity } from '../accounts/entities/user-role.entity.js';
 import { DepartmentEntity } from '../accounts/entities/department.entity.js';
 
 // MediaFileEntity cần cho worker processor để lưu output
@@ -64,6 +65,10 @@ import { GateAccessReportWorkerProcessor } from './processors/gate-access-report
 import { VehicleReportWorkerProcessor } from './processors/vehicle-report-worker.processor.js';
 import { SecurityAlertReportWorkerProcessor } from './processors/security-alert-report-worker.processor.js';
 
+// BE-04 (Đợt P1): user export
+import { UserExportService } from './services/user-export.service.js';
+import { UserExportDataService } from './services/user-export-data.service.js';
+
 /**
  * ReportsModule — UC-AA-12 / UC-158: Xuất báo cáo tổng hợp hoạt động cuộc họp.
  *
@@ -97,6 +102,7 @@ import { SecurityAlertReportWorkerProcessor } from './processors/security-alert-
       RoomEventEntity,
       AttendanceRecordEntity,
       UserEntity,
+      UserRoleEntity,
       DepartmentEntity,
       // Entity cho worker processor (lưu media file)
       MediaFileEntity,
@@ -136,6 +142,11 @@ import { SecurityAlertReportWorkerProcessor } from './processors/security-alert-
     SecurityAlertReportService,
     SecurityAlertReportDataService,
     SecurityAlertReportWorkerProcessor,
+    // BE-04 (2026-07-27): export đồng bộ, không còn worker/job — xem
+    // UserExportService docblock.
+    UserExportService,
+    UserExportDataService,
   ],
+  exports: [UserExportService],
 })
 export class ReportsModule {}
