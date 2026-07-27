@@ -34,6 +34,32 @@ export class UsersAuthRepository {
     };
   }
 
+  async findById(userId: string): Promise<AuthenticatedUserRecord | null> {
+    const row = await this.dataSource.query(
+      `
+        SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status
+        FROM users
+        WHERE id = $1 AND deleted_at IS NULL
+        LIMIT 1
+      `,
+      [userId],
+    );
+
+    if (!row[0]) {
+      return null;
+    }
+
+    return {
+      id: row[0].id,
+      email: row[0].email,
+      passwordHash: row[0].password_hash,
+      fullName: row[0].full_name,
+      avatarUrl: row[0].avatar_url ?? null,
+      departmentId: row[0].department_id ?? null,
+      accountStatus: row[0].account_status,
+    };
+  }
+
   async updateLastLoginAt(userId: string, loggedAt: Date): Promise<void> {
     await this.dataSource.query(
       `UPDATE users SET last_login_at = $2, updated_at = now() WHERE id = $1`,
