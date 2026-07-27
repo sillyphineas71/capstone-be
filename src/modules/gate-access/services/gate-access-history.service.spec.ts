@@ -53,7 +53,7 @@ describe('GateAccessHistoryService (GAH-001 / UC-117)', () => {
       const countSql = query.mock.calls[0][0] as string;
       const countParams = query.mock.calls[0][1] as unknown[];
       expect(countSql).toContain(
-        `(l.direction = 'in' OR l.paired_log_id IS NULL)`,
+        `(l.direction = 'enter' OR l.paired_log_id IS NULL)`,
       );
       expect(countSql).toContain('sessions.user_id = $1');
       expect(countParams[0]).toBe('u1');

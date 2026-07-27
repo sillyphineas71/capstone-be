@@ -24,7 +24,7 @@ export interface PaginationMeta {
  * "Hoàn tất"/"Chưa hoàn tất" EX1); giữ `out` CHỈ khi chưa ghép (EX2 "Không xác định thời điểm
  * vào"). `out` đã ghép bị loại vì đã được biểu diễn qua `check_out_time` của dòng `in`.
  */
-const SESSION_FILTER = `(l.direction = 'in' OR l.paired_log_id IS NULL)`;
+const SESSION_FILTER = `(l.direction = 'enter' OR l.paired_log_id IS NULL)`;
 
 /**
  * DATA-02 (crux): JOIN zone LUÔN kèm `z.deleted_at IS NULL`. Self-join `paired` lấy dòng đối
@@ -41,10 +41,10 @@ const SESSIONS_CTE = `
     SELECT
       l.id, l.zone_id, z.zone_code, z.zone_name, l.user_id, l.plate_number, l.metadata_json,
       l.access_time,
-      CASE WHEN l.direction = 'in' THEN l.access_time ELSE NULL END AS check_in_time,
+      CASE WHEN l.direction = 'enter' THEN l.access_time ELSE NULL END AS check_in_time,
       CASE
-        WHEN l.direction = 'out' THEN l.access_time
-        WHEN l.direction = 'in' AND paired.id IS NOT NULL THEN paired.access_time
+        WHEN l.direction = 'leave' THEN l.access_time
+        WHEN l.direction = 'enter' AND paired.id IS NOT NULL THEN paired.access_time
         ELSE NULL
       END AS check_out_time,
       l.duration_seconds,

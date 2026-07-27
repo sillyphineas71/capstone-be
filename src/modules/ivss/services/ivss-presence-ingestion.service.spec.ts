@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { IvssPresenceIngestionService } from './ivss-presence-ingestion.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 const MEETING_UUID = '22222222-2222-2222-2222-222222222222';
@@ -21,7 +22,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   let service: IvssPresenceIngestionService;
   let dsMock: any;
   let wsMock: { emitToRoom: jest.Mock };
+  let writerMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
+  const AREA_UUID = '33333333-3333-3333-3333-333333333333';
 
   const wire = (
     over: {
@@ -35,6 +38,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       fullNameThrows?: boolean;
       directionMap?: Record<string, unknown> | null;
       directionMapThrows?: boolean;
+      presenceMap?: Record<string, unknown> | null; // ZPW-001 channel_presence_zone_map
     } = {},
   ) => {
     captured = [];
@@ -61,6 +65,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
                 : over.channelMap,
           },
         ]);
+      // ZPW-001: channel_presence_zone_map (parameterized config_key = $1).
+      if (params?.[0] === 'ivss.channel_presence_zone_map')
+        return Promise.resolve([{ config_json: over.presenceMap ?? null }]);
       if (sql.includes('FROM meetings'))
         return Promise.resolve(over.meeting ?? [{ id: MEETING_UUID }]);
       if (sql.includes('FROM users WHERE id')) {
@@ -70,7 +77,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       }
       if (sql.includes('INSERT INTO iot_device_events')) {
         if (over.insertThrows) return Promise.reject(new Error('db boom'));
-        return Promise.resolve(undefined);
+        return Promise.resolve([{ id: 'evt1' }]); // QĐ-4: RETURNING id
       }
       return Promise.resolve(undefined);
     });
@@ -87,6 +94,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         IvssPresenceIngestionService,
         { provide: DataSource, useValue: dsMock },
         { provide: WebsocketService, useValue: wsMock },
+        { provide: ZonePresenceWriterService, useValue: writerMock },
         {
           provide: ConfigService,
           useValue: {
@@ -102,6 +110,10 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   beforeEach(async () => {
     dsMock = { manager: { query: jest.fn() } };
     wsMock = { emitToRoom: jest.fn() };
+    writerMock = {
+      resolvePresenceZone: jest.fn().mockResolvedValue({ valid: true }),
+      writeAppearEvent: jest.fn().mockResolvedValue({ presenceId: 'zpe1' }),
+    };
     service = await build(false);
   });
 
@@ -410,6 +422,116 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       await service.onFaceEvent(evt({ channelId: 2, eventAction: 'in' }));
       expect(insert()).toBeDefined();
       expect(payloadOf().direction).toBe('enter');
+    });
+  });
+
+  // ── ZPW-001 (UC-109 B4): writer appear ──
+  describe('zone presence writer (ZPW-001)', () => {
+    const nowIso = () => new Date().toISOString();
+    const AREA = AREA_UUID;
+
+    // T4.1 — AC-BACKCOMPAT: presence-map trống = hiện trạng hôm nay.
+    it('AC-BACKCOMPAT: presence-map trống → KHÔNG writeAppearEvent, điểm danh giữ nguyên, không ném', async () => {
+      wire(); // KHÔNG presenceMap → zone_unmapped
+      await expect(service.onFaceEvent(evt())).resolves.toBeUndefined();
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(payloadOf()).toMatchObject({
+        szUid: 'SZ1',
+        userId: 'u1',
+        channelId: 5,
+        roomId: ROOM_UUID,
+        matchState: 'matched',
+      });
+      expect(insert()!.sql).toContain('RETURNING id');
+      expect(payloadOf().presenceSkipped).toBe('zone_unmapped');
+    });
+
+    it('unmatched_identity: userId NULL → payload skip, KHÔNG writeAppearEvent', async () => {
+      wire({ presenceMap: { '5': AREA }, user: [] });
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      expect(payloadOf().presenceSkipped).toBe('unmatched_identity');
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+    });
+
+    it('bad_utc: utcFallback → payload skip, KHÔNG writeAppearEvent (KHÔNG now())', async () => {
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt({ utc: 'not-a-date' }));
+      expect(payloadOf().presenceSkipped).toBe('bad_utc');
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+    });
+
+    it('zone_wrong_type: resolvePresenceZone {valid:false} → payload skip, KHÔNG writeAppearEvent', async () => {
+      writerMock.resolvePresenceZone.mockResolvedValue({
+        valid: false,
+        reason: 'zone_wrong_type',
+      });
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      expect(payloadOf().presenceSkipped).toBe('zone_wrong_type');
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+    });
+
+    it('ghi appear thành công: writeAppearEvent 1 lần, metadata {channelId,szUid,similarity,sourceEventId} KHÔNG name; payload.presenceSkipped null', async () => {
+      const iso = nowIso();
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt({ utc: iso, similarity: 88 }));
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      const arg = writerMock.writeAppearEvent.mock.calls[0][0];
+      expect(arg.zoneId).toBe(AREA);
+      expect(arg.userId).toBe('u1');
+      expect(arg.eventTime.toISOString()).toBe(iso); // từ utc, KHÔNG now()
+      expect(arg.metadata).toEqual({
+        channelId: 5,
+        szUid: 'SZ1',
+        similarity: 88,
+        sourceEventId: 'evt1',
+      });
+      expect(arg.metadata.name).toBeUndefined();
+      expect(payloadOf().presenceSkipped).toBeNull();
+    });
+
+    it('A.2 WARN: channel có KEY trong CẢ room_map lẫn presence_map → logger.warn', async () => {
+      const warnSpy = jest.spyOn((service as any).logger, 'warn');
+      wire({ presenceMap: { '5': AREA } }); // room_map mặc định cũng có key '5'
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      const warned = warnSpy.mock.calls.some((c) =>
+        String(c[0]).includes('CẢ room_map lẫn presence_zone_map'),
+      );
+      expect(warned).toBe(true);
+      // vẫn ghi appear.
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('writeAppearEvent ném → onFaceEvent KHÔNG ném, raw event vẫn ghi', async () => {
+      writerMock.writeAppearEvent.mockRejectedValue(new Error('zpe boom'));
+      wire({ presenceMap: { '5': AREA } });
+      await expect(
+        service.onFaceEvent(evt({ utc: nowIso() })),
+      ).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+    });
+  });
+
+  // ── ZPW-001 (UC-109): reader channel_presence_zone_map ──
+  describe('getChannelPresenceZoneMap (ZPW-001)', () => {
+    const AREA = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+    it('chỉ giữ entry value là UUID hợp lệ', async () => {
+      dsMock.manager.query.mockResolvedValueOnce([
+        { config_json: { '7': AREA, '8': 'not-uuid', '9': 42 } },
+      ]);
+      const map = await (service as any).getChannelPresenceZoneMap();
+      expect(map).toEqual({ '7': AREA });
+    });
+
+    it('config trống/thiếu → {}', async () => {
+      dsMock.manager.query.mockResolvedValueOnce([]);
+      expect(await (service as any).getChannelPresenceZoneMap()).toEqual({});
+    });
+
+    it('query ném → {} (KHÔNG throw)', async () => {
+      dsMock.manager.query.mockRejectedValueOnce(new Error('cfg down'));
+      expect(await (service as any).getChannelPresenceZoneMap()).toEqual({});
     });
   });
 });

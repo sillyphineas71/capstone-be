@@ -68,7 +68,7 @@ export class RestrictedZoneIntrusionService {
       const logs = await this.gateLogRepo.find({
         where: {
           zoneId,
-          direction: 'in',
+          direction: 'enter',
           accessTime: MoreThan(gateWatermark),
         },
       });

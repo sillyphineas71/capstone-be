@@ -6,6 +6,11 @@ import type {
   IvssFaceEvent,
 } from '../../../common/ports/ivss-event-hook.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
+import {
+  IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY,
+  type PresenceSkippedReason,
+} from '../constants/zone-presence.constant.js';
 
 interface IdRow {
   id: string;
@@ -75,6 +80,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     private readonly dataSource: DataSource,
     private readonly websocketService: WebsocketService,
     private readonly configService: ConfigService,
+    private readonly zonePresenceWriter: ZonePresenceWriterService,
   ) {
     this.realtimeEnabled = this.configService.get<boolean>(
       'IVSS_REALTIME_ENABLED',
@@ -122,6 +128,31 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       const processedStatus =
         matchState === 'matched' ? 'processed' : 'unmatched';
 
+      // ZPW-001 (UC-109, A.1): QUYẾT ĐỊNH presence TRƯỚC INSERT — presenceSkipped vào payload
+      // MỘT lần (KHÔNG UPDATE bù). Đường presence ĐỘC LẬP điểm danh phòng họp bên trên.
+      const roomMap = await this.getChannelRoomMap();
+      const presenceMap = await this.getChannelPresenceZoneMap();
+      const chKey = String(evt.channelId);
+      // A.2: WARN khi channel có KEY trong CẢ hai map (kiểm KEY, KHÔNG kiểm giá trị resolve).
+      if (
+        Object.prototype.hasOwnProperty.call(roomMap, chKey) &&
+        Object.prototype.hasOwnProperty.call(presenceMap, chKey)
+      ) {
+        this.logger.warn(
+          `channel ${evt.channelId} có trong CẢ room_map lẫn presence_zone_map — kiểm cấu hình, camera nên một vai.`,
+        );
+      }
+      const presenceZoneId = presenceMap[chKey] ?? null;
+      let presenceSkipped: PresenceSkippedReason | null = null;
+      if (!presenceZoneId) presenceSkipped = 'zone_unmapped';
+      else if (!userId) presenceSkipped = 'unmatched_identity';
+      else if (utcFallback) presenceSkipped = 'bad_utc';
+      else {
+        const chk =
+          await this.zonePresenceWriter.resolvePresenceZone(presenceZoneId);
+        if (!chk.valid) presenceSkipped = chk.reason;
+      }
+
       // SEC-01: KHÔNG imageBase64; szUid metadata-only.
       const payload = {
         szUid,
@@ -137,12 +168,17 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         utc: evt.utc,
         utcFallback,
         receivedAt: new Date().toISOString(),
+        // ZPW-001: lý do skip presence (null nếu sẽ ghi appear). Nhánh B: link raw event
+        // qua metadata_json.sourceEventId của zone_presence_events, KHÔNG cột event_id.
+        presenceSkipped,
       };
 
-      await this.dataSource.manager.query(
+      // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
+      const insRows: IdRow[] = await this.dataSource.manager.query(
         `INSERT INTO iot_device_events
            (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
-         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6)`,
+         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6)
+         RETURNING id`,
         [
           deviceId,
           roomId,
@@ -152,6 +188,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
           processedStatus,
         ],
       );
+      const sourceEventId = insRows[0]?.id ?? null;
 
       if (matchState !== 'matched') {
         // OQ-5: log + metric (đếm qua log); vẫn đã persist row unmatched.
@@ -168,6 +205,31 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
           direction,
           eventTime,
         });
+      }
+
+      // ZPW-001 (UC-109, A.1): GHI presence SAU raw event + SAU nhánh điểm danh. Chỉ khi KHÔNG
+      // skip (mọi presenceSkipped đã ở payload). try/catch NUỐT lỗi — KHÔNG vỡ điểm danh/ack.
+      if (!presenceSkipped && presenceZoneId && userId) {
+        try {
+          await this.zonePresenceWriter.writeAppearEvent({
+            zoneId: presenceZoneId,
+            userId,
+            eventTime,
+            deviceId,
+            metadata: {
+              channelId: evt.channelId,
+              szUid,
+              similarity: evt.similarity ?? null,
+              sourceEventId,
+            },
+          });
+        } catch (e) {
+          this.logger.error(
+            `zone presence write failed (channel=${evt.channelId} szUid=${szUid}): ${
+              e instanceof Error ? e.message : 'unknown'
+            }`,
+          );
+        }
       }
     } catch (e) {
       // Webhook always-ack (#36) — handler KHÔNG throw.
@@ -302,11 +364,45 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
   }
 
   /**
+   * ZPW-001 (UC-109, QĐ-2): system_configs[ivss.channel_presence_zone_map] {channelId: zone_uuid};
+   * validate uuid. KEY RIÊNG với channel_room_map/channel_zone_map (camera một-vai-một-channel).
+   * Không cache. Đọc lỗi → {} (KHÔNG throw): channel không map → zone_unmapped (AC-BACKCOMPAT).
+   *
+   * ⚠ NỢ TD-ZPW-1: bản đọc thứ 4 cùng khuôn `system_configs` channel-map. Sửa validate ở đây
+   * phải soát cả: ivss-occupancy-ingest.service.ts:119, ivss-presence-ingestion.service.ts:289,
+   * anpr/vehicle-resolve.service.ts:265. Gom thành util sau khi scope ổn định (plan §11).
+   */
+  private async getChannelPresenceZoneMap(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    try {
+      const rows: ConfigRow[] = await this.dataSource.manager.query(
+        `SELECT config_json FROM system_configs
+         WHERE config_key = $1 AND is_active = true LIMIT 1`,
+        [IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY],
+      );
+      const raw = rows[0]?.config_json;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === 'string' && UUID_RE.test(v)) out[k] = v;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `IVSS channel_presence_zone_map read failed (→ zone_unmapped): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+    return out;
+  }
+
+  /**
    * Task B: system_configs[ivss.channel_direction_map] config_json {channelId: enter|leave|seen}.
    * MIRROR getChannelRoomMap (cùng query, is_active=true). Chỉ nhận value ∈ {enter,leave,seen}
    * (value lạ → bỏ entry). Lookup dùng String(channelId) — nhất quán channel_room_map.
    * Đọc config lỗi → trả rỗng (KHÔNG throw): map-miss = đường cũ (eventAction/'seen').
    */
+  // ⚠ NỢ A.6: bản đọc THỨ HAI cùng config ở vehicle-resolve.service.ts (getChannelDirectionMap, luồng xe) — sửa validate ở đây phải sửa cả bên đó.
   private async getChannelDirectionMap(): Promise<Record<string, Direction>> {
     const out: Record<string, Direction> = {};
     try {

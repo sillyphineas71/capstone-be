@@ -53,3 +53,16 @@
 | `02_reset_admin_mapping.sql` | Xóa mapping `source='ivss'` của admin (chừa row FaceGate) để cron enroll lại sạch. |
 | `03_channel_direction_map.TEMPLATE.sql` | TEMPLATE — điền channel thật rồi chạy (BEGIN/COMMIT, DELETE-then-INSERT). |
 | `04_check_events.sql` | Query 10 event IVSS gần nhất để soi match_state/direction. |
+| `05_channel_presence_zone_map.TEMPLATE.sql` | ZPW-001/UC-109 — TEMPLATE seed channel khu vực → zone (corridor/lobby/parking). |
+| `06_check_zone_presence.sql` | ZPW-001/UC-109 — soi `appear` đã ghi + `presenceSkipped` (nối qua `metadata_json.sourceEventId`, nhánh B). |
+
+## UC-109 (ZPW-001) — verify nhật ký bắt gặp `appear`
+Thứ tự:
+1. Tạo zone khu vực (`corridor`/`lobby`/`parking`) qua API UC-90.
+2. `05_channel_presence_zone_map.TEMPLATE.sql` — điền `<CHANNEL>` + `<AREA_ZONE_ID>` rồi chạy.
+3. Đảm bảo `device_user_mappings` có mapping cho `szUid` test (`source='ivss'`, chưa xoá mềm).
+4. `curl` face event tới `/api/v1/internal/ivss/events` (header `X-Internal-Token: $IVSS_BRIDGE_TOKEN`, body `FaceEventDto`: `type/channelId/personUid/utc`).
+5. `06_check_zone_presence.sql` — kỳ vọng 1 dòng `appear`, `user_id` đúng, `presenceSkipped` NULL.
+6. **Cron `SCHEDULER_RESTRICTED_ZONE_ENABLED` — bật SAU khi verify writer sạch (QC-6)** — để lúc cảnh báo sai còn phân biệt lỗi writer vs lỗi rule.
+
+Chẩn đoán `presenceSkipped`: `zone_unmapped` (chưa seed map) · `unmatched_identity` (szUid chưa map user) · `bad_utc` (đồng hồ camera lệch >1h) · `zone_wrong_type` (map trỏ nhầm zone gate/room).
