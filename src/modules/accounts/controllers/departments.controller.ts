@@ -6,6 +6,9 @@ import {
   HttpCode,
   HttpStatus,
   Ip,
+  Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -17,6 +20,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiResponse,
   ApiTags,
@@ -31,6 +35,7 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 
 import { DepartmentsService } from '../services/departments.service.js';
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
+import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
 import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
 import { PaginationMeta } from '../dto/pagination-meta.dto.js';
@@ -151,6 +156,81 @@ export class DepartmentsController {
       message: 'Lấy danh sách phòng ban thành công',
       data: result.data,
       meta: result.meta,
+    };
+  }
+
+  @Patch(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('department.update')
+  @ApiBearerAuth()
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  @ApiOperation({
+    summary: 'Cập nhật phòng ban',
+    description:
+      'Cho phép Admin/Manager cập nhật tên, phòng ban cha, người quản lý, mô tả, trạng thái hoạt động. KHÔNG cho sửa departmentCode.',
+  })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiBody({ type: UpdateDepartmentDto })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Phòng ban được cập nhật thành công.',
+    type: DepartmentResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: 'Body rỗng — không có trường nào để cập nhật.',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Phòng ban/phòng ban cha/người quản lý không tồn tại.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description: 'Tên phòng ban đã được sử dụng.',
+  })
+  @ApiResponse({
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    description: 'Chu trình cha-con hoặc vượt quá độ sâu phân cấp cho phép.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission department.update).',
+  })
+  async updateDepartment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() updateDepartmentDto: UpdateDepartmentDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const updaterId = user?.userId || 'system';
+
+    const result = await this.departmentsService.updateDepartment(
+      id,
+      updateDepartmentDto,
+      updaterId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Cập nhật phòng ban thành công',
+      data: result,
     };
   }
 }
