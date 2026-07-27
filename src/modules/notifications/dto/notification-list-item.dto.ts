@@ -7,4 +7,6 @@ export class NotificationListItemDto {
   relatedEntityId: string | null;
   priority: string;
   createdAt: Date;
+  /** [BE-07] Trạng thái đã đọc — nguồn Redis, xem NotificationReadStateService. */
+  isRead: boolean;
 }

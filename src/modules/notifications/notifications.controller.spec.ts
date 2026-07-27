@@ -23,6 +23,8 @@ describe('NotificationsController', () => {
     notificationsService = {
       listMyNotifications: jest.fn(),
       getMyNotificationDetail: jest.fn(),
+      markNotificationRead: jest.fn(),
+      markAllNotificationsRead: jest.fn(),
     } as any;
 
     controller = new NotificationsController(
@@ -178,6 +180,7 @@ describe('NotificationsController', () => {
         relatedEntityId: null,
         priority: 'normal',
         createdAt: new Date(),
+        isRead: false,
       });
 
       const response = await controller.getNotificationDetail('n1', mockUser);
@@ -186,6 +189,36 @@ describe('NotificationsController', () => {
         'n1',
         'user-uuid',
       );
+    });
+  });
+
+  // BE-07: Mark read / read-all
+  describe('markNotificationRead', () => {
+    it('[BE-07] should call service with id + userId from token, return success', async () => {
+      notificationsService.markNotificationRead.mockResolvedValue(undefined);
+
+      const response = await controller.markNotificationRead('n1', mockUser);
+
+      expect(notificationsService.markNotificationRead).toHaveBeenCalledWith(
+        'n1',
+        'user-uuid',
+      );
+      expect(response.success).toBe(true);
+    });
+  });
+
+  describe('markAllNotificationsRead', () => {
+    it('[BE-07] should call service with userId from token, return success', async () => {
+      notificationsService.markAllNotificationsRead.mockResolvedValue(
+        undefined,
+      );
+
+      const response = await controller.markAllNotificationsRead(mockUser);
+
+      expect(
+        notificationsService.markAllNotificationsRead,
+      ).toHaveBeenCalledWith('user-uuid');
+      expect(response.success).toBe(true);
     });
   });
 });

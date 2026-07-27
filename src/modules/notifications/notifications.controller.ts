@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -131,7 +132,7 @@ export class NotificationsController {
   }
 
   // ══════════════════════════════════════════
-  //  Notification Inbox (list / detail — không tracking đã đọc)
+  //  Notification Inbox (list / detail / mark-read — BE-07: đã đọc qua Redis)
   // ══════════════════════════════════════════
 
   @Get('notifications')
@@ -162,5 +163,27 @@ export class NotificationsController {
       user.userId,
     );
     return { success: true, data: result };
+  }
+
+  // [BE-07] Path TĨNH 'notifications/read-all' PHẢI khai TRƯỚC path ĐỘNG
+  // 'notifications/:id/read' — Nest match theo thứ tự đăng ký, path động sẽ
+  // nuốt path tĩnh nếu đảo thứ tự (route 'read-all' sẽ bị hiểu nhầm là id).
+  @Patch('notifications/read-all')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('notification.update.self')
+  async markAllNotificationsRead(@CurrentUser() user: { userId: string }) {
+    await this.notificationsService.markAllNotificationsRead(user.userId);
+    return { success: true, message: 'Đã đánh dấu tất cả thông báo là đã đọc' };
+  }
+
+  @Patch('notifications/:id/read')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('notification.update.self')
+  async markNotificationRead(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    await this.notificationsService.markNotificationRead(id, user.userId);
+    return { success: true, message: 'Đã đánh dấu thông báo là đã đọc' };
   }
 }

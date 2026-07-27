@@ -1,4 +1,5 @@
 ﻿import {
+  BadRequestException,
   Injectable,
   Logger,
   ConflictException,
@@ -15,6 +16,7 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
+import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
 import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
 import { PaginationMeta } from '../dto/pagination-meta.dto.js';
@@ -233,6 +235,241 @@ export class DepartmentsService {
       createdAt: createdDept!.createdAt,
       updatedAt: createdDept!.updatedAt,
     };
+  }
+
+  /**
+   * updateDepartment (BE-08) — PATCH /departments/:id.
+   * KHÔNG cho sửa departmentCode. Body rỗng (mọi field undefined) → 400.
+   */
+  async updateDepartment(
+    id: string,
+    dto: UpdateDepartmentDto,
+    updaterId: string,
+    clientContext: ClientContext,
+  ): Promise<DepartmentResponseDto> {
+    if (
+      dto.departmentName === undefined &&
+      dto.parentDepartmentId === undefined &&
+      dto.managerUserId === undefined &&
+      dto.description === undefined &&
+      dto.isActive === undefined
+    ) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Phải cung cấp ít nhất một trường để cập nhật.',
+        error: { code: 'EMPTY_UPDATE_PAYLOAD', details: {} },
+      });
+    }
+
+    let updatedDept: DepartmentEntity;
+
+    await this.dataSource.transaction(async (em) => {
+      const dept = await em.findOne(DepartmentEntity, { where: { id } });
+      if (!dept || dept.deletedAt) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+          error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+        });
+      }
+
+      const before = {
+        departmentName: dept.departmentName,
+        parentDepartmentId: dept.parentDepartmentId,
+        managerUserId: dept.managerUserId,
+        description: dept.description,
+        isActive: dept.isActive,
+      };
+
+      let departmentName = dept.departmentName;
+      if (dto.departmentName !== undefined) {
+        const sanitized = this.stripHtml(dto.departmentName);
+        if (sanitized !== dept.departmentName) {
+          const existingName = await em.findOne(DepartmentEntity, {
+            where: { departmentName: sanitized, deletedAt: IsNull() },
+          });
+          if (existingName && existingName.id !== id) {
+            throw new ConflictException({
+              success: false,
+              message: 'Tên phòng ban này đã được sử dụng.',
+              error: {
+                code: 'DEPARTMENT_ALREADY_EXISTS',
+                details: { field: 'departmentName' },
+              },
+            });
+          }
+        }
+        departmentName = sanitized;
+      }
+
+      let parentDepartmentId = dept.parentDepartmentId;
+      if (dto.parentDepartmentId !== undefined) {
+        if (dto.parentDepartmentId === null) {
+          parentDepartmentId = null;
+        } else {
+          const newParentId = dto.parentDepartmentId;
+
+          if (newParentId === id) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Phòng ban không thể là cha của chính nó.',
+              error: {
+                code: 'VALIDATION_ERROR',
+                details: { field: 'parentDepartmentId' },
+              },
+            });
+          }
+
+          const parent = await em.findOne(DepartmentEntity, {
+            where: { id: newParentId, deletedAt: IsNull() },
+          });
+          if (!parent || !parent.isActive) {
+            throw new NotFoundException({
+              success: false,
+              message: 'Phòng ban cha không tồn tại hoặc không hoạt động.',
+              error: {
+                code: 'RESOURCE_NOT_FOUND',
+                details: { field: 'parentDepartmentId' },
+              },
+            });
+          }
+
+          if (await this.wouldCreateCycle(em, id, newParentId)) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message:
+                'Không thể đặt phòng ban cha là hậu duệ của chính phòng ban này (tạo chu trình).',
+              error: {
+                code: 'VALIDATION_ERROR',
+                details: { field: 'parentDepartmentId' },
+              },
+            });
+          }
+
+          const depth = await this.calcDepth(em, newParentId);
+          if (depth + 1 > MAX_DEPTH) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Cây phân cấp phòng ban không được vượt quá 5 cấp.',
+              error: {
+                code: 'VALIDATION_ERROR',
+                details: { field: 'parentDepartmentId' },
+              },
+            });
+          }
+
+          parentDepartmentId = newParentId;
+        }
+      }
+
+      let managerUserId = dept.managerUserId;
+      if (dto.managerUserId !== undefined) {
+        if (dto.managerUserId === null) {
+          managerUserId = null;
+        } else {
+          const manager = await em.findOne(UserEntity, {
+            where: { id: dto.managerUserId, deletedAt: IsNull() },
+          });
+          if (!manager || manager.accountStatus !== 'active') {
+            throw new NotFoundException({
+              success: false,
+              message: 'Người quản lý không tồn tại hoặc không hoạt động.',
+              error: {
+                code: 'RESOURCE_NOT_FOUND',
+                details: { field: 'managerUserId' },
+              },
+            });
+          }
+          managerUserId = dto.managerUserId;
+        }
+      }
+
+      let description = dept.description;
+      if (dto.description !== undefined) {
+        description =
+          dto.description === null ? null : this.stripHtml(dto.description);
+      }
+
+      let isActive = dept.isActive;
+      if (dto.isActive !== undefined) {
+        isActive = dto.isActive;
+      }
+
+      await em.update(DepartmentEntity, id, {
+        departmentName,
+        parentDepartmentId,
+        managerUserId,
+        description,
+        isActive,
+        updatedBy: updaterId,
+      });
+
+      updatedDept = {
+        ...dept,
+        departmentName,
+        parentDepartmentId,
+        managerUserId,
+        description,
+        isActive,
+        updatedBy: updaterId,
+        updatedAt: new Date(),
+      };
+
+      try {
+        const auditLog = em.create(AuditLogEntity, {
+          userId: updaterId,
+          actionType: 'update',
+          entityType: 'department',
+          entityId: id,
+          severity: AuditLogSeverity.INFO,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+          oldValueJson: before,
+          newValueJson: {
+            departmentName,
+            parentDepartmentId,
+            managerUserId,
+            description,
+            isActive,
+          },
+        });
+        await em.save(AuditLogEntity, auditLog);
+      } catch (auditError) {
+        this.logger.error(
+          'Failed to save audit log for department update ' +
+            id +
+            ': ' +
+            (auditError as Error).message,
+        );
+      }
+    });
+
+    return this.toResponse(updatedDept!);
+  }
+
+  /**
+   * Kiểm tra đặt `candidateParentId` làm cha của `currentId` có tạo chu trình không —
+   * duyệt ngược lên từ `candidateParentId`; nếu gặp lại `currentId` thì `candidateParentId`
+   * đang là hậu duệ của `currentId` → sẽ tạo chu trình nếu chấp nhận.
+   */
+  private async wouldCreateCycle(
+    em: any,
+    currentId: string,
+    candidateParentId: string,
+  ): Promise<boolean> {
+    let cursor: string | null = candidateParentId;
+    while (cursor) {
+      if (cursor === currentId) return true;
+      const dept: { parentDepartmentId: string | null } | null =
+        await em.findOne(DepartmentEntity, {
+          where: { id: cursor },
+          select: ['id', 'parentDepartmentId'],
+        });
+      if (!dept) break;
+      cursor = dept.parentDepartmentId;
+    }
+    return false;
   }
 
   private async calcDepth(em: any, deptId: string): Promise<number> {

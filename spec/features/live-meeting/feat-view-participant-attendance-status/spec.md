@@ -22,6 +22,7 @@
 | :--- | :--- | :--- |
 | 2026-06-17 | Tạo spec lần đầu cho UC-IMM-08 Xem trạng thái điểm danh của người tham dự | Toàn bộ file |
 | 2026-06-17 | Cập nhật theo kết quả clarify (logic late, Permission, Pagination pageSize, Edge case Removed Invite, loại bỏ presence_snapshots) | Các mục 1.5, 2.2, 3, 5, 8, 9 |
+| 2026-07-27 | [P1 BE-05] Đổi path `GET /api/v1/meetings/{meetingId}/attendance` → `GET /api/v1/live-meetings/{meetingId}/attendance` để hết trùng route với `AttendanceController` (UC-APM-02, danh sách điểm danh chung có phân trang — nghiệp vụ khác). Chi tiết: `PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md` §2B. | §3.11 (dòng 206), §7 (dòng 419) |
 
 ---
 
@@ -203,7 +204,7 @@ FR-042: WHILE meeting is completed, WHEN Business Admin views attendance, THE sy
 
 ### 3.11 Requirement Notes
 
-- Reuses UC-81 endpoint GET /api/v1/meetings/{meetingId}/attendance per UC-101.
+- [P1 BE-05, 2026-07-27] Path đổi thành GET /api/v1/live-meetings/{meetingId}/attendance — tách khỏi route GET /api/v1/meetings/{meetingId}/attendance của UC-81/UC-APM-02 để hết trùng (2 route khác nghiệp vụ, không còn "reuse" endpoint UC-81 như thiết kế ban đầu 2026-06-17).
 - attendanceStatus uses display values: checked_in, late, absent.
 - isProvisional helps UI render provisional absent status for in-progress meetings.
 - Extension does not change actual_start_time, so late detection is unaffected.
@@ -414,9 +415,9 @@ Future: .xlsx export via background_jobs, WebSocket push.
 
 ## 9. API Contract
 
-Uses existing endpoint UC-81/UC-101.
+[P1 BE-05, 2026-07-27] Route riêng, tách khỏi UC-81/UC-101 (xem §3.11).
 
-GET /api/v1/meetings/{meetingId}/attendance
+GET /api/v1/live-meetings/{meetingId}/attendance
 
 Permission: attendance.read
 

@@ -18,6 +18,7 @@ import { QueueService } from '../queue/queue.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
 import { BackgroundJobType } from '../administration/entities/background-job.entity.js';
 import { NotificationListItemDto } from './dto/notification-list-item.dto.js';
+import { NotificationReadStateService } from './services/notification-read-state.service.js';
 
 export interface CreateNotificationDto {
   notificationType: NotificationType;
@@ -46,9 +47,10 @@ export interface EnqueueEmailNotificationDto extends CreateNotificationDto {
  * - createNotification/enqueueEmailNotification: đã có sẵn
  * - listMyNotifications/getMyNotificationDetail: inbox (danh sách/chi tiết thông báo của user hiện tại)
  *
- * Không tracking "đã đọc" theo từng user — Product Owner quyết định 2026-07-18 không tạo
- * bảng notification_reads, không cần theo dõi ai đã đọc (xem
- * spec/features/notifications/feat-notification-inbox/spec.md mục 1.2).
+ * [Đính chính 2026-07-27, BE-07] Bảng `notifications` vẫn KHÔNG có cột đã đọc theo user
+ * (Product Owner từ chối bảng `notification_reads`, 2026-07-18) — NHƯNG từ BE-07, trạng thái
+ * đã đọc ĐƯỢC theo dõi ở Redis (`NotificationReadStateService`), không phải "không tracking"
+ * như ghi chú cũ. Xem `spec/features/notifications/feat-notification-inbox/spec.md`.
  */
 @Injectable()
 export class NotificationsService {
@@ -61,6 +63,7 @@ export class NotificationsService {
     private readonly queueService: QueueService,
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
+    private readonly readStateService: NotificationReadStateService,
   ) {
     this.notificationQueueName = this.configService.get<string>(
       'QUEUE_NOTIFICATION',
@@ -215,6 +218,7 @@ export class NotificationsService {
       .take(limit)
       .getManyAndCount();
 
+    const readState = await this.readStateService.getReadState(userId);
     const data: NotificationListItemDto[] = items.map((item) => ({
       id: item.id,
       notificationType: item.notificationType,
@@ -224,6 +228,11 @@ export class NotificationsService {
       relatedEntityId: item.relatedEntityId,
       priority: item.priority,
       createdAt: item.createdAt,
+      isRead: this.readStateService.computeIsRead(
+        readState,
+        item.id,
+        item.createdAt,
+      ),
     }));
 
     return {
@@ -272,6 +281,26 @@ export class NotificationsService {
       relatedEntityId: notification.relatedEntityId,
       priority: notification.priority,
       createdAt: notification.createdAt,
+      isRead: await this.readStateService.isRead(
+        userId,
+        notification.id,
+        notification.createdAt,
+      ),
     };
+  }
+
+  // ── Read-state methods (BE-07, Redis) ──
+
+  /**
+   * Đánh dấu 1 notification đã đọc — trả 404/403 trước (dùng lại
+   * getMyNotificationDetail để xác nhận user là recipient), sau đó ghi Redis.
+   */
+  async markNotificationRead(id: string, userId: string): Promise<void> {
+    await this.getMyNotificationDetail(id, userId);
+    await this.readStateService.markRead(userId, id);
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await this.readStateService.markAllRead(userId);
   }
 }

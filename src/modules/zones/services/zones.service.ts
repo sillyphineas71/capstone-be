@@ -15,7 +15,10 @@ import { ZoneEntity } from '../entities/zone.entity.js';
 import { normalizeZoneCode } from '../utils/normalize-zone-code.js';
 import { ZonesAuditRepository } from '../repositories/zones-audit.repository.js';
 import { IotDevicesService } from '../../iot/services/iot-devices.service.js';
-import { IoTDeviceType } from '../../iot/entities/iot-device.entity.js';
+import {
+  IoTDeviceType,
+  IoTDeviceEntity,
+} from '../../iot/entities/iot-device.entity.js';
 import type { CreateZoneDto } from '../dto/create-zone.dto.js';
 import type { UpdateZoneDto } from '../dto/update-zone.dto.js';
 import type { ListZonesQueryDto } from '../dto/list-zones-query.dto.js';
@@ -340,8 +343,21 @@ export class ZonesService {
    * không tồn tại hoặc đã xóa mềm). KHÔNG viết lại logic lookup, KHÔNG đổi `loadActive` sang
    * public. READ-ONLY: không transaction, không audit.
    */
-  async getDetail(id: string): Promise<ZoneEntity> {
-    return this.loadActive(id);
+  /**
+   * Chi tiet khu vuc (UC-93) — kem danh sach thiet bi dang gan (BE-fix: FE bao cao modal
+   * "Them thiet bi vao khu vuc" luon thay (0) vi response cu khong tra thiet bi).
+   *
+   * Lay thiet bi qua `IotDevicesService.findByZoneId` (ARCH-01) thay vi tu query bang
+   * `iot_devices`. Equipment di kem duoc suy ra tu quan he co san
+   * `iot_devices.equipment_id -> equipments` — schema hien tai KHONG co `equipments.zone_id`
+   * nen day la duong lien ket zone -> equipment duy nhat.
+   */
+  async getDetail(
+    id: string,
+  ): Promise<{ zone: ZoneEntity; devices: IoTDeviceEntity[] }> {
+    const zone = await this.loadActive(id);
+    const devices = await this.iotDevicesService.findByZoneId(id);
+    return { zone, devices };
   }
 
   // ── UC-92 (ZND-001): xoá khu vực ──

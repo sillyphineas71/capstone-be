@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-21 | Bổ sung MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án): ghi chú TL;DR, thêm module `zones`/`anpr` vào bảng module 4.1, cập nhật database baseline 5.1/5.2, thêm mục 5.5 mô tả 4 bảng mới + 2 cột zone_id + index mới + quy tắc làm việc trên phần mở rộng | TL;DR, mục 1 (thứ tự ưu tiên), 4.1, 5.1, 5.2, 5.5 (mới) |
+| 2026-07-27 | **[Đợt P1, BE-09]** Đính chính mục 22.13 — path thật của system config admin endpoint là `/api/v1/system-configurations` (không phải `/system-configs`), PATCH nhận body `{key, value}` (không phải path param `:key`). Xem `spec/features/administration/feat-system-configurations/`. | Mục 22.13 |
 | 2026-06-06 | Sửa lỗi review: thêm device_user_mappings, cập nhật tech stack MQTT, update notification convention, xóa endpoint bảng đã remove | Các mục 3.1, 5.2, 18, 22 |
 | 2026-06-06 | Cập nhật toàn diện đồng bộ DB v3.2 Compact: loại bỏ 10 bảng đã removed khỏi tài liệu hướng dẫn, thêm mapping compact, cập nhật chuẩn Auth/MQTT/TypeORM | Toàn bộ file |
 | 2026-05-27 | Bổ sung các mục 11.13 - 11.21 (UC Camera/IoT và Spec Kit rules) từ CLAUDE_IOT.md | Cuối mục 11 |
@@ -1787,8 +1788,11 @@ GET    /api/v1/analytics/room-utilization
 GET    /api/v1/analytics/meeting-summary
 GET    /api/v1/analytics/no-show-rate
 
-GET    /api/v1/system-configs
-PATCH  /api/v1/system-configs/:key
+# [Đính chính 2026-07-27, BE-09] Path thật là /system-configurations (không phải
+# /system-configs), PATCH nhận body {key, value} (không phải path param :key) —
+# khớp SystemSettings.jsx. Xem spec/features/administration/feat-system-configurations/.
+GET    /api/v1/system-configurations
+PATCH  /api/v1/system-configurations
 GET    /api/v1/audit-logs
 ```
 

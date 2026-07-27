@@ -29,6 +29,8 @@ import { LogoutResponseDto } from '../dto/logout-response.dto';
 import { RequestOtpDto } from '../dto/request-otp.dto';
 import { ConfirmResetDto } from '../dto/confirm-reset.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
+import { RefreshTokenResponseDto } from '../dto/refresh-token-response.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { LoginResponsePresenter } from '../presenters/login-response.presenter';
 import { LoginService } from '../services/login.service';
@@ -36,6 +38,7 @@ import { LogoutService } from '../services/logout.service';
 import { PasswordResetService } from '../services/password-reset.service';
 import { ChangePasswordService } from '../services/change-password.service';
 import { GetMeService } from '../services/get-me.service';
+import { RefreshTokenService } from '../services/refresh-token.service';
 import { hasOnlyAllowedLoginFields } from '../utils/login-normalization.util';
 
 @ApiTags('Authentication')
@@ -48,6 +51,7 @@ export class AuthController {
     private readonly passwordResetService: PasswordResetService,
     private readonly changePasswordService: ChangePasswordService,
     private readonly getMeService: GetMeService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   @Post('login')
@@ -86,6 +90,48 @@ export class AuthController {
     });
 
     return this.loginResponsePresenter.success(result);
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  // KHONG gan @UseGuards(JwtAuthGuard): access token da het han la ly do goi
+  // endpoint nay nen khong the doi hoi access token con hop le. Xac thuc o day
+  // dua vao chinh chu ky cua refresh token (secret rieng) + doi chieu Redis
+  // blacklist trong RefreshTokenService — mirror cach lam public cua repo
+  // (xem 'login', khong co UseGuards). (SEC-02, BE-01, 2026-07-26)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({
+    summary: 'Refresh access token',
+    description:
+      'Cap phat cap access+refresh token moi tu mot refresh token con hop le. ' +
+      'Ap dung rotation: refresh token cu bi blacklist ngay sau khi dung (chong replay).',
+  })
+  @ApiBody({ type: RefreshTokenDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Refresh thanh cong',
+    type: RefreshTokenResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation error (thieu refreshToken)',
+  })
+  @ApiUnauthorizedResponse({
+    description:
+      'Refresh token invalid/het han (REFRESH_TOKEN_INVALID) hoac da bi thu hoi (REFRESH_TOKEN_REVOKED)',
+  })
+  async refresh(@Body() dto: RefreshTokenDto): Promise<{
+    success: boolean;
+    message: string;
+    data: RefreshTokenResponseDto;
+  }> {
+    const result = await this.refreshTokenService.refresh(dto.refreshToken);
+
+    return {
+      success: true,
+      message: 'Refresh token thanh cong',
+      data: new RefreshTokenResponseDto(result),
+    };
   }
 
   @Post('logout')

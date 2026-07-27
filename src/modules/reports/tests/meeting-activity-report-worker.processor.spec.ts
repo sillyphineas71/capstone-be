@@ -54,6 +54,9 @@ jest.mock('../renderers/security-alert-pdf-renderer.js', () => ({
 jest.mock('../renderers/security-alert-xlsx-renderer.js', () => ({
   renderSecurityAlertXlsx: jest.fn().mockResolvedValue(Buffer.from('XLSX')),
 }));
+jest.mock('../renderers/user-export-xlsx-renderer.js', () => ({
+  renderUserExportXlsx: jest.fn().mockResolvedValue(Buffer.from('XLSX')),
+}));
 
 // Mock fs
 jest.mock('fs', () => ({
@@ -359,6 +362,19 @@ describe('MeetingActivityReportWorkerProcessor', () => {
       expect(mockSecurityAlertWorker.processExport).toHaveBeenCalledWith(job);
       expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
       expect(mockVehicleWorker.processExport).not.toHaveBeenCalled();
+    });
+
+    it('[BE-04, 2026-07-27] no longer dispatches export:users — job.name falls through silently (job này giờ chạy đồng bộ trong UserExportService, không qua queue)', async () => {
+      const job = makeJob() as any;
+      job.name = 'export:users';
+
+      await processor.process(job);
+
+      expect(mockBackgroundJobsService.markRunning).not.toHaveBeenCalled();
+      expect(mockSecurityAlertWorker.processExport).not.toHaveBeenCalled();
+      expect(mockGateAccessWorker.processExport).not.toHaveBeenCalled();
+      expect(mockVehicleWorker.processExport).not.toHaveBeenCalled();
+      expect(mockRoomUtilizationWorker.processExport).not.toHaveBeenCalled();
     });
 
     it('still dispatches export:room-utilization correctly (no regression from adding gate-access branch)', async () => {

@@ -160,7 +160,9 @@ describe('ZonesController (ZNC-001 / UC-90)', () => {
         items: [entity],
         meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
       });
-      service.getDetail = jest.fn().mockResolvedValue(entity);
+      service.getDetail = jest
+        .fn()
+        .mockResolvedValue({ zone: entity, devices: [] });
     });
 
     // Case 22

@@ -4,6 +4,7 @@
 | Ngày | Tóm tắt | Vị trí |
 | :--- | :--- | :--- |
 | 2026-07-23 | Tạo tasks ZPT-001: T0 verify tiên quyết UC-126 → T1 service (getTimeline/pairEnterExit/validateRange) → T1b test → T2 DTO+controller → T3 migration permission → T-GATE. | Toàn bộ |
+| 2026-07-27 | **Đính chính P1 (A.2)**: T1/T1b bỏ `pairEnterExit`, dùng `sightingCount`. Xem spec.md/plan.md đính chính cùng ngày. | T1, T1b, T-GATE |
 
 > Map: spec.md, plan.md. **Điều kiện tiên quyết: `../uc126-campus-dashboard/` xong trước (module `campus-dashboard` đã tồn tại).**
 
@@ -17,11 +18,11 @@ T0 → T1 → T1b → T2 → T3 → T-GATE.
 - **AC**: dán xác nhận đủ; thiếu tiên quyết → **DỪNG**.
 
 ## T1 — Service `ZonePresenceTimelineService` (code) — plan §3
-- `getTimeline`, `pairEnterExit`, `validateRange`.
-- **AC**: 3 method; `pairEnterExit` đúng thuật toán FIFO đè-enter-mới (spec §2.3); range >31 ngày bị chặn.
+- `getTimeline`, `validateRange`. (`pairEnterExit` đã bị loại bỏ 2026-07-27 — xem đính chính spec §2 mục 3.)
+- **AC**: 2 method; `sightingCount = events.length` khi có `userId`; range >31 ngày bị chặn.
 
 ## T1b — Test — plan §8
-- Đủ case `pairEnterExit` (đơn/nhiều cặp, enter cuối ongoing, enter đè enter) + `getTimeline` (404 zone, 400 range, EX1 rỗng, có/không userId, personDataAvailable).
+- Đủ case `getTimeline`: 404 zone, 400 range, EX1 rỗng (`sightingCount: null`), có `userId` → `sightingCount` đúng số event, không `userId` → `sightingCount=null`, `personDataAvailable` đúng BR1.
 - **AC**: toàn bộ nhánh xanh; coverage ≥80%.
 
 ## T2 — DTO + Controller (code) — plan §4, §5
@@ -35,8 +36,8 @@ T0 → T1 → T1b → T2 → T3 → T-GATE.
 ## T-GATE — (STOP, KHÔNG commit) — plan §9
 - build=0; eslint 0 warning mới; `npx jest src/modules/campus-dashboard` xanh (UC-126+UC-119 cùng module, KHÔNG hồi quy); coverage ≥80%; DI-proof `AppModule`. KHÔNG live, KHÔNG DB thật, KHÔNG commit.
 - In: code 7 file mới + 1 file modified + jest + coverage + báo cáo gate.
-- **Owed**: residual ghép cặp giới hạn trong tập kết quả (spec §6).
-- **AC**: bảng gate đầy đủ + báo cáo: 404/400/EX1 đúng ✓ · ghép cặp FIFO đúng ✓ · personDataAvailable đúng BR1 ✓ · coverage ✓ · DI-proof ✓. STOP.
+- **Owed**: residual không đo được thời lượng lưu lại thực tế (spec §6, đính chính 2026-07-27).
+- **AC**: bảng gate đầy đủ + báo cáo: 404/400/EX1 đúng ✓ · sightingCount đúng ✓ · personDataAvailable đúng BR1 ✓ · coverage ✓ · DI-proof ✓. STOP.
 
 ## Map task → scope UC-119
 - T0 → verify tiên quyết UC-126

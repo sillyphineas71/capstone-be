@@ -111,6 +111,21 @@ import { ImportParticipantsDto } from '../dto/import-participants.dto.js';
 import { ImportParticipantsReportDto } from '../dto/import-participants-response.dto.js';
 import { XLSX_MIME } from '../constants/import-participants.constants.js';
 
+import { MeetingListService } from '../services/meeting-list.service.js';
+import { MeetingListQueryDto } from '../dto/meeting-list-query.dto.js';
+import { MeetingListItemDto } from '../dto/meeting-list-item.dto.js';
+
+import { MeetingUpdateService } from '../services/meeting-update.service.js';
+import { UpdateMeetingDto } from '../dto/update-meeting.dto.js';
+import { UpdateMeetingResponseDto } from '../dto/update-meeting-response.dto.js';
+
+// @Controller() de rong co y: moi route trong class nay tu khai bao day du path
+// (vd 'meetings/:meetingId/agendas'), khong dua vao prefix chung cua controller.
+// Ly do: mot so route chi co 1 segment ('meetings') con nhung route con lai
+// can nam duoi 'meetings/:meetingId/...'. Khai prefix chung se gay nham lan
+// khi doc code va da tung dan den bug thieu prefix 'meetings/' o 5 route
+// agenda/participant (BE-06, 2026-07-26). Khi them route moi, LUON viet day du
+// path bat dau bang 'meetings' neu route thuoc ve resource meeting.
 @Controller()
 export class MeetingsController {
   constructor(
@@ -119,6 +134,10 @@ export class MeetingsController {
     private readonly meetingRequestReviewService: MeetingRequestReviewService,
 
     private readonly participantImportService: ParticipantImportService,
+
+    private readonly meetingListService: MeetingListService,
+
+    private readonly meetingUpdateService: MeetingUpdateService,
   ) {}
 
   @Post('meetings')
@@ -227,6 +246,28 @@ export class MeetingsController {
     };
   }
 
+  @Get('meetings')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.read.all')
+  @ApiOperation({ summary: 'Danh sach cuoc hop (admin, co phan trang/filter)' })
+  @ApiResponse({ status: 200, description: 'Danh sach cuoc hop' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen meeting.read.all' })
+  async listMeetings(@Query() query: MeetingListQueryDto): Promise<{
+    success: boolean;
+    message: string;
+    data: MeetingListItemDto[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const result = await this.meetingListService.list(query);
+    return {
+      success: true,
+      message: 'Lay danh sach cuoc hop thanh cong',
+      data: result.data,
+      meta: result.meta,
+    };
+  }
+
   @Get('meetings/:meetingId')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -246,6 +287,60 @@ export class MeetingsController {
     return {
       success: true,
       message: 'Chi tiết cuộc họp',
+      data: result,
+    };
+  }
+
+  // BE-03 (2026-07-26): Pham vi CO Y HEP chi title/description. Time/room/
+  // participants/agenda/recording da co endpoint chuyen trach rieng (xem
+  // spec/features/meeting/feat-update-meeting-metadata/spec.md).
+  @Patch('meetings/:meetingId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.update.own')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  @ApiOperation({
+    summary: 'Cap nhat thong tin co ban cuoc hop (chi title/description)',
+  })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiBody({ type: UpdateMeetingDto })
+  @ApiResponse({ status: 200, description: 'Cap nhat thanh cong' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Body rong (EMPTY_UPDATE_PAYLOAD) hoac gui field ngoai title/description (forbidNonWhitelisted)',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Khong phai organizer/host cua cuoc hop',
+  })
+  @ApiResponse({ status: 404, description: 'Khong tim thay cuoc hop' })
+  @ApiResponse({
+    status: 409,
+    description: 'Cuoc hop da huy hoac da ket thuc, khong the sua',
+  })
+  async updateMeeting(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Body() dto: UpdateMeetingDto,
+    @Req() request: Request,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UpdateMeetingResponseDto;
+  }> {
+    const user = request['user'] as { userId: string };
+    const result = await this.meetingUpdateService.update(meetingId, dto, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'Cap nhat cuoc hop thanh cong',
       data: result,
     };
   }
@@ -792,7 +887,7 @@ export class MeetingsController {
     };
   }
 
-  @Delete(':meetingId/participants/:participantUserId')
+  @Delete('meetings/:meetingId/participants/:participantUserId')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @UsePipes(
@@ -921,7 +1016,7 @@ export class MeetingsController {
 
   // ------------------------------------------------------------
 
-  @Get(':meetingId/agendas')
+  @Get('meetings/:meetingId/agendas')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Xem danh sach agenda cua cuoc hop' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
@@ -956,7 +1051,7 @@ export class MeetingsController {
     };
   }
 
-  @Put(':meetingId/agendas')
+  @Put('meetings/:meetingId/agendas')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Luu toan bo chuong trinh hop (atomic replace)' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
@@ -1027,7 +1122,7 @@ export class MeetingsController {
     };
   }
 
-  @Patch(':meetingId/agendas/:agendaId')
+  @Patch('meetings/:meetingId/agendas/:agendaId')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Cap nhat mot muc agenda cu the (partial update)' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
@@ -1106,7 +1201,7 @@ export class MeetingsController {
     };
   }
 
-  @Delete(':meetingId/agendas/:agendaId')
+  @Delete('meetings/:meetingId/agendas/:agendaId')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Xoa mot muc agenda cu the' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })

@@ -26,7 +26,7 @@ export class TokenService {
     jti: string;
   }): Promise<string> {
     return this.jwtService.signAsync(payload, {
-      secret: process.env.AUTH_REFRESH_TOKEN_SECRET ?? 'dev-refresh-secret',
+      secret: this.authConfigService.getRefreshTokenSecret(),
       expiresIn: this.authConfigService.getRefreshTokenTtlSeconds(),
     });
   }

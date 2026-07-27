@@ -19,6 +19,7 @@
 | 2026-06-15 | Tạo spec lần đầu cho UC-MM-09 Tạo chương trình họp | Toàn bộ file |
 | 2026-06-15 | Cập nhật spec theo kết quả clarify: idempotency, validation order, host resolution, max items, error codes, ACs bổ sung, GET metadata, in_progress lock, notification deferred | Các mục 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 |
 | 2026-06-15 | Fix consistency Round 3: GET JSON mục 9.1 (meetingStatus enum, durationStatus tách riêng, xóa duplicate key), bảng 8.2 đồng bộ thứ tự priority với FR-033, edge cases mục 16 (hard limit + external participant), thêm AC-016/AC-026 Given/When/Then, cập nhật traceability | Mục 8.2, 9.1, 15.6, 15.7, 16, 19 |
+| 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path, vd `:meetingId/agendas` thay vì `meetings/:meetingId/agendas`), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path đã đặc tả ở mục 9.1/9.2 của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
 
 ## Hướng dẫn viết EARS Requirements
 

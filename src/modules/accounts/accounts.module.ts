@@ -32,6 +32,12 @@ import { RolesService } from './services/roles.service.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+// BE-04 (Dot P1): ReportsModule export UserExportService cho UsersController
+// (GET /users/export). Da xac minh KHONG vong lap: ReportsModule khong import
+// AccountsModule (chi TypeOrmModule.forFeature truc tiep UserEntity/UserRoleEntity),
+// nen AccountsModule -> ReportsModule la an toan (T-5.1,
+// PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md).
+import { ReportsModule } from '../reports/reports.module.js';
 
 /**
  * AccountsModule quÃ¡ÂºÂ£n lÃƒÂ½ tÃ¡ÂºÂ¥t cÃ¡ÂºÂ£ entities thuÃ¡Â»â„¢c domain Identity & Access:
@@ -59,6 +65,7 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
     AdministrationModule,
     AuthModule,
     NotificationsModule,
+    ReportsModule,
   ],
   controllers: [
     UsersController,

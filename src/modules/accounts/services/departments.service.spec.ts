@@ -2,6 +2,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
+  BadRequestException,
   ConflictException,
   NotFoundException,
   UnprocessableEntityException,
@@ -9,6 +10,7 @@ import {
 
 import { DepartmentsService } from './departments.service.js';
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
+import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { UserEntity } from '../entities/user.entity.js';
 
@@ -29,6 +31,7 @@ describe('DepartmentsService', () => {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      update: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
     repo = { findAndCount: jest.fn() };
@@ -335,6 +338,277 @@ describe('DepartmentsService', () => {
       );
 
       // Verify audit log was created (em.save called for both department + audit log)
+      expect(em.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('updateDepartment', () => {
+    const baseDept = (over: Partial<DepartmentEntity> = {}) =>
+      ({
+        id: 'd1',
+        departmentCode: 'IT',
+        departmentName: 'Phòng CNTT',
+        parentDepartmentId: null,
+        managerUserId: null,
+        description: null,
+        isActive: true,
+        deletedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...over,
+      }) as DepartmentEntity;
+
+    it('body rỗng (mọi field undefined) → 400 EMPTY_UPDATE_PAYLOAD', async () => {
+      await expect(
+        service.updateDepartment('d1', {}, 'updater-id', {}),
+      ).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('phòng ban không tồn tại → 404 DEPARTMENT_NOT_FOUND', async () => {
+      em.findOne.mockResolvedValue(null);
+      await expect(
+        service.updateDepartment(
+          'missing',
+          { description: 'x' } as UpdateDepartmentDto,
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('phòng ban đã xóa mềm (deletedAt khác null) → 404', async () => {
+      em.findOne.mockResolvedValue(baseDept({ deletedAt: new Date() }));
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { description: 'x' } as UpdateDepartmentDto,
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('đổi tên trùng với phòng ban khác → 409 DEPARTMENT_ALREADY_EXISTS', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity) {
+          if (options?.where?.id === 'd1' && !options?.where?.deletedAt) {
+            return baseDept();
+          }
+          if (options?.where?.departmentName === 'Phòng Nhân sự') {
+            return baseDept({ id: 'd2', departmentName: 'Phòng Nhân sự' });
+          }
+        }
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { departmentName: 'Phòng Nhân sự' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('gửi lại đúng tên hiện tại (không đổi) → KHÔNG bị coi là trùng, cập nhật thành công', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity) {
+          if (options?.where?.id === 'd1') return baseDept();
+        }
+        return null;
+      });
+      em.update.mockResolvedValue(undefined as any);
+
+      const result = await service.updateDepartment(
+        'd1',
+        { departmentName: 'Phòng CNTT' },
+        'updater-id',
+        {},
+      );
+
+      expect(result.departmentName).toBe('Phòng CNTT');
+      expect(em.update).toHaveBeenCalled();
+    });
+
+    it('parentDepartmentId = chính id đang sửa → 422 VALIDATION_ERROR', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity && options?.where?.id === 'd1') {
+          return baseDept();
+        }
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { parentDepartmentId: 'd1' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('parentDepartmentId trỏ vào hậu duệ của chính nó → 422 (chu trình)', async () => {
+      // d1 (đang sửa) là cha của d2; thử set cha của d1 = d2 -> chu trình
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity) {
+          if (options?.where?.id === 'd1' && !options?.select) return baseDept();
+          if (options?.where?.id === 'd2' && !options?.select) {
+            return baseDept({ id: 'd2', parentDepartmentId: 'd1' });
+          }
+          // wouldCreateCycle / calcDepth traversal (dùng select)
+          if (options?.select) {
+            if (options.where.id === 'd2') {
+              return { id: 'd2', parentDepartmentId: 'd1' };
+            }
+            if (options.where.id === 'd1') {
+              return { id: 'd1', parentDepartmentId: null };
+            }
+          }
+        }
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { parentDepartmentId: 'd2' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('parentDepartmentId không tồn tại/không active → 404 RESOURCE_NOT_FOUND', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity) {
+          if (options?.where?.id === 'd1') return baseDept();
+          if (options?.where?.id === 'ghost') return null;
+        }
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { parentDepartmentId: 'ghost' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('đổi parent vượt quá 5 cấp → 422 VALIDATION_ERROR', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity) {
+          if (options?.where?.id === 'd1' && !options?.select) return baseDept();
+          if (options?.where?.id === 'deep-parent') {
+            return options?.select
+              ? { id: 'deep-parent', parentDepartmentId: 'level4' }
+              : { id: 'deep-parent', isActive: true, parentDepartmentId: 'level4' };
+          }
+          if (options?.where?.id === 'level4')
+            return { id: 'level4', parentDepartmentId: 'level3' };
+          if (options?.where?.id === 'level3')
+            return { id: 'level3', parentDepartmentId: 'level2' };
+          if (options?.where?.id === 'level2')
+            return { id: 'level2', parentDepartmentId: 'level1' };
+          if (options?.where?.id === 'level1')
+            return { id: 'level1', parentDepartmentId: null };
+        }
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { parentDepartmentId: 'deep-parent' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('managerUserId không tồn tại/không active → 404 RESOURCE_NOT_FOUND', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity && options?.where?.id === 'd1') {
+          return baseDept();
+        }
+        if (entityClass === UserEntity) return null;
+        return null;
+      });
+
+      await expect(
+        service.updateDepartment(
+          'd1',
+          { managerUserId: 'ghost-user' },
+          'updater-id',
+          {},
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('chỉ gửi 1 field (description) → chỉ field đó đổi, các field khác giữ nguyên', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity && options?.where?.id === 'd1') {
+          return baseDept({ managerUserId: 'm1', parentDepartmentId: 'p1' });
+        }
+        return null;
+      });
+      em.update.mockResolvedValue(undefined as any);
+
+      const result = await service.updateDepartment(
+        'd1',
+        { description: 'Mô tả mới' },
+        'updater-id',
+        {},
+      );
+
+      expect(result.description).toBe('Mô tả mới');
+      expect(result.managerUserId).toBe('m1');
+      expect(result.parentDepartmentId).toBe('p1');
+      expect(result.departmentName).toBe('Phòng CNTT');
+    });
+
+    it('clear parent/manager bằng null → cập nhật thành null', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity && options?.where?.id === 'd1') {
+          return baseDept({ managerUserId: 'm1', parentDepartmentId: 'p1' });
+        }
+        return null;
+      });
+      em.update.mockResolvedValue(undefined as any);
+
+      const result = await service.updateDepartment(
+        'd1',
+        { parentDepartmentId: null, managerUserId: null },
+        'updater-id',
+        {},
+      );
+
+      expect(result.parentDepartmentId).toBeNull();
+      expect(result.managerUserId).toBeNull();
+    });
+
+    it('ghi audit log khi cập nhật thành công', async () => {
+      em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
+        if (entityClass === DepartmentEntity && options?.where?.id === 'd1') {
+          return baseDept();
+        }
+        return null;
+      });
+      em.update.mockResolvedValue(undefined as any);
+      em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
+
+      await service.updateDepartment(
+        'd1',
+        { isActive: false },
+        'updater-id',
+        { ipAddress: '127.0.0.1' },
+      );
+
       expect(em.save).toHaveBeenCalled();
     });
   });

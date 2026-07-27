@@ -453,9 +453,22 @@ export class LiveMeetingController {
 
   // ------------------------------------------------------------------
   //  UC-IMM-08: View Participant Attendance Status
+  //
+  //  [P1 BE-05, 2026-07-27] Path đổi từ `meetings/:meetingId/attendance` sang
+  //  `live-meetings/:meetingId/attendance` để hết trùng với
+  //  `AttendanceController.getMeetingAttendance` (`attendance.controller.ts`).
+  //  Hai route KHÔNG phải bản sao — UC-IMM-08 (ở đây) là điểm danh TRONG một
+  //  live-meeting session đang chạy (dùng `LiveMeetingService`, có ghi audit
+  //  qua ipAddress/userAgent, trả 409 nếu meeting chưa `in_progress`/đã kết
+  //  thúc); UC-APM-02 (`attendance.controller.ts`) là danh sách điểm danh
+  //  chung có phân trang, không gắn ràng buộc trạng thái phiên đang chạy.
+  //  Trước đợt này, NestJS chỉ đăng ký được handler nào import module SAU
+  //  cùng trong `app.module.ts` — thay đổi thứ tự import từng làm gãy route
+  //  còn lại một cách âm thầm. Từ nay 2 path tách biệt, thứ tự import module
+  //  không còn ảnh hưởng tới hành vi route.
   // ------------------------------------------------------------------
 
-  @Get('meetings/:meetingId/attendance')
+  @Get('live-meetings/:meetingId/attendance')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('attendance.read')

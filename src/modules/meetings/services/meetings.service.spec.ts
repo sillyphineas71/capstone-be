@@ -3079,4 +3079,51 @@ describe('MeetingsService', () => {
       ).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe('findMeetingRequests', () => {
+    // BE-fix: allowedSortFields dung snake_case nhung TypeORM orderBy('mr.<property>')
+    // bat buoc property camelCase cua entity => truoc day gay 500
+    // "Property 'requested_at' was not found in MeetingRequestEntity".
+    const mockRequestListQb = () => {
+      const qb: any = {
+        leftJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      return qb;
+    };
+
+    it.each([
+      ['requested_at', 'mr.requestedAt'],
+      ['created_at', 'mr.requestedAt'],
+      ['approval_status', 'mr.approvalStatus'],
+      ['request_type', 'mr.requestType'],
+    ])(
+      '[BE-fix] maps sortBy=%s to entity property %s in orderBy()',
+      async (sortBy, expectedColumn) => {
+        const qb = mockRequestListQb();
+        mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.findMeetingRequests(
+          { sortBy, sortOrder: 'asc' } as any,
+          { userId: 'u1' },
+        );
+
+        expect(qb.orderBy).toHaveBeenCalledWith(expectedColumn, 'ASC');
+      },
+    );
+
+    it('[BE-fix] falls back to mr.requestedAt DESC when sortBy is not provided', async () => {
+      const qb = mockRequestListQb();
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findMeetingRequests({} as any, { userId: 'u1' });
+
+      expect(qb.orderBy).toHaveBeenCalledWith('mr.requestedAt', 'DESC');
+    });
+  });
 });

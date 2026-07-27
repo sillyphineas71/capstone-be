@@ -101,9 +101,12 @@ void loadDevModule; // suppress unused warning
     RoomsModule,
     EquipmentModule,
     IotModule,
-    AttendanceModule,
+    AttendanceModule, // GET meetings/:meetingId/attendance (UC-APM-02)
     PresenceModule,
     UtilizationModule,
+    // [P1 BE-05, 2026-07-27] LiveMeetingModule dùng path riêng
+    // `live-meetings/:meetingId/attendance` (UC-IMM-08) — thứ tự import so với
+    // AttendanceModule KHÔNG còn quyết định route nào thắng (2 path khác nhau).
     LiveMeetingModule,
     RecordingModule,
     TranscriptionModule,

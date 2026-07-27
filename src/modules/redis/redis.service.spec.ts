@@ -18,6 +18,9 @@ describe('RedisService', () => {
     expire: jest.fn(),
     ttl: jest.fn(),
     ping: jest.fn(),
+    sadd: jest.fn(),
+    sismember: jest.fn(),
+    smembers: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -136,6 +139,61 @@ describe('RedisService', () => {
       mockRedisClient.ping.mockResolvedValue('PONG');
       const result = await service.ping();
       expect(result).toBe('PONG');
+    });
+  });
+
+  describe('sadd()', () => {
+    it('should call redis sadd and return count added', async () => {
+      mockRedisClient.sadd.mockResolvedValue(1);
+      const result = await service.sadd('my-set', 'member-1');
+      expect(result).toBe(1);
+      expect(mockRedisClient.sadd).toHaveBeenCalledWith(
+        'my-set',
+        'member-1',
+      );
+    });
+
+    it('should propagate error and log it', async () => {
+      mockRedisClient.sadd.mockRejectedValue(new Error('conn refused'));
+      await expect(service.sadd('my-set', 'member-1')).rejects.toThrow(
+        'conn refused',
+      );
+    });
+  });
+
+  describe('sismember()', () => {
+    it('should return true if member exists in set', async () => {
+      mockRedisClient.sismember.mockResolvedValue(1);
+      const result = await service.sismember('my-set', 'member-1');
+      expect(result).toBe(true);
+    });
+
+    it('should return false if member does not exist in set', async () => {
+      mockRedisClient.sismember.mockResolvedValue(0);
+      const result = await service.sismember('my-set', 'member-x');
+      expect(result).toBe(false);
+    });
+
+    it('should propagate error and log it', async () => {
+      mockRedisClient.sismember.mockRejectedValue(new Error('conn refused'));
+      await expect(
+        service.sismember('my-set', 'member-1'),
+      ).rejects.toThrow('conn refused');
+    });
+  });
+
+  describe('smembers()', () => {
+    it('should return all members of the set', async () => {
+      mockRedisClient.smembers.mockResolvedValue(['m1', 'm2']);
+      const result = await service.smembers('my-set');
+      expect(result).toEqual(['m1', 'm2']);
+    });
+
+    it('should propagate error and log it', async () => {
+      mockRedisClient.smembers.mockRejectedValue(new Error('conn refused'));
+      await expect(service.smembers('my-set')).rejects.toThrow(
+        'conn refused',
+      );
     });
   });
 

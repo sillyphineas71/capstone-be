@@ -1,6 +1,7 @@
 ﻿| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-11 | Áp dụng CR-001→CR-004: chốt recurring instance-only, no .ics, Admin không gỡ Host/Organizer, thêm agenda owner validation | Toàn bộ file |
+| 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path `DELETE /api/v1/meetings/{meetingId}/participants/{participantUserId}` đã đặc tả ở mục 6.1 của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
 
 
 # Feature Specification: Gỡ bỏ thành viên nội bộ khỏi cuộc họp

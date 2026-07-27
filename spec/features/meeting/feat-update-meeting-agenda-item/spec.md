@@ -17,6 +17,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-17 | Tạo spec lần đầu cho UC-MM-10 (UC-28 Chỉnh sửa agenda). Quyết định kiến trúc: giữ PUT atomic-replace (UC-MM-09) và bổ sung PATCH single-item (hybrid, theo lựa chọn người dùng) | Toàn bộ file |
+| 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path đã đặc tả ở mục 9.1 của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
 
 ## Hướng dẫn viết EARS Requirements
 

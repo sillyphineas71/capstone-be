@@ -23,6 +23,13 @@ export class AuthConfigService {
     );
   }
 
+  getRefreshTokenSecret(): string {
+    return this.configService.get<string>(
+      'AUTH_REFRESH_TOKEN_SECRET',
+      'dev-refresh-secret',
+    );
+  }
+
   getRateLimitMaxAttempts(): number {
     return this.configService.get<number>(
       'AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS',

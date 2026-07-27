@@ -113,6 +113,49 @@ export class RedisService {
   }
 
   /**
+   * Thêm 1 phần tử vào Redis SET. Trả về số phần tử mới được thêm (0 nếu đã tồn tại).
+   */
+  async sadd(key: string, member: string): Promise<number> {
+    try {
+      return await this.client.sadd(key, member);
+    } catch (error) {
+      this.logger.error(
+        `Redis SADD failed for key=${key}: ${(error as Error).message}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Kiểm tra 1 phần tử có nằm trong Redis SET không.
+   */
+  async sismember(key: string, member: string): Promise<boolean> {
+    try {
+      const result = await this.client.sismember(key, member);
+      return result === 1;
+    } catch (error) {
+      this.logger.error(
+        `Redis SISMEMBER failed for key=${key}: ${(error as Error).message}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Lấy toàn bộ phần tử của Redis SET.
+   */
+  async smembers(key: string): Promise<string[]> {
+    try {
+      return await this.client.smembers(key);
+    } catch (error) {
+      this.logger.error(
+        `Redis SMEMBERS failed for key=${key}: ${(error as Error).message}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Expose raw ioredis client nếu cần thao tác nâng cao.
    * Dùng cẩn thận — không dùng cho business logic thông thường.
    */

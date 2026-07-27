@@ -26,6 +26,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { GetMeService } from './services/get-me.service';
+import { RefreshTokenService } from './services/refresh-token.service';
 
 @Module({
   imports: [JwtModule.register({}), CacheModule.register()],
@@ -57,6 +58,7 @@ import { GetMeService } from './services/get-me.service';
     PermissionsGuard,
     RolesGuard,
     GetMeService,
+    RefreshTokenService,
   ],
   exports: [
     // Re-export JwtModule and CacheModule so importing modules can resolve

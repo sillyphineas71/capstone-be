@@ -5166,15 +5166,19 @@ export class MeetingsService {
       }
 
       // Sort
-      const allowedSortFields = [
-        'requested_at',
-        'created_at',
-        'approval_status',
-        'request_type',
-      ];
-      const sortField = allowedSortFields.includes(queryDto.sortBy ?? '')
-        ? queryDto.sortBy!
-        : 'requested_at';
+      // BE-fix: DTO allowlist (meeting-request-query.dto.ts) van nhan sortBy dang
+      // snake_case tu client theo dung API convention chung (CLAUDE.md 8.4). Nhung
+      // TypeORM QueryBuilder.orderBy('alias.property') bat buoc dung ten property
+      // camelCase cua entity, khong phai ten cot snake_case. MeetingRequestEntity
+      // cung khong co property `createdAt` rieng - `requestedAt` la thoi diem tao
+      // request nen duoc dung lam gia tri tuong duong.
+      const sortFieldMap: Record<string, string> = {
+        requested_at: 'requestedAt',
+        created_at: 'requestedAt',
+        approval_status: 'approvalStatus',
+        request_type: 'requestType',
+      };
+      const sortField = sortFieldMap[queryDto.sortBy ?? ''] ?? 'requestedAt';
       const sortOrder = queryDto.sortOrder === 'asc' ? 'ASC' : 'DESC';
       qb.orderBy(`mr.${sortField}`, sortOrder);
 

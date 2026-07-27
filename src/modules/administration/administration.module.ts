@@ -11,6 +11,8 @@ import { AuditLogQueryService } from './services/audit-log-query.service.js';
 import { AuditLogQueryRepository } from './repositories/audit-log-query.repository.js';
 import { BackgroundJobsController } from './controllers/background-jobs.controller.js';
 import { AuditLogsController } from './controllers/audit-logs.controller.js';
+import { SystemConfigController } from './controllers/system-config.controller.js';
+import { SystemConfigService } from './services/system-config.service.js';
 import { AuthModule } from '../auth/auth.module.js';
 
 /**
@@ -25,6 +27,9 @@ import { AuthModule } from '../auth/auth.module.js';
  * - AuditLogQueryRepository — raw SQL query ĐỌC, LEFT JOIN audit_logs + users
  * - BackgroundJobsController — GET /api/v1/background-jobs/:id (T007, poll status)
  * - AuditLogsController — GET /api/v1/audit-logs (UC-AA-11, chỉ SYSTEM_ADMIN)
+ * - SystemConfigController — GET/PATCH /api/v1/system-configurations (BE-09, 2026-07-27)
+ * - SystemConfigService — allowlist 9 key phẳng FE quản trị, xem
+ *   constants/system-config-allowlist.ts
  *
  * Module này KHÔNG import các business module (AccountsModule, RecordingModule...)
  * để tránh circular dependency. AuthModule là ngoại lệ AN TOÀN: chỉ import để
@@ -48,12 +53,17 @@ import { AuthModule } from '../auth/auth.module.js';
       UserEntity,
     ]),
   ],
-  controllers: [BackgroundJobsController, AuditLogsController],
+  controllers: [
+    BackgroundJobsController,
+    AuditLogsController,
+    SystemConfigController,
+  ],
   providers: [
     BackgroundJobsService,
     AuditLogsService,
     AuditLogQueryService,
     AuditLogQueryRepository,
+    SystemConfigService,
   ],
   exports: [TypeOrmModule, BackgroundJobsService, AuditLogsService],
 })

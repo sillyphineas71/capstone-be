@@ -18,6 +18,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-07-17 | Tạo spec lần đầu cho UC-MM-11 (UC-29 Xóa agenda). Hybrid: giữ PUT atomic-replace (UC-MM-09) và bổ sung DELETE single-item | Toàn bộ file |
+| 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path `DELETE /meetings/{meetingId}/agendas/{agendaId}` đã đặc tả ở FR-001 (mục 6.1) của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
 
 ## Hướng dẫn viết EARS Requirements
 

@@ -67,52 +67,47 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
     expect(result).toEqual({
       events: [],
       personDataAvailable: null,
-      totalDurationSeconds: null,
-      ongoing: false,
+      sightingCount: null,
       message: 'Không có dữ liệu hiện diện trong khoảng thời gian này.',
     });
   });
 
-  it('không truyền userId, toàn bộ event userId=NULL → personDataAvailable=false, totalDurationSeconds=null', async () => {
+  it('không truyền userId, toàn bộ event userId=NULL → personDataAvailable=false, sightingCount=null', async () => {
     presenceRepo.find.mockResolvedValue([
       event(),
       event({ eventType: 'disappear' }),
     ]);
     const result = await service.getTimeline('zone-1', from, to);
     expect(result.personDataAvailable).toBe(false);
-    expect(result.totalDurationSeconds).toBeNull();
+    expect(result.sightingCount).toBeNull();
   });
 
-  it('có userId + 1 cặp enter/exit → tính đúng totalDurationSeconds, ongoing=false', async () => {
+  it('không truyền userId, có event userId khác NULL → personDataAvailable=true, sightingCount vẫn null', async () => {
+    presenceRepo.find.mockResolvedValue([event({ userId: 'u1' })]);
+    const result = await service.getTimeline('zone-1', from, to);
+    expect(result.personDataAvailable).toBe(true);
+    expect(result.sightingCount).toBeNull();
+  });
+
+  it('có userId + 1 lượt appear → sightingCount=1, personDataAvailable=true', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
         eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
-      }),
-      event({
-        eventType: 'disappear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T08:10:00Z'),
       }),
     ]);
     const result = await service.getTimeline('zone-1', from, to, 'u1');
     expect(result.personDataAvailable).toBe(true);
-    expect(result.totalDurationSeconds).toBe(600); // 10 phút
-    expect(result.ongoing).toBe(false);
+    expect(result.sightingCount).toBe(1);
   });
 
-  it('nhiều cặp liên tiếp → cộng dồn đúng tổng', async () => {
+  it('có userId + nhiều lượt appear → sightingCount đúng bằng tổng số event trả về', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
         eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:00:00Z'),
-      }),
-      event({
-        eventType: 'disappear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T08:05:00Z'),
       }),
       event({
         eventType: 'appear',
@@ -120,16 +115,17 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
         eventTime: new Date('2026-07-23T09:00:00Z'),
       }),
       event({
-        eventType: 'disappear',
+        eventType: 'appear',
         userId: 'u1',
         eventTime: new Date('2026-07-23T09:20:00Z'),
       }),
     ]);
     const result = await service.getTimeline('zone-1', from, to, 'u1');
-    expect(result.totalDurationSeconds).toBe(300 + 1200);
+    expect(result.sightingCount).toBe(3);
+    expect(result.events).toHaveLength(3);
   });
 
-  it('enter cuối KHÔNG có exit theo sau → ongoing=true, KHÔNG cộng vào tổng', async () => {
+  it('events trả về đúng thứ tự eventTime ASC và giữ nguyên eventType/occupancyCount', async () => {
     presenceRepo.find.mockResolvedValue([
       event({
         eventType: 'appear',
@@ -137,42 +133,17 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
         eventTime: new Date('2026-07-23T08:00:00Z'),
       }),
       event({
-        eventType: 'disappear',
+        eventType: 'count',
+        occupancyCount: 5,
         userId: 'u1',
         eventTime: new Date('2026-07-23T08:05:00Z'),
       }),
-      event({
-        eventType: 'appear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T09:00:00Z'),
-      }),
     ]);
     const result = await service.getTimeline('zone-1', from, to, 'u1');
-    expect(result.totalDurationSeconds).toBe(300);
-    expect(result.ongoing).toBe(true);
-  });
-
-  it('2 enter liên tiếp không exit ở giữa → enter mới đè enter cũ (chỉ 1 phiên mở)', async () => {
-    presenceRepo.find.mockResolvedValue([
-      event({
-        eventType: 'appear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T08:00:00Z'),
-      }),
-      event({
-        eventType: 'appear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T08:30:00Z'),
-      }),
-      event({
-        eventType: 'disappear',
-        userId: 'u1',
-        eventTime: new Date('2026-07-23T08:40:00Z'),
-      }),
-    ]);
-    const result = await service.getTimeline('zone-1', from, to, 'u1');
-    // Tính từ enter thứ 2 (08:30) → exit (08:40) = 600s, KHÔNG tính từ enter đầu (08:00)
-    expect(result.totalDurationSeconds).toBe(600);
-    expect(result.ongoing).toBe(false);
+    expect(result.events[0].eventType).toBe('appear');
+    expect(result.events[1]).toMatchObject({
+      eventType: 'count',
+      occupancyCount: 5,
+    });
   });
 });
