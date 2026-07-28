@@ -1,6 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AttendanceItemDto {
+  /**
+   * ID bản ghi `attendance_records` — FE cần field này để gọi các route động
+   * `PATCH /meetings/:meetingId/attendance/:recordId/status`, `.../:recordId`,
+   * `POST .../:recordId/invalidate`. null = người này CHƯA có bản ghi điểm danh
+   * (phải tạo trước qua POST /meetings/:meetingId/attendance).
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description: 'ID bản ghi điểm danh; null nếu chưa điểm danh',
+  })
+  id: string | null;
+
   @ApiProperty({ format: 'uuid' })
   participantId: string;
 
