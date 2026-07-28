@@ -214,42 +214,112 @@ export class MeetingsService {
     };
   }
 
-  async generateMeetingCode(): Promise<string> {
+  /** yyyyMMdd theo giờ máy chủ — dùng chung cho mã họp và mã booking. */
+  private todayStamp(): string {
     const today = new Date();
-    const dateStr =
+    return (
       today.getFullYear().toString() +
       String(today.getMonth() + 1).padStart(2, '0') +
-      String(today.getDate()).padStart(2, '0');
-
-    const count = await this.dataSource.getRepository(MeetingEntity).count({
-      where: {
-        createdAt: MoreThanOrEqual(
-          new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-        ),
-      },
-    });
-
-    const seq = String(count + 1).padStart(3, '0');
-    return `MT-${dateStr}-${seq}`;
+      String(today.getDate()).padStart(2, '0')
+    );
   }
 
+  /** Số thứ tự lớn nhất ĐÃ CẤP trong ngày, đọc từ chính mã đã tồn tại. */
+  private maxSeqOf(codes: string[], prefix: string): number {
+    return codes.reduce((mx, code) => {
+      const n = parseInt(code.slice(prefix.length), 10);
+      return Number.isFinite(n) && n > mx ? n : mx;
+    }, 0);
+  }
+
+  /**
+   * Sinh mã cuộc họp duy nhất.
+   *
+   * ⚠ KHÔNG dùng `count(...) + 1` như bản cũ: `count` đếm bản ghi ĐANG SỐNG, trong khi
+   * `ux_meetings_code` vẫn bị chiếm bởi bản ghi soft-delete (MeetingEntity có
+   * @DeleteDateColumn). Xoá 1 họp → count tụt 1 → sinh lại đúng mã đã cấp → 23505.
+   * Hai request đồng thời cũng cùng đọc một `count` → cùng seq.
+   *
+   * Cách mới: lấy MAX seq đã cấp (kể cả bản soft-delete qua `.withDeleted()`), +1, rồi
+   * KIỂM TỒN TẠI trước khi trả; đụng thì tăng tiếp, tối đa 10 lần. Fallback theo timestamp.
+   */
+  async generateMeetingCode(): Promise<string> {
+    const prefix = `MT-${this.todayStamp()}-`;
+    const repo = this.dataSource.getRepository(MeetingEntity);
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rows = await repo
+        .createQueryBuilder('m')
+        .withDeleted() // bản soft-delete VẪN chiếm ux_meetings_code
+        .select('m.meetingCode', 'code')
+        .where('m.meetingCode LIKE :prefix', { prefix: `${prefix}%` })
+        .getRawMany<{ code: string }>();
+
+      const next = this.maxSeqOf(
+        rows.map((r) => r.code),
+        prefix,
+      );
+      const code = `${prefix}${String(next + 1 + attempt).padStart(3, '0')}`;
+
+      const exists = await repo
+        .createQueryBuilder('m')
+        .withDeleted()
+        .where('m.meetingCode = :code', { code })
+        .getCount();
+      if (exists === 0) return code;
+    }
+
+    // Không bao giờ trùng: 6 số cuối epoch ms.
+    return `${prefix}${Date.now().toString().slice(-6)}`;
+  }
+
+  /**
+   * Sinh mã booking duy nhất — cùng lỗi `count + 1` như generateMeetingCode.
+   * RoomBookingEntity KHÔNG có soft-delete nên không cần `.withDeleted()`, nhưng vẫn
+   * giữ vòng kiểm-tồn-tại + retry để chống race giữa 2 request đồng thời.
+   */
   async generateBookingCode(): Promise<string> {
-    const today = new Date();
-    const dateStr =
-      today.getFullYear().toString() +
-      String(today.getMonth() + 1).padStart(2, '0') +
-      String(today.getDate()).padStart(2, '0');
+    const prefix = `BK-${this.todayStamp()}-`;
+    const repo = this.dataSource.getRepository(RoomBookingEntity);
 
-    const count = await this.dataSource.getRepository(RoomBookingEntity).count({
-      where: {
-        createdAt: MoreThanOrEqual(
-          new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-        ),
-      },
-    });
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rows = await repo
+        .createQueryBuilder('b')
+        .select('b.bookingCode', 'code')
+        .where('b.bookingCode LIKE :prefix', { prefix: `${prefix}%` })
+        .getRawMany<{ code: string }>();
 
-    const seq = String(count + 1).padStart(3, '0');
-    return `BK-${dateStr}-${seq}`;
+      const next = this.maxSeqOf(
+        rows.map((r) => r.code),
+        prefix,
+      );
+      const code = `${prefix}${String(next + 1 + attempt).padStart(3, '0')}`;
+
+      const exists = await repo
+        .createQueryBuilder('b')
+        .where('b.bookingCode = :code', { code })
+        .getCount();
+      if (exists === 0) return code;
+    }
+
+    return `${prefix}${Date.now().toString().slice(-6)}`;
+  }
+
+  /**
+   * True khi lỗi là unique-violation trên mã họp/mã booking — CHỈ những lỗi này mới
+   * đáng retry. Lỗi nghiệp vụ (ROOM_CONFLICT, CAPACITY_EXCEEDED...) phải ném nguyên.
+   */
+  private isCodeConflict(error: unknown): boolean {
+    const driverError = (error as { driverError?: { code?: string } })
+      ?.driverError;
+    if (driverError?.code !== '23505') return false;
+    const constraint =
+      (error as { driverError?: { constraint?: string } })?.driverError
+        ?.constraint ?? '';
+    const message = (error as Error)?.message ?? '';
+    return /meetings_code|room_bookings_code|booking_code|meeting_code/i.test(
+      `${constraint} ${message}`,
+    );
   }
 
   async checkParticipantConflicts(
@@ -488,8 +558,9 @@ export class MeetingsService {
       });
     }
 
-    const meetingCode = await this.generateMeetingCode();
-    const bookingCode = await this.generateBookingCode();
+    // `let` vì vòng retry bên dưới sẽ sinh lại khi đụng unique mã.
+    let meetingCode = await this.generateMeetingCode();
+    let bookingCode = await this.generateBookingCode();
 
     const participantConflictResult = await this.checkParticipantConflicts(
       uniqueParticipantIds.filter((id) => id !== hostId),
@@ -503,106 +574,94 @@ export class MeetingsService {
     let request: MeetingRequestEntity;
     let booking: RoomBookingEntity;
 
-    try {
-      await this.dataSource.transaction(async (em) => {
-        meeting = em.create(MeetingEntity, {
-          meetingCode,
-          title: dto.title,
-          description: dto.description || null,
-          organizerId: authUser.userId,
-          hostId,
-          roomId: dto.roomId,
-          startTime,
-          endTime,
-          meetingType: (dto.meetingType as MeetingType) || MeetingType.NORMAL,
-          meetingMode: (dto.meetingMode as MeetingMode) || MeetingMode.OFFLINE,
-          status: MeetingStatus.PENDING_APPROVAL,
-          visibilityLevel: 'internal' as any,
-          timezone: 'Asia/Ho_Chi_Minh',
-          expectedAttendeeCount: dto.expectedAttendeeCount || null,
-          createdBy: authUser.userId,
-        });
-        await em.save(MeetingEntity, meeting);
-
-        const participantIds = dto.participantUserIds || [];
-        const internalParticipantsForRequest = participantIds.filter(
-          (id) => id !== hostId,
-        );
-
-        request = em.create(MeetingRequestEntity, {
-          requestCode: meetingCode,
-          meetingId: meeting.id,
-          requestType: MeetingRequestType.CREATE_MEETING,
-          requestedBy: authUser.userId,
-          targetRoomId: dto.roomId,
-          requestedStartTime: startTime,
-          requestedEndTime: endTime,
-          approvalMode: ApprovalMode.MANUAL,
-          approvalStatus: ApprovalStatus.PENDING,
-          conflictCheckStatus:
-            participantConflictResult.conflicts.length > 0
-              ? ConflictCheckStatus.WARNING
-              : ConflictCheckStatus.CLEAR,
-          conflictSummaryJson:
-            participantConflictResult.conflicts.length > 0
-              ? { conflicts: participantConflictResult.conflicts }
-              : null,
-          requestPayloadJson: {
+    // Phòng thủ lớp 2: dù generateMeetingCode đã kiểm tồn tại, vẫn còn khe race cực hẹp
+    // giữa lúc kiểm và lúc INSERT. Đụng ux_meetings_code/ux_room_bookings_code → sinh mã
+    // mới và thử lại (tối đa 3 lượt). MỌI lỗi khác ném nguyên, KHÔNG nuốt.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.dataSource.transaction(async (em) => {
+          meeting = em.create(MeetingEntity, {
+            meetingCode,
             title: dto.title,
-            description: dto.description,
+            description: dto.description || null,
+            organizerId: authUser.userId,
             hostId,
             roomId: dto.roomId,
-            startTime: dto.startTime,
-            endTime: dto.endTime,
-            meetingType: dto.meetingType,
-            meetingMode: dto.meetingMode,
-            expectedAttendeeCount: dto.expectedAttendeeCount,
-            capacityOverrideConfirmed: dto.capacityOverrideConfirmed,
-            participantUserIds: dto.participantUserIds,
-            externalParticipants: dto.externalParticipants,
-          },
-          notes: null,
-        });
-        await em.save(MeetingRequestEntity, request);
+            startTime,
+            endTime,
+            meetingType: (dto.meetingType as MeetingType) || MeetingType.NORMAL,
+            meetingMode:
+              (dto.meetingMode as MeetingMode) || MeetingMode.OFFLINE,
+            status: MeetingStatus.PENDING_APPROVAL,
+            visibilityLevel: 'internal' as any,
+            timezone: 'Asia/Ho_Chi_Minh',
+            expectedAttendeeCount: dto.expectedAttendeeCount || null,
+            createdBy: authUser.userId,
+          });
+          await em.save(MeetingEntity, meeting);
 
-        booking = em.create(RoomBookingEntity, {
-          bookingCode,
-          meetingId: meeting.id,
-          roomId: dto.roomId,
-          bookingType: BookingType.SCHEDULED,
-          reservedStartTime: startTime,
-          reservedEndTime: endTime,
-          status: RoomBookingStatus.PENDING,
-          bookedBy: authUser.userId,
-        });
-        await em.save(RoomBookingEntity, booking);
-
-        const participantRecords: MeetingParticipantEntity[] = [];
-        const alreadyAdded = new Set<string>();
-
-        if (!alreadyAdded.has(hostId)) {
-          participantRecords.push(
-            em.create(MeetingParticipantEntity, {
-              meetingId: meeting.id,
-              userId: hostId,
-              participantRole: ParticipantRole.HOST,
-              isRequired: true,
-              attendanceRequired: true,
-              invitationStatus: InvitationStatus.PENDING,
-              attendanceStatus: ParticipantAttendanceStatus.NOT_CHECKED_IN,
-              invitedBy: authUser.userId,
-            }),
+          const participantIds = dto.participantUserIds || [];
+          const internalParticipantsForRequest = participantIds.filter(
+            (id) => id !== hostId,
           );
-          alreadyAdded.add(hostId);
-        }
 
-        for (const uid of participantIds) {
-          if (!alreadyAdded.has(uid)) {
+          request = em.create(MeetingRequestEntity, {
+            requestCode: meetingCode,
+            meetingId: meeting.id,
+            requestType: MeetingRequestType.CREATE_MEETING,
+            requestedBy: authUser.userId,
+            targetRoomId: dto.roomId,
+            requestedStartTime: startTime,
+            requestedEndTime: endTime,
+            approvalMode: ApprovalMode.MANUAL,
+            approvalStatus: ApprovalStatus.PENDING,
+            conflictCheckStatus:
+              participantConflictResult.conflicts.length > 0
+                ? ConflictCheckStatus.WARNING
+                : ConflictCheckStatus.CLEAR,
+            conflictSummaryJson:
+              participantConflictResult.conflicts.length > 0
+                ? { conflicts: participantConflictResult.conflicts }
+                : null,
+            requestPayloadJson: {
+              title: dto.title,
+              description: dto.description,
+              hostId,
+              roomId: dto.roomId,
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              meetingType: dto.meetingType,
+              meetingMode: dto.meetingMode,
+              expectedAttendeeCount: dto.expectedAttendeeCount,
+              capacityOverrideConfirmed: dto.capacityOverrideConfirmed,
+              participantUserIds: dto.participantUserIds,
+              externalParticipants: dto.externalParticipants,
+            },
+            notes: null,
+          });
+          await em.save(MeetingRequestEntity, request);
+
+          booking = em.create(RoomBookingEntity, {
+            bookingCode,
+            meetingId: meeting.id,
+            roomId: dto.roomId,
+            bookingType: BookingType.SCHEDULED,
+            reservedStartTime: startTime,
+            reservedEndTime: endTime,
+            status: RoomBookingStatus.PENDING,
+            bookedBy: authUser.userId,
+          });
+          await em.save(RoomBookingEntity, booking);
+
+          const participantRecords: MeetingParticipantEntity[] = [];
+          const alreadyAdded = new Set<string>();
+
+          if (!alreadyAdded.has(hostId)) {
             participantRecords.push(
               em.create(MeetingParticipantEntity, {
                 meetingId: meeting.id,
-                userId: uid,
-                participantRole: ParticipantRole.ATTENDEE,
+                userId: hostId,
+                participantRole: ParticipantRole.HOST,
                 isRequired: true,
                 attendanceRequired: true,
                 invitationStatus: InvitationStatus.PENDING,
@@ -610,61 +669,88 @@ export class MeetingsService {
                 invitedBy: authUser.userId,
               }),
             );
-            alreadyAdded.add(uid);
+            alreadyAdded.add(hostId);
           }
-        }
 
-        if (participantRecords.length > 0) {
-          await em.save(MeetingParticipantEntity, participantRecords);
-        }
+          for (const uid of participantIds) {
+            if (!alreadyAdded.has(uid)) {
+              participantRecords.push(
+                em.create(MeetingParticipantEntity, {
+                  meetingId: meeting.id,
+                  userId: uid,
+                  participantRole: ParticipantRole.ATTENDEE,
+                  isRequired: true,
+                  attendanceRequired: true,
+                  invitationStatus: InvitationStatus.PENDING,
+                  attendanceStatus: ParticipantAttendanceStatus.NOT_CHECKED_IN,
+                  invitedBy: authUser.userId,
+                }),
+              );
+              alreadyAdded.add(uid);
+            }
+          }
 
-        if (dto.externalParticipants && dto.externalParticipants.length > 0) {
-          const externalRecords = dto.externalParticipants.map(
-            (ep: ExternalParticipantDto) =>
-              em.create(MeetingExternalParticipantEntity, {
-                meetingId: meeting.id,
-                fullName: ep.fullName,
-                email: ep.email,
-                organizationName: ep.organization || null,
-                participantRole: 'attendee',
-                invitationStatus: 'pending',
-              }),
-          );
-          await em.save(MeetingExternalParticipantEntity, externalRecords);
-        }
+          if (participantRecords.length > 0) {
+            await em.save(MeetingParticipantEntity, participantRecords);
+          }
 
-        const event = em.create(MeetingEventEntity, {
-          meetingId: meeting.id,
-          eventType: MeetingEventType.MEETING_REQUEST_CREATED,
-          actorUserId: authUser.userId,
-          sourceType: MeetingEventSourceType.MANUAL,
-          description: `Yêu cầu tạo cuộc họp "${dto.title}"`,
-          newValueJson: {
+          if (dto.externalParticipants && dto.externalParticipants.length > 0) {
+            const externalRecords = dto.externalParticipants.map(
+              (ep: ExternalParticipantDto) =>
+                em.create(MeetingExternalParticipantEntity, {
+                  meetingId: meeting.id,
+                  fullName: ep.fullName,
+                  email: ep.email,
+                  organizationName: ep.organization || null,
+                  participantRole: 'attendee',
+                  invitationStatus: 'pending',
+                }),
+            );
+            await em.save(MeetingExternalParticipantEntity, externalRecords);
+          }
+
+          const event = em.create(MeetingEventEntity, {
             meetingId: meeting.id,
-            meetingCode,
-            status: MeetingStatus.PENDING_APPROVAL,
-          } as any,
-        });
-        await em.save(MeetingEventEntity, event);
+            eventType: MeetingEventType.MEETING_REQUEST_CREATED,
+            actorUserId: authUser.userId,
+            sourceType: MeetingEventSourceType.MANUAL,
+            description: `Yêu cầu tạo cuộc họp "${dto.title}"`,
+            newValueJson: {
+              meetingId: meeting.id,
+              meetingCode,
+              status: MeetingStatus.PENDING_APPROVAL,
+            } as any,
+          });
+          await em.save(MeetingEventEntity, event);
 
-        const auditLog = em.create(AuditLogEntity, {
-          userId: authUser.userId,
-          actionType: 'create',
-          entityType: 'meeting_request',
-          entityId: request.id,
-          metadataJson: { meetingId: meeting.id, bookingId: booking.id },
-          ipAddress: clientContext.ipAddress || null,
-          userAgent: clientContext.userAgent || null,
-          severity: AuditLogSeverity.INFO,
+          const auditLog = em.create(AuditLogEntity, {
+            userId: authUser.userId,
+            actionType: 'create',
+            entityType: 'meeting_request',
+            entityId: request.id,
+            metadataJson: { meetingId: meeting.id, bookingId: booking.id },
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            severity: AuditLogSeverity.INFO,
+          });
+          await em.save(AuditLogEntity, auditLog);
         });
-        await em.save(AuditLogEntity, auditLog);
-      });
-    } catch (error: unknown) {
-      this.logger.error(
-        `Transaction failed for meeting creation: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-      throw error;
+        break;
+      } catch (error: unknown) {
+        if (attempt < 2 && this.isCodeConflict(error)) {
+          this.logger.warn(
+            `Trùng mã khi tạo họp (lượt ${attempt + 1}) — sinh mã mới, thử lại.`,
+          );
+          meetingCode = await this.generateMeetingCode();
+          bookingCode = await this.generateBookingCode();
+          continue;
+        }
+        this.logger.error(
+          `Transaction failed for meeting creation: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+        throw error;
+      }
     }
 
     // Post-transaction: notify approvers (non-blocking, no rollback)

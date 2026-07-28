@@ -87,12 +87,26 @@ describe('MeetingsService', () => {
       innerJoin: jest.fn().mockReturnThis(),
       innerJoinAndSelect: jest.fn().mockReturnThis(),
       distinct: jest.fn().mockReturnThis(),
+      // Bug 1: generateMeetingCode dùng withDeleted() (bản soft-delete vẫn chiếm
+      // ux_meetings_code) + getCount() để kiểm tồn tại trước khi trả mã.
+      withDeleted: jest.fn().mockReturnThis(),
       getMany: jest.fn(),
       getOne: jest.fn(),
       getRawMany: jest.fn(),
       getRawOne: jest.fn(),
+      getCount: jest.fn(),
     };
     return qb;
+  };
+
+  /** yyyyMMdd hôm nay — mã sinh ra gắn ngày nên test phải dựng prefix cùng cách. */
+  const todayStamp = () => {
+    const d = new Date();
+    return (
+      d.getFullYear().toString() +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      String(d.getDate()).padStart(2, '0')
+    );
   };
 
   beforeEach(async () => {
@@ -195,30 +209,71 @@ describe('MeetingsService', () => {
   });
 
   describe('generateMeetingCode', () => {
+    /** existing = mã đã tồn tại hôm nay; takenCodes = mã bị coi là đã chiếm khi kiểm. */
+    const wireCodes = (existing: string[], takenCodes: string[] = []) => {
+      const qb = mockQueryBuilder();
+      qb.getRawMany.mockResolvedValue(existing.map((code) => ({ code })));
+      qb.getCount.mockImplementation(() => {
+        const called = qb.where.mock.calls.at(-1);
+        const code = called?.[1]?.code as string | undefined;
+        return Promise.resolve(code && takenCodes.includes(code) ? 1 : 0);
+      });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+      return qb;
+    };
+
     it('[T014] should generate code in MT-YYYYMMDD-NNN format', async () => {
-      mockRepo.count.mockResolvedValue(0);
-
+      wireCodes([]);
       const code = await service.generateMeetingCode();
-
       expect(code).toMatch(/^MT-\d{8}-001$/);
     });
 
     it('[T014] should increment sequence number', async () => {
-      mockRepo.count.mockResolvedValue(5);
-
+      wireCodes([`MT-${todayStamp()}-005`]);
       const code = await service.generateMeetingCode();
-
       expect(code).toMatch(/^MT-\d{8}-006$/);
+    });
+
+    // Bug 1 (regression): bản cũ dùng count() bản ghi ĐANG SỐNG nên xoá 1 họp là seq
+    // tụt lại, sinh trùng mã đã cấp → 23505 ux_meetings_code.
+    it('Bug1: tính cả mã của bản ghi soft-delete (withDeleted) — KHÔNG cấp lại seq cũ', async () => {
+      const qb = wireCodes([
+        `MT-${todayStamp()}-001`,
+        `MT-${todayStamp()}-002`, // giả sử họp này đã bị xoá mềm
+      ]);
+      const code = await service.generateMeetingCode();
+      expect(code).toBe(`MT-${todayStamp()}-003`);
+      expect(qb.withDeleted).toHaveBeenCalled();
+    });
+
+    it('Bug1: mã dự kiến đã bị chiếm (race) → tự tăng tiếp, không trả mã trùng', async () => {
+      const taken = `MT-${todayStamp()}-001`;
+      wireCodes([], [taken]);
+      const code = await service.generateMeetingCode();
+      expect(code).not.toBe(taken);
+      expect(code).toBe(`MT-${todayStamp()}-002`);
     });
   });
 
   describe('generateBookingCode', () => {
+    const wireBooking = (existing: string[]) => {
+      const qb = mockQueryBuilder();
+      qb.getRawMany.mockResolvedValue(existing.map((code) => ({ code })));
+      qb.getCount.mockResolvedValue(0);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+      return qb;
+    };
+
     it('[T015] should generate code in BK-YYYYMMDD-NNN format', async () => {
-      mockRepo.count.mockResolvedValue(2);
-
+      wireBooking([`BK-${todayStamp()}-002`]);
       const code = await service.generateBookingCode();
-
       expect(code).toMatch(/^BK-\d{8}-003$/);
+    });
+
+    it('Bug1: mã đầu tiên trong ngày → 001', async () => {
+      wireBooking([]);
+      const code = await service.generateBookingCode();
+      expect(code).toBe(`BK-${todayStamp()}-001`);
     });
   });
 
@@ -3108,10 +3163,9 @@ describe('MeetingsService', () => {
         const qb = mockRequestListQb();
         mockRepo.createQueryBuilder.mockReturnValue(qb);
 
-        await service.findMeetingRequests(
-          { sortBy, sortOrder: 'asc' } as any,
-          { userId: 'u1' },
-        );
+        await service.findMeetingRequests({ sortBy, sortOrder: 'asc' } as any, {
+          userId: 'u1',
+        });
 
         expect(qb.orderBy).toHaveBeenCalledWith(expectedColumn, 'ASC');
       },
