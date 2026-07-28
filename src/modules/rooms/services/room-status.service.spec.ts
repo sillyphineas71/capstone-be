@@ -21,6 +21,7 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     host_name: 'Nguyễn Văn A',
     reserved_start_time: '2026-06-16T08:00:00Z',
     reserved_end_time: '2026-06-16T10:00:00Z',
+    no_show_status: null,
     ...over,
   });
 
@@ -98,11 +99,53 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
         reservedEndTime: '2026-06-16T10:00:00Z',
       },
       noShowCase: null,
+      noShowStatus: null,
       releaseHistory: [],
       lastPresenceAt: '2026-06-16T09:00:00Z',
       occupancyCount: 5,
     });
     expect(r).not.toHaveProperty('roomName');
+  });
+
+  // ─── NO-SHOW STATUS (Q3): nối dữ liệu thật thay hardcode null ───
+  it('list: noShowStatus lấy detection_status của case mới nhất theo booking', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ no_show_status: 'risk' }),
+      row({ room_id: 'r2', no_show_status: 'confirmed' }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].noShowStatus).toBe('risk');
+    expect(r[1].noShowStatus).toBe('confirmed');
+  });
+
+  it('list: SQL join no_show_cases theo cb.booking_id, lấy bản mới nhất', async () => {
+    dsMock.manager.query.mockResolvedValue([]);
+    await service.getRealtimeStatus({});
+    const sql = String(dsMock.manager.query.mock.calls[0][0]);
+    expect(sql).toContain('no_show_cases');
+    expect(sql).toContain('ns.booking_id = cb.booking_id');
+    expect(sql).toContain('ORDER BY ns.detected_at DESC');
+    // nsc PHẢI đứng sau cb (LATERAL chỉ tham chiếu được bảng khai trước nó).
+    expect(sql.indexOf(') cb ON true')).toBeLessThan(
+      sql.indexOf(') nsc ON true'),
+    );
+  });
+
+  it('list: phòng không có booking đang chạy → noShowStatus null', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ booking_id: null, no_show_status: null }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].noShowStatus).toBeNull();
+  });
+
+  it('detail: noShowStatus có giá trị thật, noShowCase vẫn null (defer #31)', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ no_show_status: 'released' }),
+    ]);
+    const r = await service.getRoomStatus('r1');
+    expect(r.noShowStatus).toBe('released');
+    expect(r.noShowCase).toBeNull();
   });
 
   it('detail: 404 ROOM_NOT_FOUND khi không tồn tại/soft-deleted', async () => {
