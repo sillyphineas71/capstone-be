@@ -9,6 +9,7 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { IvssPortraitSyncService } from '../ivss/services/ivss-portrait-sync.service.js';
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
@@ -18,6 +19,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let lifecycleMock: any;
   let earlyVacancyMock: any;
   let ivssMock: any;
+  let portraitMock: any;
   let checkInAlertMock: any;
   let restrictedZoneMock: any;
   let crowdAlertMock: any;
@@ -50,6 +52,14 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     };
     earlyVacancyMock = {
       detect: jest.fn(async () => ({ scanned: 0, flagged: 0 })),
+    };
+    portraitMock = {
+      reconcilePortraits: jest.fn(async () => ({
+        scanned: 0,
+        enrolled: 0,
+        removed: 0,
+        failed: 0,
+      })),
     };
     ivssMock = {
       provisionUpcoming: jest.fn(async () => ({
@@ -99,6 +109,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         { provide: EarlyVacancyService, useValue: earlyVacancyMock },
         { provide: FaceProvisioningService, useValue: {} },
         { provide: IvssPersonSyncService, useValue: ivssMock },
+        { provide: IvssPortraitSyncService, useValue: portraitMock },
         {
           provide: RestrictedZoneIntrusionService,
           useValue: restrictedZoneMock,
@@ -183,6 +194,28 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     const s = await build();
     ivssMock.provisionUpcoming.mockRejectedValueOnce(new Error('boom'));
     await expect(s.ivssSync()).resolves.toBeUndefined();
+  });
+
+  // ── PORTRAIT-001 ivssPortraitReconcile cron ──
+  it('ivssPortraitReconcile gate OFF (default) → KHÔNG gọi reconcile', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    await s.ivssPortraitReconcile();
+    expect(portraitMock.reconcilePortraits).not.toHaveBeenCalled();
+  });
+
+  it('ivssPortraitReconcile ON → gọi reconcilePortraits', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_IVSS_PORTRAIT_ENABLED: true };
+    const s = await build();
+    await s.ivssPortraitReconcile();
+    expect(portraitMock.reconcilePortraits).toHaveBeenCalledTimes(1);
+  });
+
+  it('ivssPortraitReconcile: throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_IVSS_PORTRAIT_ENABLED: true };
+    const s = await build();
+    portraitMock.reconcilePortraits.mockRejectedValueOnce(new Error('boom'));
+    await expect(s.ivssPortraitReconcile()).resolves.toBeUndefined();
   });
 
   // ── ARZ-001 evaluateRestrictedZoneIntrusions cron ──

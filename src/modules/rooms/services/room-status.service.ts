@@ -15,6 +15,7 @@ interface RoomStatusRow {
   host_name: string | null;
   reserved_start_time: Date | string | null;
   reserved_end_time: Date | string | null;
+  no_show_status: string | null;
 }
 
 export interface RoomStatusListItem {
@@ -29,7 +30,8 @@ export interface RoomStatusListItem {
     reservedEndTime: Date | string | null;
   } | null;
   occupancyCount: number | null;
-  noShowStatus: null;
+  /** detection_status của no_show_case mới nhất thuộc booking đang diễn ra; null nếu không có. */
+  noShowStatus: string | null;
   lastPresenceAt: Date | string | null;
 }
 
@@ -45,7 +47,10 @@ export interface RoomStatusDetail {
     reservedStartTime: Date | string | null;
     reservedEndTime: Date | string | null;
   } | null;
+  /** Object case đầy đủ — vẫn defer #31. Trạng thái rút gọn xem `noShowStatus`. */
   noShowCase: null;
+  /** detection_status của no_show_case mới nhất thuộc booking đang diễn ra; null nếu không có. */
+  noShowStatus: string | null;
   releaseHistory: never[];
   lastPresenceAt: Date | string | null;
   occupancyCount: number | null;
@@ -56,7 +61,11 @@ export interface RoomStatusDetail {
  *
  * SEC-03: raw SQL parameterized. DATA-01: loại room soft-deleted (deleted_at IS NULL).
  * Read-only: KHÔNG ghi DB, KHÔNG emit WS (writer #29). KHÔNG migration.
- * occupancyCount/lastPresenceAt từ room_events (NC-A/NC-C). No-show defer #31.
+ * occupancyCount/lastPresenceAt từ room_events (NC-A/NC-C).
+ * noShowStatus: detection_status của no_show_case MỚI NHẤT thuộc booking đang diễn ra
+ * (LATERAL `nsc` join theo `cb.booking_id` — phải khai SAU `cb`). Phòng không có booking
+ * đang chạy → cb.booking_id NULL → nsc rỗng → noShowStatus null. Object case đầy đủ
+ * (`noShowCase`) vẫn defer #31.
  */
 @Injectable()
 export class RoomStatusService {
@@ -82,13 +91,20 @@ export class RoomStatusService {
         AND b.reserved_start_time <= now() AND b.reserved_end_time >= now()
         AND b.status IN ('approved','active')
       ORDER BY b.reserved_start_time ASC LIMIT 1
-    ) cb ON true`;
+    ) cb ON true
+    LEFT JOIN LATERAL (
+      SELECT ns.detection_status
+      FROM no_show_cases ns
+      WHERE ns.booking_id = cb.booking_id
+      ORDER BY ns.detected_at DESC LIMIT 1
+    ) nsc ON true`;
 
   private static readonly SELECT_COLS = `
     r.id AS room_id, r.room_code, r.room_name, r.current_status,
     oc.occupancy_count, lp.event_time AS last_presence_at,
     cb.booking_id, cb.meeting_id, cb.title, cb.host_name,
-    cb.reserved_start_time, cb.reserved_end_time`;
+    cb.reserved_start_time, cb.reserved_end_time,
+    nsc.detection_status AS no_show_status`;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -148,7 +164,7 @@ export class RoomStatusService {
           }
         : null,
       occupancyCount: row.occupancy_count ?? null,
-      noShowStatus: null,
+      noShowStatus: row.no_show_status ?? null,
       lastPresenceAt: row.last_presence_at ?? null,
     };
   }
@@ -169,6 +185,7 @@ export class RoomStatusService {
           }
         : null,
       noShowCase: null,
+      noShowStatus: row.no_show_status ?? null,
       releaseHistory: [],
       lastPresenceAt: row.last_presence_at ?? null,
       occupancyCount: row.occupancy_count ?? null,

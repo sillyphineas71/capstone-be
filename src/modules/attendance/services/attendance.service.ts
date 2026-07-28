@@ -513,6 +513,8 @@ export class AttendanceService {
         );
 
         return new AttendanceItemDto({
+          // id bản ghi điểm danh (null nếu chưa điểm danh) — FE dùng cho route :recordId.
+          id: p.attendanceRecord?.id ?? null,
           participantId: p.participantId,
           userId: p.userId,
           avatarUrl: p.avatarUrl,

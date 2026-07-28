@@ -13,6 +13,7 @@ import { IvssPresenceIngestionService } from './services/ivss-presence-ingestion
 import { IvssPresenceQueryService } from './services/ivss-presence-query.service.js';
 import { IvssPresenceReportService } from './services/ivss-presence-report.service.js';
 import { IvssPersonSyncService } from './services/ivss-person-sync.service.js';
+import { IvssPortraitSyncService } from './services/ivss-portrait-sync.service.js';
 import { IvssWebhookController } from './controllers/ivss-webhook.controller.js';
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
 import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
@@ -51,11 +52,14 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     // IPI-001 (#38+#39): handler thật thay log-only.
     { provide: IVSS_EVENT_HANDLER, useExisting: IvssPresenceIngestionService },
     IvssPersonSyncService,
+    // PORTRAIT-001 (UC-109+110): kho mặt THƯỜNG TRỰC, group riêng IVSS_PORTRAIT_GROUP,
+    // bridge device row riêng — song song, không đụng luồng check-in họp.
+    IvssPortraitSyncService,
     IvssPresenceQueryService,
     IvssPresenceReportService,
     // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
     IvssOccupancyIngestService,
   ],
-  exports: [IVSS_BRIDGE, IvssPersonSyncService],
+  exports: [IVSS_BRIDGE, IvssPersonSyncService, IvssPortraitSyncService],
 })
 export class IvssModule {}
