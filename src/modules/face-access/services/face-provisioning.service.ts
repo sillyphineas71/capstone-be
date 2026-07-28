@@ -288,7 +288,11 @@ export class FaceProvisioningService {
       `SELECT device_id, device_person_id, device_person_code, metadata_json
        FROM device_user_mappings
        WHERE sync_status = 'synced'
-         AND COALESCE(metadata_json->>'source', '') <> 'ivss'
+         -- F3 (PORTRAIT-001): nhánh DEDUP này KHÔNG join meetings/bookingId nên phải tự
+         -- loại trừ mọi mapping không thuộc FMP. Thiếu 'portrait' ⇒ mapping kho-mặt-thường-trực
+         -- lọt vào đây, findDeviceById trả bridge row (ip_address NULL) → gọi SDK face-terminal
+         -- vào IP rỗng, fail + log rác mỗi tick. Chỉ là filter, KHÔNG đổi logic FMP.
+         AND COALESCE(metadata_json->>'source', '') NOT IN ('ivss', 'portrait')
        LIMIT 500`,
     );
     for (const mp of synced) {

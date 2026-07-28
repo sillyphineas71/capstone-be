@@ -8,6 +8,7 @@ import { NoShowLifecycleService } from '../rooms/services/no-show-lifecycle.serv
 import { EarlyVacancyService } from '../rooms/services/early-vacancy.service.js';
 import { FaceProvisioningService } from '../face-access/services/face-provisioning.service.js';
 import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service.js';
+import { IvssPortraitSyncService } from '../ivss/services/ivss-portrait-sync.service.js';
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
@@ -36,6 +37,7 @@ export class SchedulerService {
   private readonly faceSyncEnabled: boolean;
   private readonly earlyVacancyEnabled: boolean;
   private readonly ivssSyncEnabled: boolean;
+  private readonly ivssPortraitEnabled: boolean;
   private readonly restrictedZoneEnabled: boolean;
   private readonly crowdAlertEnabled: boolean;
   private readonly gatePairingEnabled: boolean;
@@ -49,6 +51,7 @@ export class SchedulerService {
     private readonly earlyVacancyService: EarlyVacancyService,
     private readonly faceProvisioningService: FaceProvisioningService,
     private readonly ivssPersonSyncService: IvssPersonSyncService,
+    private readonly ivssPortraitSyncService: IvssPortraitSyncService,
     private readonly crowdAlertService: CrowdAlertService,
     private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
     private readonly gateLogPairingService: GateLogPairingService,
@@ -85,6 +88,12 @@ export class SchedulerService {
       'SCHEDULER_IVSS_SYNC_ENABLED',
       false,
     );
+    // PORTRAIT-001: mặc định TẮT. ⚠ CHỈ bật sau khi luồng check-in họp (group "1") đã
+    // verify chạy thật — yêu cầu của chủ dự án, tránh luồng mới làm rối luồng đang test.
+    this.ivssPortraitEnabled = this.configService.get<boolean>(
+      'SCHEDULER_IVSS_PORTRAIT_ENABLED',
+      false,
+    );
     this.restrictedZoneEnabled = this.configService.get<boolean>(
       'SCHEDULER_RESTRICTED_ZONE_ENABLED',
       false,
@@ -99,7 +108,7 @@ export class SchedulerService {
     );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled}`,
     );
   }
 
@@ -244,6 +253,33 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] ivss-sync failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * PORTRAIT-001 (UC-109+110) — đối chiếu kho mặt THƯỜNG TRỰC (portrait group) với
+   * face_profiles/users: ảnh vừa được duyệt → enroll; account khoá/nghỉ hoặc ảnh hết
+   * active → remove. Đây là nguồn điều khiển DUY NHẤT (F1: không móc vào accounts vì
+   * IvssModule đã import AccountsModule ⇒ sẽ tạo vòng phụ thuộc; repo cấm forwardRef).
+   *
+   * Gate SCHEDULER_ENABLED && SCHEDULER_IVSS_PORTRAIT_ENABLED (default OFF).
+   * ⚠ CHƯA BẬT PRODUCTION — chờ luồng check-in họp verify xong. KHÔNG ném ra cron (ARCH-02).
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'ivss-portrait-reconcile' })
+  async ivssPortraitReconcile(): Promise<void> {
+    if (!this.schedulerEnabled || !this.ivssPortraitEnabled) return;
+
+    try {
+      const r = await this.ivssPortraitSyncService.reconcilePortraits();
+      this.logger.log(
+        `[Scheduler] ivss-portrait: scanned=${r.scanned} enrolled=${r.enrolled} removed=${r.removed} failed=${r.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] ivss-portrait failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

@@ -301,7 +301,11 @@ describe('FaceProvisioningService (FMP-001)', () => {
       s.includes('SELECT device_id, device_person_id, device_person_code'),
     );
     expect(String(stale)).toContain("metadata_json->>'source', '') <> 'ivss'");
-    expect(String(dedup)).toContain("metadata_json->>'source', '') <> 'ivss'");
+    // F3 (PORTRAIT-001): nhánh dedup KHÔNG join meetings/bookingId nên phải loại trừ
+    // MỌI source ngoài FMP — thêm 'portrait' (kho mặt thường trực) cạnh 'ivss'.
+    expect(String(dedup)).toContain(
+      "metadata_json->>'source', '') NOT IN ('ivss', 'portrait')",
+    );
   });
 
   it('MCS #1 cleanup: row failed (uid NULL) họp đã kết thúc → freed (deleted_at set, KHÔNG deletePerson)', async () => {
