@@ -46,6 +46,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Integration test credentials (deployed env accounts) - never commit
+/test/integration/credentials.local.json
+/test/integration
 # temp directory
 .temp
 .tmp

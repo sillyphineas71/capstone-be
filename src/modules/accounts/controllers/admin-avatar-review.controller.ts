@@ -35,7 +35,7 @@ export class AdminAvatarReviewController {
   constructor(private readonly service: AdminAvatarReviewService) {}
 
   @Get()
-  @RequireRoles('SYSTEM_ADMIN')
+  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
   @RequirePermissions('account.avatar.review')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(@Query() query: ListAvatarSubmissionsQueryDto) {
@@ -48,7 +48,7 @@ export class AdminAvatarReviewController {
   }
 
   @Get(':faceProfileId')
-  @RequireRoles('SYSTEM_ADMIN')
+  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
   @RequirePermissions('account.avatar.review')
   async detail(
     @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
@@ -62,7 +62,7 @@ export class AdminAvatarReviewController {
   }
 
   @Get(':faceProfileId/download-url')
-  @RequireRoles('SYSTEM_ADMIN')
+  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
   @RequirePermissions('account.avatar.download')
   async downloadUrl(
     @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
@@ -81,7 +81,7 @@ export class AdminAvatarReviewController {
 
   @Post(':faceProfileId/approve')
   @HttpCode(200)
-  @RequireRoles('SYSTEM_ADMIN')
+  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
   @RequirePermissions('account.avatar.review')
   async approve(
     @Param('faceProfileId', avatarSubmissionIdPipe()) faceProfileId: string,
@@ -96,7 +96,7 @@ export class AdminAvatarReviewController {
 
   @Post(':faceProfileId/reject')
   @HttpCode(200)
-  @RequireRoles('SYSTEM_ADMIN')
+  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
   @RequirePermissions('account.avatar.review')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async reject(

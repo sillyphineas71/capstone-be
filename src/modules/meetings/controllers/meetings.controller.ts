@@ -250,6 +250,13 @@ export class MeetingsController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('meeting.read.all')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
   @ApiOperation({ summary: 'Danh sach cuoc hop (admin, co phan trang/filter)' })
   @ApiResponse({ status: 200, description: 'Danh sach cuoc hop' })
   @ApiResponse({ status: 403, description: 'Khong co quyen meeting.read.all' })

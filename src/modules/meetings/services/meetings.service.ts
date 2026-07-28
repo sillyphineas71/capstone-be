@@ -15,6 +15,7 @@ import {
   MoreThan,
   MoreThanOrEqual,
   LessThanOrEqual,
+  QueryFailedError,
 } from 'typeorm';
 
 import {
@@ -488,8 +489,8 @@ export class MeetingsService {
       });
     }
 
-    const meetingCode = await this.generateMeetingCode();
-    const bookingCode = await this.generateBookingCode();
+    let meetingCode = await this.generateMeetingCode();
+    let bookingCode = await this.generateBookingCode();
 
     const participantConflictResult = await this.checkParticipantConflicts(
       uniqueParticipantIds.filter((id) => id !== hostId),
@@ -503,9 +504,19 @@ export class MeetingsService {
     let request: MeetingRequestEntity;
     let booking: RoomBookingEntity;
 
-    try {
-      await this.dataSource.transaction(async (em) => {
-        meeting = em.create(MeetingEntity, {
+    // generateMeetingCode()/generateBookingCode() derive the code from a plain
+    // `SELECT COUNT(*) WHERE created_at >= today` (no DB sequence/lock), so two requests
+    // created close together can read the same count and produce the SAME code — a real
+    // TOCTOU race that surfaces as a 23505 unique-violation on meeting_code/booking_code
+    // once the transaction below tries to insert. Retry with freshly regenerated codes
+    // instead of letting that raw DB error bubble up mislabeled by the global
+    // QueryFailedFilter (which hardcodes every 23505 as a department-name conflict).
+    const MAX_CODE_COLLISION_RETRIES = 3;
+
+    for (let attempt = 1; attempt <= MAX_CODE_COLLISION_RETRIES; attempt++) {
+      try {
+        await this.dataSource.transaction(async (em) => {
+          meeting = em.create(MeetingEntity, {
           meetingCode,
           title: dto.title,
           description: dto.description || null,
@@ -658,13 +669,33 @@ export class MeetingsService {
           severity: AuditLogSeverity.INFO,
         });
         await em.save(AuditLogEntity, auditLog);
-      });
-    } catch (error: unknown) {
-      this.logger.error(
-        `Transaction failed for meeting creation: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-      throw error;
+        });
+        break;
+      } catch (error: unknown) {
+        const driverErrorCode = (error as { driverError?: { code?: string; constraint?: string } })
+          .driverError?.code;
+        const constraint = (error as { driverError?: { constraint?: string } }).driverError
+          ?.constraint;
+        const isDuplicateCodeCollision =
+          error instanceof QueryFailedError &&
+          driverErrorCode === '23505' &&
+          (constraint?.includes('meeting_code') || constraint?.includes('booking_code'));
+
+        if (isDuplicateCodeCollision && attempt < MAX_CODE_COLLISION_RETRIES) {
+          this.logger.warn(
+            `[createMeeting] meeting_code/booking_code collision on attempt ${attempt} (constraint: ${constraint}) — regenerating and retrying.`,
+          );
+          meetingCode = await this.generateMeetingCode();
+          bookingCode = await this.generateBookingCode();
+          continue;
+        }
+
+        this.logger.error(
+          `Transaction failed for meeting creation: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+        throw error;
+      }
     }
 
     // Post-transaction: notify approvers (non-blocking, no rollback)
