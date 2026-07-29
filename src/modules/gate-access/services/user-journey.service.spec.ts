@@ -10,9 +10,15 @@ describe('UserJourneyService (UJN-001)', () => {
   let dsMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
 
-  /** Mock 4 query: users + 3 nguồn. */
+  /** Mock 5 query: users + 3 nguồn + system_configs (ngưỡng gộp phiên V2). */
   const wire = (
-    over: { user?: any[]; gate?: any[]; meeting?: any[]; zone?: any[] } = {},
+    over: {
+      user?: any[];
+      gate?: any[];
+      meeting?: any[];
+      zone?: any[];
+      config?: any[];
+    } = {},
   ): void => {
     captured = [];
     dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
@@ -25,9 +31,21 @@ describe('UserJourneyService (UJN-001)', () => {
         return Promise.resolve(over.meeting ?? []);
       if (sql.includes('FROM zone_presence_events'))
         return Promise.resolve(over.zone ?? []);
+      // Không set `config` ⇒ [] ⇒ rơi về default 300s.
+      if (sql.includes('FROM system_configs'))
+        return Promise.resolve(over.config ?? []);
       return Promise.resolve([]);
     });
   };
+
+  /** Face event thô ở A102 — helper cho các test gộp phiên. */
+  const face = (time: string, direction = 'seen', room = 'A102-ID') => ({
+    event_time: time,
+    direction,
+    room_key: room,
+    room_name: 'Phòng A102',
+    meeting_id: 'mt1',
+  });
 
   const sqlOf = (frag: string) => captured.find((c) => c.sql.includes(frag))!;
 
@@ -65,14 +83,7 @@ describe('UserJourneyService (UJN-001)', () => {
           zone_name: 'Cổng Test',
         },
       ],
-      meeting: [
-        {
-          event_time: '2026-07-29T03:00:00.000Z',
-          direction: 'enter',
-          room_name: 'Phòng A102',
-          meeting_id: 'mt1',
-        },
-      ],
+      meeting: [face('2026-07-29T03:00:00.000Z', 'enter')],
     });
 
     const r = await service.getUserJourney(USER_ID, '2026-07-29');
@@ -100,14 +111,7 @@ describe('UserJourneyService (UJN-001)', () => {
           zone_name: 'Cổng Test',
         },
       ],
-      meeting: [
-        {
-          event_time: '2026-07-29T02:00:00.000Z',
-          direction: 'enter',
-          room_name: 'Phòng A102',
-          meeting_id: 'mt1',
-        },
-      ],
+      meeting: [face('2026-07-29T02:00:00.000Z', 'enter')],
       zone: [
         {
           event_time: '2026-07-29T03:00:00.000Z',
@@ -133,6 +137,8 @@ describe('UserJourneyService (UJN-001)', () => {
 
     expect(meeting).toMatchObject({
       type: 'meeting',
+      // V2: phiên gộp ⇒ direction 'session', KHÔNG còn enter/leave lẻ.
+      direction: 'session',
       roomName: 'Phòng A102',
       meetingId: 'mt1',
       zoneName: null,
@@ -158,14 +164,7 @@ describe('UserJourneyService (UJN-001)', () => {
           zone_name: 'Cổng Test',
         },
       ],
-      meeting: [
-        {
-          event_time: '2026-07-29T02:00:00.000Z',
-          direction: 'enter',
-          room_name: 'Phòng A102',
-          meeting_id: null,
-        },
-      ],
+      meeting: [face('2026-07-29T02:00:00.000Z', 'enter')],
       zone: [],
     });
     const r = await service.getUserJourney(USER_ID, '2026-07-29');
@@ -199,6 +198,7 @@ describe('UserJourneyService (UJN-001)', () => {
         {
           event_time: '2026-07-29T02:00:00.000Z',
           direction: null,
+          room_key: 'room-khong-co-trong-bang-rooms',
           room_name: null,
           meeting_id: null,
         },
@@ -264,5 +264,193 @@ describe('UserJourneyService (UJN-001)', () => {
     const q = sqlOf('FROM iot_device_events');
     expect(q.sql).toContain("e.payload_json->>'userId' = $1");
     expect(q.params[2]).toBe('ivss_face_event');
+  });
+
+  // ══ V2 — gộp phiên face + lọc rác ══════════════════════════════════════════
+  describe('V2 — nguồn 2 gộp phiên có mặt', () => {
+    it('6 event cùng phòng cách nhau <300s → 1 phiên, durationMs = last-first, eventCount=6', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:39:00.000Z', 'enter'),
+          face('2026-07-29T10:41:00.000Z'),
+          face('2026-07-29T10:43:00.000Z'),
+          face('2026-07-29T10:45:00.000Z'),
+          face('2026-07-29T10:47:00.000Z'),
+          face('2026-07-29T10:48:00.000Z', 'leave'),
+        ],
+      });
+
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+
+      expect(r.events).toHaveLength(1);
+      expect(r.meetingCount).toBe(1);
+      expect(r.events[0]).toMatchObject({
+        type: 'meeting',
+        direction: 'session',
+        time: '2026-07-29T10:39:00.000Z',
+        endTime: '2026-07-29T10:48:00.000Z',
+        durationMs: 9 * 60 * 1000,
+        eventCount: 6,
+        roomName: 'Phòng A102',
+      });
+      expect(r.events[0].detail).toBe('Có mặt Phòng A102 (9 phút)');
+    });
+
+    it('2 cụm cùng phòng cách nhau >300s → 2 phiên riêng', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:00:00.000Z', 'enter'),
+          face('2026-07-29T10:02:00.000Z'),
+          // gap 10 phút > 300s ⇒ cắt phiên
+          face('2026-07-29T10:12:00.000Z', 'enter'),
+          face('2026-07-29T10:14:00.000Z'),
+        ],
+      });
+
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+
+      expect(r.meetingCount).toBe(2);
+      expect(r.events.map((e) => [e.time, e.endTime, e.eventCount])).toEqual([
+        ['2026-07-29T10:00:00.000Z', '2026-07-29T10:02:00.000Z', 2],
+        ['2026-07-29T10:12:00.000Z', '2026-07-29T10:14:00.000Z', 2],
+      ]);
+    });
+
+    it('đổi phòng dù sát giờ → 2 phiên (khoá gộp gồm cả roomId)', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:00:00.000Z', 'enter', 'A102-ID'),
+          face('2026-07-29T10:01:00.000Z', 'enter', 'B201-ID'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.meetingCount).toBe(2);
+    });
+
+    it('LỌC RÁC: SQL bỏ face event không resolve được roomId', async () => {
+      wire();
+      await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(sqlOf('FROM iot_device_events').sql).toContain(
+        "COALESCE(e.room_id, NULLIF(e.payload_json->>'roomId','')::uuid) IS NOT NULL",
+      );
+    });
+
+    it('LỌC RÁC (chặn tầng 2): row room_key null KHÔNG vào timeline, không đẻ phiên giả', async () => {
+      wire({
+        meeting: [
+          {
+            event_time: '2026-07-29T10:00:00.000Z',
+            direction: 'seen',
+            room_key: null,
+            room_name: null,
+            meeting_id: null,
+          },
+          face('2026-07-29T10:01:00.000Z', 'enter'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.meetingCount).toBe(1);
+      expect(r.events[0].time).toBe('2026-07-29T10:01:00.000Z');
+      expect(r.events[0].eventCount).toBe(1);
+    });
+
+    it('gate KHÔNG gộp: 2 lượt qua cổng vẫn là 2 dòng riêng', async () => {
+      wire({
+        gate: [
+          {
+            access_time: '2026-07-29T10:00:00.000Z',
+            direction: 'enter',
+            plate_number: '30G69946',
+            zone_name: 'Cổng Test',
+          },
+          {
+            access_time: '2026-07-29T10:01:00.000Z',
+            direction: 'leave',
+            plate_number: '30G69946',
+            zone_name: 'Cổng Test',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.gateCount).toBe(2);
+      expect(r.events).toHaveLength(2);
+      // Không có field phiên nào rò sang gate.
+      expect(r.events[0].endTime).toBeUndefined();
+      expect(r.events[0].durationMs).toBeUndefined();
+    });
+
+    it('zone KHÔNG gộp: appear + disappear vẫn 2 dòng', async () => {
+      wire({
+        zone: [
+          {
+            event_time: '2026-07-29T10:00:00.000Z',
+            event_type: 'appear',
+            zone_name: 'Hành lang A',
+          },
+          {
+            event_time: '2026-07-29T10:01:00.000Z',
+            event_type: 'disappear',
+            zone_name: 'Hành lang A',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.zoneCount).toBe(2);
+      expect(r.events.map((e) => e.direction)).toEqual(['appear', 'disappear']);
+    });
+
+    it('ngưỡng gộp lấy từ system_configs[ivss.presence.gap_threshold_seconds] (tái dùng key có sẵn)', async () => {
+      // Hạ ngưỡng còn 60s ⇒ 2 event cách 2 phút bị TÁCH (default 300s thì gộp).
+      wire({
+        config: [{ config_value: '60' }],
+        meeting: [
+          face('2026-07-29T10:00:00.000Z', 'enter'),
+          face('2026-07-29T10:02:00.000Z'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(sqlOf('FROM system_configs').sql).toContain(
+        "config_key = 'ivss.presence.gap_threshold_seconds'",
+      );
+      expect(r.meetingCount).toBe(2);
+    });
+
+    it('đọc config lỗi → rơi về default 300s, KHÔNG hỏng timeline', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:00:00.000Z', 'enter'),
+          face('2026-07-29T10:02:00.000Z'),
+        ],
+      });
+      const inner = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) =>
+        sql.includes('FROM system_configs')
+          ? Promise.reject(
+              new Error('relation "system_configs" does not exist'),
+            )
+          : inner(sql, params),
+      );
+
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.meetingCount).toBe(1); // gộp theo default 300s
+    });
+
+    it('durationHuman: <60s / phút / giờ+phút / tròn giờ', async () => {
+      const cases: Array<[string, string]> = [
+        ['2026-07-29T10:00:45.000Z', 'Có mặt Phòng A102 (45 giây)'],
+        ['2026-07-29T10:09:00.000Z', 'Có mặt Phòng A102 (9 phút)'],
+        ['2026-07-29T11:05:00.000Z', 'Có mặt Phòng A102 (1 giờ 5 phút)'],
+        ['2026-07-29T12:00:00.000Z', 'Có mặt Phòng A102 (2 giờ)'],
+      ];
+      for (const [end, expected] of cases) {
+        wire({
+          // Ngưỡng đủ lớn để cả 2 event nằm trong 1 phiên bất kể khoảng cách.
+          config: [{ config_value: '99999' }],
+          meeting: [face('2026-07-29T10:00:00.000Z', 'enter'), face(end)],
+        });
+        const r = await service.getUserJourney(USER_ID, '2026-07-29');
+        expect(r.events[0].detail).toBe(expected);
+      }
+    });
   });
 });

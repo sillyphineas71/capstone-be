@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type {
   UserJourneyEventDto,
@@ -15,8 +15,14 @@ interface GateRow {
 interface MeetingRow {
   event_time: Date | string;
   direction: string | null;
+  /** roomId đã resolve (e.room_id ⊕ payload.roomId) — khoá gộp phiên. Query đã lọc NOT NULL. */
+  room_key: string;
   room_name: string | null;
   meeting_id: string | null;
+}
+
+interface ConfigRow {
+  config_value: string | null;
 }
 
 interface ZoneRow {
@@ -30,6 +36,30 @@ interface UserRow {
 }
 
 const FACE_EVENT_TYPE = 'ivss_face_event';
+
+/**
+ * V2 — ngưỡng tách phiên có mặt (giây). Cùng CẤU HÌNH với luồng hiện diện họp:
+ * `system_configs['ivss.presence.gap_threshold_seconds']`.
+ *
+ * ⚠ Chỉ giá trị MẶC ĐỊNH là khác: `ivss-presence-query.service.ts` fallback 120s, ở đây 300s
+ * (timeline hành trình cả ngày thô hơn báo cáo hiện diện từng cuộc họp). Khi hàng config
+ * TỒN TẠI thì cả hai đọc CÙNG một số ⇒ không lệch. Hiện DB kiểm chưa có hàng này.
+ */
+const DEFAULT_GAP_SECONDS = 300;
+
+/** "45 giây" / "9 phút" / "1 giờ 5 phút" — bản tiếng Việt cho `detail`.
+ *
+ * KHÔNG tái dùng `durationHuman()` của ivss-presence-report.service.ts: hàm đó `private`
+ * và format kiểu "9m 00s" (dành cho bảng PDF), không phải câu người đọc. Không sửa file kia.
+ */
+const durationHuman = (ms: number): string => {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 60) return `${totalSec} giây`;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h === 0) return `${m} phút`;
+  return m === 0 ? `${h} giờ` : `${h} giờ ${m} phút`;
+};
 /**
  * Múi giờ nghiệp vụ. Trùng giá trị với hằng cùng tên trong
  * ivss-room-access-log.service.ts — bản đó là `const` private không export được,
@@ -53,8 +83,14 @@ const vnDayBounds = (col: string) => `
  *
  * Ghép 3 KIỂU nguồn (KHÔNG phải 3 camera):
  *   1. `gate_access_logs`        — xe qua cổng (chỉ log CÓ user_id: hành trình theo NGƯỜI)
- *   2. `iot_device_events`       — check-in/out phòng họp qua face (ivss_face_event)
+ *   2. `iot_device_events`       — có mặt phòng họp qua face (ivss_face_event), GỘP PHIÊN
  *   3. `zone_presence_events`    — hiện diện khu vực, GOM MỌI ZONE của user
+ *
+ * V2 — nguồn 2 KHÔNG liệt kê raw event nữa: 14 event thô (5 enter + 1 leave + 8 seen) của
+ * một người ở A102 trong 17:39–17:50 từng đẻ ra 14 dòng, trong đó 8 dòng "không rõ phòng"
+ * là rác. Nay lọc event thiếu roomId rồi gộp theo (phòng + khoảng cách thời gian)
+ * ⇒ 1 dòng "Có mặt A102 (11 phút)". Nguồn 1 và 3 GIỮ NGUYÊN từng lượt — xem
+ * {@link UserJourneyService.groupFaceSessions} để biết vì sao chỉ face mới gộp.
  *
  * ⭐ Nguồn 3 KHÔNG hard-code zone/cam: lọc theo `user_id`, lấy mọi `zone_id`. Lắp thêm
  * camera zone mới ⇒ chỉ khác `zone_id`, cùng bảng ⇒ endpoint TỰ có, không phải sửa code.
@@ -64,6 +100,8 @@ const vnDayBounds = (col: string) => `
  */
 @Injectable()
 export class UserJourneyService {
+  private readonly logger = new Logger(UserJourneyService.name);
+
   constructor(private readonly dataSource: DataSource) {}
 
   /** YYYY-MM-DD hôm nay THEO GIỜ VN — không phụ thuộc timezone tiến trình (EC2 chạy UTC). */
@@ -78,6 +116,102 @@ export class UserJourneyService {
 
   private toIso(v: Date | string): string {
     return new Date(v).toISOString();
+  }
+
+  /**
+   * Ngưỡng tách phiên: `system_configs['ivss.presence.gap_threshold_seconds']`.
+   * Best-effort — bảng/hàng thiếu hoặc giá trị rác đều rơi về {@link DEFAULT_GAP_SECONDS},
+   * KHÔNG làm hỏng cả timeline chỉ vì đọc config lỗi.
+   */
+  private async getGapThresholdSeconds(): Promise<number> {
+    try {
+      const rows: ConfigRow[] = await this.dataSource.manager.query(
+        `SELECT config_value FROM system_configs
+          WHERE config_key = 'ivss.presence.gap_threshold_seconds' AND is_active = true
+          LIMIT 1`,
+      );
+      const raw = rows[0]?.config_value;
+      if (raw != null) {
+        const n = parseInt(raw, 10);
+        if (Number.isInteger(n) && n > 0) return n;
+      }
+    } catch (e) {
+      this.logger.warn(
+        `read gap_threshold failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+    }
+    return DEFAULT_GAP_SECONDS;
+  }
+
+  /**
+   * V2 — GỘP PHIÊN CÓ MẶT cho nguồn 2 (face).
+   *
+   * Vì sao chỉ face mới gộp: camera bắn liên tục khi người ĐỨNG YÊN trong phòng, nên raw
+   * event là "người vẫn ở đó" chứ không phải "vừa xảy ra chuyện gì". Gate (vào cổng lúc X)
+   * và zone (appear/disappear) là sự kiện RỜI RẠC ⇒ giữ nguyên từng lượt, KHÔNG gộp.
+   *
+   * Quy tắc tách: đổi phòng, HOẶC khoảng cách tới event trước > `gapSeconds`.
+   * Đúng bằng ngưỡng thì vẫn CÙNG phiên (dùng `>`, không `>=`).
+   *
+   * @param rows đã ORDER BY event_time ASC và đã lọc room_key NOT NULL ở tầng SQL.
+   */
+  private groupFaceSessions(
+    rows: MeetingRow[],
+    gapSeconds: number,
+  ): UserJourneyEventDto[] {
+    const gapMs = gapSeconds * 1000;
+    const sessions: Array<{
+      roomKey: string;
+      roomName: string | null;
+      meetingId: string | null;
+      startMs: number;
+      endMs: number;
+      count: number;
+    }> = [];
+
+    for (const r of rows) {
+      // Tầng SQL đã lọc, chặn thêm ở đây để không bao giờ gộp nhầm mọi event
+      // "không rõ phòng" thành một phiên giả mang khoá null.
+      if (!r.room_key) continue;
+      const ms = new Date(r.event_time).getTime();
+      const cur = sessions[sessions.length - 1];
+      if (cur && cur.roomKey === r.room_key && ms - cur.endMs <= gapMs) {
+        cur.endMs = ms;
+        cur.count += 1;
+        // Tên phòng / meeting có thể null ở event đầu (JOIN trượt, payload thiếu) —
+        // lấy giá trị non-null ĐẦU TIÊN gặp được trong phiên.
+        cur.roomName ??= r.room_name ?? null;
+        cur.meetingId ??= r.meeting_id ?? null;
+        continue;
+      }
+      sessions.push({
+        roomKey: r.room_key,
+        roomName: r.room_name ?? null,
+        meetingId: r.meeting_id ?? null,
+        startMs: ms,
+        endMs: ms,
+        count: 1,
+      });
+    }
+
+    return sessions.map((s) => {
+      const durationMs = s.endMs - s.startMs;
+      const room = s.roomName ?? 'phòng không rõ';
+      return {
+        time: new Date(s.startMs).toISOString(),
+        endTime: new Date(s.endMs).toISOString(),
+        type: 'meeting' as const,
+        // 'session' — KHÔNG phải enter/leave lẻ. FE dựa vào đây để render dạng khoảng.
+        direction: 'session',
+        detail: `Có mặt ${room} (${durationHuman(durationMs)})`,
+        zoneName: null,
+        plateNumber: null,
+        roomName: s.roomName,
+        meetingId: s.meetingId,
+        durationMs,
+        eventCount: s.count,
+      };
+    });
   }
 
   async getUserJourney(
@@ -105,9 +239,15 @@ export class UserJourneyService {
 
     // ── Nguồn 2: check-in/out phòng họp qua face ──
     // room_name lấy qua e.room_id, fallback payload_json->>'roomId' (UC5 ghi top-level).
+    //
+    // V2 — LỌC RÁC: chỉ nhận event ĐÃ RESOLVE được phòng. Camera bắn liên tục
+    // `direction='seen'` không kèm roomId ("vào phòng không rõ") — đó là nhiễu, bỏ hẳn.
+    // Event CÓ roomId nhưng direction='seen' thì GIỮ: người vẫn đang trong phòng, nó là
+    // bằng chứng kéo dài phiên.
     const meetingRows: MeetingRow[] = await this.dataSource.manager.query(
       `SELECT e.event_time,
               e.payload_json->>'direction' AS direction,
+              COALESCE(e.room_id, NULLIF(e.payload_json->>'roomId','')::uuid)::text AS room_key,
               r.room_name,
               COALESCE(e.meeting_id::text, e.payload_json->>'meetingId') AS meeting_id
          FROM iot_device_events e
@@ -115,7 +255,8 @@ export class UserJourneyService {
                 ON r.id = COALESCE(e.room_id, NULLIF(e.payload_json->>'roomId','')::uuid)
                AND r.deleted_at IS NULL
         WHERE e.event_type = $3
-          AND e.payload_json->>'userId' = $1${vnDayBounds('e.event_time')}
+          AND e.payload_json->>'userId' = $1
+          AND COALESCE(e.room_id, NULLIF(e.payload_json->>'roomId','')::uuid) IS NOT NULL${vnDayBounds('e.event_time')}
         ORDER BY e.event_time ASC`,
       [...params, FACE_EVENT_TYPE],
     );
@@ -146,20 +287,10 @@ export class UserJourneyService {
       };
     });
 
-    const meetingEvents: UserJourneyEventDto[] = meetingRows.map((r) => {
-      const room = r.room_name ?? 'phòng không rõ';
-      const verb = r.direction === 'leave' ? 'rời khỏi' : 'vào';
-      return {
-        time: this.toIso(r.event_time),
-        type: 'meeting',
-        direction: r.direction ?? null,
-        detail: `Nhận diện khuôn mặt: ${verb} ${room}`,
-        zoneName: null,
-        plateNumber: null,
-        roomName: r.room_name ?? null,
-        meetingId: r.meeting_id ?? null,
-      };
-    });
+    const meetingEvents = this.groupFaceSessions(
+      meetingRows,
+      await this.getGapThresholdSeconds(),
+    );
 
     const zoneEvents: UserJourneyEventDto[] = zoneRows.map((r) => {
       const zone = r.zone_name ?? 'khu vực không rõ';
@@ -187,6 +318,7 @@ export class UserJourneyService {
       date: day,
       events,
       gateCount: gateEvents.length,
+      // V2: số PHIÊN có mặt, không phải số raw face event (raw đã gộp + lọc rác).
       meetingCount: meetingEvents.length,
       zoneCount: zoneEvents.length,
     };
