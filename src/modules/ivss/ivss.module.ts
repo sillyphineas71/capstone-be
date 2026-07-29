@@ -18,6 +18,8 @@ import { IvssWebhookController } from './controllers/ivss-webhook.controller.js'
 import { IvssHealthController } from './controllers/ivss-health.controller.js';
 import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
+import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
+import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
 import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
 
 /**
@@ -42,6 +44,8 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     IvssHealthController,
     IvssPresenceController,
     IvssOccupancyController,
+    // RAL-001 (Màn 2): nhật ký ra/vào theo phòng — prefix `ivss/rooms`, tách hẳn Màn 1.
+    IvssRoomAccessController,
   ],
   providers: [
     ivssBridgeProvider,
@@ -57,6 +61,7 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     IvssPortraitSyncService,
     IvssPresenceQueryService,
     IvssPresenceReportService,
+    IvssRoomAccessLogService,
     // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
     IvssOccupancyIngestService,
   ],
