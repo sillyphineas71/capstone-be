@@ -29,9 +29,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * của `alert_rules`/`security_alerts`) — người chỉ có `display_name` (không có cả hai
  * FK) không dedup được, chấp nhận trùng.
  */
-export class CreatePersonControlListTable20260722000008
-  implements MigrationInterface
-{
+export class CreatePersonControlListTable20260722000008 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "person_control_list" (

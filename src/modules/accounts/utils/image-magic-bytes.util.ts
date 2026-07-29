@@ -1,5 +1,5 @@
 /**
- * ACCT-AVATAR-SUBMIT-001 (VL-02 / FR-015): Phát hiện MIME type thực tế của file ảnh
+ * ACCT-BIOMETRIC-SUBMIT-001 (VL-02 / FR-015): Phát hiện MIME type thực tế của file ảnh
  * bằng magic bytes (file signature), KHÔNG tin vào file.mimetype của Multer hay
  * extension do client khai báo.
  *

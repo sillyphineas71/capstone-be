@@ -10,17 +10,19 @@ import { FaceProfileEntity } from './entities/face-profile.entity.js';
 import { UsersController } from './controllers/users.controller.js';
 import { DepartmentsController } from './controllers/departments.controller.js';
 import { FaceProfileController } from './controllers/face-profile.controller.js';
-import { AvatarController } from './controllers/avatar.controller.js';
-import { AdminAvatarReviewController } from './controllers/admin-avatar-review.controller.js';
+import { BiometricSubmissionController } from './controllers/biometric-submission.controller.js';
+import { AdminBiometricReviewController } from './controllers/admin-biometric-review.controller.js';
+import { AvatarPhotoController } from './controllers/avatar-photo.controller.js';
 import { UsersService } from './services/users.service.js';
 import { AccountImportService } from './services/account-import.service.js';
 import { FaceProfileService } from './services/face-profile.service.js';
 import { PermissionsController } from './controllers/permissions.controller.js';
 import { RolePermissionsController } from './controllers/role-permissions.controller.js';
 import { RolesController } from './controllers/roles.controller.js';
-import { AvatarStatusService } from './services/avatar-status.service.js';
-import { AvatarSubmissionService } from './services/avatar-submission.service.js';
-import { AdminAvatarReviewService } from './services/admin-avatar-review.service.js';
+import { BiometricStatusService } from './services/biometric-status.service.js';
+import { BiometricSubmissionService } from './services/biometric-submission.service.js';
+import { AdminBiometricReviewService } from './services/admin-biometric-review.service.js';
+import { AvatarPhotoService } from './services/avatar-photo.service.js';
 import { DepartmentsService } from './services/departments.service.js';
 import { PasswordGeneratorService } from './services/password-generator.service.js';
 import { IsDepartmentCodeUniqueConstraint } from './validators/is-department-code-unique.validator.js';
@@ -74,16 +76,18 @@ import { ReportsModule } from '../reports/reports.module.js';
     RolePermissionsController,
     RolesController,
     FaceProfileController,
-    AvatarController,
-    AdminAvatarReviewController,
+    BiometricSubmissionController,
+    AdminBiometricReviewController,
+    AvatarPhotoController,
   ],
   providers: [
     UsersService,
     AccountImportService,
     FaceProfileService,
-    AvatarStatusService,
-    AvatarSubmissionService,
-    AdminAvatarReviewService,
+    BiometricStatusService,
+    BiometricSubmissionService,
+    AdminBiometricReviewService,
+    AvatarPhotoService,
     PermissionsService,
     RolePermissionsService,
     RolesService,

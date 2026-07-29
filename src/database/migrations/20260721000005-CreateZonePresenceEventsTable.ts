@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * KHÔNG soft-delete: đây là event log.
  * Phụ thuộc: `zones`, `iot_devices`, `users`.
  */
-export class CreateZonePresenceEventsTable20260721000005
-  implements MigrationInterface
-{
+export class CreateZonePresenceEventsTable20260721000005 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "zone_presence_events" (

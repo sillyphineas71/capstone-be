@@ -91,4 +91,3 @@ export class CreateAlertRuleDto {
   @IsUUID('4', { each: true })
   allowedPersonIdsJson?: string[];
 }
-

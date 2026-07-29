@@ -1,14 +1,17 @@
-import type { AvatarReviewStatus } from '../../../common/utils/avatar-status-resolver.util';
+import type { BiometricReviewStatus } from '../../../common/utils/biometric-status-resolver.util';
 
 export interface AuthUserSummary {
   id: string;
   email: string;
   fullName: string;
   avatarUrl: string | null;
-  // ACCT-AVATAR-SUBMIT-001 (BR-016): field derived trạng thái avatar cho FE popup.
-  avatarReviewStatus: AvatarReviewStatus;
-  avatarRequired: boolean;
-  shouldShowAvatarPopup: boolean;
+  // ACCT-BIOMETRIC-SUBMIT-001 (BR-016): field derived trạng thái sinh trắc học cho FE popup.
+  // [SỬA 2026-07-29] avatarReviewStatus→biometricReviewStatus, avatarRequired→biometricRequired,
+  // shouldShowAvatarPopup→shouldShowBiometricPopup — breaking API contract change, báo FE.
+  // avatarUrl GIỮ NGUYÊN tên, nay độc lập hoàn toàn (feature feat-update-avatar-photo).
+  biometricReviewStatus: BiometricReviewStatus;
+  biometricRequired: boolean;
+  shouldShowBiometricPopup: boolean;
   departmentId: string | null;
   roles: string[];
   permissions: string[];

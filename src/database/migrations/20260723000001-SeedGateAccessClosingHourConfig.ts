@@ -13,9 +13,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * dùng `WHERE NOT EXISTS` (mirror `20260720000011-SeedDemoNotificationsJobsAuditVehicles.ts`)
  * thay vì `ON CONFLICT`, tránh lỗi `42P10 no unique or exclusion constraint`.
  */
-export class SeedGateAccessClosingHourConfig20260723000001
-  implements MigrationInterface
-{
+export class SeedGateAccessClosingHourConfig20260723000001 implements MigrationInterface {
   name = 'SeedGateAccessClosingHourConfig20260723000001';
 
   private readonly configKey = 'gate_access.closing_hour_local';

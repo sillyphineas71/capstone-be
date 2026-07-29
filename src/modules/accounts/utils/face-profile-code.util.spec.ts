@@ -1,7 +1,7 @@
 import { generateFaceProfileCode } from './face-profile-code.util.js';
 
 /**
- * ACCT-AVATAR-SUBMIT-001 — Unit test cho generateFaceProfileCode (BR-PROFILE-CODE).
+ * ACCT-BIOMETRIC-SUBMIT-001 — Unit test cho generateFaceProfileCode (BR-PROFILE-CODE).
  */
 describe('generateFaceProfileCode', () => {
   it('đúng format FP- + 32 hex uppercase', () => {

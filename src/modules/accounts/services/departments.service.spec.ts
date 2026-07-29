@@ -370,7 +370,7 @@ describe('DepartmentsService', () => {
       await expect(
         service.updateDepartment(
           'missing',
-          { description: 'x' } as UpdateDepartmentDto,
+          { description: 'x' },
           'updater-id',
           {},
         ),
@@ -380,12 +380,7 @@ describe('DepartmentsService', () => {
     it('phòng ban đã xóa mềm (deletedAt khác null) → 404', async () => {
       em.findOne.mockResolvedValue(baseDept({ deletedAt: new Date() }));
       await expect(
-        service.updateDepartment(
-          'd1',
-          { description: 'x' } as UpdateDepartmentDto,
-          'updater-id',
-          {},
-        ),
+        service.updateDepartment('d1', { description: 'x' }, 'updater-id', {}),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -454,7 +449,8 @@ describe('DepartmentsService', () => {
       // d1 (đang sửa) là cha của d2; thử set cha của d1 = d2 -> chu trình
       em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
         if (entityClass === DepartmentEntity) {
-          if (options?.where?.id === 'd1' && !options?.select) return baseDept();
+          if (options?.where?.id === 'd1' && !options?.select)
+            return baseDept();
           if (options?.where?.id === 'd2' && !options?.select) {
             return baseDept({ id: 'd2', parentDepartmentId: 'd1' });
           }
@@ -503,11 +499,16 @@ describe('DepartmentsService', () => {
     it('đổi parent vượt quá 5 cấp → 422 VALIDATION_ERROR', async () => {
       em.findOne.mockImplementation(async (entityClass: any, options?: any) => {
         if (entityClass === DepartmentEntity) {
-          if (options?.where?.id === 'd1' && !options?.select) return baseDept();
+          if (options?.where?.id === 'd1' && !options?.select)
+            return baseDept();
           if (options?.where?.id === 'deep-parent') {
             return options?.select
               ? { id: 'deep-parent', parentDepartmentId: 'level4' }
-              : { id: 'deep-parent', isActive: true, parentDepartmentId: 'level4' };
+              : {
+                  id: 'deep-parent',
+                  isActive: true,
+                  parentDepartmentId: 'level4',
+                };
           }
           if (options?.where?.id === 'level4')
             return { id: 'level4', parentDepartmentId: 'level3' };
@@ -602,12 +603,9 @@ describe('DepartmentsService', () => {
       em.update.mockResolvedValue(undefined as any);
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
 
-      await service.updateDepartment(
-        'd1',
-        { isActive: false },
-        'updater-id',
-        { ipAddress: '127.0.0.1' },
-      );
+      await service.updateDepartment('d1', { isActive: false }, 'updater-id', {
+        ipAddress: '127.0.0.1',
+      });
 
       expect(em.save).toHaveBeenCalled();
     });

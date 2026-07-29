@@ -14,9 +14,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * DATA: CHI ghi `permissions` + `role_permissions` — KHONG dung schema (khong them cot
  * `deleted_by`, khong doi FK/ON DELETE cua cac bang tham chieu `zones`).
  */
-export class SeedZoneDeletePermission20260722000003
-  implements MigrationInterface
-{
+export class SeedZoneDeletePermission20260722000003 implements MigrationInterface {
   name = 'SeedZoneDeletePermission20260722000003';
 
   private readonly permission = {

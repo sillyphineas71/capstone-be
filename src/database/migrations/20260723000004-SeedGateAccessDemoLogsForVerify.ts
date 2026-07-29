@@ -34,9 +34,7 @@ const ZONE_CODE = 'TEST-GATE-01';
  * CHỈ dùng để verify thủ công — `down()` xóa sạch đúng batch này (và zone test nếu không
  * còn tham chiếu nào khác), an toàn dọn dẹp sau khi verify xong.
  */
-export class SeedGateAccessDemoLogsForVerify20260723000004
-  implements MigrationInterface
-{
+export class SeedGateAccessDemoLogsForVerify20260723000004 implements MigrationInterface {
   name = 'SeedGateAccessDemoLogsForVerify20260723000004';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -59,34 +57,134 @@ export class SeedGateAccessDemoLogsForVerify20260723000004
 
     const rows: DemoLogRow[] = [
       // ── Case A: 5 cặp ghép theo user_id (10 dòng) ──
-      { userCode: emp1, plateNumber: '30A12345', direction: 'in', accessTime: '2026-07-20T07:55:00+07:00' },
-      { userCode: emp1, plateNumber: '30A12345', direction: 'out', accessTime: '2026-07-20T17:10:00+07:00' },
-      { userCode: emp2, plateNumber: '29H167890', direction: 'in', accessTime: '2026-07-20T08:02:00+07:00' },
-      { userCode: emp2, plateNumber: '29H167890', direction: 'out', accessTime: '2026-07-20T17:30:00+07:00' },
-      { userCode: emp3, plateNumber: null, direction: 'in', accessTime: '2026-07-21T07:40:00+07:00' },
-      { userCode: emp3, plateNumber: null, direction: 'out', accessTime: '2026-07-21T18:05:00+07:00' },
-      { userCode: emp4, plateNumber: '29G123456', direction: 'in', accessTime: '2026-07-21T08:15:00+07:00' },
-      { userCode: emp4, plateNumber: '29G123456', direction: 'out', accessTime: '2026-07-21T17:45:00+07:00' },
-      { userCode: emp5, plateNumber: null, direction: 'in', accessTime: '2026-07-22T07:50:00+07:00' },
-      { userCode: emp5, plateNumber: null, direction: 'out', accessTime: '2026-07-22T17:20:00+07:00' },
+      {
+        userCode: emp1,
+        plateNumber: '30A12345',
+        direction: 'in',
+        accessTime: '2026-07-20T07:55:00+07:00',
+      },
+      {
+        userCode: emp1,
+        plateNumber: '30A12345',
+        direction: 'out',
+        accessTime: '2026-07-20T17:10:00+07:00',
+      },
+      {
+        userCode: emp2,
+        plateNumber: '29H167890',
+        direction: 'in',
+        accessTime: '2026-07-20T08:02:00+07:00',
+      },
+      {
+        userCode: emp2,
+        plateNumber: '29H167890',
+        direction: 'out',
+        accessTime: '2026-07-20T17:30:00+07:00',
+      },
+      {
+        userCode: emp3,
+        plateNumber: null,
+        direction: 'in',
+        accessTime: '2026-07-21T07:40:00+07:00',
+      },
+      {
+        userCode: emp3,
+        plateNumber: null,
+        direction: 'out',
+        accessTime: '2026-07-21T18:05:00+07:00',
+      },
+      {
+        userCode: emp4,
+        plateNumber: '29G123456',
+        direction: 'in',
+        accessTime: '2026-07-21T08:15:00+07:00',
+      },
+      {
+        userCode: emp4,
+        plateNumber: '29G123456',
+        direction: 'out',
+        accessTime: '2026-07-21T17:45:00+07:00',
+      },
+      {
+        userCode: emp5,
+        plateNumber: null,
+        direction: 'in',
+        accessTime: '2026-07-22T07:50:00+07:00',
+      },
+      {
+        userCode: emp5,
+        plateNumber: null,
+        direction: 'out',
+        accessTime: '2026-07-22T17:20:00+07:00',
+      },
 
       // ── Case B: 2 cặp ghép qua fallback plate_number (user_id NULL) (4 dòng) ──
-      { userCode: null, plateNumber: 'SEEDTEST01', direction: 'in', accessTime: '2026-07-20T09:00:00+07:00' },
-      { userCode: null, plateNumber: 'SEEDTEST01', direction: 'out', accessTime: '2026-07-20T16:00:00+07:00' },
-      { userCode: null, plateNumber: 'SEEDTEST02', direction: 'in', accessTime: '2026-07-21T09:10:00+07:00' },
-      { userCode: null, plateNumber: 'SEEDTEST02', direction: 'out', accessTime: '2026-07-21T16:20:00+07:00' },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST01',
+        direction: 'in',
+        accessTime: '2026-07-20T09:00:00+07:00',
+      },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST01',
+        direction: 'out',
+        accessTime: '2026-07-20T16:00:00+07:00',
+      },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST02',
+        direction: 'in',
+        accessTime: '2026-07-21T09:10:00+07:00',
+      },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST02',
+        direction: 'out',
+        accessTime: '2026-07-21T16:20:00+07:00',
+      },
 
       // ── Case C (EX1): "Vào" đơn lẻ, không bao giờ có "Ra" (2 dòng) ──
-      { userCode: emp6, plateNumber: 'SEEDTEST03', direction: 'in', accessTime: '2026-07-19T08:00:00+07:00' },
-      { userCode: null, plateNumber: 'SEEDTEST04', direction: 'in', accessTime: '2026-07-19T08:30:00+07:00' },
+      {
+        userCode: emp6,
+        plateNumber: 'SEEDTEST03',
+        direction: 'in',
+        accessTime: '2026-07-19T08:00:00+07:00',
+      },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST04',
+        direction: 'in',
+        accessTime: '2026-07-19T08:30:00+07:00',
+      },
 
       // ── Case D (EX2): "Ra" đơn lẻ, không có "Vào" trong 24h trước (1 dòng) ──
-      { userCode: null, plateNumber: 'SEEDTEST05', direction: 'out', accessTime: '2026-07-22T20:00:00+07:00' },
+      {
+        userCode: null,
+        plateNumber: 'SEEDTEST05',
+        direction: 'out',
+        accessTime: '2026-07-22T20:00:00+07:00',
+      },
 
       // ── Case E (BR1 FIFO): 2 "Vào" cùng user + 1 "Ra" → phải ghép ứng viên GẦN NHẤT (3 dòng) ──
-      { userCode: emp1, plateNumber: '30A12345', direction: 'in', accessTime: '2026-07-22T07:00:00+07:00' },
-      { userCode: emp1, plateNumber: '30A12345', direction: 'in', accessTime: '2026-07-22T07:50:00+07:00' },
-      { userCode: emp1, plateNumber: '30A12345', direction: 'out', accessTime: '2026-07-22T08:10:00+07:00' },
+      {
+        userCode: emp1,
+        plateNumber: '30A12345',
+        direction: 'in',
+        accessTime: '2026-07-22T07:00:00+07:00',
+      },
+      {
+        userCode: emp1,
+        plateNumber: '30A12345',
+        direction: 'in',
+        accessTime: '2026-07-22T07:50:00+07:00',
+      },
+      {
+        userCode: emp1,
+        plateNumber: '30A12345',
+        direction: 'out',
+        accessTime: '2026-07-22T08:10:00+07:00',
+      },
     ];
 
     for (const r of rows) {

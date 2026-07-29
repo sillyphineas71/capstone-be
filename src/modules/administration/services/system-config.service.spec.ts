@@ -144,11 +144,7 @@ describe('SystemConfigService (BE-09)', () => {
         updatedAt: new Date(),
       }));
 
-      const result = await service.upsert(
-        'grace_minutes',
-        '7',
-        'admin-1',
-      );
+      const result = await service.upsert('grace_minutes', '7', 'admin-1');
 
       expect(em.create).toHaveBeenCalledWith(
         expect.anything(),
@@ -168,11 +164,7 @@ describe('SystemConfigService (BE-09)', () => {
       qb.getMany.mockResolvedValue([existing]);
       em.save.mockImplementation((_e: any, entity: any) => entity);
 
-      const result = await service.upsert(
-        'grace_minutes',
-        '8',
-        'admin-2',
-      );
+      const result = await service.upsert('grace_minutes', '8', 'admin-2');
 
       expect(existing.versionNo).toBe(4);
       expect(existing.updatedBy).toBe('admin-2');

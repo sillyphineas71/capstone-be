@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * Format 3 tầng `module.entity.action` (mirror `zones.zone.read`). Idempotent hoàn toàn.
  */
-export class SeedGateAccessHistoryReadAllPermission20260723000002
-  implements MigrationInterface
-{
+export class SeedGateAccessHistoryReadAllPermission20260723000002 implements MigrationInterface {
   name = 'SeedGateAccessHistoryReadAllPermission20260723000002';
 
   private readonly permission = {

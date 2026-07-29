@@ -145,5 +145,3 @@ void loadDevModule; // suppress unused warning
   ],
 })
 export class AppModule {}
-
-

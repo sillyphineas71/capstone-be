@@ -6,7 +6,7 @@ import { LoginResponsePresenter } from './presenters/login-response.presenter';
 import { AuthAuditRepository } from './repositories/auth-audit.repository';
 import { AuthzReadRepository } from './repositories/authz-read.repository';
 import { UsersAuthRepository } from './repositories/users-auth.repository';
-import { AvatarStatusRawRepository } from './repositories/avatar-status-raw.repository';
+import { BiometricStatusRawRepository } from './repositories/biometric-status-raw.repository';
 import { UsersResetRepository } from './repositories/users-reset.repository';
 import { ResetAuditRepository } from './repositories/reset-audit.repository';
 import { UsersChangePasswordRepository } from './repositories/users-change-password.repository';
@@ -39,7 +39,7 @@ import { RefreshTokenService } from './services/refresh-token.service';
     LogoutService,
     LoginResponsePresenter,
     UsersAuthRepository,
-    AvatarStatusRawRepository,
+    BiometricStatusRawRepository,
     AuthzReadRepository,
     AuthAuditRepository,
     UsersResetRepository,

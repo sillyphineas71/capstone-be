@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `paired_log_id` là self-FK: nối bản ghi `in` với bản ghi `out` tương ứng.
  * Phụ thuộc: `zones`, `iot_devices`, `iot_device_events`, `users`, `vehicle_registrations`.
  */
-export class CreateGateAccessLogsTable20260721000004
-  implements MigrationInterface
-{
+export class CreateGateAccessLogsTable20260721000004 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "gate_access_logs" (

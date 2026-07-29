@@ -43,7 +43,8 @@ export class SeedDefaultSystemConfigs20260727000004 implements MigrationInterfac
       value: '5',
       valueType: 'number',
       group: 'no_show',
-      description: 'Thoi gian an han (dem nguoc canh bao) truoc khi giai phong phong',
+      description:
+        'Thoi gian an han (dem nguoc canh bao) truoc khi giai phong phong',
     },
     {
       key: 'is_early_release_enabled',

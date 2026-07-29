@@ -27,9 +27,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Cũng TÁCH 2 partial unique vì zone_id nullable (mirror bẫy NULL != NULL của
  * `alert_rules`, migration trước).
  */
-export class CreateSecurityAlertsTable20260722000007
-  implements MigrationInterface
-{
+export class CreateSecurityAlertsTable20260722000007 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "security_alerts" (

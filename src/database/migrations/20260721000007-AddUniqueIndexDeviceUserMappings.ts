@@ -19,9 +19,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   GROUP BY "device_id", "user_id"
  *   HAVING COUNT(*) > 1;
  */
-export class AddUniqueIndexDeviceUserMappings20260721000007
-  implements MigrationInterface
-{
+export class AddUniqueIndexDeviceUserMappings20260721000007 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE UNIQUE INDEX "UQ_device_user_mappings_active"

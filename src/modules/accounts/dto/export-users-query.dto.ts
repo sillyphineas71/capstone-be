@@ -27,7 +27,9 @@ export class ExportUsersQueryDto {
   roleId?: string;
 
   /** true → chỉ tài khoản accountStatus='locked'; false → chỉ 'active'; bỏ trống → không lọc. */
-  @Transform(({ value }) => (value === undefined ? undefined : value === 'true'))
+  @Transform(({ value }) =>
+    value === undefined ? undefined : value === 'true',
+  )
   @IsOptional()
   @IsBoolean({ message: 'locked phải là boolean' })
   locked?: boolean;

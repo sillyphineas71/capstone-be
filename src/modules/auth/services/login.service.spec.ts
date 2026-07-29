@@ -1,7 +1,7 @@
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
-import { AvatarStatusRawRepository } from '../repositories/avatar-status-raw.repository';
+import { BiometricStatusRawRepository } from '../repositories/biometric-status-raw.repository';
 import { LoginService } from './login.service';
 import { RateLimitService } from './rate-limit.service';
 import { TokenService } from './token.service';
@@ -35,9 +35,9 @@ describe('LoginService', () => {
     getRefreshTokenTtlSeconds: jest.fn(() => 604800),
     getAccessTokenTtlSeconds: jest.fn(() => 3600),
   } as unknown as AuthConfigService;
-  const avatarStatusRawRepository = {
+  const biometricStatusRawRepository = {
     getFaceProfileRows: jest.fn(),
-  } as unknown as AvatarStatusRawRepository;
+  } as unknown as BiometricStatusRawRepository;
 
   const service = new LoginService(
     usersAuthRepository,
@@ -46,7 +46,7 @@ describe('LoginService', () => {
     rateLimitService,
     tokenService,
     authConfigService,
-    avatarStatusRawRepository,
+    biometricStatusRawRepository,
   );
 
   beforeEach(() => {
@@ -55,7 +55,7 @@ describe('LoginService', () => {
       () => undefined,
     );
     (
-      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
     ).mockResolvedValue([]);
   });
 
@@ -165,12 +165,12 @@ describe('LoginService', () => {
     });
   });
 
-  // ── ACCT-AVATAR-SUBMIT-001 (BR-016): avatar fields trong login response ──
+  // ── ACCT-BIOMETRIC-SUBMIT-001 (BR-016): biometric fields trong login response ──
 
-  it('login response chứa avatarReviewStatus=approved khi user có row active (AC-006)', async () => {
+  it('login response chứa biometricReviewStatus=approved khi user có row active (AC-006)', async () => {
     mockActiveLogin();
     (
-      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
     ).mockResolvedValue([
       { status: 'active', lastUpdatedAt: null, enrolledAt: null },
     ]);
@@ -180,15 +180,15 @@ describe('LoginService', () => {
       {},
     );
 
-    expect(result.user.avatarReviewStatus).toBe('approved');
-    expect(result.user.avatarRequired).toBe(false);
-    expect(result.user.shouldShowAvatarPopup).toBe(false);
+    expect(result.user.biometricReviewStatus).toBe('approved');
+    expect(result.user.biometricRequired).toBe(false);
+    expect(result.user.shouldShowBiometricPopup).toBe(false);
   });
 
-  it('login response chứa avatarReviewStatus=not_uploaded khi user chưa có row (AC-001)', async () => {
+  it('login response chứa biometricReviewStatus=not_uploaded khi user chưa có row (AC-001)', async () => {
     mockActiveLogin();
     (
-      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
     ).mockResolvedValue([]);
 
     const result = await service.login(
@@ -196,14 +196,14 @@ describe('LoginService', () => {
       {},
     );
 
-    expect(result.user.avatarReviewStatus).toBe('not_uploaded');
-    expect(result.user.shouldShowAvatarPopup).toBe(true);
+    expect(result.user.biometricReviewStatus).toBe('not_uploaded');
+    expect(result.user.shouldShowBiometricPopup).toBe(true);
   });
 
-  it('login response chứa avatarReviewStatus=rejected khi user có row rejected (AC-004)', async () => {
+  it('login response chứa biometricReviewStatus=rejected khi user có row rejected (AC-004)', async () => {
     mockActiveLogin();
     (
-      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
     ).mockResolvedValue([
       { status: 'rejected', lastUpdatedAt: null, enrolledAt: null },
     ]);
@@ -213,14 +213,14 @@ describe('LoginService', () => {
       {},
     );
 
-    expect(result.user.avatarReviewStatus).toBe('rejected');
-    expect(result.user.shouldShowAvatarPopup).toBe(true);
+    expect(result.user.biometricReviewStatus).toBe('rejected');
+    expect(result.user.shouldShowBiometricPopup).toBe(true);
   });
 
-  it('login KHÔNG fail khi đọc avatar status lỗi → fallback not_uploaded (resilience)', async () => {
+  it('login KHÔNG fail khi đọc biometric status lỗi → fallback not_uploaded (resilience)', async () => {
     mockActiveLogin();
     (
-      avatarStatusRawRepository.getFaceProfileRows as jest.Mock
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
     ).mockRejectedValue(new Error('db down'));
 
     const result = await service.login(
@@ -229,6 +229,6 @@ describe('LoginService', () => {
     );
 
     expect(result.accessToken).toBe('access');
-    expect(result.user.avatarReviewStatus).toBe('not_uploaded');
+    expect(result.user.biometricReviewStatus).toBe('not_uploaded');
   });
 });

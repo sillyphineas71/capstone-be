@@ -27,7 +27,9 @@ export enum NotificationType {
   ACCOUNT_WELCOME = 'account_welcome',
   MEETING_TIME_WARNING = 'meeting_time_warning',
   MEETING_TIME_CONFLICT_WARNING = 'meeting_time_conflict_warning',
-  AVATAR_REJECTED = 'avatar_rejected',
+  // [SỬA 2026-07-29] Đổi từ AVATAR_REJECTED — luồng bị từ chối là sinh trắc học, không
+  // phải avatar hiển thị. Xem spec/features/account/feat-split-avatar-and-biometric/plan.md.
+  BIOMETRIC_REJECTED = 'biometric_rejected',
   // T029: transcript (draft) đã sẵn sàng cho Host review.
   TRANSCRIPT_READY = 'transcript_ready',
   MINUTES_DELETED_BY_ADMIN = 'minutes_deleted_by_admin',

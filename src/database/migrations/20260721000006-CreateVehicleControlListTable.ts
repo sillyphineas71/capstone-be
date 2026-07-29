@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * - `plate_raw` giữ biển gốc admin nhập (hiển thị).
  * Mirror pattern soft-delete của `vehicle_registrations`.
  */
-export class CreateVehicleControlListTable20260721000006
-  implements MigrationInterface
-{
+export class CreateVehicleControlListTable20260721000006 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       CREATE TABLE "vehicle_control_list" (
@@ -47,7 +45,9 @@ export class CreateVehicleControlListTable20260721000006
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX "IDX_vehicle_control_lookup"`);
-    await queryRunner.query(`DROP INDEX "UQ_vehicle_control_plate_type_active"`);
+    await queryRunner.query(
+      `DROP INDEX "UQ_vehicle_control_plate_type_active"`,
+    );
     await queryRunner.query(`DROP TABLE "vehicle_control_list"`);
   }
 }

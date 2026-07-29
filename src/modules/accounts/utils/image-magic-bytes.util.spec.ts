@@ -1,7 +1,7 @@
 import { detectImageMimeType } from './image-magic-bytes.util.js';
 
 /**
- * ACCT-AVATAR-SUBMIT-001 — Unit test cho detectImageMimeType (VL-02 / FR-015).
+ * ACCT-BIOMETRIC-SUBMIT-001 — Unit test cho detectImageMimeType (VL-02 / FR-015).
  * Trace: AC-008.
  */
 describe('detectImageMimeType (magic bytes)', () => {

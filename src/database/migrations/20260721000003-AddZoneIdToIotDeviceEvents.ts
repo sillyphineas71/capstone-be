@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Index (zone_id, event_time DESC) phục vụ truy vấn timeline event theo zone.
  * Phụ thuộc: 20260721000001-CreateZonesTable phải chạy trước.
  */
-export class AddZoneIdToIotDeviceEvents20260721000003
-  implements MigrationInterface
-{
+export class AddZoneIdToIotDeviceEvents20260721000003 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       ALTER TABLE "iot_device_events" ADD COLUMN "zone_id" uuid

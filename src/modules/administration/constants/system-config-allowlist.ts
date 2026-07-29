@@ -45,7 +45,8 @@ export const SYSTEM_CONFIG_ALLOWLIST: readonly SystemConfigAllowlistEntry[] = [
     key: 'grace_minutes',
     valueType: SystemConfigValueType.NUMBER,
     configGroup: 'no_show',
-    description: 'Thời gian ân hạn (đếm ngược cảnh báo) trước khi giải phóng phòng',
+    description:
+      'Thời gian ân hạn (đếm ngược cảnh báo) trước khi giải phóng phòng',
     min: 1,
     max: 120,
     defaultValue: '5',

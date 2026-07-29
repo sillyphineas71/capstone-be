@@ -14,8 +14,8 @@ import { LoginDto } from '../dto/login.dto';
 import { AuthAuditRepository } from '../repositories/auth-audit.repository';
 import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
-import { AvatarStatusRawRepository } from '../repositories/avatar-status-raw.repository';
-import { resolveAvatarReviewStatus } from '../../../common/utils/avatar-status-resolver.util';
+import { BiometricStatusRawRepository } from '../repositories/biometric-status-raw.repository';
+import { resolveBiometricReviewStatus } from '../../../common/utils/biometric-status-resolver.util';
 import {
   AuthUserSummary,
   LoginSuccessData,
@@ -37,7 +37,7 @@ export class LoginService {
     private readonly rateLimitService: RateLimitService,
     private readonly tokenService: TokenService,
     private readonly authConfigService: AuthConfigService,
-    private readonly avatarStatusRawRepository: AvatarStatusRawRepository,
+    private readonly biometricStatusRawRepository: BiometricStatusRawRepository,
   ) {}
 
   async login(
@@ -162,21 +162,21 @@ export class LoginService {
       );
     }
 
-    // ACCT-AVATAR-SUBMIT-001 (BR-016): tính trạng thái avatar cho login response.
-    // Resilient: lỗi đọc avatar status KHÔNG làm fail login (avatar không chặn đăng nhập).
-    let avatarReview = {
-      avatarReviewStatus: 'not_uploaded' as const,
-      avatarRequired: true,
-      shouldShowAvatarPopup: true,
-    } as ReturnType<typeof resolveAvatarReviewStatus>;
+    // ACCT-BIOMETRIC-SUBMIT-001 (BR-016): tính trạng thái sinh trắc học cho login response.
+    // Resilient: lỗi đọc biometric status KHÔNG làm fail login (không chặn đăng nhập).
+    let biometricReview = {
+      biometricReviewStatus: 'not_uploaded' as const,
+      biometricRequired: true,
+      shouldShowBiometricPopup: true,
+    } as ReturnType<typeof resolveBiometricReviewStatus>;
     try {
-      const rows = await this.avatarStatusRawRepository.getFaceProfileRows(
+      const rows = await this.biometricStatusRawRepository.getFaceProfileRows(
         user.id,
       );
-      avatarReview = resolveAvatarReviewStatus(rows);
+      biometricReview = resolveBiometricReviewStatus(rows);
     } catch (error) {
       this.logger.warn(
-        `Failed to resolve avatar review status for user ${user.id}; defaulting to not_uploaded.`,
+        `Failed to resolve biometric review status for user ${user.id}; defaulting to not_uploaded.`,
         error instanceof Error ? error.stack : undefined,
       );
     }
@@ -186,9 +186,9 @@ export class LoginService {
       email: user.email,
       fullName: user.fullName,
       avatarUrl: user.avatarUrl,
-      avatarReviewStatus: avatarReview.avatarReviewStatus,
-      avatarRequired: avatarReview.avatarRequired,
-      shouldShowAvatarPopup: avatarReview.shouldShowAvatarPopup,
+      biometricReviewStatus: biometricReview.biometricReviewStatus,
+      biometricRequired: biometricReview.biometricRequired,
+      shouldShowBiometricPopup: biometricReview.shouldShowBiometricPopup,
       departmentId: user.departmentId,
       roles: authz.roles,
       permissions: authz.permissions,

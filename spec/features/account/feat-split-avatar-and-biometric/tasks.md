@@ -3,7 +3,8 @@
 | Ngay cap nhat | Tom tat thay doi | Cac dong thay doi |
 | :--- | :--- | :--- |
 | 2026-07-29 | Khoi tao task list chi tiet cho viec tach avatar/biometric | Toan bo tai lieu |
-| 2026-07-29 | T08-T11 DA HOAN THANH (tang spec, chua dung toi code): rename folder `feat-user-avatar-submission-reminder` -> `feat-user-biometric-submission-reminder` (git mv); sua noi dung 4 file spec theo dung muc tieu tung task; them dinh nghia `getActivePortraitBytes` vao T11. T01-T07 (code) VAN CHUA lam. | T08, T09, T10, T11 (danh dau DONE), muc "Trang thai" moi trong tung task |
+| 2026-07-29 | T08-T11 DA HOAN THANH (tang spec, chua dung toi code): rename folder `feat-user-avatar-submission-reminder` -> `feat-user-biometric-submission-reminder` (git mv); sua noi dung 4 file spec theo dung muc tieu tung task. | T08, T09, T10, T11 (danh dau DONE), muc "Trang thai" moi trong tung task |
+| 2026-07-29 | T01-T07, T12 DA HOAN THANH (tang code). Phat hien khi code T03: BUG-01 KHONG CON TON TAI (da vao truoc do o commit `b2c34ce`/FPB-001, 2026-06-30) — dinh chinh lai T10/T11 (bo `getActivePortraitBytes`, dung thang `getPortraitBytes` da loc status). Da git mv + sua noi dung 20 file (controller/service/dto/filter/pipe/util) rename avatar->biometric; xoa auto-sync `users.avatar_url` khoi approve; them `AvatarPhotoController/Service` moi (POST /api/v1/me/avatar). Build + lint (chi file da sua) + 104 unit test lien quan deu xanh. | Toan bo T01-T07, T12 |
 
 ---
 
@@ -11,27 +12,28 @@
 
 Tham chieu: `plan.md` cung thu muc. Danh sach nay liet ke chinh xac tung viec, co the giao rieng le.
 
-## T01 — Migration: rename permission code (avatar → biometric)
+## T01 — Migration: rename permission code (avatar → biometric) [✅ DONE 2026-07-29]
 
 - File moi: `src/database/migrations/<timestamp>-RenameAvatarPermissionsToBiometric.ts`
 - Nội dung: xem `plan.md` §3.1. Viết `up()`/`down()` đối xứng, kiểm tra tồn tại trước khi update (idempotent).
 - Phụ thuộc: không.
 - Rủi ro: nếu code cũ (chưa rename ở T04-T06) vẫn đang dùng string `'account.avatar.review'` để check permission thì sẽ gãy 403 ngay sau khi chạy migration này — **phải deploy cùng lúc với T04-T06**, không tách rời.
 
-## T02 — Migration: seed permission avatar mới
+## T02 — Migration: seed permission avatar mới [✅ DONE 2026-07-29]
 
 - File mới: `src/database/migrations/<timestamp>-SeedAvatarPhotoUpdatePermission.ts`
 - Nội dung: xem `plan.md` §3.2.
 - Phụ thuộc: không.
 
-## T03 — Vá BUG-01 (face-provisioning chưa gate theo status active)
+## T03 — Vá BUG-01 (face-provisioning chưa gate theo status active) [❌ KHÔNG CẦN LÀM — ĐÍNH CHÍNH 2026-07-29]
 
-- Sửa `src/modules/accounts/services/face-profile.service.ts`: thêm method mới lấy portrait chỉ khi `status = 'active'` (tên gợi ý `getActivePortraitBytes`).
-- Sửa `src/modules/face-access/services/face-provisioning.service.ts` dòng ~160: đổi call từ `getPortraitBytes` sang method mới.
-- Sửa `src/modules/face-access/services/face-provisioning.service.spec.ts`: cập nhật mock tương ứng.
-- Trước khi sửa: kiểm tra còn call site nào khác dùng `getPortraitBytes(userId)` không (nếu không còn, có thể đổi tên/inline luôn thay vì thêm method song song).
+**Kết luận sau khi verify bằng `git log -S "R2 + VAL-01" -- src/modules/accounts/services/face-profile.service.ts`**: BUG-01 KHÔNG tồn tại trong code thật. `FaceProfileService.getPortraitBytes(userId)` đã lọc `status = 'active'` từ TRƯỚC, tại commit `b2c34ce` ("fix(accounts): getPortraitBytes lấy ảnh ACTIVE từ Cloudinary cho IVSS enroll (FPB-001)", 2026-06-30) — trước cả khi feature tách avatar/biometric này bắt đầu. `face-provisioning.service.ts` gọi đúng `getPortraitBytes` (đã an toàn), test `face-profile.service.spec.ts` đã có case cho hành vi lọc status.
 
-## T04 — Rename luồng self-service submission (avatar → biometric)
+**KHÔNG tạo method `getActivePortraitBytes`** — sẽ là trùng lặp vô nghĩa với `getPortraitBytes` đã đúng. Việc duy nhất cần làm là sửa 2 spec `feat-meeting-face-provisioning`/`feat-portrait-enrollment` cho khớp thực tế — đã làm (xem changelog 2 file, mục "ĐÍNH CHÍNH 2026-07-29").
+
+Bài học: khi khảo sát ban đầu (agent Explore), báo cáo dựa trên đọc spec.md cũ thay vì code thật — trước khi tin bug report từ spec, phải verify lại bằng code/git log.
+
+## T04 — Rename luồng self-service submission (avatar → biometric) [✅ DONE 2026-07-29]
 
 File cần đổi tên + nội dung (theo `plan.md` §5):
 - `controllers/avatar.controller.ts` + `.spec.ts`
@@ -50,13 +52,13 @@ File cần đổi tên + nội dung (theo `plan.md` §5):
 
 Đổi audit action: `avatar.upload` → `biometric.upload`, `avatar.reupload` → `biometric.reupload`.
 
-## T04b — Đổi field response (login + status)
+## T04b — Đổi field response (login + status) [✅ DONE 2026-07-29]
 
 - Response `GET /api/v1/me/biometric-status` và object `user` trong `POST /api/v1/auth/login`: `avatarReviewStatus` → `biometricReviewStatus`, `avatarRequired` → `biometricRequired`, `shouldShowAvatarPopup` → `shouldShowBiometricPopup`.
 - Field `avatarUrl`: **giữ nguyên tên**, nhưng đổi nguồn — không còn tính từ `face_profiles`, chỉ đọc thẳng `users.avatar_url` (sau T07, field này chỉ được ghi bởi luồng avatar mới).
 - Sửa raw SQL trong `auth` module (theo ADR-001, không refactor sang TypeORM) tương ứng.
 
-## T05 — Rename luồng admin review (avatar → biometric)
+## T05 — Rename luồng admin review (avatar → biometric) [✅ DONE 2026-07-29]
 
 File cần đổi tên + nội dung (theo `plan.md` §5):
 - `controllers/admin-avatar-review.controller.ts`
@@ -78,13 +80,13 @@ File cần đổi tên + nội dung (theo `plan.md` §5):
 
 Đổi notification type: `avatar_rejected` → `biometric_rejected`.
 
-## T06 — Xoá auto-sync `users.avatar_url` khỏi approve (admin-biometric-review.service.ts)
+## T06 — Xoá auto-sync `users.avatar_url` khỏi approve (admin-biometric-review.service.ts) [✅ DONE 2026-07-29]
 
 - Xoá bước "UPDATE users SET avatar_url = ..." khỏi transaction approve.
 - Xoá `avatarUrlUpdated: true` khỏi `new_value_json` của audit `biometric.approve`.
 - Cập nhật test tương ứng (không còn assert `users.avatar_url` thay đổi sau approve).
 
-## T07 — Code mới: luồng avatar thật
+## T07 — Code mới: luồng avatar thật [✅ DONE 2026-07-29 — AvatarPhotoController/Service]
 
 - Tạo `src/modules/accounts/controllers/avatar-photo.controller.ts`, `services/avatar-photo.service.ts`, `dto/update-avatar-photo.dto.ts`, `dto/avatar-photo-response.dto.ts` theo `plan.md` §7.
 - Endpoint: `POST /api/v1/me/avatar`, permission `profile.avatar.update`.
@@ -135,7 +137,7 @@ Thực hiện SAU T01-T06 để nội dung spec khớp code thật:
 2. Không đổi tên feature/endpoint (đã đúng bản chất "portrait"/"face-profile" từ đầu).
 3. Thêm dòng changelog đầu file.
 
-## T12 — Kiểm tra hồi quy sau toàn bộ thay đổi
+## T12 — Kiểm tra hồi quy sau toàn bộ thay đổi [✅ DONE 2026-07-29 — build sạch, lint sạch (file mới/sửa), 104 unit test liên quan pass]
 
 - `npm run lint`
 - `npm run test` (tập trung `accounts`, `face-access`)
