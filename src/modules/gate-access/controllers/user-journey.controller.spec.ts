@@ -1,0 +1,62 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
+import { UserJourneyController } from './user-journey.controller.js';
+import { UserJourneyService } from '../services/user-journey.service.js';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { PERMISSIONS_KEY } from '../../auth/decorators/require-permissions.decorator.js';
+
+describe('UserJourneyController (UJN-001)', () => {
+  let controller: UserJourneyController;
+  let serviceMock: any;
+
+  // Dựng controller bằng `new` (mirror vehicle-registration.controller.spec.ts:30) —
+  // KHÔNG qua Test.createTestingModule vì guard cần cả cây DI thật (JwtService,
+  // RedisService...), trong khi ta chỉ cần kiểm metadata guard/permission.
+  beforeEach(() => {
+    serviceMock = {
+      getUserJourney: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        fullName: 'Bui Van Long',
+        date: '2026-07-29',
+        events: [],
+        gateCount: 0,
+        meetingCount: 0,
+        zoneCount: 0,
+      }),
+    };
+    controller = new UserJourneyController(
+      serviceMock as unknown as UserJourneyService,
+    );
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('trả envelope chuẩn {success, message, data}', async () => {
+    const r = await controller.userJourney({
+      userId: 'u1',
+      date: '2026-07-29',
+    } as any);
+    expect(r.success).toBe(true);
+    expect(r.message).toBe('User journey retrieved');
+    expect(r.data.fullName).toBe('Bui Van Long');
+    expect(serviceMock.getUserJourney).toHaveBeenCalledWith('u1', '2026-07-29');
+  });
+
+  it('truyền date=undefined khi client không gửi (service tự lấy hôm nay giờ VN)', async () => {
+    await controller.userJourney({ userId: 'u1' } as any);
+    expect(serviceMock.getUserJourney).toHaveBeenCalledWith('u1', undefined);
+  });
+
+  // ── Permission: user thiếu quyền sẽ bị PermissionsGuard chặn (403) ──
+  it('admin-gate THẬT: JwtAuthGuard + PermissionsGuard + @RequirePermissions(zones.gate_log.read)', () => {
+    const guards =
+      Reflect.getMetadata('__guards__', controller.userJourney) ?? [];
+    expect(guards).toContain(JwtAuthGuard);
+    expect(guards).toContain(PermissionsGuard);
+
+    const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.userJourney);
+    // Quyền này ĐÃ seed cho BUSINESS_ADMIN + MANAGER + SYSTEM_ADMIN (kiểm role_permissions
+    // trên DB thật). KHÔNG dùng gate_access.* vì chưa chắc có ở mọi môi trường ⇒ tránh 403.
+    expect(perms).toEqual(['zones.gate_log.read']);
+  });
+});

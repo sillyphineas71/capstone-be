@@ -6,6 +6,8 @@ import { GateAccessHistoryService } from './services/gate-access-history.service
 import { VehicleTrafficStatsService } from './services/vehicle-traffic-stats.service.js';
 import { GateAccessHistoryController } from './controllers/gate-access-history.controller.js';
 import { VehicleTrafficStatsController } from './controllers/vehicle-traffic-stats.controller.js';
+import { UserJourneyController } from './controllers/user-journey.controller.js';
+import { UserJourneyService } from './services/user-journey.service.js';
 
 /**
  * GateAccessModule (Bước 2 SAVP: GAP-001/UC-116 + GAH-001/UC-117 + VTS-001/UC-114) — logic
@@ -24,8 +26,17 @@ import { VehicleTrafficStatsController } from './controllers/vehicle-traffic-sta
  */
 @Module({
   imports: [TypeOrmModule.forFeature([GateAccessLogEntity]), AuthModule],
-  controllers: [GateAccessHistoryController, VehicleTrafficStatsController],
-  providers: [GateAccessHistoryService, VehicleTrafficStatsService],
+  controllers: [
+    GateAccessHistoryController,
+    VehicleTrafficStatsController,
+    // UJN-001: hành trình khuôn viên 1 người (prefix `campus`, ghép 3 nguồn).
+    UserJourneyController,
+  ],
+  providers: [
+    GateAccessHistoryService,
+    VehicleTrafficStatsService,
+    UserJourneyService,
+  ],
   // VehicleTrafficStatsService exported cho VehicleReportDataService (UC-128,
   // Bước 5 SAVP) gọi getStats() qua DI — KHÔNG fork logic, chỉ tái sử dụng.
   exports: [VehicleTrafficStatsService],
