@@ -44,6 +44,7 @@ import { GateAccessModule } from './modules/gate-access/gate-access.module';
 import { RestrictedZoneModule } from './modules/restricted-zone/restricted-zone.module';
 import { CampusDashboardModule } from './modules/campus-dashboard/campus-dashboard.module';
 import { CrowdAlertModule } from './modules/crowd-alert/crowd-alert.module';
+import { SearchModule } from './modules/search/search.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -123,6 +124,7 @@ void loadDevModule; // suppress unused warning
     RestrictedZoneModule, // Bước 3 SAVP (ARZ-001/UC-124): cron xâm nhập khu vực hạn chế
     CampusDashboardModule, // Bước 4 SAVP (CDB-001/UC-126, ZPT-001/UC-119, ZTH-001/UC-120): dashboard + timeline + heatmap khu vực
     CrowdAlertModule, // Bước 4 SAVP (ACR-001/UC-121): cron cảnh báo tụ tập đông người
+    SearchModule, // SRCH-01: tìm kiếm tổng hợp đa nguồn (zone/device/vehicle/user/meeting)
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],

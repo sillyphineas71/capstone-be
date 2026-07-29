@@ -91,4 +91,49 @@ export class CampusDashboardRepository {
     }
     return DEFAULT_STALENESS_MINUTES;
   }
+
+  /**
+   * CDB-RS-001 — occupancy mới nhất (event `count`) của MỌI zone active, dùng cho
+   * `business-admin-summary.zoneOccupancy` (tổng hợp toàn trường, khác `loadLatestCountEvent`
+   * vốn per-zone của UC-126). Trả kèm devices trong zone để gọi `resolveOccupancyStatus`.
+   */
+  async loadAllZonesWithLatestOccupancy(): Promise<
+    Array<{
+      zone: ZoneEntity;
+      latestEvent: ZonePresenceEventEntity | null;
+      devicesInZone: IoTDeviceEntity[];
+    }>
+  > {
+    const zones = await this.zoneRepo.find({ where: { deletedAt: IsNull() } });
+    if (zones.length === 0) return [];
+
+    const devices = await this.loadDevicesByZone(zones.map((z) => z.id));
+    const result: Array<{
+      zone: ZoneEntity;
+      latestEvent: ZonePresenceEventEntity | null;
+      devicesInZone: IoTDeviceEntity[];
+    }> = [];
+    for (const zone of zones) {
+      const latestEvent = await this.loadLatestCountEvent(zone.id);
+      result.push({
+        zone,
+        latestEvent,
+        devicesInZone: devices.filter((d) => d.zoneId === zone.id),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * CDB-RS-001 — biến thể KHÔNG filter `zoneId` của `countGateLogsToday`, dùng cho
+   * `business-admin-summary.gateTrafficToday` (tổng toàn tổ chức, không theo từng zone).
+   */
+  async countGateLogsAllZonesToday(
+    direction: GateDirection,
+    startOfDay: Date,
+  ): Promise<number> {
+    return this.gateLogRepo.count({
+      where: { direction, accessTime: MoreThanOrEqual(startOfDay) },
+    });
+  }
 }
