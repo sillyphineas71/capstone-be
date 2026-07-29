@@ -23,6 +23,7 @@ category: face-access
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí / Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-17 | Khởi tạo spec FPE-001 (UC-17): StorageService.getFile (no-traversal); endpoint enroll portrait (FileInterceptor, validate mime/size, saveFile→media_files→face_profiles); FaceProfileService.getPortraitBytes cho Ticket B. KHÔNG migration. | Toàn bộ file (bản đầu) |
+| 2026-07-29 | Chốt NC-1 (xem mục 11): status sau enroll `pending_review` → Ticket B **PHẢI chờ duyệt** (KHÔNG dùng ngay), do phát hiện BUG-01 khi tách avatar/biometric (`spec/features/account/feat-split-avatar-and-biometric/plan.md`) — `getPortraitBytes` cũ không lọc theo status nên Ticket B từng dùng ảnh chưa duyệt. Thêm `getActivePortraitBytes(userId)` — chỉ trả bytes khi `face_profiles.status = 'active'` — cho Ticket B dùng thay `getPortraitBytes`. `getPortraitBytes` gốc (không lọc status) vẫn giữ lại nếu còn call site khác cần đọc portrait bất kể status (ví dụ chính endpoint enroll để trả preview) — Ticket B KHÔNG được gọi trực tiếp `getPortraitBytes` nữa. | Mục 5, FR-FPE-001-005, mục 11 (NC-1) |
 
 ---
 
@@ -104,14 +105,22 @@ getFile(storageKey: string): Buffer
 
 ---
 
-## 5. FaceProfileService.getPortraitBytes (cho Ticket B)
+## 5. FaceProfileService.getPortraitBytes / getActivePortraitBytes
 
 ```text
 getPortraitBytes(userId: string): Promise<Buffer | null>
 - face = repo.findOne({ where:{ userId } }); !face || !face.primaryImageFileId → null.
 - media = SELECT storage_key, storage_provider FROM media_files WHERE id=$1; none → null.
 - storage_provider != 'local' → null (Pha 1 local; S3 future).
-- return StorageService.getFile(storage_key).  (lỗi đọc → ném, B bọc try/catch.)
+- return StorageService.getFile(storage_key).  (lỗi đọc → ném, caller bọc try/catch.)
+- KHÔNG lọc theo `status` — trả bytes bất kể `pending_review`/`active`/`rejected`/`disabled`/`revoked`.
+
+getActivePortraitBytes(userId: string): Promise<Buffer | null>  [MỚI 2026-07-29 — vá BUG-01, cho Ticket B]
+- Giống getPortraitBytes, nhưng THÊM điều kiện face.status = 'active' trong query findOne
+  (repo.findOne({ where:{ userId, status: FaceProfileStatus.ACTIVE } })).
+- status khác 'active' (kể cả pending_review) → null, KHÔNG trả bytes.
+- Ticket B (`feat-meeting-face-provisioning`) SHALL dùng method này thay vì getPortraitBytes,
+  để đảm bảo chỉ ảnh ĐÃ ĐƯỢC DUYỆT mới được đẩy lên FaceGate.
 ```
 
 ---
@@ -124,6 +133,7 @@ FR-FPE-001-002: THE system SHALL cung cấp POST /api/v1/users/:userId/face-prof
 FR-FPE-001-003: IF mime ∉ {image/jpeg,image/png}, THEN 400 INVALID_FILE_TYPE; IF size > FACE_PORTRAIT_MAX_BYTES, THEN 400 FILE_TOO_LARGE; thiếu file → 400.
 FR-FPE-001-004: WHEN hợp lệ, THE system SHALL saveFile → tạo media_files (image/local) → upsert face_profiles (primary_image_file_id, status pending_review, enrolled_*, sample_count) → 201 envelope.
 FR-FPE-001-005: FaceProfileService SHALL cung cấp getPortraitBytes(userId) → Buffer khi có portrait local; null nếu không có profile/ảnh/non-local.
+FR-FPE-001-005b [MỚI 2026-07-29 — vá BUG-01]: FaceProfileService SHALL cung cấp getActivePortraitBytes(userId) → Buffer chỉ khi `face_profiles.status = 'active'`; mọi status khác (kể cả `pending_review`) → null. Ticket B (`feat-meeting-face-provisioning`) SHALL dùng method này, KHÔNG dùng getPortraitBytes trực tiếp.
 FR-FPE-001-006: Mọi query SHALL parameterized (SEC-03); KHÔNG migration (DATA-01).
 ```
 
@@ -148,6 +158,7 @@ AC-FPE-001-005 (getFile ok): getFile(storageKey hợp lệ) → Buffer.
 AC-FPE-001-006 (getFile traversal): getFile('../../etc/passwd') → ném; KHÔNG đọc ngoài localPath.
 AC-FPE-001-007 (getFile missing): file không tồn tại → ném.
 AC-FPE-001-008 (getPortraitBytes): có profile+ảnh → Buffer; không profile / không ảnh → null.
+AC-FPE-001-009 (getActivePortraitBytes — MỚI 2026-07-29, vá BUG-01): profile status='active' + có ảnh → Buffer; profile status='pending_review' (dù có ảnh) → null; profile status='rejected'/'disabled'/'revoked' → null; không profile → null.
 ```
 
 ## 9. Error Code Map
@@ -165,7 +176,7 @@ AC-FPE-001-008 (getPortraitBytes): có profile+ảnh → Buffer; không profile 
 
 ```text
 storage.service.spec (+getFile): đọc ok (mock fs.readFileSync) / traversal '../..' → ném (KHÔNG read) / file-missing → ném.
-face-profile.service.spec: enrollPortrait happy (saveFile→media insert→face upsert) / mime reject / size reject / upsert (profile có sẵn → update) ; getPortraitBytes (có profile+ảnh→bytes / không profile→null / không ảnh→null).
+face-profile.service.spec: enrollPortrait happy (saveFile→media insert→face upsert) / mime reject / size reject / upsert (profile có sẵn → update) ; getPortraitBytes (có profile+ảnh→bytes / không profile→null / không ảnh→null) ; [MỚI 2026-07-29] getActivePortraitBytes (status active→bytes / status pending_review→null / status rejected|disabled|revoked→null).
 face-profile.controller.spec: passthrough envelope + 400 khi thiếu file.
 ≥80% coverage.
 ```
@@ -175,7 +186,7 @@ face-profile.controller.spec: passthrough envelope + 400 khi thiếu file.
 ## 11. [NEEDS CLARIFICATION]
 | # | Vấn đề | Đề xuất |
 |---|---|---|
-| NC-1 | status sau enroll. | `pending_review` (đúng UC-17 contract); B có thể dùng portrait ngay hoặc chờ duyệt — chốt ở B. |
+| NC-1 | status sau enroll. | **[CHỐT 2026-07-29]** `pending_review` (đúng UC-17 contract). B **PHẢI CHỜ DUYỆT** — KHÔNG được dùng portrait ngay khi còn `pending_review`. Trước đây để mở ("B có thể dùng ngay hoặc chờ duyệt — chốt ở B"); trên thực tế B đã dùng ngay (không lọc status) — đây chính là BUG-01 phát hiện khi tách avatar/biometric (`feat-split-avatar-and-biometric/plan.md`). Đã vá bằng `getActivePortraitBytes` (mục 5, FR-FPE-001-005b) — chỉ trả bytes khi `status = 'active'`, tức đã qua duyệt tại `feat-admin-biometric-review-workflow`. |
 | NC-2 | Kiểm user tồn tại trước enroll. | Optional Pha 1 (FK sẽ chặn nếu user sai); có thể thêm check 404 USER_NOT_FOUND sau. |
 | NC-3 | Interceptor file limit vs env. | Interceptor đặt limit theo FACE_PORTRAIT_MAX_BYTES (đọc lúc decoration) + service double-check. |
 

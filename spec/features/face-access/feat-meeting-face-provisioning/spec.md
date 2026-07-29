@@ -13,7 +13,7 @@ category: face-access
 - **Source Documents**:
   - `spec/global/constitution.md` (SEC-03 parameterize; ARCH-02 no-hang; DATA-01 no migration)
   - `CLAUDE.md` (§11.3 adapter/port; §11.8 boundary; §19 background jobs)
-  - Ticket A `FaceDeviceProviderFactory.create(device)`; Ticket D `FaceProfileService.getPortraitBytes(userId)`
+  - Ticket A `FaceDeviceProviderFactory.create(device)`; Ticket D `FaceProfileService.getActivePortraitBytes(userId)` [SỬA 2026-07-29 — trước đây `getPortraitBytes`, xem BUG-01]
   - `src/modules/iot/entities/device-user-mapping.entity.ts`, `meetings/entities/meeting.entity.ts`, `meeting-participant.entity.ts`, `iot-device.entity.ts`
   - `src/modules/scheduler/scheduler.service.ts`
 
@@ -25,6 +25,7 @@ category: face-access
 | :--- | :--- | :--- |
 | 2026-06-17 | Khởi tạo spec FMP-001 (Ticket B): FaceProvisioningService (provision/deprovision/reconcile) qua factory+getPortraitBytes; idempotent per (user,device,bookingId); cron gated FACE_SYNC_ENABLED OFF. KHÔNG migration. | Toàn bộ file (bản đầu) |
 | 2026-06-18 | Gộp constraint-safety hardening (nguyên MCS-001) vào FMP-001 — hardening #46/#47, không phải UC mới. | Mục "Constraint-safety hardening" (cuối file) |
+| 2026-07-29 | BUG-FIX (phát hiện khi tách avatar/biometric, xem `spec/features/account/feat-split-avatar-and-biometric/plan.md` BUG-01): `getPortraitBytes(userId)` hiện được gọi và dùng ngay nếu != null, KHÔNG kiểm tra `face_profiles.status = 'active'` — nghĩa là ảnh `pending_review`/`rejected`/`disabled`/`revoked` vẫn có thể bị đẩy lên FaceGate trước khi được admin duyệt, vô hiệu hoá yêu cầu "bắt buộc phải duyệt trước khi dùng cho nhận diện". Thêm yêu cầu: chỉ dùng portrait khi `face_profiles.status = 'active'`. | Mục 3 (bước 3.c), FR-FMP-001-002, AC mới AC-FMP-001-010 |
 
 ---
 
@@ -55,7 +56,7 @@ Có Ticket A (đẩy/gỡ FaceGate qua port) + D (portrait bytes). **Ticket B** 
 | iot_devices | `IoTDeviceEntity`: `device_type='face_server'`, `room_id`. ⇒ device theo room: `WHERE room_id=$1 AND device_type='face_server'`. |
 | device_user_mappings | [device-user-mapping.entity.ts]: `device_id`, `user_id`, `device_person_id`(=uid), `device_person_code`/`device_person_name`(=uname), `face_registered`(bool), `registered_at`?, `sync_status`(def pending), `last_synced_at`?, `last_sync_error`?, `metadata_json`? (chứa bookingId+validity). ⇒ ghi đủ, KHÔNG cột mới. |
 | Ticket A | `FaceDeviceProviderFactory.create(device)` → port (uploadFace/addPerson/findUidByName/deletePerson), timeout sẵn (no-hang). |
-| Ticket D | `FaceProfileService.getPortraitBytes(userId): Buffer|null` (export từ AccountsModule). |
+| Ticket D | `FaceProfileService.getActivePortraitBytes(userId): Buffer|null` (export từ AccountsModule) — [SỬA 2026-07-29] chỉ trả bytes khi `face_profiles.status = 'active'`; thay thế `getPortraitBytes` cũ (không lọc theo status) — xem BUG-01. |
 | Scheduler | [scheduler.service.ts]: pattern `@Cron` + gate + per-item try/catch (như #31). Thêm job face-sync, gate FACE_SYNC_ENABLED. |
 
 ---
@@ -76,7 +77,7 @@ provisionMeeting(meeting):
   3. for each participant (try/catch per — RP):
      a. uname = `${userId}:${meetingId}`; bookingId = meetingId.
      b. IDEMPOTENCY: mapping (user_id, device_id, metadata.bookingId) sync_status='synced' → SKIP.
-     c. bytes = getPortraitBytes(userId); null → log + SKIP (không enroll).
+     c. [SỬA 2026-07-29 — vá BUG-01] bytes = getActivePortraitBytes(userId) — chỉ trả bytes khi user có `face_profiles` với `status = 'active'`; mọi status khác (`pending_review`/`rejected`/`disabled`/`revoked`) hoặc không có row nào → trả null. null → log + SKIP (không enroll). (Trước đây gọi `getPortraitBytes(userId)` không kiểm tra `status`, cho phép ảnh CHƯA duyệt bị đẩy lên FaceGate — xem BUG-01 tại `feat-split-avatar-and-biometric/plan.md`.)
      d. provider = factory.create(device).
      e. ref = await provider.uploadFace(bytes).
      f. await provider.addPerson({ uname, faceRef:ref, validFrom:start_time, validTo:end_time }).
@@ -121,7 +122,7 @@ reconcile(): (cron định kỳ)
 
 ```text
 FR-FMP-001-001: provisionMeeting SHALL tìm device face_server theo room; KHÔNG device → bỏ qua (log).
-FR-FMP-001-002: Mỗi participant SHALL getPortraitBytes; null → bỏ qua (log), KHÔNG enroll.
+FR-FMP-001-002 [SỬA 2026-07-29 — vá BUG-01]: Mỗi participant SHALL getActivePortraitBytes (chỉ trả bytes khi `face_profiles.status = 'active'`); null (không có portrait HOẶC portrait tồn tại nhưng chưa được duyệt: `pending_review`/`rejected`/`disabled`/`revoked`) → bỏ qua (log), KHÔNG enroll.
 FR-FMP-001-003: SHALL uploadFace → addPerson(validity=start..end) → findUidByName → upsert device_user_mappings (synced, uid, uname, metadata bookingId/validity).
 FR-FMP-001-004 (Idempotency): IF mapping (user,device,bookingId) đã 'synced', THEN SKIP (cron mỗi phút KHÔNG đẩy lại).
 FR-FMP-001-005 (Isolation): lỗi 1 participant → mapping 'failed' + last_sync_error; KHÔNG chặn participant khác (try/catch per).
@@ -153,6 +154,7 @@ AC-FMP-001-006 (deprovision): Given mapping synced của bookingId; When deprovi
 AC-FMP-001-007 (reconcile stale): Given mapping synced mà meeting đã kết thúc; When reconcile; Then deprovision.
 AC-FMP-001-008 (reconcile dedup): Given findUidByName trả nhiều uid; When reconcile; Then giữ 1, deletePerson còn lại.
 AC-FMP-001-009 (cron gate): Given FACE_SYNC_ENABLED=false; When tick; Then KHÔNG chạy provisioning.
+AC-FMP-001-010 (pending/rejected portrait — vá BUG-01, thêm 2026-07-29): Given participant có `face_profiles` nhưng `status` là `pending_review`, `rejected`, `disabled`, hoặc `revoked` (chưa có row nào `active`); When provisionMeeting; Then getActivePortraitBytes trả null, SKIP participant đó (KHÔNG uploadFace, KHÔNG addPerson, KHÔNG tạo/update mapping), giống hệt trường hợp không có portrait nào (AC-FMP-001-004).
 ```
 
 ## 8. Test Plan (Jest — mock factory/FaceProfileService/dataSource/scheduler)
@@ -160,7 +162,7 @@ AC-FMP-001-009 (cron gate): Given FACE_SYNC_ENABLED=false; When tick; Then KHÔN
 ```text
 provisioning.service.spec:
 - provision happy (upload→add→find→upsert mapping synced) ; idempotency skip ; isolation (1 lỗi không chặn) ;
-  portrait null skip ; no device skip.
+  portrait null skip ; no device skip ; [MỚI 2026-07-29] portrait pending_review/rejected/disabled/revoked → skip giống null (AC-FMP-001-010).
 - deprovision (del→removed) ; reconcile (stale→deprovision ; dedup→delete extra).
 scheduler: gate OFF → service không gọi ; ON → gọi (mock).
 ≥80%.
