@@ -38,14 +38,22 @@ interface UserRow {
 const FACE_EVENT_TYPE = 'ivss_face_event';
 
 /**
- * V2 — ngưỡng tách phiên có mặt (giây). Cùng CẤU HÌNH với luồng hiện diện họp:
- * `system_configs['ivss.presence.gap_threshold_seconds']`.
+ * V3 — ngưỡng tách phiên RIÊNG của journey. KHÔNG dùng chung với luồng hiện diện họp.
  *
- * ⚠ Chỉ giá trị MẶC ĐỊNH là khác: `ivss-presence-query.service.ts` fallback 120s, ở đây 300s
- * (timeline hành trình cả ngày thô hơn báo cáo hiện diện từng cuộc họp). Khi hàng config
- * TỒN TẠI thì cả hai đọc CÙNG một số ⇒ không lệch. Hiện DB kiểm chưa có hàng này.
+ * V2 từng tái dùng `ivss.presence.gap_threshold_seconds`. Test production cho thấy SAI:
+ * key đó = 120s, phục vụ báo cáo HỌP (cần mịn, đo chính xác vào/ra một cuộc họp). Áp vào
+ * timeline NGÀY thì một lần có mặt A102 17:39→17:50 — camera thấy mặt cách quãng 2–6 phút
+ * vì người ngẩng lên/quay đi — bị xé thành 4 phiên rời.
+ *
+ * Hai mục đích khác nhau ⇒ hai ngưỡng khác nhau:
+ *   ivss (họp):    120s — mịn.
+ *   journey (ngày): 600s — thô. Vắng mặt camera 5–10 phút vẫn là "đang ở đó";
+ *                   chỉ >10 phút mới coi là đã rời.
+ *
+ * ⚠ Đổi số ở đây KHÔNG ảnh hưởng ivss và ngược lại — đó là mục đích của việc tách key.
  */
-const DEFAULT_GAP_SECONDS = 300;
+const JOURNEY_GAP_CONFIG_KEY = 'campus.journey.gap_threshold_seconds';
+const DEFAULT_GAP_SECONDS = 600;
 
 /** "45 giây" / "9 phút" / "1 giờ 5 phút" — bản tiếng Việt cho `detail`.
  *
@@ -119,16 +127,22 @@ export class UserJourneyService {
   }
 
   /**
-   * Ngưỡng tách phiên: `system_configs['ivss.presence.gap_threshold_seconds']`.
+   * Ngưỡng tách phiên: `system_configs[campus.journey.gap_threshold_seconds]` — key RIÊNG
+   * của journey, xem {@link JOURNEY_GAP_CONFIG_KEY}. TUYỆT ĐỐI không đọc key của ivss.
+   *
    * Best-effort — bảng/hàng thiếu hoặc giá trị rác đều rơi về {@link DEFAULT_GAP_SECONDS},
    * KHÔNG làm hỏng cả timeline chỉ vì đọc config lỗi.
+   *
+   * TODO(nợ): cả hai key ngưỡng (`ivss.presence.*` và `campus.journey.*`) nên được seed
+   * bằng migration để không mất khi reset DB — cùng cụm nợ với channel maps.
    */
   private async getGapThresholdSeconds(): Promise<number> {
     try {
       const rows: ConfigRow[] = await this.dataSource.manager.query(
         `SELECT config_value FROM system_configs
-          WHERE config_key = 'ivss.presence.gap_threshold_seconds' AND is_active = true
+          WHERE config_key = $1 AND is_active = true
           LIMIT 1`,
+        [JOURNEY_GAP_CONFIG_KEY],
       );
       const raw = rows[0]?.config_value;
       if (raw != null) {

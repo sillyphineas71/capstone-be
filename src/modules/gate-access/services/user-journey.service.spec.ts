@@ -31,7 +31,7 @@ describe('UserJourneyService (UJN-001)', () => {
         return Promise.resolve(over.meeting ?? []);
       if (sql.includes('FROM zone_presence_events'))
         return Promise.resolve(over.zone ?? []);
-      // Không set `config` ⇒ [] ⇒ rơi về default 300s.
+      // Không set `config` ⇒ [] ⇒ rơi về default 600s (V3).
       if (sql.includes('FROM system_configs'))
         return Promise.resolve(over.config ?? []);
       return Promise.resolve([]);
@@ -268,7 +268,7 @@ describe('UserJourneyService (UJN-001)', () => {
 
   // ══ V2 — gộp phiên face + lọc rác ══════════════════════════════════════════
   describe('V2 — nguồn 2 gộp phiên có mặt', () => {
-    it('6 event cùng phòng cách nhau <300s → 1 phiên, durationMs = last-first, eventCount=6', async () => {
+    it('6 event cùng phòng cách nhau <600s → 1 phiên, durationMs = last-first, eventCount=6', async () => {
       wire({
         meeting: [
           face('2026-07-29T10:39:00.000Z', 'enter'),
@@ -296,14 +296,14 @@ describe('UserJourneyService (UJN-001)', () => {
       expect(r.events[0].detail).toBe('Có mặt Phòng A102 (9 phút)');
     });
 
-    it('2 cụm cùng phòng cách nhau >300s → 2 phiên riêng', async () => {
+    it('2 cụm cùng phòng cách nhau >600s → 2 phiên riêng', async () => {
       wire({
         meeting: [
           face('2026-07-29T10:00:00.000Z', 'enter'),
           face('2026-07-29T10:02:00.000Z'),
-          // gap 10 phút > 300s ⇒ cắt phiên
-          face('2026-07-29T10:12:00.000Z', 'enter'),
-          face('2026-07-29T10:14:00.000Z'),
+          // gap 11 phút (660s) > 600s ⇒ cắt phiên
+          face('2026-07-29T10:13:00.000Z', 'enter'),
+          face('2026-07-29T10:15:00.000Z'),
         ],
       });
 
@@ -312,8 +312,30 @@ describe('UserJourneyService (UJN-001)', () => {
       expect(r.meetingCount).toBe(2);
       expect(r.events.map((e) => [e.time, e.endTime, e.eventCount])).toEqual([
         ['2026-07-29T10:00:00.000Z', '2026-07-29T10:02:00.000Z', 2],
-        ['2026-07-29T10:12:00.000Z', '2026-07-29T10:14:00.000Z', 2],
+        ['2026-07-29T10:13:00.000Z', '2026-07-29T10:15:00.000Z', 2],
       ]);
+    });
+
+    // ── V3: ngưỡng 600s — hồi quy cho lỗi "xé 1 lần có mặt thành 4 phiên" ──
+    it('cụm cách nhau 6 phút (360s) < 600s → VẪN CÙNG phiên (V2/120s từng xé nhầm)', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:39:00.000Z', 'enter'),
+          face('2026-07-29T10:45:00.000Z'), // +6 phút
+          face('2026-07-29T10:48:00.000Z'), // +3 phút
+          face('2026-07-29T10:50:00.000Z'), // +2 phút
+        ],
+      });
+
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+
+      expect(r.meetingCount).toBe(1);
+      expect(r.events[0]).toMatchObject({
+        time: '2026-07-29T10:39:00.000Z',
+        endTime: '2026-07-29T10:50:00.000Z',
+        eventCount: 4,
+      });
+      expect(r.events[0].detail).toBe('Có mặt Phòng A102 (11 phút)');
     });
 
     it('đổi phòng dù sát giờ → 2 phiên (khoá gộp gồm cả roomId)', async () => {
@@ -399,8 +421,8 @@ describe('UserJourneyService (UJN-001)', () => {
       expect(r.events.map((e) => e.direction)).toEqual(['appear', 'disappear']);
     });
 
-    it('ngưỡng gộp lấy từ system_configs[ivss.presence.gap_threshold_seconds] (tái dùng key có sẵn)', async () => {
-      // Hạ ngưỡng còn 60s ⇒ 2 event cách 2 phút bị TÁCH (default 300s thì gộp).
+    it('ngưỡng gộp đọc từ config RIÊNG campus.journey.gap_threshold_seconds', async () => {
+      // Hạ ngưỡng còn 60s ⇒ 2 event cách 2 phút bị TÁCH (default 600s thì gộp).
       wire({
         config: [{ config_value: '60' }],
         meeting: [
@@ -409,13 +431,24 @@ describe('UserJourneyService (UJN-001)', () => {
         ],
       });
       const r = await service.getUserJourney(USER_ID, '2026-07-29');
-      expect(sqlOf('FROM system_configs').sql).toContain(
-        "config_key = 'ivss.presence.gap_threshold_seconds'",
+      expect(sqlOf('FROM system_configs').params[0]).toBe(
+        'campus.journey.gap_threshold_seconds',
       );
       expect(r.meetingCount).toBe(2);
     });
 
-    it('đọc config lỗi → rơi về default 300s, KHÔNG hỏng timeline', async () => {
+    // ── V3: hai luồng PHẢI độc lập ──
+    it('journey KHÔNG đọc key của ivss (ivss.presence.* giữ nguyên 120s cho báo cáo họp)', async () => {
+      wire();
+      await service.getUserJourney(USER_ID, '2026-07-29');
+      const q = sqlOf('FROM system_configs');
+      expect(q.sql).not.toContain('ivss.presence');
+      expect(q.params).not.toContain('ivss.presence.gap_threshold_seconds');
+      // Key phải bind tham số, không nhúng thẳng vào chuỗi SQL.
+      expect(q.sql).toContain('config_key = $1');
+    });
+
+    it('đọc config lỗi → rơi về default 600s, KHÔNG hỏng timeline', async () => {
       wire({
         meeting: [
           face('2026-07-29T10:00:00.000Z', 'enter'),
@@ -432,7 +465,7 @@ describe('UserJourneyService (UJN-001)', () => {
       );
 
       const r = await service.getUserJourney(USER_ID, '2026-07-29');
-      expect(r.meetingCount).toBe(1); // gộp theo default 300s
+      expect(r.meetingCount).toBe(1); // gộp theo default 600s
     });
 
     it('durationHuman: <60s / phút / giờ+phút / tròn giờ', async () => {
