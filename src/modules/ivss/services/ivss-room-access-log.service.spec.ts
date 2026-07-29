@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
@@ -116,12 +118,23 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
     expect(r.events[0].isStranger).toBe(true);
   });
 
-  it('SQL: lọc đúng event_type/room_id + biên ngày [date, date+1)', async () => {
+  it('SQL: lọc đúng event_type/room_id + biên ngày [date, date+1) THEO GIỜ VN', async () => {
     wire();
     await service.getRoomAccessLog(ROOM_ID, '2026-07-28');
     const q = captured.find((c) => c.sql.includes('FROM iot_device_events'))!;
-    expect(q.sql).toContain('e.event_time >= $2::date');
-    expect(q.sql).toContain("($2::date + interval '1 day')");
+    // ⚠ RDS chạy UTC — biên ngày PHẢI ép Asia/Ho_Chi_Minh, nếu không event buổi tối
+    // giờ VN rơi nhầm sang ngày hôm sau.
+    expect(q.sql).toContain(
+      "e.event_time >= ($2::date::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')",
+    );
+    expect(q.sql).toContain(
+      "(($2::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')",
+    );
+    // Chặn hồi quy 1: KHÔNG quay lại $2::date trần (phụ thuộc TZ phiên DB).
+    expect(q.sql).not.toMatch(/event_time\s*>=\s*\$2::date\s/);
+    // Chặn hồi quy 2: KHÔNG bỏ ::timestamp. Thiếu nó, Postgres ép date→timestamptz
+    // rồi AT TIME ZONE chạy ngược chiều → biên lệch +7h SAI HƯỚNG (đã kiểm bằng psql).
+    expect(q.sql).not.toMatch(/\$2::date AT TIME ZONE/);
     expect(q.sql).toContain('LEFT JOIN users u');
     expect(q.params).toEqual([ROOM_ID, '2026-07-28', 'ivss_face_event']);
   });
@@ -132,6 +145,40 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
     expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const q = captured.find((c) => c.sql.includes('FROM iot_device_events'))!;
     expect(q.params[1]).toBe(r.date);
+  });
+
+  // ── Timezone của mặc định "hôm nay" (EC2 chạy UTC) ────────────────────────
+  describe('todayStr() theo giờ VN', () => {
+    afterEach(() => jest.useRealTimers());
+
+    it('02:00 giờ VN (=19:00 UTC hôm trước) → trả NGÀY HÔM NAY theo VN, KHÔNG phải hôm qua', async () => {
+      // 2026-07-28 19:00 UTC === 2026-07-29 02:00 giờ VN.
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-28T19:00:00Z'));
+      wire();
+      const r = await service.getRoomAccessLog(ROOM_ID);
+      expect(r.date).toBe('2026-07-29'); // bản cũ (theo UTC) sẽ trả '2026-07-28'
+    });
+
+    it('23:00 giờ VN (=16:00 UTC cùng ngày) → vẫn đúng ngày VN', async () => {
+      // 2026-07-29 16:00 UTC === 2026-07-29 23:00 giờ VN.
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-29T16:00:00Z'));
+      wire();
+      const r = await service.getRoomAccessLog(ROOM_ID);
+      expect(r.date).toBe('2026-07-29');
+    });
+
+    it('chặn hồi quy: KHÔNG dùng getFullYear/getMonth/getDate theo giờ process', () => {
+      // Đọc thẳng source: 3 hàm này lấy theo timezone TIẾN TRÌNH → sai trên EC2 UTC.
+      const src = readFileSync(
+        join(__dirname, 'ivss-room-access-log.service.ts'),
+        'utf8',
+      );
+      expect(src).not.toMatch(/getFullYear\(\)/);
+      expect(src).not.toMatch(/getMonth\(\)/);
+      expect(src).not.toMatch(/getDate\(\)/);
+      expect(src).toContain("Intl.DateTimeFormat('en-CA'");
+      expect(src).toContain('timeZone: BUSINESS_TIMEZONE');
+    });
   });
 
   it('ngày không có dữ liệu → mảng rỗng, các count = 0 (KHÔNG lỗi)', async () => {

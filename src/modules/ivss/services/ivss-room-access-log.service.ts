@@ -21,6 +21,8 @@ interface RoomRow {
 }
 
 const FACE_EVENT_TYPE = 'ivss_face_event';
+/** Múi giờ nghiệp vụ — dùng cho CẢ mặc định `date` lẫn biên ngày trong SQL. */
+const BUSINESS_TIMEZONE = 'Asia/Ho_Chi_Minh';
 
 /**
  * IvssRoomAccessLogService (RAL-001 / Màn 2) — nhật ký ra/vào của MỘT PHÒNG theo NGÀY.
@@ -36,16 +38,24 @@ const FACE_EVENT_TYPE = 'ivss_face_event';
 export class IvssRoomAccessLogService {
   constructor(private readonly dataSource: DataSource) {}
 
-  /** YYYY-MM-DD theo giờ máy chủ — dùng khi client không truyền `date`. */
+  /**
+   * YYYY-MM-DD của HÔM NAY THEO GIỜ VIỆT NAM — dùng khi client không truyền `date`.
+   *
+   * ⚠ KHÔNG dùng getFullYear/getMonth/getDate: chúng theo timezone TIẾN TRÌNH NODE.
+   * EC2 chạy UTC ⇒ trong khoảng 00:00–07:00 giờ VN, bản cũ trả về NGÀY HÔM QUA.
+   * Cùng bản chất lỗi timezone đã sửa ở biên ngày SQL bên dưới.
+   *
+   * Dùng Intl.DateTimeFormat('en-CA') — 'en-CA' cho ra sẵn dạng YYYY-MM-DD. Mirror
+   * pattern có sẵn ở room-usage-dashboard.service.ts:285 và facegate-time.util.ts:13
+   * (tránh cộng tay +7h, vốn sai với code DST-aware).
+   */
   private todayStr(): string {
-    const d = new Date();
-    return (
-      d.getFullYear().toString() +
-      '-' +
-      String(d.getMonth() + 1).padStart(2, '0') +
-      '-' +
-      String(d.getDate()).padStart(2, '0')
-    );
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: BUSINESS_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
   }
 
   /** matchState 'unmatched_location' | 'unmatched_identity' → người lạ/ngoài lịch. */
@@ -73,7 +83,18 @@ export class IvssRoomAccessLogService {
 
     // LEFT JOIN users: event chưa khớp danh tính có payload_json->>'userId' = NULL
     // (hoặc uid lạ) → full_name null, KHÔNG loại dòng khỏi kết quả.
-    // Biên ngày: [date, date + 1 day) theo timezone của phiên DB.
+    //
+    // Biên ngày: [00:00, 24:00) GIỜ VIỆT NAM, KHÔNG phụ thuộc timezone phiên DB.
+    // ⚠ RDS production chạy UTC. Để `$2::date` trần thì "ngày 28/7" bị hiểu là
+    // 00:00→24:00 UTC = 07:00 sáng 28 → 07:00 sáng 29 giờ VN ⇒ event buổi tối giờ VN
+    // rơi nhầm sang ngày hôm sau.
+    //
+    // ⚠⚠ BẮT BUỘC có `::timestamp` trước `AT TIME ZONE`. Thiếu nó, Postgres ép
+    // `date` → `timestamptz` rồi `AT TIME ZONE` chạy CHIỀU NGƯỢC (timestamptz →
+    // wall-time), trả `timestamp without time zone` = '2026-07-29 07:00:00' ⇒ biên
+    // lệch +7h SAI HƯỚNG, còn tệ hơn bản gốc. Có `::timestamp` thì phép đổi đúng
+    // chiều: '00:00 ngày đó giờ VN' → timestamptz '2026-07-28 17:00:00+00'.
+    // Đã nghiệm thu bằng psql với SET TIME ZONE 'UTC'.
     const rows: AccessLogRow[] = await this.dataSource.manager.query(
       `SELECT e.id,
               e.event_time,
@@ -88,8 +109,8 @@ export class IvssRoomAccessLogService {
                 ON u.id = NULLIF(e.payload_json->>'userId', '')::uuid
         WHERE e.event_type = $3
           AND e.room_id = $1
-          AND e.event_time >= $2::date
-          AND e.event_time <  ($2::date + interval '1 day')
+          AND e.event_time >= ($2::date::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')
+          AND e.event_time <  (($2::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')
         ORDER BY e.event_time ASC`,
       [roomId, day, FACE_EVENT_TYPE],
     );
