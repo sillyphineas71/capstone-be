@@ -38,6 +38,18 @@ const SORT_FIELD_MAP: Record<string, string> = {
 };
 
 /**
+ * Giá trị `device_user_mappings.metadata_json->>'source'` của KHO CHÂN DUNG THƯỜNG TRỰC.
+ *
+ * Phải khớp hằng `MAPPING_SOURCE` trong `ivss/services/ivss-portrait-sync.service.ts`.
+ * Khai lại (không import) vì `IvssModule` đã import `AccountsModule` — import ngược lại
+ * sẽ tạo vòng phụ thuộc, mà repo cấm `forwardRef`. **Đổi thì phải đổi CẢ HAI.**
+ *
+ * Lưu ý: đây là khoá trong `metadata_json`, KHÔNG phải cột `source` —
+ * `device_user_mappings` không có cột đó.
+ */
+const PORTRAIT_MAPPING_SOURCE = 'portrait';
+
+/**
  * AdminBiometricReviewService — ACCT-BIOMETRIC-REVIEW-001.
  *
  * [SỬA 2026-07-29] Đổi tên từ AdminAvatarReviewService — luồng này duyệt ảnh sinh trắc
@@ -359,6 +371,41 @@ export class AdminBiometricReviewService {
         // Approve KHÔNG còn cập nhật users.avatar_url (quyết định D2) — avatar hiển thị là
         // dữ liệu độc lập, quản lý bởi feature feat-update-avatar-photo.
 
+        // [2026-07-30] Duyệt ảnh MỚI phải kéo theo KHO CHÂN DUNG THƯỜNG TRỰC.
+        //
+        // Hai luồng đẩy ảnh theo cuộc họp (`ivss-person-sync`, `face-provisioning`) tự cứu:
+        // họp xong là deprovision mapping ⇒ họp sau enroll lại, tự lấy ảnh ACTIVE mới nhất.
+        // Kho thường trực (`ivss-portrait-sync`) thì KHÔNG — mapping của nó là VĨNH VIỄN.
+        // Để nguyên `synced`, reconcile sẽ coi như "đã đẩy rồi" và người đổi ảnh sẽ mãi bị
+        // nhận diện bằng ảnh CŨ trên thiết bị.
+        //
+        // Hạ về 'pending' thay vì soft-delete — KHÁC BIỆT QUAN TRỌNG, đừng "tối ưu" thành
+        // `deleted_at = now()`:
+        //   · reconcile (1) lọc `NOT EXISTS(... sync_status='synced')` → user vào lại hàng đợi ✓
+        //   · `enrollPortrait` dedupe theo `sync_status='synced'` → không noop nữa ✓
+        //   · bước dọn person cũ trên IVSS lọc `deleted_at IS NULL` → VẪN thấy mapping để xoá
+        //     ảnh cũ trước khi đẩy ảnh mới. Soft-delete làm bước này MÙ ⇒ ảnh cũ ở lại thiết bị
+        //     và sinh trùng szUID (đúng thứ "Nợ #2" trong portrait-sync đang chống) ✗
+        //   · reconcile (2) chỉ remove khi user KHÔNG còn face_profile active → không đụng ✓
+        // 'pending' nằm trong CHECK `chk_device_user_mappings_sync_status`.
+        //
+        // Raw SQL trong CHÍNH transaction (atomic với approve): `IvssModule` đã import
+        // `AccountsModule`, gọi ngược service bên đó sẽ tạo vòng phụ thuộc (repo cấm `forwardRef`).
+        // CHỈ đụng source='portrait' — mapping theo cuộc họp đụng vào sẽ gây enroll thừa.
+        const portraitReset: Array<{ id: string }> = await manager.query(
+          `UPDATE device_user_mappings
+              SET sync_status = 'pending',
+                  face_registered = false,
+                  last_sync_error = NULL,
+                  updated_at = now()
+            WHERE user_id = $1
+              AND deleted_at IS NULL
+              AND sync_status <> 'pending'
+              AND metadata_json->>'source' = $2
+          RETURNING id`,
+          [fp.userId, PORTRAIT_MAPPING_SOURCE],
+        );
+
         await manager.insert(AuditLogEntity, {
           userId: adminUserId,
           actionType: 'biometric.approve',
@@ -369,6 +416,8 @@ export class AdminBiometricReviewService {
             status: FaceProfileStatus.ACTIVE,
             oldActiveFaceProfileId:
               oldActive.length > 0 ? oldActive[0].id : undefined,
+            // Số mapping kho thường trực bị đánh dấu cần đẩy lại (0 khi cron chưa bật).
+            portraitMappingsReset: portraitReset.length,
           },
           severity: AuditLogSeverity.INFO,
         });
