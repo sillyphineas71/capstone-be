@@ -129,4 +129,46 @@ describe('CampusDashboardRepository (CDB-001 / UC-126)', () => {
     configRepo.findOne.mockResolvedValue({ configValue: '-5' });
     expect(await repo.loadStalenessMinutes()).toBe(15);
   });
+
+  // CDB-RS-001 — method mới cho business-admin-summary
+  it('loadAllZonesWithLatestOccupancy: không có zone → trả []', async () => {
+    zoneRepo.find.mockResolvedValue([]);
+    const result = await repo.loadAllZonesWithLatestOccupancy();
+    expect(result).toEqual([]);
+    expect(deviceRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('loadAllZonesWithLatestOccupancy: gộp đúng zone + latestEvent + devicesInZone', async () => {
+    zoneRepo.find.mockResolvedValue([
+      { id: 'z1', deletedAt: null },
+      { id: 'z2', deletedAt: null },
+    ]);
+    deviceRepo.find.mockResolvedValue([
+      { id: 'd1', zoneId: 'z1' },
+      { id: 'd2', zoneId: 'z2' },
+    ]);
+    presenceRepo.find
+      .mockResolvedValueOnce([{ id: 'evt-z1', zoneId: 'z1' }])
+      .mockResolvedValueOnce([]);
+
+    const result = await repo.loadAllZonesWithLatestOccupancy();
+
+    expect(result).toHaveLength(2);
+    expect(result[0].zone.id).toBe('z1');
+    expect(result[0].latestEvent).toEqual({ id: 'evt-z1', zoneId: 'z1' });
+    expect(result[0].devicesInZone).toEqual([{ id: 'd1', zoneId: 'z1' }]);
+    expect(result[1].zone.id).toBe('z2');
+    expect(result[1].latestEvent).toBeNull();
+    expect(result[1].devicesInZone).toEqual([{ id: 'd2', zoneId: 'z2' }]);
+  });
+
+  it('countGateLogsAllZonesToday: gọi repo.count KHÔNG kèm zoneId trong where', async () => {
+    gateLogRepo.count.mockResolvedValue(42);
+    const startOfDay = new Date('2026-07-29T00:00:00Z');
+    const result = await repo.countGateLogsAllZonesToday('enter', startOfDay);
+    expect(result).toBe(42);
+    const callArg = gateLogRepo.count.mock.calls[0][0];
+    expect(callArg.where.zoneId).toBeUndefined();
+    expect(callArg.where.direction).toBe('enter');
+  });
 });
