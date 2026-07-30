@@ -55,7 +55,14 @@ function isNonRetryableError(message: string): boolean {
     message.includes('CUDA_NOT_AVAILABLE_FOR_PROFILE') ||
     message.includes('TRANSCRIPTION_PROVIDER_NOT_SUPPORTED') ||
     // T026: thiếu model preload là lỗi cấu hình, retry cũng không tự khỏi.
-    message.includes('NOT_PRELOADED')
+    message.includes('NOT_PRELOADED') ||
+    // Bug #3 lớp 2 (2026-07-29): lỗi cấu hình/hạ tầng AI Worker — retry
+    // không tự khỏi, cố ý KHÔNG đưa "AI_WORKER_FAILED" chung chung vào đây
+    // vì chuỗi đó bọc cả lỗi tạm thời (hết RAM, timeout) mà retry có ích.
+    message.includes('AI_WORKER_NOT_BUILT') ||
+    message.includes('MINIO_NOT_CONFIGURED') ||
+    message.includes('SOURCE_AUDIO_INVALID_PATH') ||
+    message.includes('Invalid endPoint')
   );
 }
 
@@ -143,13 +150,23 @@ export class TranscriptionWorkerProcessor extends WorkerHost {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error('Job ' + job.id + ' failed — ' + errMsg);
 
-      if (isNonRetryableError(errMsg)) {
+      // Bug #3 lớp 1 (2026-07-29): trước đây chỉ chốt transcript sang
+      // 'failed' khi lỗi non-retryable — lỗi retryable (VD hạ tầng tạm
+      // thời) hết cả 3 lượt retry của BullMQ thì KHÔNG ai set transcript
+      // sang failed nữa, transcript kẹt 'processing' vĩnh viễn trong khi
+      // FE (được hướng dẫn poll tới khi status != processing) quay vô hạn.
+      const attemptsMade = job.attemptsMade + 1;
+      const maxAttempts = job.opts?.attempts ?? 1;
+      const isLastAttempt = attemptsMade >= maxAttempts;
+
+      if (isNonRetryableError(errMsg) || isLastAttempt) {
         await this.transcriptionService.failTranscript(transcriptId, errMsg);
         await this.backgroundJobsService.markFailed(backgroundJobId, errMsg);
-        return;
+        if (isNonRetryableError(errMsg)) return;
+      } else {
+        await this.backgroundJobsService.markFailed(backgroundJobId, errMsg);
       }
 
-      await this.backgroundJobsService.markFailed(backgroundJobId, errMsg);
       throw error;
     }
   }

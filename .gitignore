@@ -78,5 +78,5 @@ database_v4_current_41_tables.md
 database_v4_current_41_tables.sql
 *.bak
 ~$*
-
+.env.bak-2026-07-30
 x.ts 

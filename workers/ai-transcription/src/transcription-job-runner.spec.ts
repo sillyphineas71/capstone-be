@@ -4,7 +4,7 @@ import {
   cleanupStaleTempDirs,
   runTranscriptionJob,
 } from './transcription-job-runner';
-import { downloadAudioFromMinio } from './minio-audio-loader';
+import { fetchAudio } from './audio-source-loader';
 
 jest.mock('fs');
 jest.mock('./minio-audio-loader', () => ({
@@ -17,14 +17,18 @@ jest.mock('./minio-audio-loader', () => ({
     bucket: 'recordings',
   }),
   createMinioClient: jest.fn().mockReturnValue({}),
-  downloadAudioFromMinio: jest.fn(),
+}));
+// Bug #2 fix: transcription-job-runner giờ gọi fetchAudio() (điều phối
+// local/s3) thay vì gọi thẳng downloadAudioFromMinio().
+jest.mock('./audio-source-loader', () => ({
+  fetchAudio: jest.fn(),
 }));
 jest.mock('child_process', () => ({
   execFile: jest.fn(),
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
-const mockDownload = downloadAudioFromMinio as jest.Mock;
+const mockDownload = fetchAudio as jest.Mock;
 const mockExecFile = childProcess.execFile as unknown as jest.Mock;
 
 /** Cấu hình mock execFile theo callback convention của Node (promisify-compatible). */

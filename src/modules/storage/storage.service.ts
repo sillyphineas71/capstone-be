@@ -74,14 +74,25 @@ export class StorageService implements OnModuleInit {
    */
   private async initMinioClient(): Promise<void> {
     const { Client } = await import('minio');
-    const endpoint =
+    // Bug #1 (2026-07-29): cùng lỗi parse endpoint như worker AI transcription
+    // (minio-audio-loader.ts) — endPoint MinIO SDK yêu cầu phải là hostname
+    // THUẦN, không kèm cổng. Bản cũ chỉ bóc "http://" mà không tách cổng nên
+    // "http://localhost:9000" bị truyền nguyên "localhost:9000" cho endPoint.
+    const raw =
       this.configService.get<string>('STORAGE_S3_ENDPOINT', 'localhost') ||
       'localhost';
-    const cleanEndpoint = endpoint.replace(/^https?:\/\//, '');
+    const useSSLFromProto = raw.startsWith('https://');
+    const withoutProto = raw.replace(/^https?:\/\//, '');
+    const [host, portInEndpoint] = withoutProto.split(':');
     this.minioClient = new Client({
-      endPoint: cleanEndpoint,
-      port: this.configService.get<number>('STORAGE_S3_PORT', 9000),
-      useSSL: this.configService.get<boolean>('STORAGE_S3_USE_SSL', false),
+      endPoint: host,
+      port: Number(
+        portInEndpoint ||
+          this.configService.get<number>('STORAGE_S3_PORT', 9000),
+      ),
+      useSSL:
+        useSSLFromProto ||
+        this.configService.get<boolean>('STORAGE_S3_USE_SSL', false),
       accessKey: this.configService.get<string>('STORAGE_S3_ACCESS_KEY', ''),
       secretKey: this.configService.get<string>('STORAGE_S3_SECRET_KEY', ''),
     });

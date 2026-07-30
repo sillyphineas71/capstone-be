@@ -4,11 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
 
-import {
-  createMinioClient,
-  downloadAudioFromMinio,
-  loadMinioConfigFromEnv,
-} from './minio-audio-loader';
+import { createMinioClient, loadMinioConfigFromEnv } from './minio-audio-loader';
+import { fetchAudio } from './audio-source-loader';
 import { assertLocalProviderOnly, loadProfile } from './profile-config';
 import { validateModelsAvailable } from './model-validation';
 import { checkResources } from './resource-guard';
@@ -173,8 +170,12 @@ export async function runTranscriptionJob(
   const resultPath = path.join(jobDir, 'result.json');
 
   try {
-    const minioConfig = loadMinioConfigFromEnv();
-    const client = createMinioClient(minioConfig);
+    // Bug #1.2 (2026-07-29): chỉ dựng MinIO client khi thật sự dùng S3.
+    // Trước đây tạo vô điều kiện nên deploy dùng STORAGE_DRIVER=local vẫn
+    // chết ở đây với "Invalid endPoint" dù không định dùng MinIO.
+    const storageDriver = (process.env['STORAGE_DRIVER'] || 'local').toLowerCase();
+    const minioConfig = storageDriver === 's3' ? loadMinioConfigFromEnv() : null;
+    const client = minioConfig ? createMinioClient(minioConfig) : null;
 
     const isMultiChannel =
       Array.isArray(input.channels) && input.channels.length >= 2;
@@ -199,7 +200,7 @@ export async function runTranscriptionJob(
         const chSourcePath = path.join(chDir, 'source-audio');
         const chNormalizedPath = path.join(chDir, 'normalized.wav');
 
-        await downloadAudioFromMinio(client, minioConfig, {
+        await fetchAudio(client, minioConfig, {
           storageBucket: ch.storageBucket,
           storageKey: ch.storageKey,
           destPath: chSourcePath,
@@ -225,7 +226,7 @@ export async function runTranscriptionJob(
       sourcePath = path.join(jobDir, 'source-audio');
       normalizedPath = path.join(jobDir, 'normalized.wav');
 
-      await downloadAudioFromMinio(client, minioConfig, {
+      await fetchAudio(client, minioConfig, {
         storageBucket: input.storageBucket,
         storageKey: input.storageKey,
         destPath: sourcePath,

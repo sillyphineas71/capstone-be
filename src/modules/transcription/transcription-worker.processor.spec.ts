@@ -75,11 +75,19 @@ describe('TranscriptionWorkerProcessor (T008/T009)', () => {
     userId: 'u-1',
   };
 
-  const makeJob = (overrides: Partial<typeof baseJobData> = {}) =>
+  const makeJob = (
+    overrides: Partial<typeof baseJobData> = {},
+    jobOverrides: { attemptsMade?: number; opts?: { attempts?: number } } = {},
+  ) =>
     ({
       id: 'job-1',
       name: 'transcription:bg-1',
       data: { ...baseJobData, ...overrides },
+      // Mặc định mô phỏng lượt thử đầu tiên trong 3 lượt (BULL_DEFAULT_ATTEMPTS)
+      // — khớp hành vi gốc (chưa hết lượt retry) cho các test không quan tâm
+      // tới bug #3 lớp 1. Test riêng cho "hết lượt retry" override 2 field này.
+      attemptsMade: jobOverrides.attemptsMade ?? 0,
+      opts: jobOverrides.opts ?? { attempts: 3 },
     }) as unknown as Job;
 
   beforeEach(async () => {
@@ -158,15 +166,15 @@ describe('TranscriptionWorkerProcessor (T008/T009)', () => {
     expect(backgroundJobsService.markFailed).toHaveBeenCalled();
   });
 
-  it('AI worker chưa build (script không tồn tại) → markFailed + rethrow (cho BullMQ retry)', async () => {
+  it('AI worker chưa build (script không tồn tại) → failTranscript ngay, KHÔNG rethrow (bug #3 lớp 2: lỗi cấu hình, retry vô ích)', async () => {
     mockFs.existsSync.mockReturnValue(false);
 
-    await expect(processor.process(makeJob())).rejects.toThrow(
-      'AI_WORKER_NOT_BUILT',
+    await expect(processor.process(makeJob())).resolves.toBeUndefined();
+    expect(transcriptionService.failTranscript).toHaveBeenCalledWith(
+      'tr-1',
+      expect.stringContaining('AI_WORKER_NOT_BUILT'),
     );
     expect(backgroundJobsService.markFailed).toHaveBeenCalled();
-    // Lỗi infra/tạm thời -> KHÔNG gọi failTranscript ngay, để retry job nguyên trạng.
-    expect(transcriptionService.failTranscript).not.toHaveBeenCalled();
   });
 
   it('AI worker exit code lỗi (IO/MinIO tạm thời) → markFailed + rethrow để BullMQ retry', async () => {
@@ -181,6 +189,26 @@ describe('TranscriptionWorkerProcessor (T008/T009)', () => {
     );
     expect(backgroundJobsService.markFailed).toHaveBeenCalled();
     expect(transcriptionService.failTranscript).not.toHaveBeenCalled();
+  });
+
+  it('BUG #3 lớp 1: lỗi retryable nhưng đã HẾT lượt retry cuối cùng → failTranscript (chốt trạng thái, không để kẹt processing) nhưng vẫn rethrow', async () => {
+    mockExecFileReject(
+      Object.assign(new Error('spawn failed'), {
+        stderr: 'MINIO_DOWNLOAD_FAILED: timeout',
+      }),
+    );
+
+    // attemptsMade=2 + lần chạy hiện tại = lượt thứ 3/3 (opts.attempts=3) -> hết lượt.
+    await expect(
+      processor.process(
+        makeJob({}, { attemptsMade: 2, opts: { attempts: 3 } }),
+      ),
+    ).rejects.toThrow('AI_WORKER_FAILED');
+    expect(transcriptionService.failTranscript).toHaveBeenCalledWith(
+      'tr-1',
+      expect.stringContaining('MINIO_DOWNLOAD_FAILED'),
+    );
+    expect(backgroundJobsService.markFailed).toHaveBeenCalled();
   });
 
   it('AI worker trả lỗi validation (audio quá dài) → failTranscript, KHÔNG retry', async () => {

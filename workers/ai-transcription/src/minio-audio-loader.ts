@@ -20,14 +20,22 @@ export interface DownloadAudioParams {
 }
 
 export function loadMinioConfigFromEnv(): MinioAudioLoaderConfig {
-  const endpoint = (process.env['STORAGE_S3_ENDPOINT'] || 'localhost').replace(
-    /^https?:\/\//,
-    '',
-  );
+  // Bug #1 (2026-07-29): chấp nhận cả 3 dạng người vận hành hay viết —
+  // "minio.example.com" | "http://localhost:9000" | "localhost:9000" — vì
+  // MinIO SDK yêu cầu endPoint là hostname THUẦN, cổng truyền qua field
+  // `port` riêng. Bản cũ chỉ bóc "http://" mà không tách cổng, nên
+  // "http://localhost:9000" bị truyền nguyên "localhost:9000" cho endPoint
+  // và ném "Invalid endPoint" ngay cả khi STORAGE_DRIVER=local.
+  const raw = process.env['STORAGE_S3_ENDPOINT'] || 'localhost';
+  const useSSLFromProto = raw.startsWith('https://');
+  const withoutProto = raw.replace(/^https?:\/\//, '');
+  const [host, portInEndpoint] = withoutProto.split(':');
+
   return {
-    endpoint,
-    port: Number(process.env['STORAGE_S3_PORT'] || '9000'),
-    useSSL: process.env['STORAGE_S3_USE_SSL'] === 'true',
+    endpoint: host,
+    // Ưu tiên cổng nhúng trong endpoint, sau đó mới tới STORAGE_S3_PORT.
+    port: Number(portInEndpoint || process.env['STORAGE_S3_PORT'] || '9000'),
+    useSSL: useSSLFromProto || process.env['STORAGE_S3_USE_SSL'] === 'true',
     accessKey: process.env['STORAGE_S3_ACCESS_KEY'] || '',
     secretKey: process.env['STORAGE_S3_SECRET_KEY'] || '',
     bucket: process.env['STORAGE_S3_BUCKET'] || '',
