@@ -59,8 +59,12 @@ export class RecordingConfigController {
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('recording.config.read')
-  async findOne(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
-    const data = await this.recordingConfigService.findOne(meetingId);
+  async findOne(
+    @Req() req: any,
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    const data = await this.recordingConfigService.findOne(meetingId, userId);
     return {
       success: true,
       message: 'Recording config retrieved successfully',
