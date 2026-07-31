@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument */
 import { UserJourneyController } from './user-journey.controller.js';
 import { UserJourneyService } from '../services/user-journey.service.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -24,9 +24,7 @@ describe('UserJourneyController (UJN-001)', () => {
         zoneCount: 0,
       }),
     };
-    controller = new UserJourneyController(
-      serviceMock as unknown as UserJourneyService,
-    );
+    controller = new UserJourneyController(serviceMock);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -35,7 +33,7 @@ describe('UserJourneyController (UJN-001)', () => {
     const r = await controller.userJourney({
       userId: 'u1',
       date: '2026-07-29',
-    } as any);
+    });
     expect(r.success).toBe(true);
     expect(r.message).toBe('User journey retrieved');
     expect(r.data.fullName).toBe('Bui Van Long');
@@ -43,7 +41,7 @@ describe('UserJourneyController (UJN-001)', () => {
   });
 
   it('truyền date=undefined khi client không gửi (service tự lấy hôm nay giờ VN)', async () => {
-    await controller.userJourney({ userId: 'u1' } as any);
+    await controller.userJourney({ userId: 'u1' });
     expect(serviceMock.getUserJourney).toHaveBeenCalledWith('u1', undefined);
   });
 

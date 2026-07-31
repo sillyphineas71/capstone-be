@@ -3163,9 +3163,12 @@ describe('MeetingsService', () => {
         const qb = mockRequestListQb();
         mockRepo.createQueryBuilder.mockReturnValue(qb);
 
-        await service.findMeetingRequests({ sortBy, sortOrder: 'asc' } as any, {
-          userId: 'u1',
-        });
+        await service.findMeetingRequests(
+          { sortBy, sortOrder: 'asc' },
+          {
+            userId: 'u1',
+          },
+        );
 
         expect(qb.orderBy).toHaveBeenCalledWith(expectedColumn, 'ASC');
       },
@@ -3175,7 +3178,7 @@ describe('MeetingsService', () => {
       const qb = mockRequestListQb();
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
-      await service.findMeetingRequests({} as any, { userId: 'u1' });
+      await service.findMeetingRequests({}, { userId: 'u1' });
 
       expect(qb.orderBy).toHaveBeenCalledWith('mr.requestedAt', 'DESC');
     });

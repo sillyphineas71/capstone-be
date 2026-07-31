@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * MANAGER (xem spec §2.1). Mirror
  * 20260723000008-SeedCampusDashboardOverviewPermission.ts.
  */
-export class SeedCampusDashboardBusinessAdminSummaryPermission20260729000005
-  implements MigrationInterface
-{
+export class SeedCampusDashboardBusinessAdminSummaryPermission20260729000005 implements MigrationInterface {
   name = 'SeedCampusDashboardBusinessAdminSummaryPermission20260729000005';
 
   private readonly permission = {

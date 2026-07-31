@@ -102,9 +102,9 @@ describe('MeetingUpdateService.update (BE-03)', () => {
 
   it('body rong (khong title, khong description) → 400 EMPTY_UPDATE_PAYLOAD', async () => {
     const { service, findOne } = setup();
-    await expect(
-      service.update('meeting-1', {}, authUser),
-    ).rejects.toThrow(BadRequestException);
+    await expect(service.update('meeting-1', {}, authUser)).rejects.toThrow(
+      BadRequestException,
+    );
     expect(findOne).not.toHaveBeenCalled();
   });
 

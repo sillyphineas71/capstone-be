@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `schedule.read.self` (xem spec §2.1). Mirror
  * 20260723000008-SeedCampusDashboardOverviewPermission.ts.
  */
-export class SeedCampusDashboardEmployeeSummaryPermission20260729000004
-  implements MigrationInterface
-{
+export class SeedCampusDashboardEmployeeSummaryPermission20260729000004 implements MigrationInterface {
   name = 'SeedCampusDashboardEmployeeSummaryPermission20260729000004';
 
   private readonly permission = {
