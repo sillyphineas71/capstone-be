@@ -6,6 +6,7 @@ import {
   MeetingListSortField,
 } from '../dto/meeting-list-query.dto.js';
 import { MeetingListItemDto } from '../dto/meeting-list-item.dto.js';
+import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
 
 export interface MeetingListResult {
   data: MeetingListItemDto[];
@@ -91,6 +92,17 @@ export class MeetingListService {
     ]);
     qb.addSelect('organizer.fullName', 'organizer_full_name');
     qb.addSelect('room.room_name', 'room_room_name');
+    // BE-5: EXISTS subquery thay vi JOIN — 1 meeting co the co nhieu transcript
+    // (nhieu recording session/version), JOIN thuong se nhan ban ghi va lam sai total.
+    qb.addSelect(
+      (subQuery) =>
+        subQuery
+          .select('1')
+          .from(TranscriptEntity, 'ts')
+          .where('ts.meeting_id = meeting.id')
+          .limit(1),
+      'has_transcript',
+    );
 
     const [entities, total] = await Promise.all([
       qb.getRawAndEntities(),
@@ -101,6 +113,7 @@ export class MeetingListService {
       const raw = entities.raw[index] as {
         organizer_full_name: string | null;
         room_room_name: string | null;
+        has_transcript: number | null;
       };
       return new MeetingListItemDto({
         id: meeting.id,
@@ -116,6 +129,7 @@ export class MeetingListService {
         organizerId: meeting.organizerId,
         organizerName: raw?.organizer_full_name ?? null,
         createdAt: meeting.createdAt,
+        hasTranscript: raw?.has_transcript != null,
       });
     });
 

@@ -43,6 +43,14 @@ export class MeetingListItemDto {
   @ApiProperty()
   createdAt: Date;
 
+  // BE-5 (2026-07-31): co bao gio tao transcript cho meeting nay chua (bat ke
+  // status draft/reviewed/approved/processing/failed) — FE dung de loc nhanh
+  // danh sach meeting da co transcript, khong can mo tung meeting.
+  @ApiProperty({
+    description: 'Meeting da tung co transcript hay chua (bat ky status nao)',
+  })
+  hasTranscript: boolean;
+
   constructor(partial: MeetingListItemDto) {
     Object.assign(this, partial);
   }
