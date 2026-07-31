@@ -5,6 +5,11 @@ import {
   StatusBreakdownItem,
   MeetingDetailItem,
 } from '../services/meeting-activity-report-data.service.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 export interface ReportData {
   metadata: ReportMetadata;
@@ -35,15 +40,16 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       // ── Header ────────────────────────────────────────────────────
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(18)
         .text('BÁO CÁO TỔNG HỢP HOẠT ĐỘNG CUỘC HỌP', { align: 'center' });
       doc.moveDown(0.5);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(10)
         .fillColor('#666666')
         .text(`Tạo lúc: ${data.metadata.generatedAt.toLocaleString('vi-VN')}`, {
@@ -53,12 +59,12 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       doc.moveDown(1);
 
       // ── Phần 1: Thông tin báo cáo ────────────────────────────────
-      doc.font('Helvetica-Bold').fontSize(13).text('1. Thông tin báo cáo');
+      doc.font(VN_FONT_BOLD).fontSize(13).text('1. Thông tin báo cáo');
       doc.moveDown(0.3);
       doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
       doc.moveDown(0.5);
 
-      doc.font('Helvetica').fontSize(10);
+      doc.font(VN_FONT_REGULAR).fontSize(10);
       const { metadata } = data;
       const kv = [
         ['Phạm vi tổ chức', metadata.organizationLabel],
@@ -66,13 +72,13 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
         ['Người tạo', metadata.extractedByEmail],
       ];
       kv.forEach(([label, value]) => {
-        doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
-        doc.font('Helvetica').text(value ?? '—');
+        doc.font(VN_FONT_BOLD).text(`${label}: `, { continued: true });
+        doc.font(VN_FONT_REGULAR).text(value ?? '—');
       });
       doc.moveDown(1);
 
       // ── Phần 2: KPI tổng quan ─────────────────────────────────────
-      doc.font('Helvetica-Bold').fontSize(13).text('2. KPI tổng quan');
+      doc.font(VN_FONT_BOLD).fontSize(13).text('2. KPI tổng quan');
       doc.moveDown(0.3);
       doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
       doc.moveDown(0.5);
@@ -90,15 +96,15 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
         ],
       ];
       kpiRows.forEach(([label, value]) => {
-        doc.font('Helvetica').fontSize(10);
-        doc.font('Helvetica-Bold').text(`• ${label}: `, { continued: true });
-        doc.font('Helvetica').text(value);
+        doc.font(VN_FONT_REGULAR).fontSize(10);
+        doc.font(VN_FONT_BOLD).text(`• ${label}: `, { continued: true });
+        doc.font(VN_FONT_REGULAR).text(value);
       });
       doc.moveDown(1);
 
       // ── Phần 3: Phân bổ trạng thái ───────────────────────────────
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(13)
         .text('3. Phân bổ trạng thái cuộc họp');
       doc.moveDown(0.3);
@@ -108,7 +114,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       // Header row
       const statusColW = [180, 80, 80];
       const statusX = [50, 230, 310];
-      doc.font('Helvetica-Bold').fontSize(10);
+      doc.font(VN_FONT_BOLD).fontSize(10);
       const statusHeaderY = doc.y;
       doc.text('Trạng thái', statusX[0], statusHeaderY, {
         width: statusColW[0],
@@ -122,7 +128,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       doc.y += 5;
 
       data.statusBreakdown.forEach((item) => {
-        doc.font('Helvetica').fontSize(10);
+        doc.font(VN_FONT_REGULAR).fontSize(10);
         const rowY = doc.y;
         doc.text(item.status, statusX[0], rowY, { width: statusColW[0] });
         doc.text(item.count.toString(), statusX[1], rowY, {
@@ -138,7 +144,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       // ── Phần 4: Danh sách chi tiết ───────────────────────────────
       doc.addPage();
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(13)
         .text('4. Danh sách chi tiết cuộc họp');
       doc.moveDown(0.3);
@@ -157,7 +163,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
         'Tham dự (%)',
       ];
 
-      doc.font('Helvetica-Bold').fontSize(8);
+      doc.font(VN_FONT_BOLD).fontSize(8);
       const dHeaderY = doc.y;
       detailHeaders.forEach((h, i) => {
         doc.text(h, detailX[i], dHeaderY, { width: detailColW[i] });
@@ -167,11 +173,11 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
       doc.y += 5;
 
       // Table rows
-      doc.font('Helvetica').fontSize(7.5);
+      doc.font(VN_FONT_REGULAR).fontSize(7.5);
       data.meetingDetails.forEach((row) => {
         if (doc.y > 750) {
           doc.addPage();
-          doc.font('Helvetica-Bold').fontSize(8);
+          doc.font(VN_FONT_BOLD).fontSize(8);
           const newHeaderY = doc.y;
           detailHeaders.forEach((h, i) => {
             doc.text(h, detailX[i], newHeaderY, { width: detailColW[i] });
@@ -179,7 +185,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
           doc.y = newHeaderY + 15;
           doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#cccccc');
           doc.y += 5;
-          doc.font('Helvetica').fontSize(7.5);
+          doc.font(VN_FONT_REGULAR).fontSize(7.5);
         }
 
         const rowY = doc.y;
@@ -206,7 +212,7 @@ export function renderMeetingActivityPdf(data: ReportData): Promise<Buffer> {
 
       if (data.meetingDetails.length === 0) {
         doc
-          .font('Helvetica')
+          .font(VN_FONT_REGULAR)
           .fontSize(10)
           .fillColor('#888888')
           .text('Không có cuộc họp nào trong kỳ báo cáo.');

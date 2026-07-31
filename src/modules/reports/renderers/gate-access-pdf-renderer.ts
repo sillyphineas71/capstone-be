@@ -1,5 +1,10 @@
 import PDFDocument from 'pdfkit';
 import type { GateAccessExportRow } from '../services/gate-access-report-data.service.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 export interface GateAccessReportMeta {
   from: string;
@@ -27,14 +32,15 @@ export function renderGateAccessPdf(
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(16)
         .text('BÁO CÁO RA VÀO KHUÔN VIÊN', { align: 'center' });
       doc.moveDown(0.3);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(9)
         .fillColor('#666666')
         .text(
@@ -44,12 +50,12 @@ export function renderGateAccessPdf(
       doc.fillColor('#000000');
       doc.moveDown(0.5);
 
-      doc.font('Helvetica').fontSize(10).text(`Tổng số phiên: ${rows.length}`);
+      doc.font(VN_FONT_REGULAR).fontSize(10).text(`Tổng số phiên: ${rows.length}`);
       doc.moveDown(0.5);
 
       if (rows.length === 0) {
         doc
-          .font('Helvetica')
+          .font(VN_FONT_REGULAR)
           .fontSize(11)
           .fillColor('#888888')
           .text('Không có dữ liệu trong khoảng thời gian đã chọn.');
@@ -79,7 +85,7 @@ export function renderGateAccessPdf(
       }
 
       const drawHeader = (): void => {
-        doc.font('Helvetica-Bold').fontSize(8);
+        doc.font(VN_FONT_BOLD).fontSize(8);
         const y = doc.y;
         headers.forEach((h, i) => doc.text(h, colX[i], y, { width: colW[i] }));
         doc.y = y + 14;
@@ -91,13 +97,13 @@ export function renderGateAccessPdf(
       };
 
       drawHeader();
-      doc.font('Helvetica').fontSize(7.5);
+      doc.font(VN_FONT_REGULAR).fontSize(7.5);
 
       rows.forEach((row) => {
         if (doc.y > 520) {
           doc.addPage();
           drawHeader();
-          doc.font('Helvetica').fontSize(7.5);
+          doc.font(VN_FONT_REGULAR).fontSize(7.5);
         }
         const y = doc.y;
         const durationStr =
