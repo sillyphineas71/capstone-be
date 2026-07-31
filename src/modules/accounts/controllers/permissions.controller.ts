@@ -10,6 +10,8 @@
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -58,6 +60,10 @@ export class PermissionsController {
   @Post()
   @RequirePermissions('admin.manage_permissions')
   @HttpCode(HttpStatus.CREATED)
+  // Repo KHONG co global ValidationPipe (main.ts) => khai tuong minh, neu khong regex
+  // permissionCode + transform lowercase khong chay va code sai dinh dang lot thang vao
+  // bang nguon cua PermissionsGuard. Dat o METHOD de khong dung query DTO cua route GET.
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async create(
     @Body() dto: CreatePermissionDto,
     @CurrentUser() user: { userId: string } | undefined,
@@ -80,6 +86,9 @@ export class PermissionsController {
 
   @Patch(':id')
   @RequirePermissions('admin.manage_permissions')
+  // KHONG bat whitelist: handler doc dto.permissionCode de tra 400 tuong minh
+  // (immutable field) — whitelist se strip truoc khi vao handler.
+  @UsePipes(new ValidationPipe({ transform: true }))
   async update(
     @Param('id') id: string,
     @Body() dto: UpdatePermissionDto,
