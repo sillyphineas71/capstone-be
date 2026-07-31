@@ -131,6 +131,80 @@ describe('MediaFilesController.playback (REC-006)', () => {
   });
 });
 
+// REGRESSION (2026-07-31): file lưu trên s3/MinIO phải stream được từ bucket. Trước đây
+// controller chỉ biết createReadStream từ đĩa nên mọi file upload (driver=s3) đều hỏng.
+describe('MediaFilesController.playback — file nằm trên s3/MinIO', () => {
+  let controller: MediaFilesController;
+  let serviceMock: any;
+  let storageServiceMock: any;
+  let stream: FakeStream;
+
+  beforeEach(() => {
+    stream = new FakeStream();
+    serviceMock = {
+      resolvePlayback: jest.fn().mockResolvedValue({
+        kind: 'remote',
+        storageKey: 'recordings/m1/a.wav',
+        size: 1000,
+        mimeType: 'audio/wav',
+        fileName: 'a.wav',
+      }),
+    };
+    storageServiceMock = {
+      getObjectStream: jest.fn().mockResolvedValue(stream),
+    };
+    controller = new MediaFilesController(storageServiceMock, serviceMock);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('không Range → 200 full, đọc từ bucket, KHÔNG chạm đĩa', async () => {
+    const res = fakeRes();
+    await controller.playback('f1', { headers: {} }, res);
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'audio/wav');
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Length': 1000 });
+    expect(storageServiceMock.getObjectStream).toHaveBeenCalledWith(
+      'recordings/m1/a.wav',
+      undefined,
+      undefined,
+    );
+    expect(createReadStreamMock).not.toHaveBeenCalled();
+    expect(stream.pipe).toHaveBeenCalledWith(res);
+  });
+
+  it('Range → 206 + getPartialObject theo đúng khoảng byte (seek không tải cả file)', async () => {
+    const res = fakeRes();
+    await controller.playback('f1', { headers: { range: 'bytes=100-199' } }, res);
+    expect(res.writeHead).toHaveBeenCalledWith(206, {
+      'Content-Range': 'bytes 100-199/1000',
+      'Content-Length': 100,
+    });
+    expect(storageServiceMock.getObjectStream).toHaveBeenCalledWith(
+      'recordings/m1/a.wav',
+      100,
+      199,
+    );
+    expect(createReadStreamMock).not.toHaveBeenCalled();
+  });
+
+  it('suffix Range bytes=-100 → 100 byte cuối của object', async () => {
+    const res = fakeRes();
+    await controller.playback('f1', { headers: { range: 'bytes=-100' } }, res);
+    expect(storageServiceMock.getObjectStream).toHaveBeenCalledWith(
+      'recordings/m1/a.wav',
+      900,
+      999,
+    );
+  });
+
+  it('lỗi stream từ bucket → 500, KHÔNG lộ chi tiết hạ tầng', async () => {
+    const res = fakeRes();
+    await controller.playback('f1', { headers: {} }, res);
+    stream.emit('error', new Error('minio: connection reset'));
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
 describe('MediaFilesController list/detail/visibility (REC-006)', () => {
   let controller: MediaFilesController;
   let serviceMock: any;
