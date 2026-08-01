@@ -4,7 +4,6 @@ import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DataSource } from 'typeorm';
-import * as path from 'path';
 
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { BackgroundJobEntity } from '../../administration/entities/background-job.entity.js';
@@ -19,6 +18,7 @@ import { MeetingMinutesEntity } from '../entities/meeting-minutes.entity.js';
 import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
 import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { slugifyFileNamePart } from '../../../common/utils/filename.util.js';
 import { renderMeetingMinutesPdf } from '../renderers/meeting-minutes-pdf-renderer.js';
 import { renderMeetingMinutesDocx } from '../renderers/meeting-minutes-docx-renderer.js';
 import {
@@ -149,9 +149,14 @@ export class MinutesExportWorkerProcessor extends WorkerHost {
             ? StorageProvider.MINIO
             : StorageProvider.LOCAL;
 
-      // 6. Tạo MediaFileEntity
+      // 6. Tạo MediaFileEntity — tên file hiển thị/tải xuống theo tên cuộc họp
+      // (khác với storageKey nội bộ vẫn random để tránh trùng/đoán được).
+      const meetingSlug = slugifyFileNamePart(
+        meeting?.title || minutes.title || 'cuoc_hop',
+      );
+      const friendlyFileName = `Tom_tat_cuoc_hop_${meetingSlug}.${fileExt}`;
       const mediaFile = this.mediaFileRepo.create({
-        fileName: path.basename(saveResult.storageKey),
+        fileName: friendlyFileName,
         fileType: MediaFileType.EXPORT,
         mimeType,
         storageProvider: storageProv,

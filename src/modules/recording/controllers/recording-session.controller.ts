@@ -22,7 +22,7 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 const AUDIO_UPLOAD_MAX_BYTES =
-  Number(process.env.STORAGE_MAX_FILE_SIZE) || 50 * 1024 * 1024;
+  Number(process.env.STORAGE_MAX_FILE_SIZE) || 100 * 1024 * 1024;
 
 @Controller()
 export class RecordingSessionController {
