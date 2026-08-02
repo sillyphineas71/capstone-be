@@ -1,5 +1,10 @@
 import PDFDocument from 'pdfkit';
 import { MinutesExportData } from './meeting-minutes-export-data.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 /**
  * renderMeetingMinutesPdf (UC-147, FR-001/FR-003/FR-012).
@@ -18,19 +23,20 @@ export function renderMeetingMinutesPdf(
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       // ── Header ──
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(18)
         .text('BIÊN BẢN CUỘC HỌP', { align: 'center' });
       doc.moveDown(0.3);
-      doc.font('Helvetica-Bold').fontSize(13).text(data.title, {
+      doc.font(VN_FONT_BOLD).fontSize(13).text(data.title, {
         align: 'center',
       });
       doc.moveDown(0.5);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(10)
         .fillColor('#666666')
         .text(
@@ -51,7 +57,7 @@ export function renderMeetingMinutesPdf(
       // ── Nội dung chính ──
       section(doc, '1. Nội dung biên bản');
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(11)
         .text(data.minutesContent || '(Chưa có nội dung)', {
           align: 'left',
@@ -61,9 +67,9 @@ export function renderMeetingMinutesPdf(
       // ── Quyết định ──
       section(doc, '2. Quyết định');
       if (data.decisions.length === 0) {
-        doc.font('Helvetica-Oblique').fontSize(11).text('(Không có)');
+        doc.font(VN_FONT_REGULAR).fontSize(11).text('(Không có)');
       } else {
-        doc.font('Helvetica').fontSize(11);
+        doc.font(VN_FONT_REGULAR).fontSize(11);
         data.decisions.forEach((d, i) => doc.text(`${i + 1}. ${d}`));
       }
       doc.moveDown(1);
@@ -72,9 +78,9 @@ export function renderMeetingMinutesPdf(
       if (data.includeActionItems) {
         section(doc, '3. Đầu việc (Action items)');
         if (data.actionItems.length === 0) {
-          doc.font('Helvetica-Oblique').fontSize(11).text('(Không có)');
+          doc.font(VN_FONT_REGULAR).fontSize(11).text('(Không có)');
         } else {
-          doc.font('Helvetica').fontSize(11);
+          doc.font(VN_FONT_REGULAR).fontSize(11);
           data.actionItems.forEach((a, i) => doc.text(`${i + 1}. ${a}`));
         }
         doc.moveDown(1);
@@ -83,7 +89,7 @@ export function renderMeetingMinutesPdf(
       // ── Transcript (tùy chọn) ──
       if (data.transcriptText) {
         section(doc, '4. Bản ghi lời (Transcript)');
-        doc.font('Helvetica').fontSize(10).text(data.transcriptText, {
+        doc.font(VN_FONT_REGULAR).fontSize(10).text(data.transcriptText, {
           align: 'left',
         });
       }
@@ -96,7 +102,7 @@ export function renderMeetingMinutesPdf(
 }
 
 function section(doc: PDFKit.PDFDocument, title: string): void {
-  doc.font('Helvetica-Bold').fontSize(13).text(title);
+  doc.font(VN_FONT_BOLD).fontSize(13).text(title);
   doc.moveDown(0.2);
   doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
   doc.moveDown(0.4);

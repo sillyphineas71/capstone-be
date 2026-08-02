@@ -69,6 +69,7 @@ describe('MediaFilesService (REC-006)', () => {
         token: 'signed-token',
         expiresAt: '2026-06-16T10:10:00.000Z',
       }),
+      getObjectSize: jest.fn().mockResolvedValue(2048),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -192,17 +193,78 @@ describe('MediaFilesService (REC-006)', () => {
   it('resolvePlayback: ok → path/size/mime', async () => {
     repoMock.findOne.mockResolvedValue(baseRow());
     const r = await service.resolvePlayback('f1');
+    expect(r.kind).toBe('local');
+    if (r.kind !== 'local') throw new Error('expected local');
     expect(r.path).toBe(path.join(BASE, 'f1.mp4'));
     expect(r.size).toBe(1048576);
     expect(r.mimeType).toBe('video/mp4');
   });
 
-  it('resolvePlayback: 404 non-local', async () => {
-    repoMock.findOne.mockResolvedValue(baseRow({ storageProvider: 's3' }));
+  // REGRESSION (2026-07-31): sau khi deploy đổi STORAGE_DRIVER=s3, mọi audio upload được
+  // lưu với storageProvider='s3'. Bản cũ chỉ chấp nhận LOCAL nên playback + secure-download
+  // 404 với TOÀN BỘ file, dù object vẫn nằm nguyên trong bucket.
+  it('resolvePlayback: s3 → resolve remote, size lấy từ StorageService (KHÔNG chạm đĩa)', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 's3', storageKey: 'recordings/m1/a.wav' }),
+    );
+    const r = await service.resolvePlayback('f1');
+    expect(r.kind).toBe('remote');
+    if (r.kind !== 'remote') throw new Error('expected remote');
+    expect(r.storageKey).toBe('recordings/m1/a.wav');
+    expect(r.size).toBe(2048);
+    expect(r.mimeType).toBe('video/mp4');
+    expect(storageServiceMock.getObjectSize).toHaveBeenCalledWith(
+      'recordings/m1/a.wav',
+    );
+    expect(fsMock.existsSync).not.toHaveBeenCalled();
+  });
+
+  it('resolvePlayback: minio cũng resolve remote', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 'minio', storageKey: 'recordings/m1/b.wav' }),
+    );
+    const r = await service.resolvePlayback('f1');
+    expect(r.kind).toBe('remote');
+  });
+
+  it('resolvePlayback: object không còn trong bucket → 404 (không lộ lỗi hạ tầng)', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 's3', storageKey: 'recordings/m1/gone.wav' }),
+    );
+    storageServiceMock.getObjectSize.mockRejectedValue(
+      new Error('NoSuchKey: the object does not exist'),
+    );
+    await expect(service.resolvePlayback('f1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('resolvePlayback: SEC object key traversal → 404, KHÔNG gọi storage', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 's3', storageKey: '../../etc/passwd' }),
+    );
+    await expect(service.resolvePlayback('f1')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(storageServiceMock.getObjectSize).not.toHaveBeenCalled();
+  });
+
+  it('resolvePlayback: 404 provider không stream được (cloud_provider)', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 'cloud_provider' }),
+    );
     await expect(service.resolvePlayback('f1')).rejects.toThrow(
       NotFoundException,
     );
     expect(fsMock.existsSync).not.toHaveBeenCalled();
+  });
+
+  it('resolveSecureDownload: s3 → remote (trước đây 404 vì uỷ quyền cho resolvePlayback local-only)', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({ storageProvider: 's3', storageKey: 'recordings/m1/a.wav' }),
+    );
+    const r = await service.resolveSecureDownload('f1');
+    expect(r.kind).toBe('remote');
   });
 
   it('resolvePlayback: 404 storage_key null', async () => {

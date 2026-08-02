@@ -16,6 +16,7 @@
 import { createReadStream } from 'fs';
 import type { Request, Response } from 'express';
 import { MediaFilesService } from '../services/media-files.service.js';
+import type { ResolvedMedia } from '../services/media-files.service.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
 import { VisibilityDto } from '../dto/visibility.dto.js';
@@ -125,16 +126,33 @@ export class MediaFilesController {
         'Content-Range': `bytes ${start}-${end}/${m.size}`,
         'Content-Length': end - start + 1,
       });
-      const stream = createReadStream(m.path, { start, end });
+      const stream = await this.openMediaStream(m, start, end);
       stream.on('error', onError);
       stream.pipe(res);
       return;
     }
 
     res.writeHead(200, { 'Content-Length': m.size });
-    const stream = createReadStream(m.path);
+    const stream = await this.openMediaStream(m);
     stream.on('error', onError);
     stream.pipe(res);
+  }
+
+  /**
+   * Mở stream đọc theo đúng nơi file đang nằm. `start`/`end` inclusive; bỏ trống = full file.
+   * Nhánh `remote` (s3/MinIO) dùng getPartialObject nên seek không phải tải cả file về.
+   */
+  private async openMediaStream(
+    m: ResolvedMedia,
+    start?: number,
+    end?: number,
+  ): Promise<NodeJS.ReadableStream> {
+    if (m.kind === 'remote') {
+      return this.storageService.getObjectStream(m.storageKey, start, end);
+    }
+    return start === undefined
+      ? createReadStream(m.path)
+      : createReadStream(m.path, { start, end });
   }
 
   // REC-006 (UC-123): ẩn/xóa-mềm media_file.
@@ -183,14 +201,15 @@ export class MediaFilesController {
     const m = resolved;
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', m.mimeType);
-    const filename = m.path.split(/[\\/]/).pop();
+    // fileName lấy từ DB — nhánh remote không có đường dẫn đĩa để cắt lấy tên.
+    const filename =
+      m.fileName || (m.kind === 'local' ? m.path.split(/[\\/]/).pop() : 'file');
     res.setHeader(
       'Content-Disposition',
       'attachment; filename="' + filename + '"',
     );
     res.writeHead(200, { 'Content-Length': m.size });
-    const { createReadStream } = require('fs');
-    const stream = createReadStream(m.path);
+    const stream = await this.openMediaStream(m);
     stream.on('error', () => {
       if (!res.headersSent) res.status(500).end();
       else res.end();

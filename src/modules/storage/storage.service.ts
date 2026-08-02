@@ -252,6 +252,62 @@ export class StorageService implements OnModuleInit {
   }
 
   /**
+   * Kích thước object (bytes) — dùng cho Content-Length/Content-Range khi stream
+   * playback từ s3/MinIO, nơi không có fs.statSync().
+   */
+  async getObjectSize(storageKey: string): Promise<number> {
+    if (this.storageDriver !== 's3') {
+      const base = path.resolve(this.localPath);
+      const resolved = path.resolve(this.localPath, storageKey);
+      if (!(resolved === base || resolved.startsWith(base + path.sep))) {
+        throw new Error('Invalid storage key (path traversal).');
+      }
+      return fs.statSync(resolved).size;
+    }
+    if (!this.minioClient) {
+      throw new Error('MinIO client is not initialized.');
+    }
+    const stat = await this.minioClient.statObject(this.s3Bucket, storageKey);
+    return stat.size;
+  }
+
+  /**
+   * Stream object — hỗ trợ byte range để phục vụ HTTP Range (video/audio seek).
+   * `start`/`end` là chỉ số byte INCLUSIVE (đúng ngữ nghĩa header Range), trong khi
+   * MinIO getPartialObject nhận (offset, length) nên phải quy đổi.
+   * Bỏ trống cả hai = lấy toàn bộ object.
+   */
+  async getObjectStream(
+    storageKey: string,
+    start?: number,
+    end?: number,
+  ): Promise<NodeJS.ReadableStream> {
+    if (this.storageDriver !== 's3') {
+      const base = path.resolve(this.localPath);
+      const resolved = path.resolve(this.localPath, storageKey);
+      if (!(resolved === base || resolved.startsWith(base + path.sep))) {
+        throw new Error('Invalid storage key (path traversal).');
+      }
+      return start === undefined
+        ? fs.createReadStream(resolved)
+        : fs.createReadStream(resolved, { start, end });
+    }
+    if (!this.minioClient) {
+      throw new Error('MinIO client is not initialized.');
+    }
+    if (start === undefined) {
+      return this.minioClient.getObject(this.s3Bucket, storageKey);
+    }
+    const length = (end ?? 0) - start + 1;
+    return this.minioClient.getPartialObject(
+      this.s3Bucket,
+      storageKey,
+      start,
+      length,
+    );
+  }
+
+  /**
    * Sinh presigned URL có thời hạn ngắn để truy cập object trên MinIO/S3.
    * Chỉ áp dụng cho driver s3 — không tạo public URL cho private bucket.
    */

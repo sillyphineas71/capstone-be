@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import {
@@ -16,13 +17,72 @@ import {
   RecordingConfigResponseDto,
 } from '../dto/recording-config-response.dto.js';
 import { RecordingConfigAuditRepository } from '../repositories/recording-config-audit.repository.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+
+/** Role có toàn quyền cấu hình recording cho MỌI meeting (không cần là Host/Organizer). */
+const RECORDING_CONFIG_FULL_SCOPE_ROLES = [
+  'MANAGER',
+  'BUSINESS_ADMIN',
+  'SYSTEM_ADMIN',
+];
+
+interface MeetingOwnershipRow {
+  id: string;
+  organizer_id: string;
+  host_id: string | null;
+}
 
 @Injectable()
 export class RecordingConfigService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly auditRepo: RecordingConfigAuditRepository,
+    private readonly authzRepo: AuthzReadRepository,
   ) {}
+
+  /**
+   * Bug 7.2: role tĩnh (RequirePermissions) chỉ chặn ở tầng "có quyền cấu hình recording
+   * nói chung" hay không. Với role không full-scope (vd EMPLOYEE), bắt buộc phải là
+   * Host/Organizer của CHÍNH meeting đó — mirror MeetingUpdateService (meeting.update.own).
+   */
+  private async assertCanConfigure(
+    meeting: MeetingOwnershipRow,
+    userId: string | null,
+  ): Promise<void> {
+    if (!userId) {
+      throw new ForbiddenException({
+        success: false,
+        message:
+          'Bạn không có quyền cấu hình ghi âm/ghi hình cho cuộc họp này.',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+    }
+
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    const hasFullScopeRole = roles.some((role) =>
+      RECORDING_CONFIG_FULL_SCOPE_ROLES.includes(role),
+    );
+    if (hasFullScopeRole) return;
+
+    const isOrganizer = meeting.organizer_id === userId;
+    const isHost = meeting.host_id === userId;
+    if (!isOrganizer && !isHost) {
+      throw new ForbiddenException({
+        success: false,
+        message:
+          'Bạn không có quyền cấu hình ghi âm/ghi hình cho cuộc họp này.',
+        error: {
+          code: 'FORBIDDEN',
+          details: {
+            requiredPermission: 'recording.config.own',
+            isOrganizer,
+            isHost,
+          },
+        },
+      });
+    }
+  }
 
   async create(
     meetingId: string,
@@ -30,9 +90,9 @@ export class RecordingConfigService {
     userId: string | null,
   ): Promise<RecordingConfigResponseDto> {
     // 1. Meeting tồn tại (read-only raw query, không import MeetingsModule).
-    const meetingRows: Array<{ id: string }> =
+    const meetingRows: MeetingOwnershipRow[] =
       await this.dataSource.manager.query(
-        'SELECT id FROM meetings WHERE id = $1',
+        'SELECT id, organizer_id, host_id FROM meetings WHERE id = $1',
         [meetingId],
       );
     if (!meetingRows || meetingRows.length === 0) {
@@ -41,6 +101,9 @@ export class RecordingConfigService {
         message: 'Meeting not found.',
       });
     }
+
+    // 1b. Bug 7.2: role không full-scope (vd EMPLOYEE) phải là Host/Organizer.
+    await this.assertCanConfigure(meetingRows[0], userId);
 
     // 2. 1:1 — đã có config?
     const existing = await this.dataSource.manager.findOne(
@@ -99,7 +162,10 @@ export class RecordingConfigService {
     }
   }
 
-  async findOne(meetingId: string): Promise<RecordingConfigResponseDto> {
+  async findOne(
+    meetingId: string,
+    userId: string | null,
+  ): Promise<RecordingConfigResponseDto> {
     const config = await this.dataSource.manager.findOne(
       RecordingConfigEntity,
       { where: { meetingId } },
@@ -110,6 +176,17 @@ export class RecordingConfigService {
         message: 'Recording config not found for this meeting.',
       });
     }
+
+    // Bug 7.2: role không full-scope (vd EMPLOYEE) phải là Host/Organizer.
+    const meetingRows: MeetingOwnershipRow[] =
+      await this.dataSource.manager.query(
+        'SELECT id, organizer_id, host_id FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (meetingRows && meetingRows.length > 0) {
+      await this.assertCanConfigure(meetingRows[0], userId);
+    }
+
     return toRecordingConfigResponse(config);
   }
 
@@ -127,6 +204,16 @@ export class RecordingConfigService {
         code: 'RECORDING_CONFIG_NOT_FOUND',
         message: 'Recording config not found for this meeting.',
       });
+    }
+
+    // Bug 7.2: role không full-scope (vd EMPLOYEE) phải là Host/Organizer.
+    const meetingRows: MeetingOwnershipRow[] =
+      await this.dataSource.manager.query(
+        'SELECT id, organizer_id, host_id FROM meetings WHERE id = $1',
+        [meetingId],
+      );
+    if (meetingRows && meetingRows.length > 0) {
+      await this.assertCanConfigure(meetingRows[0], userId);
     }
 
     // Guard "đang ghi": có recording_session active cho meeting?

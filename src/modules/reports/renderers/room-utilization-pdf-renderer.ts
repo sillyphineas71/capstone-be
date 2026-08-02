@@ -6,6 +6,11 @@ import {
   RoomUsageRow,
   ReleasedRoomRow,
 } from '../services/room-utilization-report-data.service.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 export interface RoomUtilizationReportData {
   metadata: ReportMetadata;
@@ -32,14 +37,15 @@ export function renderRoomUtilizationPdf(
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(18)
         .text('BÁO CÁO SỬ DỤNG PHÒNG HỌP', { align: 'center' });
       doc.moveDown(0.5);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(10)
         .fillColor('#666666')
         .text(`Tạo lúc: ${data.metadata.generatedAt.toLocaleString('vi-VN')}`, {
@@ -158,7 +164,7 @@ export function renderRoomUtilizationPdf(
 }
 
 function sectionHeader(doc: PDFKit.PDFDocument, title: string): void {
-  doc.font('Helvetica-Bold').fontSize(13).text(title);
+  doc.font(VN_FONT_BOLD).fontSize(13).text(title);
   doc.moveDown(0.3);
   doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke('#aaaaaa');
   doc.moveDown(0.5);
@@ -166,10 +172,10 @@ function sectionHeader(doc: PDFKit.PDFDocument, title: string): void {
 
 function kvRow(doc: PDFKit.PDFDocument, label: string, value: string): void {
   doc
-    .font('Helvetica-Bold')
+    .font(VN_FONT_BOLD)
     .fontSize(10)
     .text(`${label}: `, { continued: true });
-  doc.font('Helvetica').text(value ?? '—');
+  doc.font(VN_FONT_REGULAR).text(value ?? '—');
 }
 
 function tableHeader(
@@ -178,7 +184,7 @@ function tableHeader(
   x: number[],
   w: number[],
 ): void {
-  doc.font('Helvetica-Bold').fontSize(9);
+  doc.font(VN_FONT_BOLD).fontSize(9);
   const y = doc.y;
   headers.forEach((h, i) => doc.text(h, x[i], y, { width: w[i] }));
   doc.y = y + 15;
@@ -196,13 +202,13 @@ function tableRow(
     doc.addPage();
     doc.y = 50;
   }
-  doc.font('Helvetica').fontSize(8.5);
+  doc.font(VN_FONT_REGULAR).fontSize(8.5);
   const y = doc.y;
   cells.forEach((c, i) => doc.text(c, x[i], y, { width: w[i] }));
   doc.y = y + 14;
 }
 
 function emptyNote(doc: PDFKit.PDFDocument, text: string): void {
-  doc.font('Helvetica').fontSize(10).fillColor('#888888').text(text);
+  doc.font(VN_FONT_REGULAR).fontSize(10).fillColor('#888888').text(text);
   doc.fillColor('#000000');
 }

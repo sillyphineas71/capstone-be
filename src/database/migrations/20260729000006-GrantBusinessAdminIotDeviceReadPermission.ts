@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Mirror 20260727000006-GrantManagerAvatarReviewPermission.ts — permission KHÔNG mới, chỉ
  * thêm 1 dòng role_permissions. KHÔNG mở rộng sang iot.device.disable/enable/probe/update.
  */
-export class GrantBusinessAdminIotDeviceReadPermission20260729000006
-  implements MigrationInterface
-{
+export class GrantBusinessAdminIotDeviceReadPermission20260729000006 implements MigrationInterface {
   name = 'GrantBusinessAdminIotDeviceReadPermission20260729000006';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

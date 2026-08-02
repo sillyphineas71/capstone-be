@@ -3,6 +3,11 @@ import type {
   SecurityAlertExportRow,
   SecurityAlertStatusCounts,
 } from '../services/security-alert-report-data.service.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 export interface SecurityAlertReportMeta {
   from: string;
@@ -37,14 +42,15 @@ export function renderSecurityAlertPdf(
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(16)
         .text('BÁO CÁO SỰ KIỆN AN NINH', { align: 'center' });
       doc.moveDown(0.3);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(9)
         .fillColor('#666666')
         .text(
@@ -55,7 +61,7 @@ export function renderSecurityAlertPdf(
       doc.moveDown(0.5);
 
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(10)
         .text(
           `Tổng số: ${rows.length}  ·  Mới: ${statusCounts.new}  ·  Đã tiếp nhận: ${statusCounts.acknowledged}  ·  Đã xử lý: ${statusCounts.resolved}`,
@@ -64,7 +70,7 @@ export function renderSecurityAlertPdf(
 
       if (rows.length === 0) {
         doc
-          .font('Helvetica')
+          .font(VN_FONT_REGULAR)
           .fontSize(11)
           .fillColor('#888888')
           .text('Không có dữ liệu trong khoảng thời gian đã chọn.');
@@ -94,7 +100,7 @@ export function renderSecurityAlertPdf(
       }
 
       const drawHeader = (): void => {
-        doc.font('Helvetica-Bold').fontSize(7.5);
+        doc.font(VN_FONT_BOLD).fontSize(7.5);
         const y = doc.y;
         headers.forEach((h, i) => doc.text(h, colX[i], y, { width: colW[i] }));
         doc.y = y + 14;
@@ -106,13 +112,13 @@ export function renderSecurityAlertPdf(
       };
 
       drawHeader();
-      doc.font('Helvetica').fontSize(7);
+      doc.font(VN_FONT_REGULAR).fontSize(7);
 
       rows.forEach((row) => {
         if (doc.y > 520) {
           doc.addPage();
           drawHeader();
-          doc.font('Helvetica').fontSize(7);
+          doc.font(VN_FONT_REGULAR).fontSize(7);
         }
         const y = doc.y;
         doc.text(row.alertType, colX[0], y, { width: colW[0] });

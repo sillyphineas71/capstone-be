@@ -124,7 +124,7 @@ export class IvssRoomAccessLogService {
         fullName: r.full_name ?? null,
         direction: r.direction ?? null,
         matchState: r.match_state ?? null,
-        similarity: Number.isFinite(similarity as number) ? similarity : null,
+        similarity: Number.isFinite(similarity) ? similarity : null,
         meetingId: r.meeting_id ?? null,
         isStranger: this.isStranger(r.match_state),
       };

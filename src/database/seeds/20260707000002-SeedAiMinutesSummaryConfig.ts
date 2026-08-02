@@ -22,7 +22,11 @@ export async function seedAiMinutesSummaryConfig(
     const configJson = {
       enabled: false,
       provider: 'mock',
-      modelName: 'qwen2.5:7b-instruct',
+      // 2026-07-30: đổi mặc định sang 3b-instruct — máy cá nhân dùng để chạy
+      // AI Summarize (kế hoạch Tailscale) chỉ đã pull sẵn bản 3b, không pull
+      // thêm 7b (đỡ ~4.7GB tải về + RAM lúc chạy). Đổi qua bản khác chỉ cần
+      // sửa giá trị này trong system_configs, không cần sửa code.
+      modelName: 'qwen2.5:3b-instruct',
       allowExternalProvider: false,
       requireHumanReview: true,
       maxInputTokens: 6000,

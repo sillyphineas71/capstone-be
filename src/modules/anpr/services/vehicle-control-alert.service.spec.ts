@@ -205,11 +205,11 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
 
   // === UC-108: New scenarios ===
 
-  describe("UC-108 unknown_vehicle and vehicle_unauthorized", () => {
+  describe('UC-108 unknown_vehicle and vehicle_unauthorized', () => {
     const noRegRows = []; // empty = no registration exists
-    const pendingRows = [{ status: "pending" }];
-    const rejectedRows = [{ status: "rejected" }];
-    const activeRows = [{ status: "active" }];
+    const pendingRows = [{ status: 'pending' }];
+    const rejectedRows = [{ status: 'rejected' }];
+    const activeRows = [{ status: 'active' }];
 
     // Reset mock to simulate no controlList match
     function resetMock() {
@@ -217,121 +217,130 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
       dsMock.manager.query.mockReset();
     }
 
-    it("AC-003: unknown vehicle (no registration) -> unknown_vehicle alert", async () => {
+    it('AC-003: unknown vehicle (no registration) -> unknown_vehicle alert', async () => {
       resetMock();
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve(noRegRows);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve(noRegRows);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("UNKNOWN01", ctx);
+      await service.evaluate('UNKNOWN01', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.alertType).toBe("unknown_vehicle");
-      expect(input.severity).toBe("medium");
+      expect(input.alertType).toBe('unknown_vehicle');
+      expect(input.severity).toBe('medium');
     });
 
-    it("AC-004: pending registration -> vehicle_unauthorized alert", async () => {
+    it('AC-004: pending registration -> vehicle_unauthorized alert', async () => {
       resetMock();
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve(pendingRows);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve(pendingRows);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("PENDING01", ctx);
+      await service.evaluate('PENDING01', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.alertType).toBe("vehicle_unauthorized");
-      expect(input.severity).toBe("low");
+      expect(input.alertType).toBe('vehicle_unauthorized');
+      expect(input.severity).toBe('low');
     });
 
-    it("rejected registration -> vehicle_unauthorized alert", async () => {
+    it('rejected registration -> vehicle_unauthorized alert', async () => {
       resetMock();
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve(rejectedRows);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve(rejectedRows);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("REJECTED01", ctx);
+      await service.evaluate('REJECTED01', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.alertType).toBe("vehicle_unauthorized");
-      expect(input.severity).toBe("low");
+      expect(input.alertType).toBe('vehicle_unauthorized');
+      expect(input.severity).toBe('low');
     });
 
-    it("active registration (no controlList) -> no alert", async () => {
+    it('active registration (no controlList) -> no alert', async () => {
       resetMock();
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve(activeRows);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve(activeRows);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("ACTIVE01", ctx);
+      await service.evaluate('ACTIVE01', ctx);
       expect(alertsMock.recordAlert).not.toHaveBeenCalled();
       expect(notifMock.createNotification).not.toHaveBeenCalled();
     });
   });
 
-  describe("Priority chain (B>C>A>D)", () => {
-    it("blocklist + active registration -> blocklist wins", async () => {
+  describe('Priority chain (B>C>A>D)', () => {
+    it('blocklist + active registration -> blocklist wins', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve([{ status: "active" }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([{ status: 'active' }]);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("PRIORITY01", ctx);
+      await service.evaluate('PRIORITY01', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
       expect(input).toBeDefined();
-      expect(input.alertType).toBe("vehicle_control_match");
-      expect(input.severity).toBe("high");
+      expect(input.alertType).toBe('vehicle_control_match');
+      expect(input.severity).toBe('high');
     });
 
-    it("watchlist + pending registration -> watchlist wins", async () => {
+    it('watchlist + pending registration -> watchlist wins', async () => {
       controlListMock.checkControlList.mockResolvedValue(watchlistMatch);
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve([{ status: "pending" }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([{ status: 'pending' }]);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("PRIORITY02", ctx);
+      await service.evaluate('PRIORITY02', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.alertType).toBe("vehicle_control_match");
-      expect(input.severity).toBe("medium");
+      expect(input.alertType).toBe('vehicle_control_match');
+      expect(input.severity).toBe('medium');
     });
   });
 
-  describe("Zone_id resolution", () => {
-    it("channelId resolves -> zoneId included in recordAlert", async () => {
+  describe('Zone_id resolution', () => {
+    it('channelId resolves -> zoneId included in recordAlert', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation(async (sql: string) => {
-        if (sql.includes("FROM iot_devices i WHERE i.channel_id")) return Promise.resolve([{ zone_id: "zone-1" }]);
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve([]);
+        if (sql.includes('FROM iot_devices i WHERE i.channel_id'))
+          return Promise.resolve([{ zone_id: 'zone-1' }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([]);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("ZONE01", { channelId: 3, direction: "enter" });
+      await service.evaluate('ZONE01', { channelId: 3, direction: 'enter' });
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.zoneId).toBe("zone-1");
+      expect(input.zoneId).toBe('zone-1');
     });
 
-    it("no zone_id -> zoneId=null does not block alert", async () => {
+    it('no zone_id -> zoneId=null does not block alert', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation(async (sql: string) => {
-        if (sql.includes("FROM iot_devices")) return Promise.resolve([{ zone_id: null }]);
-        if (sql.includes("FROM vehicle_registrations")) return Promise.resolve([]);
+        if (sql.includes('FROM iot_devices'))
+          return Promise.resolve([{ zone_id: null }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([]);
         return Promise.resolve(adminRows);
       });
-      await service.evaluate("ZONE02", ctx);
+      await service.evaluate('ZONE02', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
       expect(input.zoneId).toBeNull();
     });
   });
 
-  describe("eventId parameter", () => {
-    it("eventId passed -> sourceEventId set in recordAlert", async () => {
+  describe('eventId parameter', () => {
+    it('eventId passed -> sourceEventId set in recordAlert', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
-      await service.evaluate("EVID01", ctx, "evt-123");
+      await service.evaluate('EVID01', ctx, 'evt-123');
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.sourceEventId).toBe("evt-123");
+      expect(input.sourceEventId).toBe('evt-123');
     });
 
-    it("eventId undefined -> sourceEventId null", async () => {
+    it('eventId undefined -> sourceEventId null', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
-      await service.evaluate("EVID02", ctx);
+      await service.evaluate('EVID02', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
       expect(input.sourceEventId).toBeNull();
     });
   });
-
 });

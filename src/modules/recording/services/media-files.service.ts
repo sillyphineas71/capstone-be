@@ -12,6 +12,26 @@ import { ListMediaQueryDto } from '../dto/list-media-query.dto.js';
 import { VisibilityDto } from '../dto/visibility.dto.js';
 import { StorageService } from '../../storage/storage.service.js';
 
+/**
+ * Kết quả resolve 1 media file để stream. `local` = đọc từ đĩa, `remote` = đọc từ
+ * bucket s3/MinIO qua StorageService. Controller phân nhánh theo `kind`.
+ */
+export type ResolvedMedia =
+  | {
+      kind: 'local';
+      path: string;
+      size: number;
+      mimeType: string;
+      fileName: string;
+    }
+  | {
+      kind: 'remote';
+      storageKey: string;
+      size: number;
+      mimeType: string;
+      fileName: string;
+    };
+
 export interface MediaSummary {
   id: string;
   fileName: string;
@@ -133,14 +153,55 @@ export class MediaFilesService {
   }
 
   /**
-   * UC-122 (v1 local): resolve file để controller stream.
-   * SEC: storage_key resolve PHẢI nằm trong RECORDING_STORAGE_PATH (chống path traversal).
+   * UC-122: resolve file để controller stream.
+   *
+   * Hỗ trợ CẢ HAI nơi lưu, vì hai luồng ghi dữ liệu khác nhau:
+   *  - `local`  — ffmpeg ghi video thẳng ra đĩa (recording-session.service.ts hard-code
+   *    'local'). SEC: storage_key PHẢI nằm trong RECORDING_STORAGE_PATH (chống traversal).
+   *  - `s3`/`minio` — audio upload đi qua StorageService, lưu `storageProvider: <driver>`.
+   *
+   * Trước 2026-07-31 hàm này chỉ chấp nhận LOCAL, nên sau khi deploy đổi sang
+   * STORAGE_DRIVER=s3 thì MỌI file upload đều 404 (kể cả file tồn tại thật trong bucket) —
+   * kéo theo cả secure-download vì nó gọi lại hàm này.
    */
-  async resolvePlayback(
-    fileId: string,
-  ): Promise<{ path: string; size: number; mimeType: string }> {
+  async resolvePlayback(fileId: string): Promise<ResolvedMedia> {
     const m = await this.loadActive(fileId);
-    if (m.storageProvider !== StorageProvider.LOCAL || !m.storageKey) {
+    if (!m.storageKey) {
+      throw this.notFound();
+    }
+
+    if (
+      m.storageProvider === StorageProvider.S3 ||
+      m.storageProvider === StorageProvider.MINIO
+    ) {
+      // Object key luôn là đường dẫn tương đối trong bucket — chặn key tuyệt đối
+      // hoặc có '..' trước khi đưa xuống SDK.
+      if (m.storageKey.startsWith('/') || m.storageKey.includes('..')) {
+        throw this.notFound();
+      }
+      let size: number;
+      try {
+        size = await this.storageService.getObjectSize(m.storageKey);
+      } catch (err) {
+        // Object không còn trong bucket (hoặc bucket/driver sai cấu hình) → 404,
+        // KHÔNG lộ chi tiết hạ tầng ra response.
+        this.logger.warn(
+          `Playback resolve failed for ${m.id} (key=${m.storageKey}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        throw this.notFound();
+      }
+      return {
+        kind: 'remote',
+        storageKey: m.storageKey,
+        size,
+        mimeType: m.mimeType,
+        fileName: m.fileName,
+      };
+    }
+
+    if (m.storageProvider !== StorageProvider.LOCAL) {
       throw this.notFound();
     }
 
@@ -157,27 +218,29 @@ export class MediaFilesService {
       throw this.notFound();
     }
     const size = fs.statSync(resolved).size;
-    return { path: resolved, size, mimeType: m.mimeType };
+    return {
+      kind: 'local',
+      path: resolved,
+      size,
+      mimeType: m.mimeType,
+      fileName: m.fileName,
+    };
   }
 
   /**
-   * ACCT-AVATAR-REVIEW-001: resolve cho secure-download — hỗ trợ cả
-   * local (stream từ đĩa) và cloud_provider (redirect sang file_url,
+   * ACCT-AVATAR-REVIEW-001: resolve cho secure-download — hỗ trợ local (đĩa),
+   * s3/minio (stream từ bucket) và cloud_provider (redirect sang file_url,
    * VD: Cloudinary, vì backend không lưu bytes của các file này).
    */
   async resolveSecureDownload(
     fileId: string,
-  ): Promise<
-    | { kind: 'redirect'; url: string }
-    | { kind: 'local'; path: string; size: number; mimeType: string }
-  > {
+  ): Promise<{ kind: 'redirect'; url: string } | ResolvedMedia> {
     const m = await this.loadActive(fileId);
     if (m.storageProvider === StorageProvider.CLOUD_PROVIDER) {
       if (!m.fileUrl) throw this.notFound();
       return { kind: 'redirect', url: m.fileUrl };
     }
-    const playback = await this.resolvePlayback(fileId);
-    return { kind: 'local', ...playback };
+    return this.resolvePlayback(fileId);
   }
 
   /** UC-123: hide (is_active=false) hoặc soft_delete (deleted_at). */

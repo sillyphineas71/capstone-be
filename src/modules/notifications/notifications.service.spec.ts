@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationReadStateService } from './services/notification-read-state.service.js';
@@ -44,8 +44,26 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
   describe('listMyNotifications', () => {
     it('gọi getReadState 1 LẦN cho cả trang, map isRead cho từng item qua computeIsRead', async () => {
       const items = [
-        { id: 'n1', notificationType: 't', subject: null, content: 'c1', relatedEntityType: null, relatedEntityId: null, priority: 'normal', createdAt: new Date('2026-07-01') },
-        { id: 'n2', notificationType: 't', subject: null, content: 'c2', relatedEntityType: null, relatedEntityId: null, priority: 'normal', createdAt: new Date('2026-07-02') },
+        {
+          id: 'n1',
+          notificationType: 't',
+          subject: null,
+          content: 'c1',
+          relatedEntityType: null,
+          relatedEntityId: null,
+          priority: 'normal',
+          createdAt: new Date('2026-07-01'),
+        },
+        {
+          id: 'n2',
+          notificationType: 't',
+          subject: null,
+          content: 'c2',
+          relatedEntityType: null,
+          relatedEntityId: null,
+          priority: 'normal',
+          createdAt: new Date('2026-07-02'),
+        },
       ];
       queryBuilder.getManyAndCount.mockResolvedValue([items, 2]);
       const state = { readIds: new Set(['n1']), readAllAt: null };
@@ -66,9 +84,9 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
   describe('getMyNotificationDetail', () => {
     it('404 nếu không tồn tại', async () => {
       repo.findOne.mockResolvedValue(null);
-      await expect(
-        service.getMyNotificationDetail('n1', 'u1'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.getMyNotificationDetail('n1', 'u1')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('403 nếu user không phải recipient', async () => {
@@ -77,9 +95,9 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
         recipientUserIdsJson: ['other-user'],
         createdAt: new Date(),
       });
-      await expect(
-        service.getMyNotificationDetail('n1', 'u1'),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getMyNotificationDetail('n1', 'u1')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('trả isRead từ readStateService.isRead khi là recipient', async () => {
@@ -129,9 +147,9 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
         createdAt: new Date(),
       });
 
-      await expect(
-        service.markNotificationRead('n1', 'u1'),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.markNotificationRead('n1', 'u1')).rejects.toThrow(
+        ForbiddenException,
+      );
       expect(readStateService.markRead).not.toHaveBeenCalled();
     });
   });

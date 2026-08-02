@@ -182,4 +182,34 @@ describe('MeetingListService.list', () => {
     expect(res.data[0].roomName).toBeNull();
     expect(res.data[0].organizerName).toBeNull();
   });
+
+  it('BE-5: has_transcript raw = 1 → hasTranscript true', async () => {
+    const { service } = setup(
+      [makeMeetingEntity()],
+      [
+        {
+          organizer_full_name: 'Nguyen Van A',
+          room_room_name: 'Phong A',
+          has_transcript: 1,
+        },
+      ],
+    );
+    const res = await service.list(q());
+    expect(res.data[0].hasTranscript).toBe(true);
+  });
+
+  it('BE-5: has_transcript raw = null/undefined → hasTranscript false', async () => {
+    const { service } = setup(
+      [makeMeetingEntity()],
+      [
+        {
+          organizer_full_name: 'Nguyen Van A',
+          room_room_name: 'Phong A',
+          has_transcript: null,
+        },
+      ],
+    );
+    const res = await service.list(q());
+    expect(res.data[0].hasTranscript).toBe(false);
+  });
 });

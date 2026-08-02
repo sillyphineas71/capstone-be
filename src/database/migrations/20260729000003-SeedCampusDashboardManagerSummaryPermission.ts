@@ -7,9 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * tham số `managerId`), SYSTEM_ADMIN/BUSINESS_ADMIN không có `direct_manager_id`/team riêng
  * theo nghĩa này (xem spec §2.1). Mirror 20260723000008-SeedCampusDashboardOverviewPermission.ts.
  */
-export class SeedCampusDashboardManagerSummaryPermission20260729000003
-  implements MigrationInterface
-{
+export class SeedCampusDashboardManagerSummaryPermission20260729000003 implements MigrationInterface {
   name = 'SeedCampusDashboardManagerSummaryPermission20260729000003';
 
   private readonly permission = {

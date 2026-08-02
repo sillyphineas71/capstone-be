@@ -147,10 +147,7 @@ describe('RedisService', () => {
       mockRedisClient.sadd.mockResolvedValue(1);
       const result = await service.sadd('my-set', 'member-1');
       expect(result).toBe(1);
-      expect(mockRedisClient.sadd).toHaveBeenCalledWith(
-        'my-set',
-        'member-1',
-      );
+      expect(mockRedisClient.sadd).toHaveBeenCalledWith('my-set', 'member-1');
     });
 
     it('should propagate error and log it', async () => {
@@ -176,9 +173,9 @@ describe('RedisService', () => {
 
     it('should propagate error and log it', async () => {
       mockRedisClient.sismember.mockRejectedValue(new Error('conn refused'));
-      await expect(
-        service.sismember('my-set', 'member-1'),
-      ).rejects.toThrow('conn refused');
+      await expect(service.sismember('my-set', 'member-1')).rejects.toThrow(
+        'conn refused',
+      );
     });
   });
 
@@ -191,9 +188,7 @@ describe('RedisService', () => {
 
     it('should propagate error and log it', async () => {
       mockRedisClient.smembers.mockRejectedValue(new Error('conn refused'));
-      await expect(service.smembers('my-set')).rejects.toThrow(
-        'conn refused',
-      );
+      await expect(service.smembers('my-set')).rejects.toThrow('conn refused');
     });
   });
 

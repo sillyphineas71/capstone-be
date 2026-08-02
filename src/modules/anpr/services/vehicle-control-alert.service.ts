@@ -69,20 +69,24 @@ export class VehicleControlAlertService {
       // --- Step 2: Resolve zone_id from channelId (FR-020) ---
       let zoneId: string | null = null;
       try {
-        const rows: Array<{ zone_id: string | null }> = await this.dataSource.manager.query(
-          `SELECT i.zone_id FROM iot_devices i WHERE i.channel_id = $1 AND i.deleted_at IS NULL LIMIT 1`,
-          [context.channelId],
-        );
+        const rows: Array<{ zone_id: string | null }> =
+          await this.dataSource.manager.query(
+            `SELECT i.zone_id FROM iot_devices i WHERE i.channel_id = $1 AND i.deleted_at IS NULL LIMIT 1`,
+            [context.channelId],
+          );
         zoneId = rows[0]?.zone_id ?? null;
       } catch (e) {
-        this.logger.warn(`Zone resolution failed (channel=${context.channelId}): ${e instanceof Error ? e.message : 'unknown'}`);
+        this.logger.warn(
+          `Zone resolution failed (channel=${context.channelId}): ${e instanceof Error ? e.message : 'unknown'}`,
+        );
       }
 
       // --- Step 3: Priority chain (B>C>A>D) ---
       let alertType: string | null = null;
       let severity: AlertSeverity = 'medium';
       let subject = '';
-      let notificationType: NotificationType = NotificationType.VEHICLE_CONTROL_LIST_MATCH;
+      let notificationType: NotificationType =
+        NotificationType.VEHICLE_CONTROL_LIST_MATCH;
       let payload: Record<string, unknown> = {
         plateNumber,
         channelId: context.channelId,
@@ -90,15 +94,23 @@ export class VehicleControlAlertService {
       };
       let ruleId: string | null = null;
 
-      const controlListMatch = await this.vehicleControlListService.checkControlList(plateNumber);
+      const controlListMatch =
+        await this.vehicleControlListService.checkControlList(plateNumber);
       if (controlListMatch) {
-        payload = { ...payload, listType: controlListMatch.listType, reason: controlListMatch.reason, controlListEntryId: controlListMatch.id };
+        payload = {
+          ...payload,
+          listType: controlListMatch.listType,
+          reason: controlListMatch.reason,
+          controlListEntryId: controlListMatch.id,
+        };
         if (controlListMatch.listType === 'blocklist') {
-          alertType = 'vehicle_control_match'; severity = 'high';
+          alertType = 'vehicle_control_match';
+          severity = 'high';
           subject = 'C\\u1ea3nh b\\u00e1o: xe trong danh s\\u00e1ch ch\\u1eb7n';
           notificationType = NotificationType.VEHICLE_CONTROL_LIST_MATCH;
         } else {
-          alertType = 'vehicle_control_match'; severity = 'medium';
+          alertType = 'vehicle_control_match';
+          severity = 'medium';
           subject = 'C\\u1ea3nh b\\u00e1o: xe c\\u1ea7n theo d\\u00f5i';
           notificationType = NotificationType.VEHICLE_CONTROL_LIST_MATCH;
         }
@@ -106,21 +118,31 @@ export class VehicleControlAlertService {
 
       if (!alertType) {
         try {
-          const regRows: Array<{ status: string }> = await this.dataSource.manager.query(
-            `SELECT status FROM vehicle_registrations WHERE plate_number = $1 AND deleted_at IS NULL LIMIT 1`,
-            [plateNumber],
-          );
+          const regRows: Array<{ status: string }> =
+            await this.dataSource.manager.query(
+              `SELECT status FROM vehicle_registrations WHERE plate_number = $1 AND deleted_at IS NULL LIMIT 1`,
+              [plateNumber],
+            );
           if (regRows.length === 0) {
-            alertType = 'unknown_vehicle'; severity = 'medium';
-            subject = 'C\\u1ea3nh b\\u00e1o: bi\\u1ec3n s\\u1ed1 kh\\u00f4ng x\\u00e1c \\u0111\\u1ecbnh';
+            alertType = 'unknown_vehicle';
+            severity = 'medium';
+            subject =
+              'C\\u1ea3nh b\\u00e1o: bi\\u1ec3n s\\u1ed1 kh\\u00f4ng x\\u00e1c \\u0111\\u1ecbnh';
             notificationType = NotificationType.UNKNOWN_VEHICLE_ALERT;
-          } else if (regRows[0].status === 'pending' || regRows[0].status === 'rejected') {
-            alertType = 'vehicle_unauthorized'; severity = 'low';
-            subject = 'Th\\u00f4ng b\\u00e1o: xe \\u0111ang ch\\u1edd duy\\u1ec7t/b\\u1ecb t\\u1eeb ch\\u1ed1i';
+          } else if (
+            regRows[0].status === 'pending' ||
+            regRows[0].status === 'rejected'
+          ) {
+            alertType = 'vehicle_unauthorized';
+            severity = 'low';
+            subject =
+              'Th\\u00f4ng b\\u00e1o: xe \\u0111ang ch\\u1edd duy\\u1ec7t/b\\u1ecb t\\u1eeb ch\\u1ed1i';
             notificationType = NotificationType.VEHICLE_UNAUTHORIZED_ALERT;
           }
         } catch (e) {
-          this.logger.warn(`Vehicle registration check failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`);
+          this.logger.warn(
+            `Vehicle registration check failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`,
+          );
           return;
         }
       }
@@ -129,34 +151,47 @@ export class VehicleControlAlertService {
 
       // --- Step 4: Check alert_rules ---
       try {
-        const { suppressed, rule } = await this.alertRulesService.findEffectiveRule(alertType, zoneId);
+        const { suppressed, rule } =
+          await this.alertRulesService.findEffectiveRule(alertType, zoneId);
         if (suppressed) {
-          this.logger.debug(`Alert suppressed by rule (type=${alertType} plate=${plateNumber})`);
+          this.logger.debug(
+            `Alert suppressed by rule (type=${alertType} plate=${plateNumber})`,
+          );
           return;
         }
         ruleId = rule?.id ?? null;
       } catch (e) {
-        this.logger.warn(`Alert rules check failed (type=${alertType}): ${e instanceof Error ? e.message : 'unknown'}`);
+        this.logger.warn(
+          `Alert rules check failed (type=${alertType}): ${e instanceof Error ? e.message : 'unknown'}`,
+        );
       }
 
       // --- Step 5: recordAlert ---
       try {
         await this.alertsService.recordAlert({
-          alertType, zoneId, severity, ruleId,
+          alertType,
+          zoneId,
+          severity,
+          ruleId,
           sourceEventId: eventId ?? null,
           payloadJson: payload,
         });
       } catch (e) {
-        this.logger.error(`recordAlert failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`);
+        this.logger.error(
+          `recordAlert failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`,
+        );
       }
 
       // --- Step 6: createNotification ---
       const recipients = await this.resolveRecipients();
       if (recipients.length === 0) {
-        this.logger.warn(`Alert match (plate=${plateNumber}) - no recipients, skip notification.`);
+        this.logger.warn(
+          `Alert match (plate=${plateNumber}) - no recipients, skip notification.`,
+        );
         return;
       }
-      const alertContent = `Bi\\u1ec3n s\\u1ed1 ${plateNumber} v\\u1eeba qua c\\u1ed5ng ` +
+      const alertContent =
+        `Bi\\u1ec3n s\\u1ed1 ${plateNumber} v\\u1eeba qua c\\u1ed5ng ` +
         `(channel ${context.channelId}, direction ${context.direction}).` +
         (payload.listType ? ` Lo\\u1ea1i: ${payload.listType}.` : '') +
         (payload.reason ? ` L\\u00fd do: ${payload.reason}.` : '');
@@ -165,13 +200,20 @@ export class VehicleControlAlertService {
         channel: NotificationChannel.IN_APP,
         subject,
         content: alertContent,
-        priority: severity === 'high' ? NotificationPriority.HIGH : severity === 'low' ? NotificationPriority.LOW : NotificationPriority.NORMAL,
+        priority:
+          severity === 'high'
+            ? NotificationPriority.HIGH
+            : severity === 'low'
+              ? NotificationPriority.LOW
+              : NotificationPriority.NORMAL,
         recipientScope: 'user_list',
         recipientUserIds: recipients,
         payloadJson: payload,
       });
     } catch (e) {
-      this.logger.error(`Alert evaluation failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`);
+      this.logger.error(
+        `Alert evaluation failed (plate=${plateNumber}): ${e instanceof Error ? e.message : 'unknown'}`,
+      );
     }
   }
   /** Recipient = đúng bộ role đã gán quyền `vehicle_control.read` (UC8 migration 20260722000001). */

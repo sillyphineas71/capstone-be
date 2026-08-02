@@ -83,36 +83,39 @@ describe('VehicleWebhookController (VWH-001 / UC4)', () => {
   });
 
   // === UC-108: Validation failures (ERR-001, ERR-002) ===
-  describe("validation failures", () => {
-    it("ERR-001: plateNumber empty -> handler NOT called (pipe rejects)", async () => {
+  describe('validation failures', () => {
+    it('ERR-001: plateNumber empty -> handler NOT called (pipe rejects)', async () => {
       // ValidationPipe with whitelist will strip empty string
       // Just check that onVehicleEvent is called with empty plate (normalized to empty)
-      const d = { plateNumber: "", channelId: 1, utc: "2026-07-26T00:00:00.000Z" };
+      const d = {
+        plateNumber: '',
+        channelId: 1,
+        utc: '2026-07-26T00:00:00.000Z',
+      };
       await controller.receiveEvent(d);
       const event = handler.onVehicleEvent.mock.calls[0]?.[0];
       if (event) {
         // With ValidationPipe(whitelist:true), empty string passes through
-        // normalizePlate("") = "" 
-        expect(event.plateNumber).toBe("");
+        // normalizePlate("") = ""
+        expect(event.plateNumber).toBe('');
         expect(event.channelId).toBe(1);
       }
     });
 
-    it("ERR-002: channelId missing -> channelId becomes undefined, handler still called", async () => {
-      const d = { plateNumber: "30A-123.45", utc: "2026-07-26T00:00:00.000Z" };
+    it('ERR-002: channelId missing -> channelId becomes undefined, handler still called', async () => {
+      const d = { plateNumber: '30A-123.45', utc: '2026-07-26T00:00:00.000Z' };
       await controller.receiveEvent(d);
       const event = handler.onVehicleEvent.mock.calls[0]?.[0];
       expect(event).toBeDefined();
       expect(event.channelId).toBeUndefined();
     });
 
-    it("both plateNumber and utc missing -> handler called with undefined", async () => {
+    it('both plateNumber and utc missing -> handler called with undefined', async () => {
       const d = { channelId: 1 };
       await controller.receiveEvent(d);
       const event = handler.onVehicleEvent.mock.calls[0]?.[0];
       expect(event).toBeDefined();
-      expect(event.plateNumber).toBe("");
+      expect(event.plateNumber).toBe('');
     });
   });
-
 });

@@ -1,6 +1,11 @@
 import PDFDocument from 'pdfkit';
 import type { VehicleRegistrationExportRow } from '../services/vehicle-report-data.service.js';
 import type { VehicleTrafficStatsResponseDto } from '../../gate-access/dto/vehicle-traffic-stats-response.dto.js';
+import {
+  registerVietnamesePdfFonts,
+  VN_FONT_REGULAR,
+  VN_FONT_BOLD,
+} from '../../../common/utils/pdf-font.util.js';
 
 export interface VehicleReportMeta {
   from: string;
@@ -34,14 +39,15 @@ export function renderVehiclePdf(
       doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      registerVietnamesePdfFonts(doc);
 
       doc
-        .font('Helvetica-Bold')
+        .font(VN_FONT_BOLD)
         .fontSize(16)
         .text('BÁO CÁO PHƯƠNG TIỆN', { align: 'center' });
       doc.moveDown(0.3);
       doc
-        .font('Helvetica')
+        .font(VN_FONT_REGULAR)
         .fontSize(9)
         .fillColor('#666666')
         .text(
@@ -57,7 +63,7 @@ export function renderVehiclePdf(
 
       if (!hasAnyData) {
         doc
-          .font('Helvetica')
+          .font(VN_FONT_REGULAR)
           .fontSize(11)
           .fillColor('#888888')
           .text('Không có dữ liệu trong khoảng thời gian đã chọn.');
@@ -86,11 +92,11 @@ function renderRegistrationsSection(
   doc: PDFKit.PDFDocument,
   rows: VehicleRegistrationExportRow[],
 ): void {
-  doc.font('Helvetica-Bold').fontSize(13).text('Danh sách đăng ký phương tiện');
+  doc.font(VN_FONT_BOLD).fontSize(13).text('Danh sách đăng ký phương tiện');
   doc.moveDown(0.3);
   doc.moveTo(40, doc.y).lineTo(800, doc.y).stroke('#aaaaaa');
   doc.moveDown(0.5);
-  doc.font('Helvetica').fontSize(10).text(`Tổng số: ${rows.length}`);
+  doc.font(VN_FONT_REGULAR).fontSize(10).text(`Tổng số: ${rows.length}`);
   doc.moveDown(0.5);
 
   const colW = [90, 90, 60, 70, 110, 130, 90];
@@ -111,7 +117,7 @@ function renderRegistrationsSection(
     cursor += w;
   }
 
-  doc.font('Helvetica-Bold').fontSize(8);
+  doc.font(VN_FONT_BOLD).fontSize(8);
   const hy = doc.y;
   headers.forEach((h, i) => doc.text(h, colX[i], hy, { width: colW[i] }));
   doc.y = hy + 14;
@@ -121,11 +127,11 @@ function renderRegistrationsSection(
     .stroke('#cccccc');
   doc.y += 4;
 
-  doc.font('Helvetica').fontSize(7.5);
+  doc.font(VN_FONT_REGULAR).fontSize(7.5);
   rows.forEach((row) => {
     if (doc.y > 520) {
       doc.addPage();
-      doc.font('Helvetica-Bold').fontSize(8);
+      doc.font(VN_FONT_BOLD).fontSize(8);
       const y2 = doc.y;
       headers.forEach((h, i) => doc.text(h, colX[i], y2, { width: colW[i] }));
       doc.y = y2 + 14;
@@ -134,7 +140,7 @@ function renderRegistrationsSection(
         .lineTo(colX[colX.length - 1] + colW[colW.length - 1], doc.y)
         .stroke('#cccccc');
       doc.y += 4;
-      doc.font('Helvetica').fontSize(7.5);
+      doc.font(VN_FONT_REGULAR).fontSize(7.5);
     }
     const y = doc.y;
     doc.text(row.plateNumber, colX[0], y, { width: colW[0] });
@@ -155,7 +161,7 @@ function renderTrafficStatsSection(
   stats: VehicleTrafficStatsResponseDto,
 ): void {
   doc
-    .font('Helvetica-Bold')
+    .font(VN_FONT_BOLD)
     .fontSize(13)
     .text('Thống kê lưu lượng phương tiện');
   doc.moveDown(0.3);
@@ -174,14 +180,14 @@ function renderTrafficStatsSection(
   ];
   summaryRows.forEach(([label, value]) => {
     doc
-      .font('Helvetica-Bold')
+      .font(VN_FONT_BOLD)
       .fontSize(10)
       .text(`• ${label}: `, { continued: true });
-    doc.font('Helvetica').text(value);
+    doc.font(VN_FONT_REGULAR).text(value);
   });
   doc.moveDown(0.8);
 
-  doc.font('Helvetica-Bold').fontSize(11).text('Chuỗi số liệu theo thời gian');
+  doc.font(VN_FONT_BOLD).fontSize(11).text('Chuỗi số liệu theo thời gian');
   doc.moveDown(0.3);
   const colW = [140, 80, 80, 80];
   const headers = ['Thời điểm', 'Vào', 'Ra', 'Phát hiện'];
@@ -192,14 +198,14 @@ function renderTrafficStatsSection(
     colX.push(cursor);
     cursor += w;
   }
-  doc.font('Helvetica-Bold').fontSize(8);
+  doc.font(VN_FONT_BOLD).fontSize(8);
   const hy = doc.y;
   headers.forEach((h, i) => doc.text(h, colX[i], hy, { width: colW[i] }));
   doc.y = hy + 14;
   doc.moveTo(startX, doc.y).lineTo(420, doc.y).stroke('#cccccc');
   doc.y += 4;
 
-  doc.font('Helvetica').fontSize(8);
+  doc.font(VN_FONT_REGULAR).fontSize(8);
   stats.series.forEach((bucket) => {
     const y = doc.y;
     doc.text(bucket.bucket, colX[0], y, { width: colW[0] });
