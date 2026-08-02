@@ -161,6 +161,12 @@ export interface UpdateMeetingTimeResponse {
   bookingId: string;
   notificationStatus: string;
   updatedAt: string;
+  // Nghiệp vụ duyệt lại (dev-branch): true khi meeting đang SCHEDULED nên thay
+  // đổi được ghi thành MeetingRequest PENDING chờ Manager duyệt, CHƯA áp dụng
+  // vào meeting — newStartTime/newEndTime/newRoomId ở trên khi đó là giá trị
+  // ĐANG YÊU CẦU, không phải giá trị đã áp dụng.
+  pendingApproval: boolean;
+  requestId?: string;
 }
 
 interface ConflictResult {
@@ -954,12 +960,17 @@ export class MeetingsService {
       });
     }
 
-    if (meeting.status !== MeetingStatus.SCHEDULED) {
+    if (
+      meeting.status !== MeetingStatus.PENDING_APPROVAL &&
+      meeting.status !== MeetingStatus.SCHEDULED
+    ) {
       throw new ConflictException({
         success: false,
-        message:
-          'Không thể thay đổi thời gian dự kiến cho cuộc họp đang diễn ra, đã kết thúc hoặc đã bị hủy.',
-        error: { code: 'MEETING_STATUS_NOT_EDITABLE', details: { meetingId } },
+        message: `Không thể thay đổi thời gian cho cuộc họp đang ở trạng thái "${meeting.status}".`,
+        error: {
+          code: 'MEETING_STATUS_NOT_EDITABLE',
+          details: { meetingId, currentStatus: meeting.status },
+        },
       });
     }
 
@@ -1248,161 +1259,289 @@ export class MeetingsService {
 
     let bookingId = '';
     let notificationStatus = 'queued';
+    let pendingApproval = false;
+    let requestId = '';
 
     try {
       await this.dataSource.transaction(async (em) => {
-        let booking: RoomBookingEntity | null = null;
+        const lockedMeeting = await em.findOne(MeetingEntity, {
+          where: { id: meetingId },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-        if (activeBooking) {
-          booking = await em.findOne(RoomBookingEntity, {
-            where: { id: activeBooking.id },
+        if (
+          !lockedMeeting ||
+          (lockedMeeting.status !== MeetingStatus.PENDING_APPROVAL &&
+            lockedMeeting.status !== MeetingStatus.SCHEDULED)
+        ) {
+          throw new ConflictException({
+            success: false,
+            message: 'Cuộc họp đã thay đổi trạng thái. Vui lòng thử lại.',
+            error: {
+              code: 'MEETING_STATUS_NOT_EDITABLE',
+              details: { meetingId },
+            },
+          });
+        }
+
+        if (lockedMeeting.status === MeetingStatus.PENDING_APPROVAL) {
+          // ── 1b: chưa duyệt → sửa thoải mái, KHÔNG sinh request thứ 2 ──
+          let booking: RoomBookingEntity | null = null;
+
+          if (activeBooking) {
+            booking = await em.findOne(RoomBookingEntity, {
+              where: { id: activeBooking.id },
+              lock: { mode: 'pessimistic_write' },
+            });
+
+            if (!booking) {
+              throw new NotFoundException({
+                success: false,
+                message: 'Booking record không tồn tại',
+                error: { code: 'ROOM_NOT_FOUND', details: {} },
+              });
+            }
+
+            const recheckConflict = await em.find(RoomBookingEntity, {
+              where: {
+                roomId: targetRoomId,
+                status: In([
+                  RoomBookingStatus.PENDING,
+                  RoomBookingStatus.APPROVED,
+                  RoomBookingStatus.ACTIVE,
+                ]),
+                id: Not(booking.id),
+                reservedStartTime: LessThanOrEqual(newEndTime),
+                reservedEndTime: MoreThanOrEqual(newStartTime),
+              },
+            });
+
+            if (recheckConflict.length > 0) {
+              throw new ConflictException({
+                success: false,
+                message:
+                  'Phòng họp không khả dụng trong khung giờ mới (xung đột tại thời điểm xác nhận).',
+                error: {
+                  code: 'ROOM_TIME_CONFLICT',
+                  details: { blocking: true },
+                },
+              });
+            }
+
+            booking.roomId = targetRoomId;
+            booking.reservedStartTime = newStartTime;
+            booking.reservedEndTime = newEndTime;
+            if (newRoomIdValue || targetRoomId !== meeting.roomId) {
+              booking.bookingType = BookingType.RELOCATED;
+            }
+            await em.save(RoomBookingEntity, booking);
+            bookingId = booking.id;
+          } else {
+            const bookingCode = await this.generateBookingCodeTransaction(em);
+            const newBooking = em.create(RoomBookingEntity, {
+              bookingCode,
+              meetingId,
+              roomId: targetRoomId,
+              bookingType: BookingType.SCHEDULED,
+              reservedStartTime: newStartTime,
+              reservedEndTime: newEndTime,
+              status: RoomBookingStatus.PENDING,
+              bookedBy: authUser.userId,
+            });
+            await em.save(RoomBookingEntity, newBooking);
+            bookingId = newBooking.id;
+
+            const auditWarn = em.create(AuditLogEntity, {
+              userId: authUser.userId,
+              actionType: 'update',
+              entityType: 'meeting_booking',
+              entityId: meetingId,
+              oldValueJson: null,
+              newValueJson: {
+                note: 'Missing booking record - created new booking',
+              },
+              metadataJson: { reason: dto.changeReason || null },
+              ipAddress: clientContext.ipAddress || null,
+              userAgent: clientContext.userAgent || null,
+              severity: AuditLogSeverity.WARNING,
+            });
+            await em.save(AuditLogEntity, auditWarn);
+          }
+
+          const repo = em.getRepository(MeetingEntity);
+          await repo.update(meetingId, {
+            startTime: newStartTime,
+            endTime: newEndTime,
+            roomId: newRoomIdValue || targetRoomId,
+            updatedBy: authUser.userId,
+          });
+
+          // Meeting mới tạo có đúng 1 MeetingRequest PENDING (từ createMeeting,
+          // hoặc từ một lần sửa SCHEDULED→pending trước đó) — cập nhật ngay
+          // trên request đó, KHÔNG tạo thêm request thứ 2.
+          const pendingRequest = await em.findOne(MeetingRequestEntity, {
+            where: { meetingId, approvalStatus: ApprovalStatus.PENDING },
             lock: { mode: 'pessimistic_write' },
           });
 
-          if (!booking) {
-            throw new NotFoundException({
-              success: false,
-              message: 'Booking record không tồn tại',
-              error: { code: 'ROOM_NOT_FOUND', details: {} },
-            });
-          }
-
-          const recheckConflict = await em.find(RoomBookingEntity, {
-            where: {
-              roomId: targetRoomId,
-              status: In([
-                RoomBookingStatus.PENDING,
-                RoomBookingStatus.APPROVED,
-                RoomBookingStatus.ACTIVE,
-              ]),
-              id: Not(booking.id),
-              reservedStartTime: LessThanOrEqual(newEndTime),
-              reservedEndTime: MoreThanOrEqual(newStartTime),
-            },
-          });
-
-          if (recheckConflict.length > 0) {
+          if (!pendingRequest) {
             throw new ConflictException({
               success: false,
               message:
-                'Phòng họp không khả dụng trong khung giờ mới (xung đột tại thời điểm xác nhận).',
+                'Không tìm thấy yêu cầu đang chờ duyệt cho cuộc họp này. Vui lòng liên hệ quản trị viên.',
               error: {
-                code: 'ROOM_TIME_CONFLICT',
-                details: { blocking: true },
+                code: 'PENDING_REQUEST_NOT_FOUND',
+                details: { meetingId },
               },
             });
           }
 
-          booking.roomId = targetRoomId;
-          booking.reservedStartTime = newStartTime;
-          booking.reservedEndTime = newEndTime;
-          if (newRoomIdValue || targetRoomId !== meeting.roomId) {
-            booking.bookingType = BookingType.RELOCATED;
-          }
-          await em.save(RoomBookingEntity, booking);
-          bookingId = booking.id;
-        } else {
-          const bookingCode = await this.generateBookingCode();
-          const newBooking = em.create(RoomBookingEntity, {
-            bookingCode,
-            meetingId,
-            roomId: targetRoomId,
-            bookingType: BookingType.SCHEDULED,
-            reservedStartTime: newStartTime,
-            reservedEndTime: newEndTime,
-            status: RoomBookingStatus.APPROVED,
-            bookedBy: authUser.userId,
-          });
-          await em.save(RoomBookingEntity, newBooking);
-          bookingId = newBooking.id;
-
-          const auditWarn = em.create(AuditLogEntity, {
-            userId: authUser.userId,
-            actionType: 'update',
-            entityType: 'meeting_booking',
-            entityId: meetingId,
-            oldValueJson: null,
-            newValueJson: {
-              note: 'Missing booking record - created new booking',
-            },
-            metadataJson: { reason: dto.changeReason || null },
-            ipAddress: clientContext.ipAddress || null,
-            userAgent: clientContext.userAgent || null,
-            severity: AuditLogSeverity.WARNING,
-          });
-          await em.save(AuditLogEntity, auditWarn);
-        }
-
-        const repo = em.getRepository(MeetingEntity);
-        await repo.update(meetingId, {
-          startTime: newStartTime,
-          endTime: newEndTime,
-          roomId: newRoomIdValue || targetRoomId,
-          updatedBy: authUser.userId,
-        });
-
-        const request = em.create(MeetingRequestEntity, {
-          requestType: MeetingRequestType.UPDATE_TIME,
-          requestedBy: authUser.userId,
-          meetingId,
-          targetRoomId,
-          requestedStartTime: newStartTime,
-          requestedEndTime: newEndTime,
-          approvalMode: ApprovalMode.AUTO,
-          approvalStatus: ApprovalStatus.APPLIED,
-          conflictCheckStatus: ConflictCheckStatus.CLEAR,
-          conflictSummaryJson: {
-            participantConflicts:
-              participantConflicts.length > 0 ? participantConflicts : null,
-          },
-          requestPayloadJson: {
+          pendingRequest.requestedStartTime = newStartTime;
+          pendingRequest.requestedEndTime = newEndTime;
+          pendingRequest.targetRoomId = newRoomIdValue || targetRoomId;
+          pendingRequest.requestPayloadJson = {
+            ...pendingRequest.requestPayloadJson,
             startTime: dto.startTime,
             endTime: dto.endTime,
             newRoomId: dto.newRoomId || null,
             overrideParticipantConflict:
               dto.overrideParticipantConflict || false,
             changeReason: dto.changeReason || null,
-          } as any,
-          appliedAt: new Date(),
-        });
-        await em.save(MeetingRequestEntity, request);
+          } as any;
+          await em.save(MeetingRequestEntity, pendingRequest);
+          requestId = pendingRequest.id;
 
-        const event = em.create(MeetingEventEntity, {
-          meetingId,
-          eventType: MeetingEventType.MEETING_TIME_UPDATED,
-          actorUserId: authUser.userId,
-          sourceType: MeetingEventSourceType.MANUAL,
-          oldValueJson: oldMeetingData as any,
-          newValueJson: {
-            startTime: dto.startTime,
-            endTime: dto.endTime,
-            roomId: targetRoomId,
-            changeReason: dto.changeReason || null,
-          } as any,
-        });
-        await em.save(MeetingEventEntity, event);
+          const event = em.create(MeetingEventEntity, {
+            meetingId,
+            eventType: MeetingEventType.MEETING_TIME_UPDATED,
+            actorUserId: authUser.userId,
+            sourceType: MeetingEventSourceType.MANUAL,
+            description: `Cập nhật thời gian yêu cầu cuộc họp "${meeting.title}" (đang chờ phê duyệt)`,
+            oldValueJson: oldMeetingData as any,
+            newValueJson: {
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              roomId: targetRoomId,
+              changeReason: dto.changeReason || null,
+            } as any,
+          });
+          await em.save(MeetingEventEntity, event);
 
-        const auditLog = em.create(AuditLogEntity, {
-          userId: authUser.userId,
-          actionType: 'update',
-          entityType: 'meeting',
-          entityId: meetingId,
-          oldValueJson: oldMeetingData as any,
-          newValueJson: {
-            startTime: dto.startTime,
-            endTime: dto.endTime,
-            roomId: targetRoomId,
-            changeReason: dto.changeReason || null,
-          } as any,
-          metadataJson: {
-            reason: dto.changeReason || null,
-            requestId: 'req-' + Date.now(),
-          } as any,
-          ipAddress: clientContext.ipAddress || null,
-          userAgent: clientContext.userAgent || null,
-          severity: AuditLogSeverity.INFO,
-        });
-        await em.save(AuditLogEntity, auditLog);
+          const auditLog = em.create(AuditLogEntity, {
+            userId: authUser.userId,
+            actionType: 'update',
+            entityType: 'meeting',
+            entityId: meetingId,
+            oldValueJson: oldMeetingData as any,
+            newValueJson: {
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              roomId: targetRoomId,
+              changeReason: dto.changeReason || null,
+            } as any,
+            metadataJson: {
+              reason: dto.changeReason || null,
+              requestId: pendingRequest.id,
+            } as any,
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            severity: AuditLogSeverity.INFO,
+          });
+          await em.save(AuditLogEntity, auditLog);
+        } else {
+          // ── 1c: đã duyệt (SCHEDULED) → phải duyệt lại, KHÔNG áp ngay ──
+          pendingApproval = true;
+
+          const requestCode = await this.generateRequestCodeTransaction(
+            em,
+            'UPD',
+          );
+          const newRequest = em.create(MeetingRequestEntity, {
+            requestCode,
+            meetingId,
+            requestType: MeetingRequestType.UPDATE_TIME,
+            requestedBy: authUser.userId,
+            targetRoomId,
+            requestedStartTime: newStartTime,
+            requestedEndTime: newEndTime,
+            approvalMode: ApprovalMode.MANUAL,
+            approvalStatus: ApprovalStatus.PENDING,
+            conflictCheckStatus:
+              participantConflicts.length > 0
+                ? ConflictCheckStatus.WARNING
+                : ConflictCheckStatus.CLEAR,
+            conflictSummaryJson:
+              participantConflicts.length > 0
+                ? { participantConflicts }
+                : null,
+            requestPayloadJson: {
+              oldStartTime: oldMeetingData.startTime,
+              oldEndTime: oldMeetingData.endTime,
+              oldRoomId: oldMeetingData.roomId,
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              newRoomId: dto.newRoomId || null,
+              overrideParticipantConflict:
+                dto.overrideParticipantConflict || false,
+              changeReason: dto.changeReason || null,
+            } as any,
+          });
+          await em.save(MeetingRequestEntity, newRequest);
+          requestId = newRequest.id;
+
+          await em.update(MeetingEntity, meetingId, {
+            status: MeetingStatus.PENDING_APPROVAL,
+            updatedBy: authUser.userId,
+          });
+
+          // Booking GIỮ NGUYÊN slot cũ cho tới khi được duyệt (tránh mất chỗ
+          // nếu Manager từ chối) — không update/relocate ở bước này.
+          const currentBooking = activeBooking
+            ? activeBooking
+            : await em.findOne(RoomBookingEntity, {
+                where: { meetingId, roomId: meeting.roomId! },
+                order: { createdAt: 'DESC' },
+              });
+          bookingId = currentBooking?.id || '';
+
+          const event = em.create(MeetingEventEntity, {
+            meetingId,
+            eventType: MeetingEventType.MEETING_REQUEST_CREATED,
+            actorUserId: authUser.userId,
+            sourceType: MeetingEventSourceType.MANUAL,
+            description: `Yêu cầu đổi thời gian cuộc họp "${meeting.title}" — chờ duyệt lại`,
+            oldValueJson: oldMeetingData as any,
+            newValueJson: {
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              roomId: targetRoomId,
+              changeReason: dto.changeReason || null,
+            } as any,
+          });
+          await em.save(MeetingEventEntity, event);
+
+          const auditLog = em.create(AuditLogEntity, {
+            userId: authUser.userId,
+            actionType: 'update_requested',
+            entityType: 'meeting',
+            entityId: meetingId,
+            oldValueJson: oldMeetingData as any,
+            newValueJson: {
+              startTime: dto.startTime,
+              endTime: dto.endTime,
+              roomId: targetRoomId,
+              changeReason: dto.changeReason || null,
+            } as any,
+            metadataJson: {
+              reason: dto.changeReason || null,
+              requestId: newRequest.id,
+            } as any,
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            severity: AuditLogSeverity.INFO,
+          });
+          await em.save(AuditLogEntity, auditLog);
+        }
       });
     } catch (error: unknown) {
       if (error instanceof ConflictException) {
@@ -1415,82 +1554,115 @@ export class MeetingsService {
       throw error;
     }
 
-    try {
-      const externalParticipants = await this.dataSource
-        .getRepository(MeetingExternalParticipantEntity)
-        .find({ where: { meetingId } });
-
-      const internalRecipientIds = participants
-        .filter((p) => p.userId)
-        .map((p) => p.userId);
-
-      const allUserIds = [
-        ...new Set([
-          ...internalRecipientIds,
-          meeting.organizerId,
-          ...(meeting.hostId ? [meeting.hostId] : []),
-        ]),
-      ];
-
-      const payloadJson = {
-        oldStartTime: oldMeetingData.startTime,
-        oldEndTime: oldMeetingData.endTime,
-        newStartTime: dto.startTime,
-        newEndTime: dto.endTime,
-        oldRoomId: meeting.roomId,
-        newRoomId: targetRoomId !== meeting.roomId ? targetRoomId : null,
-        changeReason: dto.changeReason || null,
-      };
-
-      // IN_APP notification for all participants
-      await this.notificationsService.createNotification({
-        notificationType: NotificationType.MEETING_TIME_UPDATED,
-        channel: NotificationChannel.IN_APP,
-        subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
-        content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
-        relatedEntityType: 'meeting',
-        relatedEntityId: meetingId,
-        recipientScope: 'user_list',
-        recipientUserIds: allUserIds,
-        payloadJson,
-        createdBy: authUser.userId,
-      });
-
-      // EMAIL notification to non-actor + external participants
-      const emailRecipientIds = allUserIds.filter(
-        (id) => id !== authUser.userId,
-      );
-      if (emailRecipientIds.length > 0 || externalParticipants.length > 0) {
-        const emailMap = await this.resolveUserEmails(
-          emailRecipientIds,
-          this.dataSource.manager,
-        );
-        const toEmails = [
-          ...emailMap.values(),
-          ...externalParticipants
-            .filter((ep) => !!ep.email)
-            .map((ep) => ep.email),
-        ].filter(Boolean) as string[];
-        if (toEmails.length > 0) {
-          await this.notificationsService.enqueueEmailNotification({
-            notificationType: NotificationType.MEETING_TIME_UPDATED,
-            channel: NotificationChannel.EMAIL,
-            subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
-            content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
-            toEmails,
-            relatedEntityType: 'meeting',
-            relatedEntityId: meetingId,
+    if (pendingApproval) {
+      // ── 1c: chưa áp dụng gì cả — chỉ báo Manager có yêu cầu chờ duyệt,
+      // KHÔNG báo participants (họ chưa thấy thay đổi nào trên meeting) ──
+      try {
+        const approverIds = await this.resolveApproverIds();
+        if (approverIds.length > 0) {
+          await this.notificationsService.createNotification({
+            notificationType: NotificationType.MEETING_REQUEST_CREATED,
+            channel: NotificationChannel.IN_APP,
+            subject: `Yêu cầu đổi giờ cuộc họp: ${meeting.title}`,
+            content: `Yêu cầu đổi thời gian cho cuộc họp "${meeting.title}" đang chờ phê duyệt.`,
+            relatedEntityType: 'meeting_request',
+            relatedEntityId: requestId,
             recipientScope: 'user_list',
-            payloadJson,
+            recipientUserIds: approverIds,
+            payloadJson: {
+              oldStartTime: oldMeetingData.startTime,
+              oldEndTime: oldMeetingData.endTime,
+              newStartTime: dto.startTime,
+              newEndTime: dto.endTime,
+              changeReason: dto.changeReason || null,
+            },
             createdBy: authUser.userId,
           });
         }
+      } catch (notifError: unknown) {
+        this.logger.error(
+          `[updateMeetingTime] Approver notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
+        );
+        notificationStatus = 'failed';
       }
-    } catch (notifError: unknown) {
-      this.logger.error(
-        `[updateMeetingTime] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
-      );
-      notificationStatus = 'failed';
+    } else {
+      try {
+        const externalParticipants = await this.dataSource
+          .getRepository(MeetingExternalParticipantEntity)
+          .find({ where: { meetingId } });
+
+        const internalRecipientIds = participants
+          .filter((p) => p.userId)
+          .map((p) => p.userId);
+
+        const allUserIds = [
+          ...new Set([
+            ...internalRecipientIds,
+            meeting.organizerId,
+            ...(meeting.hostId ? [meeting.hostId] : []),
+          ]),
+        ];
+
+        const payloadJson = {
+          oldStartTime: oldMeetingData.startTime,
+          oldEndTime: oldMeetingData.endTime,
+          newStartTime: dto.startTime,
+          newEndTime: dto.endTime,
+          oldRoomId: meeting.roomId,
+          newRoomId: targetRoomId !== meeting.roomId ? targetRoomId : null,
+          changeReason: dto.changeReason || null,
+        };
+
+        // IN_APP notification for all participants
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_TIME_UPDATED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+          content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: allUserIds,
+          payloadJson,
+          createdBy: authUser.userId,
+        });
+
+        // EMAIL notification to non-actor + external participants
+        const emailRecipientIds = allUserIds.filter(
+          (id) => id !== authUser.userId,
+        );
+        if (emailRecipientIds.length > 0 || externalParticipants.length > 0) {
+          const emailMap = await this.resolveUserEmails(
+            emailRecipientIds,
+            this.dataSource.manager,
+          );
+          const toEmails = [
+            ...emailMap.values(),
+            ...externalParticipants
+              .filter((ep) => !!ep.email)
+              .map((ep) => ep.email),
+          ].filter(Boolean) as string[];
+          if (toEmails.length > 0) {
+            await this.notificationsService.enqueueEmailNotification({
+              notificationType: NotificationType.MEETING_TIME_UPDATED,
+              channel: NotificationChannel.EMAIL,
+              subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
+              content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+              toEmails,
+              relatedEntityType: 'meeting',
+              relatedEntityId: meetingId,
+              recipientScope: 'user_list',
+              payloadJson,
+              createdBy: authUser.userId,
+            });
+          }
+        }
+      } catch (notifError: unknown) {
+        this.logger.error(
+          `[updateMeetingTime] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
+        );
+        notificationStatus = 'failed';
+      }
     }
 
     return {
@@ -1503,6 +1675,8 @@ export class MeetingsService {
       newRoomId: targetRoomId !== meeting.roomId ? targetRoomId : null,
       bookingId,
       notificationStatus,
+      pendingApproval,
+      requestId: pendingApproval ? requestId : undefined,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1625,6 +1799,28 @@ export class MeetingsService {
     return `BK-${dateStr}-${seq}`;
   }
 
+  private async generateRequestCodeTransaction(
+    em: EntityManager,
+    prefix: string,
+  ): Promise<string> {
+    const today = new Date();
+    const dateStr =
+      today.getFullYear().toString() +
+      String(today.getMonth() + 1).padStart(2, '0') +
+      String(today.getDate()).padStart(2, '0');
+
+    const count = await em.getRepository(MeetingRequestEntity).count({
+      where: {
+        requestedAt: MoreThanOrEqual(
+          new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+        ),
+      },
+    });
+
+    const seq = String(count + 1).padStart(3, '0');
+    return `${prefix}-${dateStr}-${seq}`;
+  }
+
   // ── T009: Core Business Logic ──────────────────────────────────────
 
   async updateMeetingRoom(
@@ -1647,11 +1843,13 @@ export class MeetingsService {
       });
     }
 
-    if (meeting.status !== MeetingStatus.SCHEDULED) {
+    if (
+      meeting.status !== MeetingStatus.PENDING_APPROVAL &&
+      meeting.status !== MeetingStatus.SCHEDULED
+    ) {
       throw new ConflictException({
         success: false,
-        message:
-          'Chỉ có thể đổi phòng cho cuộc họp đang ở trạng thái Đã lên lịch.',
+        message: `Không thể đổi phòng cho cuộc họp đang ở trạng thái "${meeting.status}".`,
         error: {
           code: 'INVALID_MEETING_STATUS',
           details: { meetingId, currentStatus: meeting.status },
@@ -1809,6 +2007,8 @@ export class MeetingsService {
 
     let newBookingId = '';
     let notificationStatus = 'queued';
+    let pendingApproval = false;
+    let requestId = '';
 
     try {
       await this.dataSource.transaction(async (em) => {
@@ -1819,7 +2019,8 @@ export class MeetingsService {
 
         if (
           !lockedMeeting ||
-          lockedMeeting.status !== MeetingStatus.SCHEDULED
+          (lockedMeeting.status !== MeetingStatus.PENDING_APPROVAL &&
+            lockedMeeting.status !== MeetingStatus.SCHEDULED)
         ) {
           throw new ConflictException({
             success: false,
@@ -1836,118 +2037,208 @@ export class MeetingsService {
           });
         }
 
-        await em.update(
-          RoomBookingEntity,
-          {
+        if (lockedMeeting.status === MeetingStatus.PENDING_APPROVAL) {
+          // ── 1b: chưa duyệt → sửa thoải mái, KHÔNG sinh request thứ 2 ──
+          await em.update(
+            RoomBookingEntity,
+            {
+              meetingId,
+              roomId: meeting.roomId,
+              status: Not(RoomBookingStatus.RELEASED),
+            },
+            { status: RoomBookingStatus.RELEASED },
+          );
+
+          const bookingCode = await this.generateBookingCodeTransaction(em);
+
+          const newBooking = em.create(RoomBookingEntity, {
+            bookingCode,
             meetingId,
-            roomId: meeting.roomId,
-            status: Not(RoomBookingStatus.RELEASED),
-          },
-          { status: RoomBookingStatus.RELEASED },
-        );
+            roomId: dto.newRoomId,
+            bookingType: BookingType.RELOCATED,
+            reservedStartTime: meeting.startTime,
+            reservedEndTime: meeting.endTime,
+            status: RoomBookingStatus.PENDING,
+            bookedBy: authUser.userId,
+          });
+          await em.save(RoomBookingEntity, newBooking);
+          newBookingId = newBooking.id;
 
-        const bookingCode = await this.generateBookingCodeTransaction(em);
+          await em.update(MeetingEntity, meetingId, {
+            roomId: dto.newRoomId,
+            updatedBy: authUser.userId,
+          });
 
-        const newBooking = em.create(RoomBookingEntity, {
-          bookingCode,
-          meetingId,
-          roomId: dto.newRoomId,
-          bookingType: BookingType.RELOCATED,
-          reservedStartTime: meeting.startTime,
-          reservedEndTime: meeting.endTime,
-          status: RoomBookingStatus.APPROVED,
-          bookedBy: authUser.userId,
-        });
-        await em.save(RoomBookingEntity, newBooking);
-        newBookingId = newBooking.id;
+          await em.save(MeetingEventEntity, {
+            meetingId,
+            eventType: MeetingEventType.ROOM_CHANGED,
+            actorUserId: authUser.userId,
+            sourceType: MeetingEventSourceType.MANUAL,
+            description: `Đổi phòng yêu cầu từ "${oldRoomName}" sang "${newRoomName}" (đang chờ phê duyệt)`,
+            oldValueJson: { roomId: meeting.roomId, roomName: oldRoomName },
+            newValueJson: { roomId: dto.newRoomId, roomName: newRoomName },
+            metadataJson: {
+              changeReason: dto.changeReason || null,
+              confirmCapacityOverride: dto.confirmCapacityOverride || false,
+            } as any,
+          });
 
-        await em.update(MeetingEntity, meetingId, {
-          roomId: dto.newRoomId,
-          updatedBy: authUser.userId,
-        });
+          const oldBookingRecord = oldBooking
+            ? oldBooking
+            : await em.findOne(RoomBookingEntity, {
+                where: { meetingId, roomId: meeting.roomId! },
+                order: { createdAt: 'DESC' },
+              });
 
-        await em.save(MeetingEventEntity, {
-          meetingId,
-          eventType: MeetingEventType.ROOM_CHANGED,
-          actorUserId: authUser.userId,
-          sourceType: MeetingEventSourceType.MANUAL,
-          description: `Đổi phòng từ "${oldRoomName}" sang "${newRoomName}"`,
-          oldValueJson: { roomId: meeting.roomId, roomName: oldRoomName },
-          newValueJson: { roomId: dto.newRoomId, roomName: newRoomName },
-          metadataJson: {
-            changeReason: dto.changeReason || null,
-            confirmCapacityOverride: dto.confirmCapacityOverride || false,
-          } as any,
-        });
+          await em.save(RoomEventEntity, {
+            roomId: meeting.roomId!,
+            meetingId,
+            bookingId: oldBookingRecord?.id || null,
+            eventType: 'room_released',
+            sourceType: 'manual',
+            actorUserId: authUser.userId,
+            oldStatus: oldBookingRecord?.status || null,
+            newStatus: RoomBookingStatus.RELEASED,
+            description: `Phòng được giải phóng do đổi sang "${newRoomName}"`,
+          });
 
-        const oldBookingRecord = oldBooking
-          ? oldBooking
-          : await em.findOne(RoomBookingEntity, {
-              where: { meetingId, roomId: meeting.roomId! },
-              order: { createdAt: 'DESC' },
+          await em.save(RoomEventEntity, {
+            roomId: dto.newRoomId,
+            meetingId,
+            bookingId: newBooking.id,
+            eventType: 'room_reserved',
+            sourceType: 'manual',
+            actorUserId: authUser.userId,
+            newStatus: RoomBookingStatus.PENDING,
+            description: `Phòng được đặt lại từ "${oldRoomName}" (đang chờ phê duyệt)`,
+          });
+
+          // Meeting mới tạo có đúng 1 MeetingRequest PENDING — cập nhật ngay
+          // trên request đó, KHÔNG tạo thêm request thứ 2.
+          const pendingRequest = await em.findOne(MeetingRequestEntity, {
+            where: { meetingId, approvalStatus: ApprovalStatus.PENDING },
+            lock: { mode: 'pessimistic_write' },
+          });
+
+          if (!pendingRequest) {
+            throw new ConflictException({
+              success: false,
+              message:
+                'Không tìm thấy yêu cầu đang chờ duyệt cho cuộc họp này. Vui lòng liên hệ quản trị viên.',
+              error: {
+                code: 'PENDING_REQUEST_NOT_FOUND',
+                details: { meetingId },
+              },
             });
+          }
 
-        await em.save(RoomEventEntity, {
-          roomId: meeting.roomId!,
-          meetingId,
-          bookingId: oldBookingRecord?.id || null,
-          eventType: 'room_released',
-          sourceType: 'manual',
-          actorUserId: authUser.userId,
-          oldStatus: RoomBookingStatus.APPROVED,
-          newStatus: RoomBookingStatus.RELEASED,
-          description: `Phòng được giải phóng do đổi sang "${newRoomName}"`,
-        });
-
-        await em.save(RoomEventEntity, {
-          roomId: dto.newRoomId,
-          meetingId,
-          bookingId: newBooking.id,
-          eventType: 'room_reserved',
-          sourceType: 'manual',
-          actorUserId: authUser.userId,
-          newStatus: RoomBookingStatus.APPROVED,
-          description: `Phòng được đặt lại từ "${oldRoomName}"`,
-        });
-
-        await em.save(MeetingRequestEntity, {
-          requestCode: bookingCode,
-          meetingId,
-          requestType: MeetingRequestType.UPDATE_ROOM,
-          requestedBy: authUser.userId,
-          targetRoomId: dto.newRoomId,
-          requestedStartTime: meeting.startTime,
-          requestedEndTime: meeting.endTime,
-          approvalMode: ApprovalMode.AUTO,
-          approvalStatus: ApprovalStatus.APPLIED,
-          conflictCheckStatus: ConflictCheckStatus.CLEAR,
-          requestPayloadJson: {
+          pendingRequest.targetRoomId = dto.newRoomId;
+          pendingRequest.requestedStartTime = meeting.startTime;
+          pendingRequest.requestedEndTime = meeting.endTime;
+          pendingRequest.requestPayloadJson = {
+            ...pendingRequest.requestPayloadJson,
             changeReason: dto.changeReason || null,
             confirmCapacityOverride: dto.confirmCapacityOverride || false,
             oldRoomId: meeting.roomId,
-          } as any,
-          appliedAt: new Date(),
-        });
+          } as any;
+          await em.save(MeetingRequestEntity, pendingRequest);
+          requestId = pendingRequest.id;
 
-        await em.save(AuditLogEntity, {
-          userId: authUser.userId,
-          actionType: 'update_room',
-          entityType: 'meeting',
-          entityId: meetingId,
-          oldValueJson: {
-            roomId: meeting.roomId,
-            roomName: oldRoomName,
-          } as any,
-          newValueJson: {
-            roomId: dto.newRoomId,
-            roomName: newRoomName,
-            changeReason: dto.changeReason || null,
-            confirmCapacityOverride: dto.confirmCapacityOverride || false,
-          } as any,
-          ipAddress: clientContext.ipAddress || null,
-          userAgent: clientContext.userAgent || null,
-          severity: AuditLogSeverity.INFO,
-        });
+          await em.save(AuditLogEntity, {
+            userId: authUser.userId,
+            actionType: 'update_room',
+            entityType: 'meeting',
+            entityId: meetingId,
+            oldValueJson: {
+              roomId: meeting.roomId,
+              roomName: oldRoomName,
+            } as any,
+            newValueJson: {
+              roomId: dto.newRoomId,
+              roomName: newRoomName,
+              changeReason: dto.changeReason || null,
+              confirmCapacityOverride: dto.confirmCapacityOverride || false,
+            } as any,
+            metadataJson: { requestId: pendingRequest.id },
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            severity: AuditLogSeverity.INFO,
+          });
+        } else {
+          // ── 1c: đã duyệt (SCHEDULED) → phải duyệt lại, KHÔNG áp ngay ──
+          pendingApproval = true;
+
+          // Booking GIỮ NGUYÊN phòng cũ cho tới khi được duyệt (tránh mất
+          // chỗ nếu Manager từ chối) — không release/relocate ở bước này.
+          newBookingId = oldBooking?.id || '';
+
+          const requestCode = await this.generateRequestCodeTransaction(
+            em,
+            'UPD',
+          );
+          const newRequest = em.create(MeetingRequestEntity, {
+            requestCode,
+            meetingId,
+            requestType: MeetingRequestType.UPDATE_ROOM,
+            requestedBy: authUser.userId,
+            targetRoomId: dto.newRoomId,
+            requestedStartTime: meeting.startTime,
+            requestedEndTime: meeting.endTime,
+            approvalMode: ApprovalMode.MANUAL,
+            approvalStatus: ApprovalStatus.PENDING,
+            conflictCheckStatus: ConflictCheckStatus.CLEAR,
+            requestPayloadJson: {
+              changeReason: dto.changeReason || null,
+              confirmCapacityOverride: dto.confirmCapacityOverride || false,
+              oldRoomId: meeting.roomId,
+              oldRoomName,
+              newRoomId: dto.newRoomId,
+              newRoomName,
+            } as any,
+          });
+          await em.save(MeetingRequestEntity, newRequest);
+          requestId = newRequest.id;
+
+          await em.update(MeetingEntity, meetingId, {
+            status: MeetingStatus.PENDING_APPROVAL,
+            updatedBy: authUser.userId,
+          });
+
+          await em.save(MeetingEventEntity, {
+            meetingId,
+            eventType: MeetingEventType.MEETING_REQUEST_CREATED,
+            actorUserId: authUser.userId,
+            sourceType: MeetingEventSourceType.MANUAL,
+            description: `Yêu cầu đổi phòng cuộc họp "${meeting.title}" từ "${oldRoomName}" sang "${newRoomName}" — chờ duyệt lại`,
+            oldValueJson: { roomId: meeting.roomId, roomName: oldRoomName },
+            newValueJson: { roomId: dto.newRoomId, roomName: newRoomName },
+            metadataJson: {
+              changeReason: dto.changeReason || null,
+              confirmCapacityOverride: dto.confirmCapacityOverride || false,
+            } as any,
+          });
+
+          await em.save(AuditLogEntity, {
+            userId: authUser.userId,
+            actionType: 'update_room_requested',
+            entityType: 'meeting',
+            entityId: meetingId,
+            oldValueJson: {
+              roomId: meeting.roomId,
+              roomName: oldRoomName,
+            } as any,
+            newValueJson: {
+              roomId: dto.newRoomId,
+              roomName: newRoomName,
+              changeReason: dto.changeReason || null,
+              confirmCapacityOverride: dto.confirmCapacityOverride || false,
+            } as any,
+            metadataJson: { requestId: newRequest.id },
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            severity: AuditLogSeverity.INFO,
+          });
+        }
       });
     } catch (error: unknown) {
       if (
@@ -1963,87 +2254,120 @@ export class MeetingsService {
       throw error;
     }
 
-    try {
-      const participants = await this.dataSource
-        .getRepository(MeetingParticipantEntity)
-        .find({ where: { meetingId } });
-
-      const externalParticipants = await this.dataSource
-        .getRepository(MeetingExternalParticipantEntity)
-        .find({ where: { meetingId } });
-
-      const internalRecipientIds = (participants || [])
-        .filter((p) => p.userId)
-        .map((p) => p.userId);
-
-      const allUserIds = [
-        ...new Set([
-          ...internalRecipientIds,
-          meeting.organizerId,
-          ...(meeting.hostId ? [meeting.hostId] : []),
-        ]),
-      ];
-
-      const payloadJson = {
-        oldRoomId: meeting.roomId,
-        oldRoomName,
-        newRoomId: dto.newRoomId,
-        newRoomName,
-        changeReason: dto.changeReason || null,
-      };
-
-      // IN_APP notification for all participants
-      await this.notificationsService.createNotification({
-        notificationType: NotificationType.MEETING_ROOM_UPDATED,
-        channel: NotificationChannel.IN_APP,
-        subject: `Cập nhật phòng họp: ${meeting.title}`,
-        content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
-        relatedEntityType: 'meeting',
-        relatedEntityId: meetingId,
-        recipientScope: 'user_list',
-        recipientUserIds: allUserIds,
-        payloadJson,
-        createdBy: authUser.userId,
-      });
-
-      // EMAIL notification to non-actor + external participants
-      const emailRecipientIds = allUserIds.filter(
-        (id) => id !== authUser.userId,
-      );
-      if (
-        emailRecipientIds.length > 0 ||
-        (externalParticipants || []).length > 0
-      ) {
-        const emailMap = await this.resolveUserEmails(
-          emailRecipientIds,
-          this.dataSource.manager,
-        );
-        const toEmails = [
-          ...emailMap.values(),
-          ...(externalParticipants || [])
-            .filter((ep) => !!ep.email)
-            .map((ep) => ep.email),
-        ].filter(Boolean) as string[];
-        if (toEmails.length > 0) {
-          await this.notificationsService.enqueueEmailNotification({
-            notificationType: NotificationType.MEETING_ROOM_UPDATED,
-            channel: NotificationChannel.EMAIL,
-            subject: `Cập nhật phòng họp: ${meeting.title}`,
-            content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
-            toEmails,
-            relatedEntityType: 'meeting',
-            relatedEntityId: meetingId,
+    if (pendingApproval) {
+      // ── 1c: chưa áp dụng gì cả — chỉ báo Manager có yêu cầu chờ duyệt,
+      // KHÔNG báo participants (phòng thực tế chưa đổi) ──
+      try {
+        const approverIds = await this.resolveApproverIds();
+        if (approverIds.length > 0) {
+          await this.notificationsService.createNotification({
+            notificationType: NotificationType.MEETING_REQUEST_CREATED,
+            channel: NotificationChannel.IN_APP,
+            subject: `Yêu cầu đổi phòng cuộc họp: ${meeting.title}`,
+            content: `Yêu cầu đổi phòng cho cuộc họp "${meeting.title}" từ "${oldRoomName}" sang "${newRoomName}" đang chờ phê duyệt.`,
+            relatedEntityType: 'meeting_request',
+            relatedEntityId: requestId,
             recipientScope: 'user_list',
-            payloadJson,
+            recipientUserIds: approverIds,
+            payloadJson: {
+              oldRoomId: meeting.roomId,
+              oldRoomName,
+              newRoomId: dto.newRoomId,
+              newRoomName,
+              changeReason: dto.changeReason || null,
+            },
             createdBy: authUser.userId,
           });
         }
+      } catch (notifError: unknown) {
+        this.logger.error(
+          `[updateMeetingRoom] Approver notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
+        );
+        notificationStatus = 'failed';
       }
-    } catch (notifError: unknown) {
-      this.logger.error(
-        `[updateMeetingRoom] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
-      );
-      notificationStatus = 'failed';
+    } else {
+      try {
+        const participants = await this.dataSource
+          .getRepository(MeetingParticipantEntity)
+          .find({ where: { meetingId } });
+
+        const externalParticipants = await this.dataSource
+          .getRepository(MeetingExternalParticipantEntity)
+          .find({ where: { meetingId } });
+
+        const internalRecipientIds = (participants || [])
+          .filter((p) => p.userId)
+          .map((p) => p.userId);
+
+        const allUserIds = [
+          ...new Set([
+            ...internalRecipientIds,
+            meeting.organizerId,
+            ...(meeting.hostId ? [meeting.hostId] : []),
+          ]),
+        ];
+
+        const payloadJson = {
+          oldRoomId: meeting.roomId,
+          oldRoomName,
+          newRoomId: dto.newRoomId,
+          newRoomName,
+          changeReason: dto.changeReason || null,
+        };
+
+        // IN_APP notification for all participants
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.MEETING_ROOM_UPDATED,
+          channel: NotificationChannel.IN_APP,
+          subject: `Cập nhật phòng họp: ${meeting.title}`,
+          content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+          relatedEntityType: 'meeting',
+          relatedEntityId: meetingId,
+          recipientScope: 'user_list',
+          recipientUserIds: allUserIds,
+          payloadJson,
+          createdBy: authUser.userId,
+        });
+
+        // EMAIL notification to non-actor + external participants
+        const emailRecipientIds = allUserIds.filter(
+          (id) => id !== authUser.userId,
+        );
+        if (
+          emailRecipientIds.length > 0 ||
+          (externalParticipants || []).length > 0
+        ) {
+          const emailMap = await this.resolveUserEmails(
+            emailRecipientIds,
+            this.dataSource.manager,
+          );
+          const toEmails = [
+            ...emailMap.values(),
+            ...(externalParticipants || [])
+              .filter((ep) => !!ep.email)
+              .map((ep) => ep.email),
+          ].filter(Boolean) as string[];
+          if (toEmails.length > 0) {
+            await this.notificationsService.enqueueEmailNotification({
+              notificationType: NotificationType.MEETING_ROOM_UPDATED,
+              channel: NotificationChannel.EMAIL,
+              subject: `Cập nhật phòng họp: ${meeting.title}`,
+              content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+              toEmails,
+              relatedEntityType: 'meeting',
+              relatedEntityId: meetingId,
+              recipientScope: 'user_list',
+              payloadJson,
+              createdBy: authUser.userId,
+            });
+          }
+        }
+      } catch (notifError: unknown) {
+        this.logger.error(
+          `[updateMeetingRoom] Notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
+        );
+        notificationStatus = 'failed';
+      }
     }
 
     return {
@@ -2055,6 +2379,8 @@ export class MeetingsService {
       startTime: meeting.startTime.toISOString(),
       endTime: meeting.endTime.toISOString(),
       notificationStatus,
+      pendingApproval,
+      requestId: pendingApproval ? requestId : undefined,
       updatedAt: new Date().toISOString(),
     };
   }
