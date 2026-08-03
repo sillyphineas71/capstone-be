@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { OccupancyPersistenceService } from '../../presence/services/occupancy-persistence.service.js';
+import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
 import { OccupancyEventDto } from '../dto/occupancy-event.dto.js';
 
@@ -26,6 +27,10 @@ const SKEW_MS = 60 * 60 * 1000; // 1h
  *  3. ghi raw iot_device_events (room_id=NULL §2.4, payload mask) (AC-11).
  *  4. resolveRoom(channelId) qua system_configs['ivss.channel_room_map']; không map → skip + log (AC-05).
  *  5. OccupancyPersistenceService.persist(...) — DUY NHẤT, confidence=null (§Locked-9) (AC-04/06..09).
+ *  6. (F3, recon B5) resolveZone(channelId) qua system_configs['ivss.channel_presence_zone_map']
+ *     — ĐỘC LẬP với bước 4/5, không map → skip + log. Có map →
+ *     ZonePresenceWriterService.writeCountEvent(...) — nguồn zone_presence_events
+ *     (event_type='count') duy nhất cho crowd-alert (ACR-001) + zone-traffic-heatmap.
  *
  * Exception (vd count ngoài [0,MAX] từ persist) để trồi lên controller (controller nuốt → ack 200, AC-17).
  * SEC: KHÔNG nhân bản persist; raw payload đã mask; KHÔNG log token (guard lo).
@@ -37,6 +42,7 @@ export class IvssOccupancyIngestService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly occupancyPersistence: OccupancyPersistenceService,
+    private readonly zonePresenceWriter: ZonePresenceWriterService,
   ) {}
 
   async ingest(dto: OccupancyEventDto): Promise<void> {
@@ -73,21 +79,40 @@ export class IvssOccupancyIngestService {
 
     // 3. Resolve room qua channel_room_map — không map → skip persist (đã có raw vết).
     const roomId = await this.resolveRoom(dto.channelId);
-    if (!roomId) {
+    if (roomId) {
+      // 4. Persist (DUY NHẤT) — confidence luôn null cho IVSS. Exception trồi lên controller.
+      await this.occupancyPersistence.persist({
+        roomId,
+        meetingId: null,
+        occupancyCount,
+        confidence: null,
+        eventTime,
+      });
+    } else {
       this.logger.warn(
         `Occupancy channel chưa map room (channel=${dto.channelId}) — raw đã ghi, skip persist.`,
       );
-      return;
     }
 
-    // 4. Persist (DUY NHẤT) — confidence luôn null cho IVSS. Exception trồi lên controller.
-    await this.occupancyPersistence.persist({
-      roomId,
-      meetingId: null,
-      occupancyCount,
-      confidence: null,
-      eventTime,
-    });
+    // 5. Resolve zone qua channel_presence_zone_map (F3, recon B5) — ĐỘC LẬP với
+    // room ở bước 3: cùng 1 channel có thể map room, zone, cả hai, hoặc không cái
+    // nào. Trước fix này KHÔNG có gì ghi zone_presence_events(event_type='count')
+    // → crowd-alert/zone-traffic-heatmap luôn rỗng dữ liệu. Không map → skip lặng
+    // (giống room ở trên).
+    const zoneId = await this.resolveZone(dto.channelId);
+    if (zoneId) {
+      await this.zonePresenceWriter.writeCountEvent({
+        zoneId,
+        occupancyCount,
+        eventTime,
+        deviceId,
+        metadata: { channelId: dto.channelId, source: 'ivss_occupancy' },
+      });
+    } else {
+      this.logger.warn(
+        `Occupancy channel chưa map zone (channel=${dto.channelId}) — skip crowd-alert/heatmap write.`,
+      );
+    }
   }
 
   /** ISO + |skew|≤1h → eventTime; sai/lệch → now + fallback. */
@@ -120,6 +145,31 @@ export class IvssOccupancyIngestService {
     const rows: ConfigRow[] = await this.dataSource.manager.query(
       `SELECT config_json FROM system_configs
        WHERE config_key = 'ivss.channel_room_map' AND is_active = true LIMIT 1`,
+    );
+    const raw = rows[0]?.config_json;
+    const out: Record<string, string> = {};
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && UUID_RE.test(v)) out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  private async resolveZone(channelId: number): Promise<string | null> {
+    const map = await this.getChannelPresenceZoneMap();
+    return map[String(channelId)] ?? null;
+  }
+
+  /**
+   * system_configs['ivss.channel_presence_zone_map'] config_json {channelId: zone_uuid};
+   * validate uuid (F3, recon B5 — mirror getChannelRoomMap, key riêng vì channel có thể
+   * map zone khác room, hoặc map cả hai).
+   */
+  private async getChannelPresenceZoneMap(): Promise<Record<string, string>> {
+    const rows: ConfigRow[] = await this.dataSource.manager.query(
+      `SELECT config_json FROM system_configs
+       WHERE config_key = 'ivss.channel_presence_zone_map' AND is_active = true LIMIT 1`,
     );
     const raw = rows[0]?.config_json;
     const out: Record<string, string> = {};
