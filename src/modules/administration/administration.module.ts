@@ -13,6 +13,8 @@ import { BackgroundJobsController } from './controllers/background-jobs.controll
 import { AuditLogsController } from './controllers/audit-logs.controller.js';
 import { SystemConfigController } from './controllers/system-config.controller.js';
 import { SystemConfigService } from './services/system-config.service.js';
+import { ChannelMapConfigController } from './controllers/channel-map-config.controller.js';
+import { ChannelMapConfigService } from './services/channel-map-config.service.js';
 import { AuthModule } from '../auth/auth.module.js';
 
 /**
@@ -30,6 +32,12 @@ import { AuthModule } from '../auth/auth.module.js';
  * - SystemConfigController — GET/PATCH /api/v1/system-configurations (BE-09, 2026-07-27)
  * - SystemConfigService — allowlist 9 key phẳng FE quản trị, xem
  *   constants/system-config-allowlist.ts
+ * - ChannelMapConfigController — GET/PATCH /api/v1/system-configurations/channel-maps
+ *   (F7, 2026-08-04) — 7 key dấu chấm (4 channel-map JSON + 3 ngưỡng), TÁCH RIÊNG khỏi
+ *   allowlist 9 key phẳng ở trên (2 hệ tên key không trộn, xem
+ *   constants/channel-map-config.constant.ts)
+ * - ChannelMapConfigService — validate + upsert system_configs.config_json/config_value
+ *   cho 7 key đó, KHÔNG đụng logic đọc của các service nội bộ đang dùng chúng
  *
  * Module này KHÔNG import các business module (AccountsModule, RecordingModule...)
  * để tránh circular dependency. AuthModule là ngoại lệ AN TOÀN: chỉ import để
@@ -57,6 +65,7 @@ import { AuthModule } from '../auth/auth.module.js';
     BackgroundJobsController,
     AuditLogsController,
     SystemConfigController,
+    ChannelMapConfigController,
   ],
   providers: [
     BackgroundJobsService,
@@ -64,6 +73,7 @@ import { AuthModule } from '../auth/auth.module.js';
     AuditLogQueryService,
     AuditLogQueryRepository,
     SystemConfigService,
+    ChannelMapConfigService,
   ],
   exports: [TypeOrmModule, BackgroundJobsService, AuditLogsService],
 })
