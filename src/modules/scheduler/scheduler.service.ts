@@ -12,6 +12,7 @@ import { IvssPortraitSyncService } from '../ivss/services/ivss-portrait-sync.ser
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
+import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -41,6 +42,7 @@ export class SchedulerService {
   private readonly restrictedZoneEnabled: boolean;
   private readonly crowdAlertEnabled: boolean;
   private readonly gatePairingEnabled: boolean;
+  private readonly autoCompleteEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -55,6 +57,7 @@ export class SchedulerService {
     private readonly crowdAlertService: CrowdAlertService,
     private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
     private readonly gateLogPairingService: GateLogPairingService,
+    private readonly liveMeetingService: LiveMeetingService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -106,9 +109,14 @@ export class SchedulerService {
       'SCHEDULER_GATE_PAIRING_ENABLED',
       false,
     );
+    // recon B1: cron auto-complete meeting quá end_time (gated default OFF).
+    this.autoCompleteEnabled = this.configService.get<boolean>(
+      'SCHEDULER_AUTO_COMPLETE_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled}`,
     );
   }
 
@@ -229,6 +237,30 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] early-vacancy failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * recon B1 — auto-complete meeting đã quá end_time (reuse
+   * LiveMeetingService.endMeeting(), KHÔNG viết lại logic kết thúc phiên).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_AUTO_COMPLETE_ENABLED (default OFF).
+   * KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'auto-complete-meetings' })
+  async autoCompleteMeetings(): Promise<void> {
+    if (!this.schedulerEnabled || !this.autoCompleteEnabled) return;
+
+    try {
+      const r = await this.liveMeetingService.autoCompleteOverdueMeetings();
+      this.logger.log(
+        `[Scheduler] auto-complete-meetings: scanned=${r.scanned} completed=${r.completed} skipped=${r.skipped} failed=${r.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] auto-complete-meetings failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

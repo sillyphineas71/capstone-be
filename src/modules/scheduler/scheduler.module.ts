@@ -10,6 +10,7 @@ import { IvssModule } from '../ivss/ivss.module.js';
 import { RestrictedZoneModule } from '../restricted-zone/restricted-zone.module.js';
 import { CrowdAlertModule } from '../crowd-alert/crowd-alert.module.js';
 import { ZonesModule } from '../zones/zones.module.js';
+import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -37,6 +38,10 @@ import { ZonesModule } from '../zones/zones.module.js';
     // GAP-001 (UC-106): cron gate-log-pairing inject GateLogPairingService (zones export).
     // Cạnh scheduler → zones MỘT CHIỀU (zones KHÔNG import scheduler) ⇒ không circular.
     ZonesModule,
+    // recon B1: cron auto-complete inject LiveMeetingService (endMeeting() reuse).
+    // Cạnh scheduler → live-meeting MỘT CHIỀU (live-meeting chỉ import
+    // AuthModule + WebsocketModule) ⇒ không circular.
+    LiveMeetingModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],
