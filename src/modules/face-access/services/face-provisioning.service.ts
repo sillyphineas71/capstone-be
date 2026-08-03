@@ -234,10 +234,13 @@ export class FaceProvisioningService {
   }
 
   async deprovisionMeeting(meeting: MeetingRow): Promise<void> {
+    // F2 (recon B2/B4): lấy MỌI mapping còn sống (mọi sync_status:
+    // failed/pending/synced) — khớp deprovisionEndedMeetings. Chỉ lọc
+    // sync_status='synced' bỏ sót slot failed/pending, kẹt vĩnh viễn.
     const maps: MappingRow[] = await this.dataSource.manager.query(
       `SELECT id, device_id, device_person_id, sync_status, metadata_json
        FROM device_user_mappings
-       WHERE metadata_json->>'bookingId' = $1 AND sync_status = 'synced'`,
+       WHERE metadata_json->>'bookingId' = $1 AND sync_status IN ('synced', 'failed', 'pending') AND deleted_at IS NULL`,
       [meeting.id],
     );
     for (const mp of maps) {
