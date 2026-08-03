@@ -3311,9 +3311,10 @@ export class MeetingsService {
         '(m.organizer_id = :userId OR m.host_id = :userId OR mp.id IS NOT NULL)',
         { userId },
       )
-      .andWhere('m.status NOT IN (:...excludedStatuses)', {
-        excludedStatuses: ['draft', 'pending_approval'],
-      })
+      // Không loại trạng thái nào ở đây: khi client không truyền `status`,
+      // lịch cá nhân phải trả TẤT CẢ trạng thái (kể cả draft/pending_approval)
+      // — người đặt phòng cần thấy cuộc họp đang chờ duyệt để theo dõi/hủy.
+      // Filter `status` tùy chọn ở dưới đã đủ để client tự thu hẹp khi cần.
       .andWhere('m.start_time < :to', { to: toDate })
       .andWhere('m.end_time > :from', { from: fromDate })
       .andWhere('m.deleted_at IS NULL')

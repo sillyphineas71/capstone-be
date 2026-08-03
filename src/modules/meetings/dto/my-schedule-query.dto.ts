@@ -42,10 +42,13 @@ export class MyScheduleQueryDto {
   timezone?: string = 'Asia/Ho_Chi_Minh';
 
   @IsOptional()
-  @IsEnum(['scheduled', 'in_progress', 'cancelled', 'completed'], {
-    each: true,
-    message: 'status khong hop le',
-  })
+  @IsEnum(
+    ['draft', 'pending_approval', 'scheduled', 'in_progress', 'cancelled', 'completed'],
+    {
+      each: true,
+      message: 'status khong hop le',
+    },
+  )
   status?: string[];
 
   @IsOptional()
