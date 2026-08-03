@@ -1054,8 +1054,10 @@ describe('MeetingsService', () => {
 
       mockRepo.count.mockResolvedValue(0);
 
-      em.findOne.mockImplementation(async (_entity: any, options: any = {}) => {
-        if (options?.lock) return fakeActiveBooking;
+      em.findOne.mockImplementation(async (entity: any, options: any = {}) => {
+        if (!options?.lock) return null;
+        if (entity === MeetingEntity) return { ...fakeMeeting };
+        if (entity === RoomBookingEntity) return fakeActiveBooking;
         return null;
       });
       em.find.mockResolvedValue([]);
@@ -1068,6 +1070,7 @@ describe('MeetingsService', () => {
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn().mockResolvedValue({ affected: 1 }),
       }));
+      em.update = jest.fn().mockResolvedValue({ affected: 1 });
 
       const qb = mockQueryBuilder();
       qb.getMany.mockResolvedValue([]);
@@ -1092,10 +1095,20 @@ describe('MeetingsService', () => {
       expect(result.newEndTime).toBe(validDto.endTime);
       expect(result.bookingId).toBe('booking-uuid');
       expect(dataSource.transaction).toHaveBeenCalled();
+      // Nghiệp vụ duyệt lại: meeting đang SCHEDULED → thay đổi CHƯA áp dụng,
+      // chỉ ghi MeetingRequest PENDING chờ Manager duyệt lại.
+      expect(result.pendingApproval).toBe(true);
+      expect(result.requestId).toBeDefined();
     });
 
-    it('[T040] should call createNotification with MEETING_TIME_UPDATED and old/new times in payload', async () => {
+    it('[T040] SCHEDULED: notifies approvers (MEETING_REQUEST_CREATED), KHÔNG báo participants MEETING_TIME_UPDATED (chưa áp dụng)', async () => {
       setupMocks();
+      const approverQb = mockQueryBuilder();
+      approverQb.getMany.mockResolvedValue([
+        { id: 'approver-uuid' } as UserEntity,
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(approverQb);
+
       await service.updateMeetingTime(
         'meeting-uuid',
         validDto,
@@ -1104,9 +1117,10 @@ describe('MeetingsService', () => {
       );
       expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
-          notificationType: NotificationType.MEETING_TIME_UPDATED,
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
           channel: NotificationChannel.IN_APP,
-          relatedEntityType: 'meeting',
+          relatedEntityType: 'meeting_request',
+          recipientUserIds: ['approver-uuid'],
           payloadJson: expect.objectContaining({
             oldStartTime: expect.any(String),
             oldEndTime: expect.any(String),
@@ -1115,9 +1129,14 @@ describe('MeetingsService', () => {
           }),
         }),
       );
+      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_TIME_UPDATED,
+        }),
+      );
     });
 
-    it('[T041] should call enqueueEmailNotification with correct recipients', async () => {
+    it('[T041] SCHEDULED: KHÔNG gửi email cho participants (thay đổi chưa được áp dụng)', async () => {
       setupMocks();
       mockRepo.find.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
@@ -1149,19 +1168,16 @@ describe('MeetingsService', () => {
       );
       expect(
         mockNotificationsService.enqueueEmailNotification,
-      ).toHaveBeenCalledWith(
-        expect.objectContaining({
-          notificationType: NotificationType.MEETING_TIME_UPDATED,
-          channel: NotificationChannel.EMAIL,
-          toEmails: expect.arrayContaining([
-            expect.stringMatching(/@company\.com$/),
-          ]),
-        }),
-      );
+      ).not.toHaveBeenCalled();
     });
 
-    it('[T042] should succeed and return notificationStatus=failed when notification/email fails', async () => {
+    it('[T042] should succeed and return notificationStatus=failed when approver notification fails', async () => {
       setupMocks();
+      const approverQb = mockQueryBuilder();
+      approverQb.getMany.mockResolvedValue([
+        { id: 'approver-uuid' } as UserEntity,
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(approverQb);
       mockNotificationsService.createNotification.mockRejectedValue(
         new Error('Notify failed'),
       );

@@ -22,6 +22,9 @@ export const envValidationSchema = Joi.object({
   CORS_ORIGIN: Joi.string().default(
     'http://localhost:5173,http://localhost:3000',
   ),
+  // Trang docs Swagger/OpenAPI phơi toàn bộ bề mặt API ra public — bật mặc
+  // định cho demo/bảo vệ, có công tắc tắt khi cần (production siết chặt).
+  SWAGGER_ENABLED: Joi.boolean().default(true),
 
   // ─── B. Database ─────────────────────────────────────────────────────────────
   DB_HOST: Joi.string().required(),

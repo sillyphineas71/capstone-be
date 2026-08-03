@@ -9,6 +9,8 @@
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -37,6 +39,10 @@ export class RolePermissionsController {
 
   @Post()
   @RequirePermissions('admin.manage_permissions')
+  // Repo KHONG co global ValidationPipe (main.ts) => khai tuong minh, neu khong
+  // @IsUUID('4', {each:true}) khong chay va permissionIds rac di thang vao query In(...)
+  // => loi cast uuid 22P02 => 500 thay vi 400.
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async assign(
     @Param('roleId') roleId: string,
     @Body() dto: AssignPermissionsDto,

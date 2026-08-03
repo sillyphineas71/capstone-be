@@ -25,6 +25,39 @@ export class IvssPresenceController {
     private readonly presenceReportService: IvssPresenceReportService,
   ) {}
 
+  // #43 (IPR-001): tải PDF báo cáo hiện diện cả họp. C2: @Res() file, KHÔNG envelope.
+  // ⚠ LUẬT THỨ TỰ: route STATIC `report` phải khai TRƯỚC route động `:userId` bên dưới
+  // (cùng method GET, cùng 5 segment). Khai sau sẽ bị `:userId` nuốt → ParseUUIDPipe 400.
+  @Get(':meetingId/presence/report')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('ivss.presence.read')
+  async report(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Res() res: Response,
+  ) {
+    let report: { buffer: Buffer; filename: string } | null;
+    try {
+      report = await this.presenceReportService.buildMeetingReport(meetingId);
+    } catch {
+      // Lỗi render → 500, KHÔNG lộ path/chi tiết nội bộ.
+      res.status(500).end();
+      return;
+    }
+    if (!report) {
+      res.status(404).json({
+        code: 'MEETING_NOT_FOUND',
+        message: 'Meeting not found.',
+      });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${report.filename}"`,
+    );
+    res.send(report.buffer);
+  }
+
   // #41 + #42 chi tiết 1 người trong 1 họp.
   @Get(':meetingId/presence/:userId')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -59,36 +92,5 @@ export class IvssPresenceController {
       });
     }
     return { success: true, message: 'IVSS meeting presence retrieved', data };
-  }
-
-  // #43 (IPR-001): tải PDF báo cáo hiện diện cả họp. C2: @Res() file, KHÔNG envelope.
-  @Get(':meetingId/presence/report')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('ivss.presence.read')
-  async report(
-    @Param('meetingId', ParseUUIDPipe) meetingId: string,
-    @Res() res: Response,
-  ) {
-    let report: { buffer: Buffer; filename: string } | null;
-    try {
-      report = await this.presenceReportService.buildMeetingReport(meetingId);
-    } catch {
-      // Lỗi render → 500, KHÔNG lộ path/chi tiết nội bộ.
-      res.status(500).end();
-      return;
-    }
-    if (!report) {
-      res.status(404).json({
-        code: 'MEETING_NOT_FOUND',
-        message: 'Meeting not found.',
-      });
-      return;
-    }
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${report.filename}"`,
-    );
-    res.send(report.buffer);
   }
 }

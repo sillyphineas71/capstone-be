@@ -12,6 +12,8 @@
   HttpStatus,
   BadRequestException,
   ParseUUIDPipe,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
@@ -60,6 +62,11 @@ export class RolesController {
   @Post()
   @RequirePermissions('account.role.create')
   @HttpCode(HttpStatus.CREATED)
+  // Repo KHONG co global ValidationPipe (main.ts) => phai khai tuong minh, neu khong
+  // decorator tren CreateRoleDto khong chay (roleCode mat regex + uppercase-transform,
+  // thieu roleName => NOT NULL => 500). Dat o METHOD, khong dat o controller: route GET
+  // dung query DTO co @Max(100) trong khi FE goi limit=500 => se 400 oan.
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async create(
     @Body() dto: CreateRoleDto,
     @CurrentUser() user: { userId: string } | undefined,
@@ -82,6 +89,10 @@ export class RolesController {
 
   @Patch(':id')
   @RequirePermissions('account.role.update')
+  // KHONG bat whitelist o route nay: handler co doc rawDto.roleCode/isSystemRole de tra
+  // 400 tuong minh (immutable field). whitelist se strip 2 field do truoc khi vao handler
+  // => request doi roleCode se am tham 200 thay vi bao loi.
+  @UsePipes(new ValidationPipe({ transform: true }))
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRoleDto,

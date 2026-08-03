@@ -645,7 +645,7 @@ export class MeetingsController {
 
       { ipAddress, userAgent },
 
-      dto.cancellationReason,
+      dto.cancellationReason ?? dto.reason,
     );
 
     return {
