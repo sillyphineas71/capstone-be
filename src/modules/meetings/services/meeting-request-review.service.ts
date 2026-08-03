@@ -867,34 +867,30 @@ export class MeetingRequestReviewService {
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<void> {
-    const notifyUserIds: string[] = [result.requesterId];
-    if (result.hostId && !notifyUserIds.includes(result.hostId)) {
-      notifyUserIds.push(result.hostId);
-    }
-    for (const uid of notifyUserIds) {
-      try {
-        await this.notificationsService.createNotification({
-          notificationType: NotificationType.MEETING_REQUEST_REJECTED,
-          channel: NotificationChannel.IN_APP,
-          subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã bị từ chối`,
-          content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã bị từ chối.`,
-          relatedEntityType: 'meeting',
-          relatedEntityId: result.meetingId,
-          recipientScope: 'user_list',
-          recipientUserIds: [uid],
-          createdBy: authUser.userId,
-        });
-      } catch (error) {
-        this.logger.error(
-          `[Reject] Failed to send rejection notify to ${uid}: ${(error as Error).message}`,
-        );
-        await this.writeNotificationFailureAudit(
-          result.meetingId,
-          authUser,
-          clientContext,
-          `Failed to notify ${uid} of rejection: ${(error as Error).message}`,
-        );
-      }
+    // Only the host is notified of a rejection — in-app only, no email.
+    const hostUserId = result.hostId ?? result.requesterId;
+    try {
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.MEETING_REQUEST_REJECTED,
+        channel: NotificationChannel.IN_APP,
+        subject: `Yêu cầu cuộc họp "${result.meetingTitle}" đã bị từ chối`,
+        content: `Yêu cầu cuộc họp "${result.meetingTitle}" của bạn đã bị từ chối.`,
+        relatedEntityType: 'meeting',
+        relatedEntityId: result.meetingId,
+        recipientScope: 'user_list',
+        recipientUserIds: [hostUserId],
+        createdBy: authUser.userId,
+      });
+    } catch (error) {
+      this.logger.error(
+        `[Reject] Failed to send rejection notify to ${hostUserId}: ${(error as Error).message}`,
+      );
+      await this.writeNotificationFailureAudit(
+        result.meetingId,
+        authUser,
+        clientContext,
+        `Failed to notify ${hostUserId} of rejection: ${(error as Error).message}`,
+      );
     }
   }
 }

@@ -14,6 +14,12 @@ export class TranscriptSegmentDto {
   @ApiProperty() overlap!: boolean;
   @ApiProperty() lowConfidence!: boolean;
   @ApiProperty() manualReviewRequired!: boolean;
+  // feat-speaker-tagging-post-meeting/live (2026-08-02/03): field mở rộng
+  // do SpeakerMappingService ghi thêm khi Host gán tên — không có trong
+  // contract gốc của Python AI worker (schemas.py), chỉ xuất hiện SAU khi
+  // đã gán ít nhất 1 lần cho cụm chứa segment này.
+  @ApiPropertyOptional() mappedExternalParticipantId?: string | null;
+  @ApiPropertyOptional() displayName?: string | null;
 }
 
 export class TranscriptResponseDto {

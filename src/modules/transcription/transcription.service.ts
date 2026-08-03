@@ -46,6 +46,7 @@ import {
 import { TRANSCRIPTION_ERROR_CODES } from './constants/transcription-error-codes.js';
 import { TRANSCRIPTION_QUEUE_NAME } from './constants/transcription-job.constants.js';
 import { TranscriptionResult } from './types/transcript-segment.type.js';
+import { SpeakerMappingService } from './speaker-mapping.service.js';
 
 @Injectable()
 export class TranscriptionService {
@@ -69,6 +70,9 @@ export class TranscriptionService {
     private readonly notificationsService: NotificationsService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
+    // GA-27 (feat-speaker-tagging-post-meeting): áp lại mapping đã gán từ
+    // meeting_events mỗi khi transcript mới được ghi — xem updateTranscriptResult().
+    private readonly speakerMappingService: SpeakerMappingService,
   ) {}
 
   async createTranscriptionJob(
@@ -419,6 +423,22 @@ export class TranscriptionService {
         reviewSegments.length +
         ')',
     );
+
+    // GA-27 (feat-speaker-tagging-post-meeting) — áp lại mapping đã gán từ
+    // meeting_events, nếu recording session này từng được Host gán tên trước
+    // đó (ở bản transcript cũ hơn). Best-effort: lỗi ở đây KHÔNG được làm fail
+    // job transcription đã ghi draft thành công (đúng pattern notifyTranscriptReady).
+    try {
+      await this.speakerMappingService.applySpeakerMappingsFromEvents(
+        transcriptId,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        'applySpeakerMappingsFromEvents FAILED (bo qua, khong fail job): ' +
+          msg,
+      );
+    }
   }
 
   /**

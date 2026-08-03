@@ -4,6 +4,9 @@ dist/
 __pycache__/
 *.pyc
 
+# Output tạm của script benchmark thủ công (benchmark_resources.py, bench_climate.py)
+python/_bench_tmp/
+
 # Model weights (pyannote, faster-whisper...) preload thủ công theo T-HF-001 —
 # không commit vào Git, tải lại trên máy khác khi cần.
 models/

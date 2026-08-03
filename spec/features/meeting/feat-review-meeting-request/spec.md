@@ -17,6 +17,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-08 | Cập nhật spec sau khi clarify: xử lý room conflict không reject, cấm self-approval, validation, pessimistic lock | Toàn bộ các mục liên quan FR, AC, Model, Errors |
+| 2026-08-03 | Thay đổi quyết định nghiệp vụ theo yêu cầu team: reject chỉ thông báo cho **host** (không còn gửi thêm cho creator/requester nếu khác host). Đồng thời fix bug đã phát hiện: meeting_invite trước đây bị gửi ngay lúc tạo meeting (trước khi duyệt) — đã sửa để chỉ gửi sau khi approve, đúng như FR-007/FR-035 spec đã quy định. | FR-013, AC-002, mục 7.7 |
 
 ## 1. Context & Goal
 
@@ -130,7 +131,7 @@ FR-011: WHEN approver gửi yêu cầu reject meeting request hợp lệ, THE sy
   - `meetings.status` sang `cancelled`
   - `room_bookings.status` sang `cancelled`
 FR-012: WHEN approver reject meeting request, THE system SHALL lưu `rejection_reason` vào `meeting_requests.rejection_reason`, `meetings.cancellation_reason`, và `room_bookings.cancellation_reason`.
-FR-013: WHEN approver reject meeting request thành công, THE system SHALL tạo notification `meeting_request_rejected` cho creator (và host nếu host khác creator).
+FR-013: WHEN approver reject meeting request thành công, THE system SHALL tạo notification `meeting_request_rejected` (IN_APP only) chỉ cho host. Nếu creator/requester khác host, creator/requester KHÔNG nhận notification này.
 FR-014: WHEN approver reject meeting request, THE system SHALL NOT tạo notification `meeting_invite` cho participants.
 FR-015: WHEN approver reject meeting request thành công, THE system SHALL tạo `meeting_events` với `event_type = meeting_request_rejected`.
 FR-016: WHEN approver reject meeting request thành công, THE system SHALL ghi audit_log với `action_type = reject` và `entity_type = meeting_request`.
@@ -443,7 +444,7 @@ Then:
   - meetings.status = cancelled
   - room_bookings.status = cancelled
   - meeting_events được tạo với event_type = meeting_request_rejected
-  - notifications meeting_request_rejected được tạo cho creator/host
+  - notifications meeting_request_rejected (IN_APP) được tạo chỉ cho host (không gửi cho creator/requester nếu khác host, không gửi email)
   - NOT tạo meeting_invite cho participants
   - audit_logs được ghi với action_type = reject
 ```
