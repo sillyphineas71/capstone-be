@@ -25,7 +25,12 @@ interface MappingRow {
 }
 
 /** Kết quả provision 1 participant (MCS #2). */
-type ProvisionResult = 'provisioned' | 'noop' | 'revived' | 'skipped';
+type ProvisionResult =
+  | 'provisioned'
+  | 'noop'
+  | 'revived'
+  | 'skipped'
+  | 'skipped_no_portrait';
 
 /**
  * FaceProvisioningService (FMP-001 / Ticket B) — đẩy/gỡ khuôn mặt theo cuộc họp.
@@ -103,7 +108,7 @@ export class FaceProvisioningService {
     for (const p of participants) {
       try {
         const r = await this.provisionParticipant(meeting, device, p.user_id);
-        if (r === 'skipped') skipped++;
+        if (r === 'skipped' || r === 'skipped_no_portrait') skipped++;
       } catch (e) {
         await this.upsertMapping({
           deviceId: device.id,
@@ -159,10 +164,26 @@ export class FaceProvisioningService {
 
     const bytes = await this.faceProfileService.getPortraitBytes(userId);
     if (!bytes) {
+      // F4 (recon B7): trước đây skip im lặng, KHÔNG ghi vết gì — không ai
+      // truy được vì sao user không được enroll. Ghi mapping status='pending'
+      // + error='no_portrait' (như nhánh lỗi khác ở provisionMeeting) để có
+      // dấu vết, và để cron sau tự retry nếu user upload ảnh rồi. VẪN skip
+      // enroll — KHÔNG tự tạo/ép ảnh (việc ép upload thuộc FE, ngoài scope).
       this.logger.warn(
         `No portrait for user ${userId} (meeting ${meeting.id}) — skip enroll.`,
       );
-      return 'noop';
+      await this.upsertMapping({
+        deviceId: device.id,
+        userId,
+        uid: null,
+        uname,
+        bookingId: meeting.id,
+        validFrom: meeting.start_time,
+        validTo: meeting.end_time,
+        status: 'pending',
+        error: 'no_portrait',
+      });
+      return 'skipped_no_portrait';
     }
 
     const provider = this.factory.create({
