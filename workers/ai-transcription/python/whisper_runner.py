@@ -10,6 +10,17 @@ import os
 from typing import Any, Dict, List, Optional
 
 from faster_whisper import WhisperModel
+from faster_whisper.vad import VadOptions
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _resolve_model_ref(model_size_or_path: str) -> str:
@@ -52,12 +63,22 @@ def transcribe(
         local_files_only=local_files_only,
     )
 
+    # GA-10 (2026-08-02, feat-transcript-segment-merge): vad_filter=True một
+    # mình dùng mặc định thư viện (VadOptions.min_silence_duration_ms=2000ms,
+    # xác nhận thật trên faster-whisper==1.2.1 đang cài) — vẫn hay cắt câu giữa
+    # chừng ở khoảng lặng ngắn. Truyền vad_parameters tường minh, đọc ngưỡng im
+    # lặng từ env để không hard-code, cho phép benchmark (T-MERGE-005) tinh
+    # chỉnh mà không sửa code.
+    vad_min_silence_ms = _env_int("WHISPER_VAD_MIN_SILENCE_MS", 2000)
+    vad_parameters = VadOptions(min_silence_duration_ms=vad_min_silence_ms)
+
     segments_iter, info = model.transcribe(
         audio_path,
         language=whisper_language,
         task="transcribe",
         beam_size=5,
         vad_filter=True,
+        vad_parameters=vad_parameters,
         temperature=0.0,
         initial_prompt=initial_prompt,
         # condition_on_previous_text=True (default) làm model thiên về lặp lại

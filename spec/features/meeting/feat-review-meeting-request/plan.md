@@ -8,13 +8,21 @@
 
 ---
 
+## CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-08-03 | Reject chỉ thông báo cho host (không còn "creator/host"). | Mục 7.2 (Reject step 14), dòng tóm tắt đầu file |
+| 2026-08-03 | Đính chính: participant nội bộ khi approve chỉ nhận MEETING_INVITE qua IN_APP (KHÔNG gửi email) — giữ nguyên hành vi cũ để giảm tải dịch vụ email; chỉ external participant mới nhận email. | Mục 7.2 (Approve step 14), dòng tóm tắt đầu file |
+
+---
+
 ## 1. Feature Summary
 
 Feature này cho phép Manager/Approver phê duyệt (approve) hoặc từ chối (reject) một meeting request đang ở trạng thái `pending`. Đây là bước tiếp theo sau feature MEETING-CREATE-MANUAL-001 (tạo yêu cầu cuộc họp).
 
-Khi approve: chuyển `meeting_requests → approved`, `meetings → scheduled`, `room_bookings → approved`, tạo notification meeting_invite cho participants, ghi audit log.
+Khi approve: chuyển `meeting_requests → approved`, `meetings → scheduled`, `room_bookings → approved`, tạo notification meeting_invite (IN_APP cho internal, EMAIL cho external) cho participants, ghi audit log.
 
-Khi reject: chuyển `meeting_requests → rejected`, `meetings → cancelled`, `room_bookings → cancelled`, tạo notification cho creator/host, ghi audit log.
+Khi reject: chuyển `meeting_requests → rejected`, `meetings → cancelled`, `room_bookings → cancelled`, tạo notification meeting_request_rejected (IN_APP) chỉ cho host, ghi audit log.
 
 ---
 
@@ -235,7 +243,7 @@ if (request.requested_by === authUser.userId || meeting.organizer_id === authUse
     - room_bookings: status='approved', approved_by, approved_at
 13. Create meeting_events: event_type='meeting_request_approved'
 14. Create notifications:
-    - MEETING_INVITE cho internal participants
+    - MEETING_INVITE cho internal participants (IN_APP only — không gửi email để giảm tải dịch vụ email)
     - MEETING_INVITE cho external participants (email)
     - MEETING_REQUEST_APPROVED cho creator/host
 15. Create audit_log: action_type='approve', metadata_json chứa decision_note (nếu có)
@@ -262,8 +270,7 @@ if (request.requested_by === authUser.userId || meeting.organizer_id === authUse
     - room_bookings: status='cancelled', cancellation_reason
 13. Create meeting_events: event_type='meeting_request_rejected'
 14. Create notifications:
-    - MEETING_REQUEST_REJECTED cho creator
-    - MEETING_REQUEST_REJECTED cho host (nếu host !== creator)
+    - MEETING_REQUEST_REJECTED (IN_APP) chỉ cho host (creator/requester KHÔNG nhận nếu khác host)
     - KHÔNG tạo MEETING_INVITE
 15. Create audit_log: action_type='reject'
 16. Return success response

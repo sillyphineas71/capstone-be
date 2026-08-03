@@ -31,6 +31,7 @@ import { BackgroundJobsService } from '../administration/services/background-job
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { TRANSCRIPTION_ERROR_CODES } from './constants/transcription-error-codes.js';
 import { TranscriptStatusTransition } from './dto/update-transcript-status.dto.js';
+import { SpeakerMappingService } from './speaker-mapping.service.js';
 
 describe('TranscriptionService (T030)', () => {
   let service: TranscriptionService;
@@ -46,6 +47,7 @@ describe('TranscriptionService (T030)', () => {
   let queueService: { addJob: jest.Mock };
   let backgroundJobsService: { createQueuedJob: jest.Mock };
   let notificationsService: { createNotification: jest.Mock };
+  let speakerMappingService: { applySpeakerMappingsFromEvents: jest.Mock };
   let configService: { get: jest.Mock };
   let queryRunner: {
     connect: jest.Mock;
@@ -103,6 +105,9 @@ describe('TranscriptionService (T030)', () => {
     notificationsService = {
       createNotification: jest.fn().mockResolvedValue({ id: 'notif-1' }),
     };
+    speakerMappingService = {
+      applySpeakerMappingsFromEvents: jest.fn().mockResolvedValue(undefined),
+    };
     configService = { get: jest.fn((_key: string, def: unknown) => def) };
     queryRunner = {
       connect: jest.fn().mockResolvedValue(undefined),
@@ -145,6 +150,7 @@ describe('TranscriptionService (T030)', () => {
         { provide: QueueService, useValue: queueService },
         { provide: BackgroundJobsService, useValue: backgroundJobsService },
         { provide: NotificationsService, useValue: notificationsService },
+        { provide: SpeakerMappingService, useValue: speakerMappingService },
         { provide: ConfigService, useValue: configService },
         { provide: DataSource, useValue: dataSource },
       ],
@@ -602,6 +608,54 @@ describe('TranscriptionService (T030)', () => {
       expect(payload.speakerSegmentsJson.manualReviewRequired).toBe(true);
       expect(payload.speakerSegmentsJson.manualReviewSegmentCount).toBe(1);
       expect(payload.speakerSegmentsJson.editRevisionNo).toBe(0);
+    });
+
+    it('GA-27: goi applySpeakerMappingsFromEvents SAU khi ghi draft xong', async () => {
+      const result = {
+        languageCode: 'vi-VN',
+        rawText: 'x',
+        cleanedText: 'x',
+        confidenceScore: 0.9,
+        segments: [],
+        detectedSpeakers: [],
+        modelVersions: { whisper: 'small', pyannote: null, sepformer: null },
+        warnings: [],
+      } as never;
+
+      await service.updateTranscriptResult('tr-1', result);
+
+      expect(
+        speakerMappingService.applySpeakerMappingsFromEvents,
+      ).toHaveBeenCalledWith('tr-1');
+      // Thứ tự gọi: ghi draft (transcriptRepo.update) PHẢI xảy ra TRƯỚC khi áp
+      // lại mapping (GA-27 đọc segments MỚI vừa ghi) — so invocationCallOrder
+      // thay vì toHaveBeenCalledBefore (jest-extended chưa cài trong project).
+      const updateOrder = transcriptRepo.update.mock.invocationCallOrder[0];
+      const applyOrder =
+        speakerMappingService.applySpeakerMappingsFromEvents.mock
+          .invocationCallOrder[0];
+      expect(updateOrder).toBeLessThan(applyOrder);
+    });
+
+    it('GA-27 fail-safe: loi applySpeakerMappingsFromEvents KHONG lam fail updateTranscriptResult', async () => {
+      speakerMappingService.applySpeakerMappingsFromEvents.mockRejectedValue(
+        new Error('boom'),
+      );
+      const result = {
+        languageCode: 'vi-VN',
+        rawText: 'x',
+        cleanedText: 'x',
+        confidenceScore: 0.9,
+        segments: [],
+        detectedSpeakers: [],
+        modelVersions: { whisper: 'small', pyannote: null, sepformer: null },
+        warnings: [],
+      } as never;
+
+      await expect(
+        service.updateTranscriptResult('tr-1', result),
+      ).resolves.toBeUndefined();
+      expect(transcriptRepo.update).toHaveBeenCalledTimes(1);
     });
   });
 

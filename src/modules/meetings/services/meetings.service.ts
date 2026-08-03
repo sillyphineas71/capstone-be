@@ -778,43 +778,6 @@ export class MeetingsService {
       }
     }
 
-    try {
-      const emailMap = await this.resolveUserEmails(
-        [
-          ...new Set([
-            ...(dto.participantUserIds || []),
-            hostId,
-            authUser.userId,
-          ]),
-        ],
-        this.dataSource.manager,
-      );
-      await this.notifyMeetingRecipients(
-        NotificationType.MEETING_INVITE,
-        `L\u1eddi m\u1eddi tham gia cu\u1ed9c h\u1ecdp: ${dto.title}`,
-        `B\u1ea1n \u0111\u00e3 \u0111\u01b0\u1ee3c th\u00eam v\u00e0o cu\u1ed9c h\u1ecdp "${dto.title}".`,
-        [
-          ...new Set([
-            ...(dto.participantUserIds || []),
-            hostId,
-            authUser.userId,
-          ]),
-        ],
-        (dto.externalParticipants || [])
-          .filter((ep: any) => ep.email)
-          .map((ep: any) => ep.email),
-        'meeting',
-        meeting!.id,
-        authUser.userId,
-      );
-    } catch (participantNotifError) {
-      this.logger.error(
-        '[Create] Participant block failed for meeting ' +
-          meeting!.id +
-          ': ' +
-          (participantNotifError as Error).message,
-      );
-    }
     return new CreateMeetingResponseDto({
       id: meeting!.id,
       meetingCode,
@@ -853,85 +816,6 @@ export class MeetingsService {
         '[resolveUserEmails] Failed: ' + (err as Error).message,
       );
       return new Map();
-    }
-  }
-
-  private async notifyMeetingRecipients(
-    notificationType: NotificationType,
-    subject: string,
-    content: string,
-    internalUserIds: string[],
-    externalEmails: string[],
-    relatedEntityType: string,
-    relatedEntityId: string,
-    createdBy: string,
-  ): Promise<void> {
-    const allUserIds = [...new Set(internalUserIds)];
-    const emailMap = await this.resolveUserEmails(
-      allUserIds,
-      this.dataSource.manager,
-    );
-    const allExternal = [...new Set(externalEmails.filter(Boolean))];
-    for (const uid of allUserIds) {
-      try {
-        await this.notificationsService.createNotification({
-          notificationType,
-          channel: NotificationChannel.IN_APP,
-          subject,
-          content,
-          relatedEntityType,
-          relatedEntityId,
-          recipientScope: 'user_list',
-          recipientUserIds: [uid],
-          createdBy,
-        });
-      } catch (err) {
-        this.logger.error(
-          '[notify] IN_APP failed for ' + uid + ': ' + (err as Error).message,
-        );
-      }
-      const userEmail = emailMap.get(uid);
-      if (userEmail) {
-        try {
-          await this.notificationsService.enqueueEmailNotification({
-            notificationType,
-            channel: NotificationChannel.EMAIL,
-            subject,
-            content,
-            toEmails: [userEmail],
-            relatedEntityType,
-            relatedEntityId,
-            recipientScope: 'user_list',
-            createdBy,
-          });
-        } catch (err) {
-          this.logger.error(
-            '[notify] EMAIL failed for ' + uid + ': ' + (err as Error).message,
-          );
-        }
-      }
-    }
-    for (const email of allExternal) {
-      try {
-        await this.notificationsService.enqueueEmailNotification({
-          notificationType,
-          channel: NotificationChannel.EMAIL,
-          subject,
-          content,
-          toEmails: [email],
-          relatedEntityType,
-          relatedEntityId,
-          recipientScope: 'user_list',
-          createdBy,
-        });
-      } catch (err) {
-        this.logger.error(
-          '[notify] External EMAIL failed for ' +
-            email +
-            ': ' +
-            (err as Error).message,
-        );
-      }
     }
   }
 

@@ -18,7 +18,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TranscriptEntity } from './entities/transcript.entity.js';
 import { TranscriptionController } from './transcription.controller.js';
 import { TranscriptSegmentsController } from './transcript-segments.controller.js';
+import { TranscriptSpeakerMappingsController } from './transcript-speaker-mappings.controller.js';
+import { LiveSpeakerTaggingController } from './live-speaker-tagging.controller.js';
 import { TranscriptionService } from './transcription.service.js';
+import { SpeakerMappingService } from './speaker-mapping.service.js';
 import { TranscriptionWorkerProcessor } from './transcription-worker.processor.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
@@ -53,9 +56,21 @@ const isWorkerEnabled = process.env['TRANSCRIPTION_WORKER_ENABLED'] !== 'false';
     WebsocketModule,
     TypeOrmModule.forFeature([TranscriptEntity]),
   ],
-  controllers: [TranscriptionController, TranscriptSegmentsController],
+  controllers: [
+    TranscriptionController,
+    TranscriptSegmentsController,
+    TranscriptSpeakerMappingsController,
+    // feat-speaker-tagging-live (GA-30/32/35): SpeakerMappingService đã đăng
+    // ký sẵn ở providers bên dưới — không cần thêm lại.
+    LiveSpeakerTaggingController,
+  ],
   providers: [
     TranscriptionService,
+    // feat-speaker-tagging-post-meeting (GA-20→27): SpeakerMappingService
+    // đăng ký TRƯỚC TranscriptionService trong mảng không quan trọng thứ tự
+    // (Nest tự resolve dependency graph) — TranscriptionService inject
+    // SpeakerMappingService để gọi applySpeakerMappingsFromEvents() (GA-27).
+    SpeakerMappingService,
     ...(isWorkerEnabled ? [TranscriptionWorkerProcessor] : []),
   ],
   exports: [TypeOrmModule, TranscriptionService],

@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from overlap_detector import segment_overlaps_window
 
+SENTENCE_END_CHARS = (".", "!", "?")
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
@@ -40,6 +42,16 @@ def _env_float(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
     except ValueError:
         return default
 
@@ -80,6 +92,102 @@ def _dominant_speaker(
         return None
     best_speaker = max(overlap_by_speaker, key=lambda k: overlap_by_speaker[k])
     return best_speaker, overlap_by_speaker[best_speaker] / seg_duration
+
+
+def merge_fragmented_segments(
+    segments: List[Dict[str, Any]],
+    turns: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """GA-11 (2026-08-02, feat-transcript-segment-merge/spec.md FR-001..FR-003):
+    gộp các segment STT liền kề thuộc CÙNG một lượt nói thành một segment hoàn
+    chỉnh hơn, chạy TRƯỚC assign_speakers() (transcribe_pipeline.py).
+
+    Chỉ gộp segment[i] vào segment gộp trước đó khi CẢ BA điều kiện đúng:
+      1. Cả hai overlap với CÙNG một turn/speaker chiếm ưu thế theo
+         _dominant_speaker() (tái dùng logic đã có, không viết lại). Segment
+         không overlap turn nào -> _dominant_speaker trả None -> tự động
+         KHÔNG đủ điều kiện gộp (khớp FR-009).
+      2. Khoảng cách giữa endMs của cụm đang gộp và startMs segment kế tiếp <
+         SEGMENT_MERGE_MAX_GAP_MS (env, mặc định 800ms — plan tổng GIAI ĐOẠN 1).
+      3. Text của cụm đang gộp KHÔNG kết thúc bằng dấu kết câu (. ! ?) — coi
+         là câu chưa xong, không phải hai câu độc lập của cùng người.
+
+    AN TOÀN TUYỆT ĐỐI (spec.md ERR-GA-001): điều kiện (1) luôn được kiểm tra
+    ĐẦU TIÊN trong `can_merge` — không có nhánh nào bỏ qua nó. Không bao giờ
+    gộp hai segment khác turn/speaker chiếm ưu thế, dù khoảng cách gần đến đâu.
+
+    Trả về danh sách MỚI, không mutate `segments` đầu vào. An toàn khi
+    segments=[] hoặc turns=[] (trả nguyên segments, không gộp gì — khớp FR-007:
+    caller chỉ gọi hàm này khi turns không rỗng, nhưng hàm tự vệ thêm ở đây).
+    """
+    if not segments or not turns:
+        return list(segments)
+
+    max_gap_ms = _env_int("SEGMENT_MERGE_MAX_GAP_MS", 800)
+
+    merged: List[Dict[str, Any]] = [dict(segments[0])]
+    prev_speaker = _dominant_speaker(segments[0], turns)
+
+    for raw_segment in segments[1:]:
+        segment = dict(raw_segment)
+        current_speaker = _dominant_speaker(segment, turns)
+
+        prev = merged[-1]
+        prev_text = (prev.get("text") or "").strip()
+        gap_ms = segment["startMs"] - prev["endMs"]
+        ends_with_sentence_punct = prev_text.endswith(SENTENCE_END_CHARS)
+
+        can_merge = (
+            prev_speaker is not None
+            and current_speaker is not None
+            and prev_speaker[0] == current_speaker[0]
+            and gap_ms < max_gap_ms
+            and not ends_with_sentence_punct
+        )
+
+        if can_merge:
+            merged[-1] = _merge_two_segments(prev, segment)
+        else:
+            merged.append(segment)
+
+        prev_speaker = current_speaker
+
+    return merged
+
+
+def _merge_two_segments(prev: Dict[str, Any], nxt: Dict[str, Any]) -> Dict[str, Any]:
+    """Gộp `nxt` vào `prev`, trả về segment MỚI (không mutate input). Trọng số
+    trung bình theo độ dài GỐC của từng mảnh — tính TRƯỚC khi endMs bị đổi,
+    tránh lệch trọng số (FR-003, spec.md)."""
+    prev_duration = max(1, prev["endMs"] - prev["startMs"])
+    nxt_duration = max(1, nxt["endMs"] - nxt["startMs"])
+    total_duration = prev_duration + nxt_duration
+
+    def _weighted_avg(a: Optional[float], b: Optional[float]) -> Optional[float]:
+        a_val = a if a is not None else 0.0
+        b_val = b if b is not None else 0.0
+        return round((a_val * prev_duration + b_val * nxt_duration) / total_duration, 4)
+
+    result = dict(prev)
+    prev_text = (prev.get("text") or "").strip()
+    result["text"] = (prev_text + " " + nxt["text"].strip()).strip()
+    result["endMs"] = nxt["endMs"]
+    result["sttConfidence"] = _weighted_avg(prev.get("sttConfidence"), nxt.get("sttConfidence"))
+    result["finalConfidence"] = _weighted_avg(prev.get("finalConfidence"), nxt.get("finalConfidence"))
+    # OR các cờ cảnh báo — không được để việc gộp âm thầm xoá cờ low-confidence/
+    # manualReview của một trong hai mảnh gốc.
+    result["lowConfidence"] = bool(prev.get("lowConfidence") or nxt.get("lowConfidence"))
+    result["manualReviewRequired"] = bool(
+        prev.get("manualReviewRequired") or nxt.get("manualReviewRequired")
+    )
+    merged_notes = list(prev.get("notes", []))
+    for note in nxt.get("notes", []):
+        if note not in merged_notes:
+            merged_notes.append(note)
+    if "segment_merged_same_turn" not in merged_notes:
+        merged_notes.append("segment_merged_same_turn")
+    result["notes"] = merged_notes
+    return result
 
 
 def _mark_unknown(

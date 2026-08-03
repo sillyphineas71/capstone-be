@@ -4,6 +4,12 @@
 **Input**: Design documents from `spec/features/meeting/feat-review-meeting-request/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/meeting-request-review-api.md, quickstart.md
 
+## CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
+| :--- | :--- | :--- |
+| 2026-08-03 | Cập nhật T007: reject chỉ thông báo host (bỏ "creator/host"). | T007 |
+| 2026-08-03 | Đính chính T006: MEETING_INVITE khi approve chỉ gửi IN_APP cho internal participant (KHÔNG gửi email, để giảm tải dịch vụ email); external participant vẫn nhận email. | T006 |
+
 ---
 
 ## Phase 1: Setup & Foundation
@@ -44,7 +50,7 @@
   - Update `meetings`: `status='scheduled'`, `updated_by`, `updated_at`
   - Update `room_bookings`: `status='approved'`, `approved_by`, `approved_at`
   - `em.create` + `em.save` `MeetingEventEntity` với `event_type='meeting_request_approved'`
-  - `em.create` + `em.save` notification records: `MEETING_INVITE` cho từng participant (internal + external), `MEETING_REQUEST_APPROVED` cho creator/host
+  - `em.create` + `em.save` notification records: `MEETING_INVITE` (IN_APP only) cho từng internal participant, `MEETING_INVITE` (EMAIL) cho external participant, `MEETING_REQUEST_APPROVED` cho creator/host
   - `em.create` + `em.save` `AuditLogEntity` với `action_type='approve'`; lưu `decisionNote` vào `metadata_json.decision_note`
   - Return `ApproveResponseDto`
 
@@ -60,7 +66,7 @@
   - Update `meetings`: `status='cancelled'`, `cancellation_reason`, `updated_by`, `updated_at`
   - Update `room_bookings`: `status='cancelled'`, `cancellation_reason`
   - Tạo `MeetingEventEntity` với `event_type='meeting_request_rejected'`
-  - Tạo notification `MEETING_REQUEST_REJECTED` cho creator/host — **KHÔNG** tạo `MEETING_INVITE`
+  - Tạo notification `MEETING_REQUEST_REJECTED` (IN_APP) chỉ cho host (không gửi cho creator/requester nếu khác host) — **KHÔNG** tạo `MEETING_INVITE`
   - Tạo `AuditLogEntity` với `action_type='reject'`
   - Return `RejectResponseDto`
 

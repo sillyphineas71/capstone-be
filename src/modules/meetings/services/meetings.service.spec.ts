@@ -759,7 +759,7 @@ describe('MeetingsService', () => {
       expect(result.bookingCode).toMatch(/^BK-\d{8}-\d{3}$/);
     });
 
-    it('[T028] should create notification for approvers + participants + audit log', async () => {
+    it('[T028] should create notification for approvers + audit log, and NOT invite participants yet', async () => {
       setupDefaultMocks();
 
       await service.create(validDto, authUser, clientContext);
@@ -773,27 +773,17 @@ describe('MeetingsService', () => {
         }),
       );
 
-      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+      // Participants must NOT be invited at creation time — only after manager approval.
+      expect(
+        mockNotificationsService.createNotification,
+      ).not.toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_INVITE,
-          channel: NotificationChannel.IN_APP,
-          relatedEntityType: 'meeting',
-          recipientScope: 'user_list',
         }),
       );
-
       expect(
         mockNotificationsService.enqueueEmailNotification,
-      ).toHaveBeenCalledWith(
-        expect.objectContaining({
-          notificationType: NotificationType.MEETING_INVITE,
-          channel: NotificationChannel.EMAIL,
-          toEmails: expect.arrayContaining([
-            expect.stringMatching(/@company\.com$/),
-          ]),
-          relatedEntityType: 'meeting',
-        }),
-      );
+      ).not.toHaveBeenCalled();
 
       expect(em.create).toHaveBeenCalledWith(
         AuditLogEntity,
@@ -815,7 +805,7 @@ describe('MeetingsService', () => {
       ).rejects.toThrow('DB Error');
     });
 
-    it('[T030] should send email to external participants via enqueueEmailNotification', async () => {
+    it('[T030] should NOT email external participants at creation time (only after approval)', async () => {
       const dtoWithExternal = {
         ...validDto,
         externalParticipants: [
@@ -829,33 +819,10 @@ describe('MeetingsService', () => {
 
       expect(
         mockNotificationsService.enqueueEmailNotification,
-      ).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toEmails: ['guest1@external.com'],
-        }),
-      );
-      expect(
-        mockNotificationsService.enqueueEmailNotification,
-      ).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toEmails: ['guest2@external.com'],
-        }),
-      );
+      ).not.toHaveBeenCalled();
     });
 
-    it('[T031] should succeed even if participant notification enqueue fails', async () => {
-      setupDefaultMocks();
-      mockNotificationsService.enqueueEmailNotification.mockRejectedValue(
-        new Error('Queue down'),
-      );
-
-      const result = await service.create(validDto, authUser, clientContext);
-
-      expect(result.id).toBeDefined();
-      expect(result.status).toBe(MeetingStatus.PENDING_APPROVAL);
-    });
-
-    it('[T032] should succeed even if createNotification for participants fails', async () => {
+    it('[T032] should succeed even if createNotification for approvers fails', async () => {
       setupDefaultMocks();
       mockNotificationsService.createNotification.mockRejectedValue(
         new Error('Notify down'),

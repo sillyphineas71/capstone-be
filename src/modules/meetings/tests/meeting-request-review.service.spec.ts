@@ -282,6 +282,28 @@ describe('MeetingRequestReviewService', () => {
       );
     });
 
+    it('[AC-011b] should NOT email internal participants on approve (in-app only, to reduce email load)', async () => {
+      setupSuccessMocks();
+      em.find = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { userId: 'participant-1' } as MeetingParticipantEntity,
+          { userId: 'participant-2' } as MeetingParticipantEntity,
+        ])
+        .mockResolvedValueOnce([]);
+
+      await service.approve(
+        'request-uuid',
+        approveDto,
+        authUser,
+        clientContext,
+      );
+
+      expect(
+        notificationsService.enqueueEmailNotification,
+      ).not.toHaveBeenCalled();
+    });
+
     it('[AC-013] should create audit log with action_type approve', async () => {
       setupSuccessMocks();
 
@@ -543,6 +565,24 @@ describe('MeetingRequestReviewService', () => {
           notificationType: NotificationType.MEETING_REQUEST_REJECTED,
           channel: NotificationChannel.IN_APP,
           recipientUserIds: expect.arrayContaining([creatorUser.userId]),
+        }),
+      );
+    });
+
+    it('[AC-012] should notify only the host, not the requester, when they differ', async () => {
+      em.findOne
+        .mockResolvedValueOnce(mockRequest({ requestedBy: 'requester-uuid' }))
+        .mockResolvedValueOnce(mockMeeting({ hostId: 'host-uuid' }))
+        .mockResolvedValueOnce(mockBooking());
+
+      await service.reject('request-uuid', rejectDto, authUser, clientContext);
+
+      expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_REQUEST_REJECTED,
+          channel: NotificationChannel.IN_APP,
+          recipientUserIds: ['host-uuid'],
         }),
       );
     });

@@ -25,7 +25,11 @@ from typing import Any, Dict, List, Optional
 
 from audio_preprocess import UnsupportedMediaFormatError, preprocess_audio
 from diarization_runner import DiarizationUnavailableError, diarize
-from merge_segments import assign_speakers, build_detected_speakers
+from merge_segments import (
+    assign_speakers,
+    build_detected_speakers,
+    merge_fragmented_segments,
+)
 from overlap_detector import (
     detect_overlaps,
     detect_overlaps_from_segments,
@@ -279,6 +283,17 @@ def run_pipeline(
             log_event("overlap_detection_done", windowCount=len(overlap_windows))
 
         if turns:
+            # GA-11/GA-12 (feat-transcript-segment-merge): gộp mảnh CÙNG lượt
+            # nói trước khi gán speaker — giảm mảnh vắt ranh giới người nói bị
+            # gán oan "unknown" (xem spec.md FR-005). Chỉ chạy khi có turns
+            # (CLR-002: diarization tắt/fail -> giữ nguyên hành vi cũ, không gộp).
+            before_count = len(segments)
+            segments = merge_fragmented_segments(segments, turns)
+            log_event(
+                "segment_merge_done",
+                beforeCount=before_count,
+                afterCount=len(segments),
+            )
             segments = assign_speakers(segments, turns, overlap_windows)
             detected_speakers = build_detected_speakers(segments)
 
