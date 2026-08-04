@@ -118,8 +118,72 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
     expect(r.unmatchedCount).toBe(2);
   });
 
-  // ── ALS-002: isStranger ĐỔI NGHĨA, isUnmatched giữ nghĩa cũ ──────────────
+  // ── ALS-002: isStranger ĐỔI NGHĨA (userId==null), isUnmatched giữ nghĩa cũ ──
   describe('isStranger (userId==null) vs isUnmatched (matchState unmatched*)', () => {
+    it('matched → isStranger=false, isUnmatched=false', async () => {
+      wire({ events: [evt({ match_state: 'matched', user_id: 'u1' })] });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events[0].isStranger).toBe(false);
+      expect(r.events[0].isUnmatched).toBe(false);
+    });
+
+    it('unmatched_identity + userId=null → CÓ trong kết quả, isStranger=true, fullName=null, isUnmatched=true', async () => {
+      wire({
+        events: [
+          evt({
+            match_state: 'unmatched_identity',
+            user_id: null,
+            full_name: null,
+          }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events).toHaveLength(1); // KHÔNG bị lọc bỏ
+      expect(r.events[0].isStranger).toBe(true);
+      expect(r.events[0].fullName).toBeNull();
+      expect(r.events[0].isUnmatched).toBe(true);
+    });
+
+    it('unmatched_location + userId có giá trị → CÓ trong kết quả, isStranger=false, fullName=tên thật, isUnmatched=true', async () => {
+      wire({
+        events: [
+          evt({
+            match_state: 'unmatched_location',
+            user_id: 'u1',
+            full_name: 'Bui Van Long',
+          }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events).toHaveLength(1);
+      // Đây chính là điểm ĐỔI so với bản cũ (cũ: startsWith('unmatched') → true).
+      expect(r.events[0].isStranger).toBe(false);
+      expect(r.events[0].fullName).toBe('Bui Van Long');
+      // Ngữ nghĩa cũ vẫn giữ nguyên ở isUnmatched cho FE đang dùng.
+      expect(r.events[0].isUnmatched).toBe(true);
+    });
+
+    it('unmatched_both + userId=null → CÓ trong kết quả, isStranger=true, isUnmatched=true', async () => {
+      wire({
+        events: [
+          evt({ match_state: 'unmatched_both', user_id: null, full_name: null }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events).toHaveLength(1);
+      expect(r.events[0].isStranger).toBe(true);
+      expect(r.events[0].fullName).toBeNull();
+      expect(r.events[0].isUnmatched).toBe(true);
+    });
+
     it('1 event matched + 1 stranger (userId null) → isStranger đúng từng dòng', async () => {
       wire({
         events: [
@@ -138,30 +202,30 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       expect(r.events.map((e) => e.isStranger)).toEqual([false, true]);
     });
 
-    it('unmatched_location NHƯNG có userId → KHÔNG phải stranger (đã nhận diện, chỉ sai lịch)', async () => {
-      wire({
-        events: [evt({ match_state: 'unmatched_location', user_id: 'u1' })],
-      });
+    it('4 matchState trộn lẫn → tổng số dòng TRƯỚC/SAU fix bằng nhau (không lọc bớt/thêm)', async () => {
+      const mixed = [
+        evt({ id: 'e1', match_state: 'matched', user_id: 'u1' }),
+        evt({
+          id: 'e2',
+          match_state: 'unmatched_identity',
+          user_id: null,
+          full_name: null,
+        }),
+        evt({ id: 'e3', match_state: 'unmatched_location', user_id: 'u2' }),
+        evt({
+          id: 'e4',
+          match_state: 'unmatched_both',
+          user_id: null,
+          full_name: null,
+        }),
+      ];
+      wire({ events: mixed });
       const r = await service.getRoomAccessLog(ROOM_ID, {
         date: '2026-07-28',
       });
-      // Đây chính là điểm ĐỔI so với bản cũ (cũ: startsWith('unmatched') → true).
-      expect(r.events[0].isStranger).toBe(false);
-      // Ngữ nghĩa cũ vẫn giữ nguyên ở isUnmatched cho FE đang dùng.
-      expect(r.events[0].isUnmatched).toBe(true);
-    });
-
-    it('unmatched_both + userId null → cả isStranger lẫn isUnmatched = true', async () => {
-      wire({
-        events: [
-          evt({ match_state: 'unmatched_both', user_id: null, full_name: null }),
-        ],
-      });
-      const r = await service.getRoomAccessLog(ROOM_ID, {
-        date: '2026-07-28',
-      });
-      expect(r.events[0].isStranger).toBe(true);
-      expect(r.events[0].isUnmatched).toBe(true);
+      // WHERE clause KHÔNG đổi → số dòng SQL trả về = số dòng events truyền vào.
+      expect(r.events).toHaveLength(mixed.length);
+      expect(r.events.map((e) => e.id)).toEqual(['e1', 'e2', 'e3', 'e4']);
     });
   });
 
