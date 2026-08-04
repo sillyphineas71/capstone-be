@@ -18,6 +18,8 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { ConfigService } from '@nestjs/config';
+import { StorageService } from '../../storage/storage.service.js';
 
 describe('MeetingsService.deleteAgendaItem', () => {
   let service: MeetingsService;
@@ -103,6 +105,17 @@ describe('MeetingsService.deleteAgendaItem', () => {
         { provide: NotificationsService, useValue: notificationsService },
         { provide: AuthzReadRepository, useValue: authzRepo },
         { provide: FaceProvisioningService, useValue: faceProvisioningService },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
+        {
+          provide: StorageService,
+          useValue: {
+            saveFile: jest.fn(),
+            deleteFile: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 

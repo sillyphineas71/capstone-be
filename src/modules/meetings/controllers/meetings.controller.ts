@@ -103,6 +103,11 @@ import {
   AgendaItemUpdateResponseDto,
   DeleteAgendaItemResponseDto,
 } from '../dto/agenda-response.dto.js';
+import {
+  AgendaAttachmentUploadResponseDto,
+  DeleteAgendaAttachmentResponseDto,
+} from '../dto/agenda-attachment.dto.js';
+import type { UploadedAgendaAttachmentFile } from '../services/meetings.service.js';
 
 import { ClientContext } from '../services/meetings.service.js';
 
@@ -1260,6 +1265,112 @@ export class MeetingsController {
 
       message: 'Xoa muc agenda thanh cong',
 
+      data: result,
+    };
+  }
+
+  // Agenda Attachment endpoints (đính kèm tài liệu cho agenda item)
+  // Xem spec/features/meeting/feat-attach-meeting-agenda-document/
+
+  @Post('meetings/:meetingId/agendas/:agendaId/attachments')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Dinh kem tai lieu cho mot muc agenda' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'agendaId', type: 'string', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Dinh kem thanh cong',
+    type: AgendaAttachmentUploadResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'AGENDA_ATTACHMENT_FILE_REQUIRED / AGENDA_ATTACHMENT_FILE_TOO_LARGE / AGENDA_ATTACHMENT_FILE_TYPE_INVALID',
+  })
+  @ApiResponse({ status: 403, description: 'AGENDA_WRITE_FORBIDDEN' })
+  @ApiResponse({
+    status: 404,
+    description: 'MEETING_NOT_FOUND / AGENDA_ITEM_NOT_FOUND',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'AGENDA_MEETING_STATUS_BLOCKED / AGENDA_ATTACHMENT_LIMIT_EXCEEDED',
+  })
+  async addAgendaAttachment(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('agendaId', ParseUUIDPipe) agendaId: string,
+    @UploadedFile() file: UploadedAgendaAttachmentFile | undefined,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: AgendaAttachmentUploadResponseDto;
+  }> {
+    const result = await this.meetingsService.addAgendaAttachment(
+      meetingId,
+      agendaId,
+      file,
+      currentUser.userId,
+    );
+
+    return {
+      success: true,
+      message: 'Da dinh kem tai lieu thanh cong',
+      data: result,
+    };
+  }
+
+  @Delete('meetings/:meetingId/agendas/:agendaId/attachments/:fileId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Go tai lieu dinh kem cua mot muc agenda' })
+  @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'agendaId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'fileId', type: 'string', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Xoa tai lieu dinh kem thanh cong',
+    type: DeleteAgendaAttachmentResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'AGENDA_WRITE_FORBIDDEN' })
+  @ApiResponse({
+    status: 404,
+    description:
+      'MEETING_NOT_FOUND / AGENDA_ITEM_NOT_FOUND / AGENDA_ATTACHMENT_NOT_FOUND',
+  })
+  @ApiResponse({ status: 409, description: 'AGENDA_MEETING_STATUS_BLOCKED' })
+  async removeAgendaAttachment(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @Param('agendaId', ParseUUIDPipe) agendaId: string,
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DeleteAgendaAttachmentResponseDto;
+  }> {
+    const result = await this.meetingsService.removeAgendaAttachment(
+      meetingId,
+      agendaId,
+      fileId,
+      currentUser.userId,
+    );
+
+    return {
+      success: true,
+      message: 'Da go tai lieu dinh kem',
       data: result,
     };
   }

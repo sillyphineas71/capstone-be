@@ -5,12 +5,16 @@ import {
   ConflictException,
   UnprocessableEntityException,
   BadRequestException,
+  BadGatewayException,
   ForbiddenException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import {
   DataSource,
   EntityManager,
   In,
+  IsNull,
   Not,
   MoreThan,
   MoreThanOrEqual,
@@ -94,7 +98,12 @@ import {
   BackgroundJobType,
   BackgroundJobStatus,
 } from '../../administration/entities/background-job.entity.js';
-import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
+import {
+  MediaFileEntity,
+  MediaFileType,
+  StorageProvider,
+} from '../../recording/entities/media-file.entity.js';
+import { StorageService } from '../../storage/storage.service.js';
 import { RecordingConfigEntity } from '../../recording/entities/recording-config.entity.js';
 import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.js';
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
@@ -140,6 +149,17 @@ import {
   AgendaItemUpdateResponseDto,
   DeleteAgendaItemResponseDto,
 } from '../dto/agenda-response.dto.js';
+import {
+  AgendaAttachmentDto,
+  AgendaAttachmentUploadResponseDto,
+  DeleteAgendaAttachmentResponseDto,
+} from '../dto/agenda-attachment.dto.js';
+import {
+  AGENDA_ATTACHMENT_MAX_BYTES_DEFAULT,
+  AGENDA_ATTACHMENT_MAX_COUNT_DEFAULT,
+  AGENDA_ATTACHMENT_ALLOWED_MIME_TYPES,
+  AGENDA_ATTACHMENT_MIME_TO_EXTENSIONS,
+} from '../constants/agenda-attachment.constants.js';
 export interface AuthUser {
   userId: string;
   jti?: string;
@@ -149,6 +169,13 @@ export interface AuthUser {
 export interface ClientContext {
   ipAddress?: string;
   userAgent?: string;
+}
+
+export interface UploadedAgendaAttachmentFile {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+  size: number;
 }
 
 export interface UpdateMeetingTimeResponse {
@@ -195,6 +222,8 @@ export class MeetingsService {
     private readonly notificationsService: NotificationsService,
     private readonly authzRepo: AuthzReadRepository,
     private readonly faceProvisioningService: FaceProvisioningService,
+    private readonly configService: ConfigService,
+    private readonly storageService: StorageService,
   ) {}
 
   async getRoomAvailability(
@@ -1293,7 +1322,7 @@ export class MeetingsService {
             overrideParticipantConflict:
               dto.overrideParticipantConflict || false,
             changeReason: dto.changeReason || null,
-          } as any;
+          };
           await em.save(MeetingRequestEntity, pendingRequest);
           requestId = pendingRequest.id;
 
@@ -1357,9 +1386,7 @@ export class MeetingsService {
                 ? ConflictCheckStatus.WARNING
                 : ConflictCheckStatus.CLEAR,
             conflictSummaryJson:
-              participantConflicts.length > 0
-                ? { participantConflicts }
-                : null,
+              participantConflicts.length > 0 ? { participantConflicts } : null,
             requestPayloadJson: {
               oldStartTime: oldMeetingData.startTime,
               oldEndTime: oldMeetingData.endTime,
@@ -2026,7 +2053,7 @@ export class MeetingsService {
             changeReason: dto.changeReason || null,
             confirmCapacityOverride: dto.confirmCapacityOverride || false,
             oldRoomId: meeting.roomId,
-          } as any;
+          };
           await em.save(MeetingRequestEntity, pendingRequest);
           requestId = pendingRequest.id;
 
@@ -4533,6 +4560,11 @@ export class MeetingsService {
         relations: { owner: true },
       });
 
+    // 3b. Batch-load attachments for all agenda items (1 query, tránh N+1)
+    const attachmentsByAgendaId = await this.loadAgendaAttachmentsMap(
+      agendas.map((a) => a.id),
+    );
+
     // 4. Map to response DTOs
     const items = agendas.map(
       (agenda) =>
@@ -4545,6 +4577,7 @@ export class MeetingsService {
           ownerName: agenda.owner?.fullName ?? null,
           plannedDurationMinutes: agenda.plannedDurationMinutes ?? 0,
           status: agenda.status,
+          attachments: attachmentsByAgendaId.get(agenda.id) ?? [],
         }),
     );
 
@@ -5374,6 +5407,382 @@ export class MeetingsService {
         ),
         remainingItemCount: remainingItems.length,
       });
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Agenda Attachment feature (đính kèm tài liệu cho agenda item)
+  // Xem spec/features/meeting/feat-attach-meeting-agenda-document/
+  // ────────────────────────────────────────────────────────────
+
+  private getAgendaAttachmentFileExtension(fileName: string): string {
+    const dot = fileName.lastIndexOf('.');
+    return dot >= 0 ? fileName.slice(dot).toLowerCase() : '';
+  }
+
+  /**
+   * Gộp 1 query duy nhất để lấy attachments cho nhiều agenda item cùng lúc
+   * (tránh N+1 khi getAgendas() trả danh sách nhiều item). Xem FR-007.
+   */
+  private async loadAgendaAttachmentsMap(
+    agendaIds: string[],
+  ): Promise<Map<string, AgendaAttachmentDto[]>> {
+    const map = new Map<string, AgendaAttachmentDto[]>();
+    if (agendaIds.length === 0) {
+      return map;
+    }
+
+    const files = await this.dataSource.getRepository(MediaFileEntity).find({
+      where: {
+        relatedEntityType: 'meeting_agenda',
+        relatedEntityId: In(agendaIds),
+        deletedAt: IsNull(),
+      },
+      order: { uploadedAt: 'DESC' },
+    });
+
+    for (const file of files) {
+      const agendaId = file.relatedEntityId as string;
+      const list = map.get(agendaId) ?? [];
+      list.push(
+        new AgendaAttachmentDto({
+          id: file.id,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          fileSizeBytes: file.fileSizeBytes,
+          fileUrl: file.fileUrl,
+          uploadedBy: file.uploadedBy,
+          uploadedAt: file.uploadedAt,
+        }),
+      );
+      map.set(agendaId, list);
+    }
+
+    return map;
+  }
+
+  /**
+   * Load meeting + agenda item cho thao tác WRITE (upload/xóa attachment),
+   * tái dùng nguyên checkAgendaWritePermission/validateMeetingStatusForAgendaWrite
+   * của feat-create-meeting-agenda (UC-MM-09). Không lock — dùng cho bước
+   * validate sớm trước khi chạm storage; transaction bên trong addAgendaAttachment/
+   * removeAgendaAttachment sẽ re-validate có lock để tránh race condition.
+   */
+  private async loadAgendaForAttachmentWrite(
+    meetingId: string,
+    agendaId: string,
+    userId: string,
+  ): Promise<{ meeting: MeetingEntity; agenda: MeetingAgendaEntity }> {
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Cuoc hop khong ton tai hoac da bi xoa',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    this.checkAgendaWritePermission(meeting, userId);
+    this.validateMeetingStatusForAgendaWrite(meeting);
+
+    const agenda = await this.dataSource
+      .getRepository(MeetingAgendaEntity)
+      .findOne({ where: { id: agendaId, meetingId: meeting.id } });
+    if (!agenda) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Muc agenda khong ton tai',
+        error: { code: 'AGENDA_ITEM_NOT_FOUND', details: { agendaId } },
+      });
+    }
+
+    return { meeting, agenda };
+  }
+
+  async addAgendaAttachment(
+    meetingId: string,
+    agendaId: string,
+    file: UploadedAgendaAttachmentFile | undefined,
+    userId: string,
+  ): Promise<AgendaAttachmentUploadResponseDto> {
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Vui long dinh kem file',
+        error: { code: 'AGENDA_ATTACHMENT_FILE_REQUIRED', details: {} },
+      });
+    }
+
+    const maxBytes = this.configService.get<number>(
+      'AGENDA_ATTACHMENT_MAX_BYTES',
+      AGENDA_ATTACHMENT_MAX_BYTES_DEFAULT,
+    );
+    if (file.size > maxBytes) {
+      throw new BadRequestException({
+        success: false,
+        message: `File vuot qua gioi han ${maxBytes} bytes`,
+        error: {
+          code: 'AGENDA_ATTACHMENT_FILE_TOO_LARGE',
+          details: { maxBytes },
+        },
+      });
+    }
+
+    const allowedMimeTypes: string[] =
+      this.configService.get<string[]>(
+        'AGENDA_ATTACHMENT_ALLOWED_MIME_TYPES',
+        AGENDA_ATTACHMENT_ALLOWED_MIME_TYPES,
+      ) ?? AGENDA_ATTACHMENT_ALLOWED_MIME_TYPES;
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Dinh dang file khong duoc ho tro',
+        error: {
+          code: 'AGENDA_ATTACHMENT_FILE_TYPE_INVALID',
+          details: { allowedMimeTypes },
+        },
+      });
+    }
+
+    const ext = this.getAgendaAttachmentFileExtension(file.originalname);
+    const allowedExtensions =
+      AGENDA_ATTACHMENT_MIME_TO_EXTENSIONS[file.mimetype];
+    if (!allowedExtensions || !allowedExtensions.includes(ext)) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Duoi file khong khop voi dinh dang khai bao',
+        error: {
+          code: 'AGENDA_ATTACHMENT_FILE_TYPE_INVALID',
+          details: { expectedExtensions: allowedExtensions },
+        },
+      });
+    }
+
+    // Validate ownership/status/agenda-existence sớm để tránh chạm storage khi request rõ ràng sai.
+    const { meeting } = await this.loadAgendaForAttachmentWrite(
+      meetingId,
+      agendaId,
+      userId,
+    );
+
+    const mediaFileId = randomUUID();
+    let storageResult: {
+      storageKey: string;
+      publicUrl: string;
+      sizeBytes: number;
+    };
+    try {
+      storageResult = await this.storageService.saveFile({
+        buffer: file.buffer,
+        originalName: file.originalname,
+        folder: 'agenda-attachments',
+        storageKey: `agenda-attachments/${mediaFileId}${ext}`,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Storage save failed for agenda attachment ${agendaId}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new BadGatewayException({
+        success: false,
+        message: 'Khong the luu file len kho luu tru',
+        error: { code: 'AGENDA_ATTACHMENT_STORAGE_FAILED', details: {} },
+      });
+    }
+
+    const now = new Date();
+    const maxCount = this.configService.get<number>(
+      'AGENDA_ATTACHMENT_MAX_COUNT',
+      AGENDA_ATTACHMENT_MAX_COUNT_DEFAULT,
+    );
+
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        // Re-validate có lock để tránh race condition (FR-020).
+        const lockedMeeting = await manager
+          .getRepository(MeetingEntity)
+          .createQueryBuilder('meeting')
+          .setLock('pessimistic_write')
+          .where('meeting.id = :meetingId', { meetingId })
+          .getOne();
+        if (!lockedMeeting || lockedMeeting.deletedAt) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Cuoc hop khong ton tai hoac da bi xoa',
+            error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+          });
+        }
+        this.checkAgendaWritePermission(lockedMeeting, userId);
+        this.validateMeetingStatusForAgendaWrite(lockedMeeting);
+
+        const agendaStillExists = await manager
+          .getRepository(MeetingAgendaEntity)
+          .findOne({ where: { id: agendaId, meetingId } });
+        if (!agendaStillExists) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Muc agenda khong ton tai',
+            error: { code: 'AGENDA_ITEM_NOT_FOUND', details: { agendaId } },
+          });
+        }
+
+        const currentCount = await manager
+          .getRepository(MediaFileEntity)
+          .count({
+            where: {
+              relatedEntityType: 'meeting_agenda',
+              relatedEntityId: agendaId,
+              deletedAt: IsNull(),
+            },
+          });
+        if (currentCount >= maxCount) {
+          throw new ConflictException({
+            success: false,
+            message: 'Da dat so luong file dinh kem toi da cho muc agenda nay',
+            error: {
+              code: 'AGENDA_ATTACHMENT_LIMIT_EXCEEDED',
+              details: { maxCount, currentCount },
+            },
+          });
+        }
+
+        await manager.getRepository(MediaFileEntity).insert({
+          id: mediaFileId,
+          meetingId,
+          relatedEntityType: 'meeting_agenda',
+          relatedEntityId: agendaId,
+          uploadedBy: userId,
+          fileName: file.originalname,
+          fileType: MediaFileType.DOCUMENT,
+          mimeType: file.mimetype,
+          storageProvider: StorageProvider.LOCAL,
+          storageKey: storageResult.storageKey,
+          fileUrl: storageResult.publicUrl,
+          fileSizeBytes: String(storageResult.sizeBytes),
+          isActive: true,
+          uploadedAt: now,
+        });
+
+        const auditLog = manager.create(AuditLogEntity, {
+          userId,
+          actionType: 'meeting_agenda_attachment_uploaded',
+          entityType: 'meeting_agenda',
+          entityId: agendaId,
+          newValueJson: {
+            mediaFileId,
+            fileName: file.originalname,
+            fileSizeBytes: storageResult.sizeBytes,
+          },
+          severity: AuditLogSeverity.INFO,
+        });
+        await manager.save(AuditLogEntity, auditLog);
+      });
+    } catch (error) {
+      await this.storageService
+        .deleteFile(storageResult.storageKey)
+        .catch((cleanupError) => {
+          this.logger.warn(
+            `Failed to clean up orphan storage file: ${storageResult.storageKey}`,
+            cleanupError instanceof Error ? cleanupError.stack : undefined,
+          );
+        });
+      throw error;
+    }
+
+    return new AgendaAttachmentUploadResponseDto({
+      id: mediaFileId,
+      agendaId,
+      meetingId: meeting.id,
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      fileSizeBytes: String(storageResult.sizeBytes),
+      fileUrl: storageResult.publicUrl,
+      uploadedBy: userId,
+      uploadedAt: now,
+    });
+  }
+
+  async removeAgendaAttachment(
+    meetingId: string,
+    agendaId: string,
+    fileId: string,
+    userId: string,
+  ): Promise<DeleteAgendaAttachmentResponseDto> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const meeting = await manager
+        .getRepository(MeetingEntity)
+        .createQueryBuilder('meeting')
+        .setLock('pessimistic_write')
+        .where('meeting.id = :meetingId', { meetingId })
+        .getOne();
+      if (!meeting || meeting.deletedAt) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Cuoc hop khong ton tai hoac da bi xoa',
+          error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+        });
+      }
+      this.checkAgendaWritePermission(meeting, userId);
+      this.validateMeetingStatusForAgendaWrite(meeting);
+
+      const agenda = await manager
+        .getRepository(MeetingAgendaEntity)
+        .findOne({ where: { id: agendaId, meetingId } });
+      if (!agenda) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Muc agenda khong ton tai',
+          error: { code: 'AGENDA_ITEM_NOT_FOUND', details: { agendaId } },
+        });
+      }
+
+      const mediaFile = await manager.getRepository(MediaFileEntity).findOne({
+        where: {
+          id: fileId,
+          relatedEntityType: 'meeting_agenda',
+          relatedEntityId: agendaId,
+          deletedAt: IsNull(),
+        },
+      });
+      if (!mediaFile) {
+        throw new NotFoundException({
+          success: false,
+          message: 'File dinh kem khong ton tai hoac da bi xoa',
+          error: { code: 'AGENDA_ATTACHMENT_NOT_FOUND', details: { fileId } },
+        });
+      }
+
+      const deletedAt = new Date();
+      await manager
+        .getRepository(MediaFileEntity)
+        .update({ id: fileId }, { deletedAt });
+
+      const auditLog = manager.create(AuditLogEntity, {
+        userId,
+        actionType: 'meeting_agenda_attachment_deleted',
+        entityType: 'meeting_agenda',
+        entityId: agendaId,
+        oldValueJson: { fileId, storageKey: mediaFile.storageKey },
+        severity: AuditLogSeverity.INFO,
+      });
+      await manager.save(AuditLogEntity, auditLog);
+
+      return { fileId, agendaId, deletedAt, storageKey: mediaFile.storageKey };
+    });
+
+    await this.storageService.deleteFile(result.storageKey).catch((error) => {
+      this.logger.warn(
+        `Failed to delete physical file from storage: ${result.storageKey}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    });
+
+    return new DeleteAgendaAttachmentResponseDto({
+      fileId: result.fileId,
+      agendaId: result.agendaId,
+      deletedAt: result.deletedAt,
     });
   }
 

@@ -65,6 +65,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { StorageService } from '../../storage/storage.service.js';
 
 describe('MeetingsService', () => {
   let service: MeetingsService;
@@ -179,6 +180,13 @@ describe('MeetingsService', () => {
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
+        {
+          provide: StorageService,
+          useValue: {
+            saveFile: jest.fn(),
+            deleteFile: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();

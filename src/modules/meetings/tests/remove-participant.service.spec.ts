@@ -15,6 +15,7 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { StorageService } from '../../storage/storage.service.js';
 import { UserEntity } from '../../accounts/entities/user.entity.js';
 import {
   MeetingParticipantEntity,
@@ -139,6 +140,13 @@ describe('MeetingsService.removeParticipant', () => {
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
+        {
+          provide: StorageService,
+          useValue: {
+            saveFile: jest.fn(),
+            deleteFile: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();

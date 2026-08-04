@@ -23,6 +23,8 @@ import { AuthzReadRepository } from '../../auth/repositories/authz-read.reposito
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { ConfigService } from '@nestjs/config';
+import { StorageService } from '../../storage/storage.service.js';
 
 describe('MeetingsService.updateAgendaItem', () => {
   let service: MeetingsService;
@@ -110,6 +112,17 @@ describe('MeetingsService.updateAgendaItem', () => {
         { provide: NotificationsService, useValue: notificationsService },
         { provide: AuthzReadRepository, useValue: authzRepo },
         { provide: FaceProvisioningService, useValue: faceProvisioningService },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue('test-secret') },
+        },
+        {
+          provide: StorageService,
+          useValue: {
+            saveFile: jest.fn(),
+            deleteFile: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 

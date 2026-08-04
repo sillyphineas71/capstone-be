@@ -1,3 +1,5 @@
+import { AgendaAttachmentDto } from './agenda-attachment.dto.js';
+
 export class AgendaItemResponseDto {
   id: string;
   agendaOrder: number;
@@ -7,6 +9,7 @@ export class AgendaItemResponseDto {
   ownerName: string | null;
   plannedDurationMinutes: number;
   status: string;
+  attachments?: AgendaAttachmentDto[];
 
   constructor(data: Partial<AgendaItemResponseDto>) {
     Object.assign(this, data);
