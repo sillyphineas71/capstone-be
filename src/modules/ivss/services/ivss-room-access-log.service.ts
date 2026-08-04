@@ -77,6 +77,15 @@ export class IvssRoomAccessLogService {
   }
 
   /**
+   * [ALS-002] "Người lạ" = KHÔNG nhận diện được danh tính (userId null) —
+   * KHÔNG phải "vào phòng không có lịch" (unmatched_location vẫn CÓ userId,
+   * chỉ sai phòng/ngoài giờ họp, người quen chứ không lạ).
+   */
+  private isStranger(userId: string | null): boolean {
+    return userId === null;
+  }
+
+  /**
    * [ALS-002] Ngữ nghĩa CŨ của isStranger — giữ lại dưới tên `isUnmatched` để FE
    * đang đọc field cũ không vỡ. Xem doc trong room-access-log-response.dto.ts.
    */
@@ -191,9 +200,7 @@ export class IvssRoomAccessLogService {
         matchState: r.match_state ?? null,
         similarity: Number.isFinite(similarity) ? similarity : null,
         meetingId: r.meeting_id ?? null,
-        // [ALS-002] "người lạ" = KHÔNG nhận diện được danh tính, KHÔNG phải
-        // "vào phòng không có lịch". Ngữ nghĩa cũ giữ ở isUnmatched.
-        isStranger: (r.user_id ?? null) === null,
+        isStranger: this.isStranger(r.user_id),
         isUnmatched: this.isUnmatched(r.match_state),
       };
     });
