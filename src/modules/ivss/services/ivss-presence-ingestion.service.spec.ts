@@ -534,4 +534,53 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       expect(await (service as any).getChannelPresenceZoneMap()).toEqual({});
     });
   });
+
+  // ── F-B (MST-001): resolveMeeting nhận cả scheduled ──────────────────────
+  describe('resolveMeeting (F-B)', () => {
+    // utc phải nằm trong ±1h (SKEW) nếu không parseUtc rơi vào nhánh fallback.
+    const nowIso = () => new Date().toISOString();
+
+    it('nhận CẢ scheduled lẫn in_progress — bịt khe cron chưa kịp lật đầu giờ', async () => {
+      wire();
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      const q = captured.find((c) => c.sql.includes('FROM meetings'))!;
+      expect(q.sql).toContain("status IN ('scheduled', 'in_progress')");
+      // Chặn hồi quy: KHÔNG quay lại lọc cứng 1 trạng thái.
+      expect(q.sql).not.toMatch(/status\s*=\s*'in_progress'/);
+    });
+
+    it('vẫn chốt theo cửa sổ thời gian + loại soft-delete', async () => {
+      wire();
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      const q = captured.find((c) => c.sql.includes('FROM meetings'))!;
+      expect(q.sql).toContain('BETWEEN start_time AND end_time');
+      expect(q.sql).toContain('deleted_at IS NULL');
+    });
+
+    it('KHÔNG nhận cancelled/completed/draft/pending_approval', async () => {
+      wire();
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      const q = captured.find((c) => c.sql.includes('FROM meetings'))!;
+      for (const s of [
+        'cancelled',
+        'completed',
+        'draft',
+        'pending_approval',
+      ]) {
+        expect(q.sql).not.toContain(s);
+      }
+    });
+
+    it('họp scheduled trong giờ → trả meetingId (matched, không còn unmatched)', async () => {
+      wire({ meeting: [{ id: MEETING_UUID }] });
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      expect(payloadOf().meetingId).toBe(MEETING_UUID);
+    });
+
+    it('không có họp nào trong giờ → meetingId null (giữ nguyên hành vi cũ)', async () => {
+      wire({ meeting: [] });
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      expect(payloadOf().meetingId).toBeNull();
+    });
+  });
 });

@@ -8,20 +8,41 @@ import { IvssRoomAccessLogService } from './ivss-room-access-log.service.js';
 
 const ROOM_ID = '097cf988-8976-42d9-a83d-e5a0013022d9';
 
-describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
+describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
   let service: IvssRoomAccessLogService;
   let dsMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
 
-  /** Mock 2 query: rooms (kiểm tồn tại) + iot_device_events (log). */
-  const wire = (over: { room?: any[]; events?: any[] } = {}): void => {
+  const isCountQuery = (sql: string) => sql.includes('COUNT(*)');
+  const isEventQuery = (sql: string) =>
+    sql.includes('FROM iot_device_events') && !isCountQuery(sql);
+
+  /**
+   * Mock 3 query: rooms (kiểm tồn tại) + COUNT (tổng/matched/unmatched) +
+   * SELECT event (trang hiện tại). `counts` mặc định suy ra từ `events` cho gọn —
+   * test phân trang truyền `counts` riêng để giả lập total > số dòng trong trang.
+   */
+  const wire = (
+    over: { room?: any[]; events?: any[]; counts?: any } = {},
+  ): void => {
     captured = [];
+    const events = over.events ?? [];
+    const counts = over.counts ?? {
+      total: String(events.length),
+      matched: String(
+        events.filter((e: any) => e.match_state === 'matched').length,
+      ),
+      unmatched: String(
+        events.filter((e: any) => String(e.match_state).startsWith('unmatched'))
+          .length,
+      ),
+    };
     dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
       captured.push({ sql, params });
-      if (sql.includes('FROM rooms'))
+      if (sql.includes('FROM rooms') && !sql.includes('iot_device_events'))
         return Promise.resolve(over.room ?? [{ room_name: 'Phòng A102' }]);
-      if (sql.includes('FROM iot_device_events'))
-        return Promise.resolve(over.events ?? []);
+      if (isCountQuery(sql)) return Promise.resolve([counts]);
+      if (isEventQuery(sql)) return Promise.resolve(events);
       return Promise.resolve([]);
     });
   };
@@ -31,6 +52,8 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
     event_time: '2026-07-28T10:45:21.000Z',
     user_id: 'u1',
     full_name: 'Bui Van Long',
+    room_id: ROOM_ID,
+    room_name: 'Phòng A102',
     direction: 'enter',
     match_state: 'matched',
     similarity: '0.98',
@@ -54,13 +77,13 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
   it('phòng không tồn tại / đã soft-delete → 404 ROOM_NOT_FOUND', async () => {
     wire({ room: [] });
     await expect(
-      service.getRoomAccessLog(ROOM_ID, '2026-07-28'),
+      service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' }),
     ).rejects.toThrow(NotFoundException);
   });
 
   it('map đúng field camelCase + roomName + date', async () => {
     wire({ events: [evt()] });
-    const r = await service.getRoomAccessLog(ROOM_ID, '2026-07-28');
+    const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
     expect(r.roomId).toBe(ROOM_ID);
     expect(r.roomName).toBe('Phòng A102');
     expect(r.date).toBe('2026-07-28');
@@ -69,33 +92,77 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
       eventTime: '2026-07-28T10:45:21.000Z',
       userId: 'u1',
       fullName: 'Bui Van Long',
+      roomId: ROOM_ID,
+      roomName: 'Phòng A102',
       direction: 'enter',
       matchState: 'matched',
       similarity: 0.98, // string từ jsonb → number
       meetingId: 'mt1',
       isStranger: false,
+      isUnmatched: false,
     });
   });
 
-  it('đếm matched/unmatched + isStranger đúng theo matchState', async () => {
+  it('đếm matched/unmatched lấy từ COUNT query (toàn bộ kết quả lọc)', async () => {
     wire({
       events: [
         evt({ id: 'e1', match_state: 'matched' }),
         evt({ id: 'e2', match_state: 'matched', direction: 'leave' }),
         evt({ id: 'e3', match_state: 'unmatched_location' }),
-        evt({ id: 'e4', match_state: 'unmatched_identity' }),
+        evt({ id: 'e4', match_state: 'unmatched_identity', user_id: null }),
       ],
     });
-    const r = await service.getRoomAccessLog(ROOM_ID, '2026-07-28');
+    const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
     expect(r.totalEvents).toBe(4);
     expect(r.matchedCount).toBe(2);
     expect(r.unmatchedCount).toBe(2);
-    expect(r.events.map((e) => e.isStranger)).toEqual([
-      false,
-      false,
-      true,
-      true,
-    ]);
+  });
+
+  // ── ALS-002: isStranger ĐỔI NGHĨA, isUnmatched giữ nghĩa cũ ──────────────
+  describe('isStranger (userId==null) vs isUnmatched (matchState unmatched*)', () => {
+    it('1 event matched + 1 stranger (userId null) → isStranger đúng từng dòng', async () => {
+      wire({
+        events: [
+          evt({ id: 'ok', match_state: 'matched', user_id: 'u1' }),
+          evt({
+            id: 'stranger',
+            match_state: 'unmatched_identity',
+            user_id: null,
+            full_name: null,
+          }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events.map((e) => e.isStranger)).toEqual([false, true]);
+    });
+
+    it('unmatched_location NHƯNG có userId → KHÔNG phải stranger (đã nhận diện, chỉ sai lịch)', async () => {
+      wire({
+        events: [evt({ match_state: 'unmatched_location', user_id: 'u1' })],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      // Đây chính là điểm ĐỔI so với bản cũ (cũ: startsWith('unmatched') → true).
+      expect(r.events[0].isStranger).toBe(false);
+      // Ngữ nghĩa cũ vẫn giữ nguyên ở isUnmatched cho FE đang dùng.
+      expect(r.events[0].isUnmatched).toBe(true);
+    });
+
+    it('unmatched_both + userId null → cả isStranger lẫn isUnmatched = true', async () => {
+      wire({
+        events: [
+          evt({ match_state: 'unmatched_both', user_id: null, full_name: null }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      expect(r.events[0].isStranger).toBe(true);
+      expect(r.events[0].isUnmatched).toBe(true);
+    });
   });
 
   it('event chưa khớp danh tính (userId/full_name null) VẪN được trả, không loại', async () => {
@@ -110,7 +177,7 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
         }),
       ],
     });
-    const r = await service.getRoomAccessLog(ROOM_ID, '2026-07-28');
+    const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
     expect(r.totalEvents).toBe(1);
     expect(r.events[0].userId).toBeNull();
     expect(r.events[0].fullName).toBeNull();
@@ -120,8 +187,8 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
 
   it('SQL: lọc đúng event_type/room_id + biên ngày [date, date+1) THEO GIỜ VN', async () => {
     wire();
-    await service.getRoomAccessLog(ROOM_ID, '2026-07-28');
-    const q = captured.find((c) => c.sql.includes('FROM iot_device_events'))!;
+    await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
+    const q = captured.find((c) => isEventQuery(c.sql))!;
     // ⚠ RDS chạy UTC — biên ngày PHẢI ép Asia/Ho_Chi_Minh, nếu không event buổi tối
     // giờ VN rơi nhầm sang ngày hôm sau.
     expect(q.sql).toContain(
@@ -136,15 +203,116 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
     // rồi AT TIME ZONE chạy ngược chiều → biên lệch +7h SAI HƯỚNG (đã kiểm bằng psql).
     expect(q.sql).not.toMatch(/\$2::date AT TIME ZONE/);
     expect(q.sql).toContain('LEFT JOIN users u');
-    expect(q.params).toEqual([ROOM_ID, '2026-07-28', 'ivss_face_event']);
+    expect(q.params.slice(0, 4)).toEqual([
+      'ivss_face_event',
+      '2026-07-28',
+      ROOM_ID,
+      null,
+    ]);
   });
 
   it('thiếu date → tự dùng hôm nay (YYYY-MM-DD)', async () => {
     wire();
     const r = await service.getRoomAccessLog(ROOM_ID);
     expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const q = captured.find((c) => c.sql.includes('FROM iot_device_events'))!;
+    const q = captured.find((c) => isEventQuery(c.sql))!;
     expect(q.params[1]).toBe(r.date);
+  });
+
+  // ── ALS-002: route toàn hệ thống (roomId = null) ──────────────────────────
+  describe('toàn hệ thống (roomId null)', () => {
+    it('KHÔNG kiểm tồn tại phòng, KHÔNG lọc room_id (param $3 = null)', async () => {
+      wire({ events: [evt()] });
+      const r = await service.getRoomAccessLog(null, { date: '2026-07-28' });
+      expect(r.roomId).toBeNull();
+      expect(r.roomName).toBeNull();
+      // Không có query kiểm phòng.
+      expect(
+        captured.some(
+          (c) => c.sql.includes('FROM rooms') && c.sql.includes('room_name FROM'),
+        ),
+      ).toBe(false);
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.params[2]).toBeNull();
+      // Điều kiện lọc phòng phải là dạng bỏ qua được khi null.
+      expect(q.sql).toContain('$3::uuid IS NULL OR e.room_id = $3::uuid');
+    });
+
+    it('trả roomId/roomName của TỪNG event (nhiều phòng lẫn nhau)', async () => {
+      wire({
+        events: [
+          evt({ id: 'a', room_id: 'r1', room_name: 'A101' }),
+          evt({ id: 'b', room_id: 'r2', room_name: 'B202' }),
+        ],
+      });
+      const r = await service.getRoomAccessLog(null, { date: '2026-07-28' });
+      expect(r.events.map((e) => e.roomName)).toEqual(['A101', 'B202']);
+    });
+  });
+
+  // ── ALS-002: phân trang ───────────────────────────────────────────────────
+  describe('phân trang', () => {
+    it('mặc định page=1 limit=20 → LIMIT/OFFSET đúng', async () => {
+      wire();
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+      });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.sql).toContain('LIMIT $5 OFFSET $6');
+      expect(q.params[4]).toBe(20);
+      expect(q.params[5]).toBe(0);
+      expect(r.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
+    });
+
+    it('page=3 limit=10 → OFFSET 20, totalPages tính từ total của COUNT', async () => {
+      wire({ events: [evt()], counts: { total: '45', matched: '40', unmatched: '5' } });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+        page: 3,
+        limit: 10,
+      });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.params[4]).toBe(10);
+      expect(q.params[5]).toBe(20);
+      expect(r.pagination).toEqual({
+        page: 3,
+        limit: 10,
+        total: 45,
+        totalPages: 5,
+      });
+      // totalEvents = tổng toàn bộ, KHÔNG phải số dòng trong trang.
+      expect(r.totalEvents).toBe(45);
+      expect(r.events).toHaveLength(1);
+    });
+  });
+
+  // ── ALS-002: search theo tên ──────────────────────────────────────────────
+  describe('search theo users.full_name', () => {
+    it('có search → truyền vào param $4, SQL dùng ILIKE', async () => {
+      wire();
+      await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+        search: 'Long',
+      });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.params[3]).toBe('Long');
+      expect(q.sql).toContain("u.full_name ILIKE '%' || $4::text || '%'");
+    });
+
+    it('search rỗng/chỉ khoảng trắng → coi như không lọc (param null)', async () => {
+      wire();
+      await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+        search: '   ',
+      });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.params[3]).toBeNull();
+    });
   });
 
   // ── Timezone của mặc định "hôm nay" (EC2 chạy UTC) ────────────────────────
@@ -183,7 +351,7 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2)', () => {
 
   it('ngày không có dữ liệu → mảng rỗng, các count = 0 (KHÔNG lỗi)', async () => {
     wire({ events: [] });
-    const r = await service.getRoomAccessLog(ROOM_ID, '2026-01-01');
+    const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-01-01' });
     expect(r.events).toEqual([]);
     expect(r.totalEvents).toBe(0);
     expect(r.matchedCount).toBe(0);

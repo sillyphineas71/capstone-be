@@ -104,6 +104,13 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         skipped: 0,
         failed: 0,
       })),
+      advanceMeetingStatuses: jest.fn(async () => ({
+        started: 0,
+        scanned: 0,
+        completed: 0,
+        skipped: 0,
+        failed: 0,
+      })),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -333,5 +340,43 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
       new Error('boom'),
     );
     await expect(s.autoCompleteMeetings()).resolves.toBeUndefined();
+  });
+
+  // ── F-A (MST-001): cron meeting-status-advance ──
+  it('advanceMeetingStatuses gate OFF (default) → KHÔNG gọi service', async () => {
+    cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_MEETING_STATUS_ENABLED default false
+    const s = await build();
+    await s.advanceMeetingStatuses();
+    expect(liveMeetingMock.advanceMeetingStatuses).not.toHaveBeenCalled();
+  });
+
+  it('advanceMeetingStatuses ON → gọi advanceMeetingStatuses 1 lần', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_MEETING_STATUS_ENABLED: true };
+    const s = await build();
+    await s.advanceMeetingStatuses();
+    expect(liveMeetingMock.advanceMeetingStatuses).toHaveBeenCalledTimes(1);
+  });
+
+  it('advanceMeetingStatuses: SCHEDULER_ENABLED=false → KHÔNG chạy dù cờ riêng bật', async () => {
+    cfg = { SCHEDULER_ENABLED: false, SCHEDULER_MEETING_STATUS_ENABLED: true };
+    const s = await build();
+    await s.advanceMeetingStatuses();
+    expect(liveMeetingMock.advanceMeetingStatuses).not.toHaveBeenCalled();
+  });
+
+  it('advanceMeetingStatuses: service throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_MEETING_STATUS_ENABLED: true };
+    const s = await build();
+    liveMeetingMock.advanceMeetingStatuses.mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(s.advanceMeetingStatuses()).resolves.toBeUndefined();
+  });
+
+  it('cờ meeting-status KHÔNG bật nhầm cron auto-complete cũ (2 cờ độc lập)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_MEETING_STATUS_ENABLED: true };
+    const s = await build();
+    await s.autoCompleteMeetings();
+    expect(liveMeetingMock.autoCompleteOverdueMeetings).not.toHaveBeenCalled();
   });
 });

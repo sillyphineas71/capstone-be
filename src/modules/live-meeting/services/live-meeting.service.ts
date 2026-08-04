@@ -2001,15 +2001,80 @@ export class LiveMeetingService {
   }
 
   /**
+   * F-A (MST-001) — lật `scheduled` → `in_progress` cho họp ĐÃ tới giờ.
+   *
+   * Trước fix này KHÔNG cron nào lật trạng thái theo thời gian: `in_progress`
+   * chỉ có khi CÓ NGƯỜI bấm "bắt đầu" (`startMeeting`). Họp không ai bấm thì
+   * đứng nguyên `scheduled` mãi ⇒ (1) `resolveMeeting` của IVSS lọc
+   * `status='in_progress'` trượt sạch → mọi lần quẹt mặt thành `unmatched`;
+   * (2) `autoCompleteOverdueMeetings()` bên dưới reuse `endMeeting()`, mà
+   * `validateMeetingCanEnd` ném MEETING_NOT_STARTED cho `scheduled` ⇒ họp đó
+   * KHÔNG BAO GIỜ thành `completed`, báo cáo lọc `completed` rỗng.
+   *
+   * `actual_start_time = start_time` (giờ theo LỊCH), KHÔNG phải `now()`:
+   * cron chạy mỗi phút nên `now()` lệch tới 1 phút, và nếu server tắt rồi bật
+   * lại thì lệch rất xa. Lấy giờ lịch để `duration` mà `endMeeting()` tính ra
+   * đúng trọn khung giờ đã đặt phòng, ổn định không phụ thuộc cron chạy lúc nào.
+   * `COALESCE` giữ nguyên mốc cũ nếu ai đó đã bấm bắt đầu thật.
+   *
+   * Quét CẢ họp đã quá `end_time` (không chỉ họp đang trong khung giờ): đưa
+   * chúng qua `in_progress` chính là để `autoCompleteOverdueMeetings()` ngay
+   * sau đó `endMeeting()` được — đã chốt: họp quá giờ không ai tới VẪN chuyển
+   * `completed` (no-show là việc của NoShowDetectionService, không chặn vòng
+   * đời trạng thái ở đây).
+   *
+   * KHÔNG đụng `cancelled`/`draft`/`pending_approval`/`completed`.
+   * Idempotent: `WHERE status='scheduled'` nên chạy lại không lật gì thêm.
+   */
+  async autoStartDueMeetings(): Promise<{ started: number }> {
+    const result: unknown = await this.dataSource.query(
+      `UPDATE meetings
+          SET status = $1,
+              actual_start_time = COALESCE(actual_start_time, start_time),
+              updated_at = now()
+        WHERE status = $2
+          AND start_time <= now()
+          AND deleted_at IS NULL`,
+      [MeetingStatus.IN_PROGRESS, MeetingStatus.SCHEDULED],
+    );
+    // node-postgres: UPDATE không RETURNING trả [rows, rowCount].
+    const started =
+      Array.isArray(result) && typeof result[1] === 'number' ? result[1] : 0;
+    return { started };
+  }
+
+  /**
+   * F-A (MST-001) — 1 lượt đẩy trạng thái theo thời gian: bắt đầu họp tới giờ
+   * rồi kết thúc họp quá giờ. Entry point DUY NHẤT cho cron
+   * `meeting-status-advance`.
+   *
+   * Thứ tự BẮT BUỘC start → complete: họp `scheduled` đã quá `end_time` phải
+   * đi qua `in_progress` thì `endMeeting()` mới nhận (xem doc
+   * {@link autoStartDueMeetings}) — đảo thứ tự sẽ bỏ sót đúng nhóm đó.
+   */
+  async advanceMeetingStatuses(): Promise<{
+    started: number;
+    scanned: number;
+    completed: number;
+    skipped: number;
+    failed: number;
+  }> {
+    const { started } = await this.autoStartDueMeetings();
+    const ended = await this.autoCompleteOverdueMeetings();
+    return { started, ...ended };
+  }
+
+  /**
    * F1 (recon B1) — auto-complete meetings qua end_time. Trước fix này KHÔNG
    * cron nào gọi endMeeting() → meeting IN_PROGRESS quá end_time không bao
    * giờ chuyển 'completed', các report lọc m.status='completed' luôn rỗng.
    *
    * Reuse nguyên endMeeting() (actor = organizerId của chính meeting đó) —
-   * KHÔNG viết lại logic kết thúc phiên. Meeting còn 'scheduled' (chưa ai
-   * bấm bắt đầu) bị endMeeting() từ chối bằng MEETING_NOT_STARTED — tính là
-   * skipped, không phải lỗi: đây là no-show, thuộc phạm vi
-   * NoShowDetectionService riêng, không phải "đã họp xong".
+   * KHÔNG viết lại logic kết thúc phiên.
+   *
+   * [F-A] `skipped` (MEETING_NOT_STARTED) giờ chỉ còn là lưới an toàn cho khe
+   * đua hiếm: {@link advanceMeetingStatuses} đã lật `scheduled` → `in_progress`
+   * TRƯỚC khi gọi hàm này, nên gần như không còn họp `scheduled` lọt vào đây.
    */
   async autoCompleteOverdueMeetings(): Promise<{
     scanned: number;
