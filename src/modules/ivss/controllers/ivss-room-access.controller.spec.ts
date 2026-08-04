@@ -23,15 +23,18 @@ describe('IvssRoomAccessController (RAL-001 / ALS-002)', () => {
     controller = new IvssRoomAccessController(svc);
   });
 
-  it('accessLogAll: roomId=null + truyền đủ date/page/limit/search', async () => {
+  it('accessLogAll: roomId=null + truyền đủ date/meetingId/page/limit/search', async () => {
+    const MEETING_ID = '11111111-1111-4111-8111-111111111111';
     const r = await controller.accessLogAll({
       date: '2026-07-28',
+      meetingId: MEETING_ID,
       page: 2,
       limit: 50,
       search: 'Long',
     });
     expect(svc.getRoomAccessLog).toHaveBeenCalledWith(null, {
       date: '2026-07-28',
+      meetingId: MEETING_ID,
       page: 2,
       limit: 50,
       search: 'Long',
@@ -48,6 +51,7 @@ describe('IvssRoomAccessController (RAL-001 / ALS-002)', () => {
     });
     expect(svc.getRoomAccessLog).toHaveBeenCalledWith(ROOM_ID, {
       date: '2026-07-28',
+      meetingId: undefined,
       page: 1,
       limit: 20,
       search: undefined,
