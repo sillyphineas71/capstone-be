@@ -11,6 +11,10 @@ import {
 import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
 import { AlertsService } from '../../alerts/services/alerts.service.js';
 import { AlertSeverity } from '../../alerts/dto/record-alert.input.js';
+import { IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY } from '../../ivss/constants/zone-presence.constant.js';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface VehicleControlAlertContext {
   channelId: number;
@@ -26,7 +30,13 @@ export interface VehicleControlAlertContext {
  * tắt tường minh) → dừng CẢ recordAlert lẫn notification (AF1). Không suppressed →
  * `AlertsService.recordAlert()` TRƯỚC (severity theo `listType`, bọc try/catch NotThrow
  * RIÊNG — lỗi ghi `security_alerts` KHÔNG được chặn notification cũ), rồi mới notification
- * như cũ. `zoneId: null` cố định (residual: `VehicleResolveService` chưa ghi `zone_id`).
+ * như cũ.
+ *
+ * F6 (recon R1): `zoneId` resolve qua `system_configs['ivss.channel_presence_zone_map']`
+ * (mirror `ivss-presence-ingestion.service.ts`/`ivss-occupancy-ingest.service.ts` — KHÔNG
+ * có hàm dùng chung, tech-debt TD-ZPW-1 đã ghi nhận). TRƯỚC ĐÂY query thẳng
+ * `iot_devices.channel_id` — cột đó KHÔNG TỒN TẠI → luôn throw → zoneId luôn null (bug đã
+ * fix). Channel chưa map → `zoneId=null`, alert VẪN bắn bình thường (bất biến, KHÔNG đổi).
  *
  * NotThrow toàn bộ `evaluate()`: lỗi cảnh báo KHÔNG được phá luồng ingest event chính
  * (mirror `VehicleResolveService`/`StrangerAlertService`). Throttle in-memory theo plate
@@ -67,19 +77,9 @@ export class VehicleControlAlertService {
       this.lastAlertAt.set(plateNumber, now);
 
       // --- Step 2: Resolve zone_id from channelId (FR-020) ---
-      let zoneId: string | null = null;
-      try {
-        const rows: Array<{ zone_id: string | null }> =
-          await this.dataSource.manager.query(
-            `SELECT i.zone_id FROM iot_devices i WHERE i.channel_id = $1 AND i.deleted_at IS NULL LIMIT 1`,
-            [context.channelId],
-          );
-        zoneId = rows[0]?.zone_id ?? null;
-      } catch (e) {
-        this.logger.warn(
-          `Zone resolution failed (channel=${context.channelId}): ${e instanceof Error ? e.message : 'unknown'}`,
-        );
-      }
+      // F6: qua channel_presence_zone_map — KHÔNG map → zoneId=null, KHÔNG throw
+      // (AC-BACKCOMPAT, mirror pattern presence/occupancy).
+      const zoneId = await this.resolveZone(context.channelId);
 
       // --- Step 3: Priority chain (B>C>A>D) ---
       let alertType: string | null = null;
@@ -216,6 +216,40 @@ export class VehicleControlAlertService {
       );
     }
   }
+  private async resolveZone(channelId: number): Promise<string | null> {
+    const map = await this.getChannelPresenceZoneMap();
+    return map[String(channelId)] ?? null;
+  }
+
+  /**
+   * F6 (recon R1/R2): system_configs['ivss.channel_presence_zone_map'] {channelId: zone_uuid};
+   * validate uuid. Không cache. Đọc lỗi/không map → {} (KHÔNG throw): map-miss = zoneId=null,
+   * alert vẫn bắn (AC-BACKCOMPAT). Mirror ivss-occupancy-ingest.service.ts/
+   * ivss-presence-ingestion.service.ts — KHÔNG có hàm dùng chung (TD-ZPW-1).
+   */
+  private async getChannelPresenceZoneMap(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    try {
+      const rows: Array<{ config_json: Record<string, unknown> | null }> =
+        await this.dataSource.manager.query(
+          `SELECT config_json FROM system_configs
+           WHERE config_key = $1 AND is_active = true LIMIT 1`,
+          [IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY],
+        );
+      const raw = rows[0]?.config_json;
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === 'string' && UUID_RE.test(v)) out[k] = v;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `channel_presence_zone_map read failed (→ zoneId null): ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+    }
+    return out;
+  }
+
   /** Recipient = đúng bộ role đã gán quyền `vehicle_control.read` (UC8 migration 20260722000001). */
   private async resolveRecipients(): Promise<string[]> {
     const rows: Array<{ id: string }> = await this.dataSource.manager.query(

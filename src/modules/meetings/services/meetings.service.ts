@@ -64,6 +64,7 @@ import {
 } from '../../notifications/entities/notification.entity.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -193,6 +194,7 @@ export class MeetingsService {
     private readonly warningTokenUtil: WarningTokenUtil,
     private readonly notificationsService: NotificationsService,
     private readonly authzRepo: AuthzReadRepository,
+    private readonly faceProvisioningService: FaceProvisioningService,
   ) {}
 
   async getRoomAvailability(
@@ -2549,6 +2551,23 @@ export class MeetingsService {
         (error as Error).stack,
       );
       throw error;
+    }
+
+    // ── Step 4m (recon B2/B4): gỡ face mapping của meeting bị hủy — ngoài
+    // transaction (gọi thiết bị ngoài), best-effort như notification bên
+    // dưới. Không gỡ → mapping còn sống chiếm slot (device,user) vĩnh viễn,
+    // họp sau cùng slot bị defer mãi (B4).
+    try {
+      await this.faceProvisioningService.deprovisionMeeting({
+        id: meetingId,
+        room_id: meeting.roomId,
+        start_time: meeting.startTime,
+        end_time: meeting.endTime,
+      });
+    } catch (faceError: unknown) {
+      this.logger.error(
+        `[cancelMeeting] deprovisionMeeting failed for meeting ${meetingId}: ${(faceError as Error).message}`,
+      );
     }
 
     // ── Step 5: Outside transaction — notification via NotificationsService ──

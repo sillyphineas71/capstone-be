@@ -13,6 +13,7 @@ import { IvssPortraitSyncService } from '../ivss/services/ivss-portrait-sync.ser
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
+import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
   let detectMock: any;
@@ -24,6 +25,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let restrictedZoneMock: any;
   let crowdAlertMock: any;
   let gatePairingMock: any;
+  let liveMeetingMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -95,6 +97,14 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     gatePairingMock = {
       pairBatch: jest.fn(async () => ({ scanned: 0, paired: 0, skipped: 0 })),
     };
+    liveMeetingMock = {
+      autoCompleteOverdueMeetings: jest.fn(async () => ({
+        scanned: 0,
+        completed: 0,
+        skipped: 0,
+        failed: 0,
+      })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -116,6 +126,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         },
         { provide: CrowdAlertService, useValue: crowdAlertMock },
         { provide: GateLogPairingService, useValue: gatePairingMock },
+        { provide: LiveMeetingService, useValue: liveMeetingMock },
       ],
     }).compile();
     return module.get(SchedulerService);
@@ -296,5 +307,31 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     const s = await build();
     gatePairingMock.pairBatch.mockRejectedValueOnce(new Error('boom'));
     await expect(s.gateLogPairing()).resolves.toBeUndefined();
+  });
+
+  // ── recon B1: autoCompleteMeetings cron ──
+  it('autoCompleteMeetings gate OFF (default) → KHÔNG gọi autoCompleteOverdueMeetings', async () => {
+    cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_AUTO_COMPLETE_ENABLED default false
+    const s = await build();
+    await s.autoCompleteMeetings();
+    expect(liveMeetingMock.autoCompleteOverdueMeetings).not.toHaveBeenCalled();
+  });
+
+  it('autoCompleteMeetings ON → gọi autoCompleteOverdueMeetings 1 lần', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_AUTO_COMPLETE_ENABLED: true };
+    const s = await build();
+    await s.autoCompleteMeetings();
+    expect(liveMeetingMock.autoCompleteOverdueMeetings).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it('autoCompleteMeetings: autoCompleteOverdueMeetings throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = { SCHEDULER_ENABLED: true, SCHEDULER_AUTO_COMPLETE_ENABLED: true };
+    const s = await build();
+    liveMeetingMock.autoCompleteOverdueMeetings.mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(s.autoCompleteMeetings()).resolves.toBeUndefined();
   });
 });

@@ -15,6 +15,19 @@ export interface WriteAppearInput {
   metadata?: Record<string, unknown> | null;
 }
 
+/**
+ * Input ghi một dòng `count` vào `zone_presence_events` (F3, recon B5 — nguồn dữ liệu
+ * cho crowd-alert/zone-traffic-heatmap, trước đây KHÔNG có gì ghi event_type='count').
+ * KHÔNG có `userId` (đếm số lượng, không gắn 1 người cụ thể).
+ */
+export interface WriteCountInput {
+  zoneId: string;
+  occupancyCount: number;
+  eventTime: Date;
+  deviceId?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 /** Kết quả validate zone khu vực (đọc, không ghi) — để `ivss` biết type TRƯỚC INSERT raw. */
 export type ResolvePresenceZoneResult =
   | { valid: true }
@@ -104,6 +117,64 @@ export class ZonePresenceWriterService {
       await qr.rollbackTransaction();
       this.logger.error(
         `writeAppearEvent failed (zone=${input.zoneId} user=${input.userId}): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      throw e;
+    } finally {
+      await qr.release();
+    }
+  }
+
+  /**
+   * GHI — INSERT 1 dòng `count` (F3, recon B5). KHÔNG giới hạn `zone_type` như
+   * `writeAppearEvent` (QC-5 chỉ áp dụng vòng `appear` — crowd-alert/heatmap đọc
+   * theo zone_id bất kỳ do `alert_rules`/dashboard chỉ định, không kén loại zone).
+   * Chỉ kiểm zone tồn tại (chưa xoá mềm). Tx riêng, COMMIT trước khi trả.
+   */
+  async writeCountEvent(
+    input: WriteCountInput,
+  ): Promise<{ presenceId: string }> {
+    const zoneRows: Array<{ id: string }> =
+      await this.dataSource.manager.query(
+        `SELECT id FROM zones WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [input.zoneId],
+      );
+    if (zoneRows.length === 0) {
+      throw new Error(
+        `writeCountEvent: zone ${input.zoneId} không tồn tại hoặc đã xoá`,
+      );
+    }
+
+    const metaJson =
+      input.metadata && Object.keys(input.metadata).length > 0
+        ? JSON.stringify(input.metadata)
+        : null;
+
+    const qr = this.dataSource.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+    try {
+      const rows: Array<{ id: string }> = await qr.manager.query(
+        `INSERT INTO zone_presence_events
+           (zone_id, device_id, user_id, event_type, occupancy_count,
+            confidence_score, event_time, source_type, metadata_json)
+         VALUES ($1, $2, NULL, 'count', $3, NULL, $4, 'ivss', $5::jsonb)
+         RETURNING id`,
+        [
+          input.zoneId,
+          input.deviceId ?? null,
+          input.occupancyCount,
+          input.eventTime,
+          metaJson,
+        ],
+      );
+      await qr.commitTransaction();
+      return { presenceId: rows[0].id };
+    } catch (e) {
+      await qr.rollbackTransaction();
+      this.logger.error(
+        `writeCountEvent failed (zone=${input.zoneId} count=${input.occupancyCount}): ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

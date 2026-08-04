@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   UnprocessableEntityException,
   BadRequestException,
+  HttpException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
@@ -1997,6 +1998,68 @@ export class LiveMeetingService {
       duration: durationMinutes,
       roomReleased,
     });
+  }
+
+  /**
+   * F1 (recon B1) — auto-complete meetings qua end_time. Trước fix này KHÔNG
+   * cron nào gọi endMeeting() → meeting IN_PROGRESS quá end_time không bao
+   * giờ chuyển 'completed', các report lọc m.status='completed' luôn rỗng.
+   *
+   * Reuse nguyên endMeeting() (actor = organizerId của chính meeting đó) —
+   * KHÔNG viết lại logic kết thúc phiên. Meeting còn 'scheduled' (chưa ai
+   * bấm bắt đầu) bị endMeeting() từ chối bằng MEETING_NOT_STARTED — tính là
+   * skipped, không phải lỗi: đây là no-show, thuộc phạm vi
+   * NoShowDetectionService riêng, không phải "đã họp xong".
+   */
+  async autoCompleteOverdueMeetings(): Promise<{
+    scanned: number;
+    completed: number;
+    skipped: number;
+    failed: number;
+  }> {
+    const rows: Array<{ id: string; organizer_id: string }> =
+      await this.dataSource.query(
+        `SELECT id, organizer_id FROM meetings
+         WHERE status IN ('scheduled', 'in_progress')
+           AND end_time < now()
+           AND deleted_at IS NULL
+         LIMIT 500`,
+      );
+
+    let completed = 0;
+    let skipped = 0;
+    let failed = 0;
+    const systemContext: ClientContext = {
+      userAgent: 'scheduler-auto-complete',
+    };
+
+    for (const row of rows) {
+      try {
+        await this.endMeeting(
+          row.id,
+          { userId: row.organizer_id },
+          systemContext,
+        );
+        completed++;
+      } catch (e: unknown) {
+        const code =
+          e instanceof HttpException
+            ? (e.getResponse() as { error?: { code?: string } })?.error?.code
+            : undefined;
+        if (code === MEETING_END_ERRORS.MEETING_NOT_STARTED) {
+          skipped++;
+        } else {
+          failed++;
+          this.logger.error(
+            `[autoCompleteOverdueMeetings] meeting ${row.id} failed: ${
+              e instanceof Error ? e.message : 'unknown'
+            }`,
+          );
+        }
+      }
+    }
+
+    return { scanned: rows.length, completed, skipped, failed };
   }
 
   /**

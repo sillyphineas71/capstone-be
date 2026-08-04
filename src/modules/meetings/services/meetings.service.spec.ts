@@ -64,6 +64,7 @@ import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 
 describe('MeetingsService', () => {
   let service: MeetingsService;
@@ -72,6 +73,7 @@ describe('MeetingsService', () => {
   let module: TestingModule;
   let mockNotificationsService: Record<string, jest.Mock>;
   let mockAuthzReadRepository: Record<string, jest.Mock>;
+  let mockFaceProvisioningService: Record<string, jest.Mock>;
   let mockRepo: jest.Mocked<
     Pick<
       Repository<any>,
@@ -132,6 +134,10 @@ describe('MeetingsService', () => {
         .mockResolvedValue({ roles: [], permissions: [] }),
     };
 
+    mockFaceProvisioningService = {
+      deprovisionMeeting: jest.fn().mockResolvedValue(undefined),
+    };
+
     em = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -162,6 +168,10 @@ describe('MeetingsService', () => {
         WarningTokenUtil,
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: AuthzReadRepository, useValue: mockAuthzReadRepository },
+        {
+          provide: FaceProvisioningService,
+          useValue: mockFaceProvisioningService,
+        },
         {
           provide: JwtService,
           useValue: { sign: jest.fn(), verify: jest.fn() },

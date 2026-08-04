@@ -178,6 +178,8 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_AUTO_RELEASE_CRON: Joi.string().default('*/5 * * * *'),
   // EVD-001 (#34): cron phát hiện phòng trống sớm (gated default OFF).
   SCHEDULER_EARLY_VACANCY_ENABLED: Joi.boolean().default(false),
+  // recon B1: cron auto-complete meeting quá end_time (gated default OFF).
+  SCHEDULER_AUTO_COMPLETE_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_CRON: Joi.string().default('0 * * * *'),
 

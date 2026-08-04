@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { IvssOccupancyIngestService } from './ivss-occupancy-ingest.service.js';
 import { OccupancyPersistenceService } from '../../presence/services/occupancy-persistence.service.js';
+import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 
@@ -11,8 +12,10 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
   let service: IvssOccupancyIngestService;
   let dataSourceMock: any;
   let persistMock: { persist: jest.Mock };
+  let zonePresenceWriterMock: { writeCountEvent: jest.Mock };
   let bridgeRows: any[];
   let channelMap: Record<string, unknown> | null;
+  let zoneChannelMap: Record<string, unknown> | null;
 
   const dto = (over: any = {}) => ({
     type: 'occupancy',
@@ -33,14 +36,19 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
   beforeEach(async () => {
     bridgeRows = [{ id: 'bridge-1' }];
     channelMap = { '5': ROOM_UUID };
+    // Mặc định KHÔNG map zone — các test AC-* có sẵn không quan tâm crowd-alert/zone,
+    // tránh writeCountEvent bị gọi ngoài ý muốn ở những test đó.
+    zoneChannelMap = null;
 
     dataSourceMock = {
       manager: {
         query: jest.fn().mockImplementation((sql: string) => {
           if (sql.includes('FROM iot_devices'))
             return Promise.resolve(bridgeRows);
-          if (sql.includes('FROM system_configs'))
+          if (sql.includes("config_key = 'ivss.channel_room_map'"))
             return Promise.resolve([{ config_json: channelMap }]);
+          if (sql.includes("config_key = 'ivss.channel_presence_zone_map'"))
+            return Promise.resolve([{ config_json: zoneChannelMap }]);
           return Promise.resolve(undefined); // INSERT raw
         }),
       },
@@ -48,12 +56,19 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
     persistMock = {
       persist: jest.fn().mockResolvedValue({ statusChanged: true }),
     };
+    zonePresenceWriterMock = {
+      writeCountEvent: jest.fn().mockResolvedValue({ presenceId: 'zpe-1' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IvssOccupancyIngestService,
         { provide: DataSource, useValue: dataSourceMock },
         { provide: OccupancyPersistenceService, useValue: persistMock },
+        {
+          provide: ZonePresenceWriterService,
+          useValue: zonePresenceWriterMock,
+        },
       ],
     }).compile();
     service = module.get(IvssOccupancyIngestService);
@@ -149,5 +164,32 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
     const payload = String(rawInsertCall()[1][2]);
     expect(payload).toContain('"enteredNumber":null');
     expect(payload).toContain('"exitedNumber":null');
+  });
+
+  // ── F3 (recon B5): channel_presence_zone_map → zone_presence_events(event_type='count') ──
+  const ZONE_UUID = '22222222-2222-2222-2222-222222222222';
+
+  it('F3: channel map zone → writeCountEvent gọi đúng (zoneId, count, eventTime)', async () => {
+    zoneChannelMap = { '5': ZONE_UUID };
+    await service.ingest(dto());
+    expect(zonePresenceWriterMock.writeCountEvent).toHaveBeenCalledTimes(1);
+    const arg = zonePresenceWriterMock.writeCountEvent.mock.calls[0][0];
+    expect(arg.zoneId).toBe(ZONE_UUID);
+    expect(arg.occupancyCount).toBe(3);
+    expect(arg.eventTime).toBeInstanceOf(Date);
+  });
+
+  it('F3: channel KHÔNG map zone → writeCountEvent KHÔNG gọi (skip lặng)', async () => {
+    zoneChannelMap = null;
+    await service.ingest(dto());
+    expect(zonePresenceWriterMock.writeCountEvent).not.toHaveBeenCalled();
+  });
+
+  it('F3: room KHÔNG map nhưng zone CÓ map → vẫn gọi writeCountEvent (2 mapping độc lập)', async () => {
+    channelMap = { '99': ROOM_UUID }; // channel 5 không có trong room map
+    zoneChannelMap = { '5': ZONE_UUID };
+    await service.ingest(dto({ channelId: 5 }));
+    expect(persistMock.persist).not.toHaveBeenCalled();
+    expect(zonePresenceWriterMock.writeCountEvent).toHaveBeenCalledTimes(1);
   });
 });

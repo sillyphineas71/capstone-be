@@ -182,14 +182,16 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(statuses).toContain('synced');
   });
 
-  it('portrait null → skip (KHÔNG enroll)', async () => {
+  it('portrait null → skip enroll (F4: vẫn ghi mapping pending/no_portrait để có vết)', async () => {
     dsMock.manager.query.mockImplementation(defaultRouter());
     profileMock.getPortraitBytes.mockResolvedValue(null);
     await service.provisionMeeting(meeting());
     expect(provider.uploadFace).not.toHaveBeenCalled();
-    expect(
-      calls(dsMock.manager.query, 'INSERT INTO device_user_mappings').length,
-    ).toBe(0);
+    const ins = calls(dsMock.manager.query, 'INSERT INTO device_user_mappings');
+    expect(ins.length).toBe(1);
+    expect(ins[0][1]).toEqual(
+      expect.arrayContaining(['pending', 'no_portrait']),
+    );
   });
 
   it('no device trong room → bỏ qua', async () => {

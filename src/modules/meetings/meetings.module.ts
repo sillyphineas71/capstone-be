@@ -14,6 +14,7 @@ import { AccountsModule } from '../accounts/accounts.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { FaceAccessModule } from '../face-access/face-access.module.js';
 import { MeetingsController } from './controllers/meetings.controller.js';
 import { MeetingRequestsController } from './controllers/meeting-requests.controller.js';
 import { MeetingsService } from './services/meetings.service.js';
@@ -50,6 +51,7 @@ import { FromToConstraint } from './validators/from-to.constraint.js';
     NotificationsModule,
     AdministrationModule,
     AuthModule,
+    FaceAccessModule,
     TypeOrmModule.forFeature([
       MeetingRecurrenceRuleEntity,
       MeetingEntity,

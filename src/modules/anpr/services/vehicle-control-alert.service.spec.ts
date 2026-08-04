@@ -298,26 +298,30 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
     });
   });
 
-  describe('Zone_id resolution', () => {
-    it('channelId resolves -> zoneId included in recordAlert', async () => {
+  describe('Zone_id resolution (F6, recon R1: qua channel_presence_zone_map, KHÔNG phải iot_devices.channel_id)', () => {
+    const ZONE_UUID = '11111111-1111-1111-1111-111111111111';
+
+    it('channel có map trong channel_presence_zone_map -> zoneId included in recordAlert', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation(async (sql: string) => {
-        if (sql.includes('FROM iot_devices i WHERE i.channel_id'))
-          return Promise.resolve([{ zone_id: 'zone-1' }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([
+            { config_json: { '3': ZONE_UUID } },
+          ]);
         if (sql.includes('FROM vehicle_registrations'))
           return Promise.resolve([]);
         return Promise.resolve(adminRows);
       });
       await service.evaluate('ZONE01', { channelId: 3, direction: 'enter' });
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
-      expect(input.zoneId).toBe('zone-1');
+      expect(input.zoneId).toBe(ZONE_UUID);
     });
 
-    it('no zone_id -> zoneId=null does not block alert', async () => {
+    it('channel KHÔNG map -> zoneId=null, KHÔNG chặn alert (bất biến F6)', async () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation(async (sql: string) => {
-        if (sql.includes('FROM iot_devices'))
-          return Promise.resolve([{ zone_id: null }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([{ config_json: {} }]);
         if (sql.includes('FROM vehicle_registrations'))
           return Promise.resolve([]);
         return Promise.resolve(adminRows);
@@ -325,6 +329,25 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
       await service.evaluate('ZONE02', ctx);
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
       expect(input.zoneId).toBeNull();
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(1);
+      expect(notifMock.createNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('đọc system_configs lỗi -> zoneId=null, KHÔNG throw, alert vẫn bắn', async () => {
+      controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
+      dsMock.manager.query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM system_configs'))
+          return Promise.reject(new Error('conn refused'));
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([]);
+        return Promise.resolve(adminRows);
+      });
+      await expect(
+        service.evaluate('ZONE03', ctx),
+      ).resolves.toBeUndefined();
+      const input = alertsMock.recordAlert.mock.calls[0]?.[0];
+      expect(input.zoneId).toBeNull();
+      expect(notifMock.createNotification).toHaveBeenCalledTimes(1);
     });
   });
 
