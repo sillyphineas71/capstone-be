@@ -61,7 +61,7 @@ export class CrowdAlertService {
 
       for (const event of events) {
         eventsChecked++;
-        if ((event.occupancyCount ?? 0) > threshold) {
+        if ((event.occupancyCount ?? 0) >= threshold) {
           violationsFound++;
           await this.alertsService.recordAlert({
             alertType: 'crowd',
