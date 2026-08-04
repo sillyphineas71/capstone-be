@@ -27,11 +27,15 @@ import {
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
-import { FaceProfileEntity } from '../entities/face-profile.entity.js';
+import {
+  FaceProfileEntity,
+  FaceProfileStatus,
+} from '../entities/face-profile.entity.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+import { BIOMETRIC_EXEMPT_ROLE_CODES } from '../../../common/utils/biometric-exempt-roles.util.js';
 
 // UC-10 — READ-only cross-module entities (chỉ dùng để kiểm ràng buộc tham chiếu
 // và soft-delete quan hệ trong transaction xóa; KHÔNG gọi/sửa service module khác).
@@ -501,6 +505,21 @@ export class UsersService {
     const toAdd = desired.filter((id) => !currentSet.has(id));
     const toRemove = currentRoleIds.filter((id) => !desiredSet.has(id));
 
+    // A.6b (BA 2026-08-03): xác định demote khỏi role miễn trừ sinh trắc học
+    // (BUSINESS_ADMIN/SYSTEM_ADMIN) — dùng để quyết định có bắt upload lại không.
+    const involvedRoleIds = [...new Set([...currentRoleIds, ...desired])];
+    const involvedRoles = await em.find(RoleEntity, {
+      where: { id: In(involvedRoleIds) },
+    });
+    const roleCodeById = new Map(involvedRoles.map((r) => [r.id, r.roleCode]));
+    const wasExempt = currentRoleIds.some((id) =>
+      BIOMETRIC_EXEMPT_ROLE_CODES.includes(roleCodeById.get(id) ?? ''),
+    );
+    const willBeExempt = desired.some((id) =>
+      BIOMETRIC_EXEMPT_ROLE_CODES.includes(roleCodeById.get(id) ?? ''),
+    );
+    const isBiometricDemotion = wasExempt && !willBeExempt;
+
     // A.7 BR-04 — self-lockout: không tự gỡ vai trò hệ thống của chính mình
     if (actorId === targetUserId && toRemove.length > 0) {
       const removingRoles = await em.find(RoleEntity, {
@@ -558,6 +577,37 @@ export class UsersService {
             isActive: true,
           });
           await tem.save(UserRoleEntity, newRow);
+        }
+      }
+
+      // B.2b (BA 2026-08-03): demote khỏi BUSINESS_ADMIN/SYSTEM_ADMIN → thu hồi
+      // face_profile ACTIVE hiện có, bắt buộc user nộp lại ảnh (không giữ ảnh cũ).
+      if (isBiometricDemotion) {
+        const activeFaceProfiles = await tem.find(FaceProfileEntity, {
+          where: { userId: targetUserId, status: FaceProfileStatus.ACTIVE },
+        });
+        for (const profile of activeFaceProfiles) {
+          profile.status = FaceProfileStatus.REVOKED;
+          profile.lastUpdatedAt = new Date();
+          await tem.save(FaceProfileEntity, profile);
+        }
+        if (activeFaceProfiles.length > 0) {
+          const revokeAudit = tem.create(AuditLogEntity, {
+            userId: actorId,
+            actionType: 'biometric.auto_revoked_on_role_downgrade',
+            entityType: 'face_profiles',
+            entityId: targetUserId,
+            severity: AuditLogSeverity.WARNING,
+            oldValueJson: {
+              faceProfileIds: activeFaceProfiles.map((p) => p.id),
+              status: FaceProfileStatus.ACTIVE,
+            },
+            newValueJson: { status: FaceProfileStatus.REVOKED },
+            ipAddress: clientContext.ipAddress || null,
+            userAgent: clientContext.userAgent || null,
+            requestId: clientContext.requestId || null,
+          });
+          await tem.save(AuditLogEntity, revokeAudit);
         }
       }
 

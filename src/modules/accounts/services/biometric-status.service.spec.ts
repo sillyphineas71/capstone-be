@@ -9,13 +9,17 @@ describe('BiometricStatusService', () => {
   let service: BiometricStatusService;
   let userRepo: { findOne: jest.Mock };
   let faceProfileRepo: { find: jest.Mock };
+  let dataSource: { manager: { find: jest.Mock } };
 
   beforeEach(() => {
     userRepo = { findOne: jest.fn() };
     faceProfileRepo = { find: jest.fn() };
+    // default: user không giữ role nào → không exempt sinh trắc học (BA 2026-08-03).
+    dataSource = { manager: { find: jest.fn().mockResolvedValue([]) } };
     service = new BiometricStatusService(
       userRepo as never,
       faceProfileRepo as never,
+      dataSource as never,
     );
   });
 
@@ -97,5 +101,43 @@ describe('BiometricStatusService', () => {
     const result = await service.getStatus('u1');
     expect(result.biometricReviewStatus).toBe('rejected');
     expect(result.message).not.toContain('từ chối');
+  });
+
+  it('BUSINESS_ADMIN chưa upload → biometricRequired=false, popup=false (BA 2026-08-03)', async () => {
+    userRepo.findOne.mockResolvedValue({ id: 'u1', avatarUrl: null });
+    faceProfileRepo.find.mockResolvedValue([]);
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'BUSINESS_ADMIN' } },
+    ]);
+
+    const result = await service.getStatus('u1');
+    expect(result.biometricRequired).toBe(false);
+    expect(result.shouldShowBiometricPopup).toBe(false);
+  });
+
+  it('SYSTEM_ADMIN → biometricRequired=false dù có ảnh rejected (BA 2026-08-03)', async () => {
+    userRepo.findOne.mockResolvedValue({ id: 'u1', avatarUrl: null });
+    faceProfileRepo.find.mockResolvedValue([
+      { status: 'rejected', lastUpdatedAt: null, enrolledAt: null },
+    ]);
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'SYSTEM_ADMIN' } },
+    ]);
+
+    const result = await service.getStatus('u1');
+    expect(result.biometricRequired).toBe(false);
+    expect(result.shouldShowBiometricPopup).toBe(false);
+  });
+
+  it('EMPLOYEE → không bị miễn trừ, giữ nguyên hành vi cũ (BA 2026-08-03)', async () => {
+    userRepo.findOne.mockResolvedValue({ id: 'u1', avatarUrl: null });
+    faceProfileRepo.find.mockResolvedValue([]);
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'EMPLOYEE' } },
+    ]);
+
+    const result = await service.getStatus('u1');
+    expect(result.biometricRequired).toBe(true);
+    expect(result.shouldShowBiometricPopup).toBe(true);
   });
 });

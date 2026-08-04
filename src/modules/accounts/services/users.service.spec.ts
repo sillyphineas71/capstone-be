@@ -24,7 +24,10 @@ import {
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
-import { FaceProfileEntity } from '../entities/face-profile.entity.js';
+import {
+  FaceProfileEntity,
+  FaceProfileStatus,
+} from '../entities/face-profile.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
 import { MeetingParticipantEntity } from '../../meetings/entities/meeting-participant.entity.js';
@@ -1065,7 +1068,9 @@ describe('UsersService', () => {
       existingRowByRoleId?: Record<string, unknown>; // reactivate-if-exists lookup
       removeRows?: unknown[]; // rows trả về khi soft-remove trong txn
       systemRolesInRemove?: { id: string; isSystemRole: boolean }[]; // BR-04
+      involvedRoles?: { id: string; roleCode: string }[]; // BA 2026-08-03: lookup roleCode cho exemption check
       finalActiveRoles?: { id: string; roleCode: string; roleName: string }[]; // getActiveRolesResponse
+      activeFaceProfiles?: { id: string; status: string }[]; // BA 2026-08-03: face_profiles ACTIVE hiện có
       saveThrowsOnUserRole?: boolean;
     }) {
       em.findOne.mockImplementation(async (entityClass, options: any) => {
@@ -1102,8 +1107,14 @@ describe('UsersService', () => {
           }));
         }
         if (entityClass === RoleEntity) {
-          // BR-04: find roles In(toRemove)
-          return opts.systemRolesInRemove ?? [];
+          // BA 2026-08-03: lookup roleCode cho toàn bộ role liên quan (exemption
+          // check) khi có; nếu không, fallback về hành vi cũ (BR-04: find roles
+          // In(toRemove)) — actor≠target nên 2 query này không xảy ra cùng lúc
+          // trong cùng 1 test.
+          return opts.involvedRoles ?? opts.systemRolesInRemove ?? [];
+        }
+        if (entityClass === FaceProfileEntity) {
+          return opts.activeFaceProfiles ?? [];
         }
         return [];
       });
@@ -1287,6 +1298,97 @@ describe('UsersService', () => {
         expect.anything(),
       );
       expect(em.save).toHaveBeenCalledWith(UserRoleEntity, existingInactive);
+    });
+
+    it('[U10] BA 2026-08-03 — Promote lên BUSINESS_ADMIN: giữ nguyên face_profile ACTIVE, không revoke', async () => {
+      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      setup({
+        roles: { 'role-ba': { isActive: true } },
+        currentActiveRoleIds: ['role-employee'],
+        involvedRoles: [
+          { id: 'role-employee', roleCode: 'EMPLOYEE' },
+          { id: 'role-ba', roleCode: 'BUSINESS_ADMIN' },
+        ],
+        existingRowByRoleId: {},
+        removeRows: [{ roleId: 'role-employee', isActive: true }],
+        finalActiveRoles: [
+          { id: 'role-ba', roleCode: 'BUSINESS_ADMIN', roleName: 'BA' },
+        ],
+        activeFaceProfiles: [activeProfile],
+      });
+
+      await service.updateUserRoles(targetUserId, ['role-ba'], actorId, {});
+
+      // Không đụng vào face_profiles khi promote (không exempt → exempt).
+      expect(em.save).not.toHaveBeenCalledWith(
+        FaceProfileEntity,
+        expect.anything(),
+      );
+      expect(activeProfile.status).toBe(FaceProfileStatus.ACTIVE);
+    });
+
+    it('[U11] BA 2026-08-03 — Demote từ BUSINESS_ADMIN xuống EMPLOYEE: revoke face_profile ACTIVE + audit riêng', async () => {
+      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      setup({
+        roles: { 'role-employee': { isActive: true } },
+        currentActiveRoleIds: ['role-ba'],
+        involvedRoles: [
+          { id: 'role-ba', roleCode: 'BUSINESS_ADMIN' },
+          { id: 'role-employee', roleCode: 'EMPLOYEE' },
+        ],
+        existingRowByRoleId: {},
+        removeRows: [{ roleId: 'role-ba', isActive: true }],
+        finalActiveRoles: [
+          { id: 'role-employee', roleCode: 'EMPLOYEE', roleName: 'Employee' },
+        ],
+        activeFaceProfiles: [activeProfile],
+      });
+
+      await service.updateUserRoles(
+        targetUserId,
+        ['role-employee'],
+        actorId,
+        {},
+      );
+
+      // Face profile ACTIVE bị revoke → bắt buộc upload lại.
+      expect(activeProfile.status).toBe(FaceProfileStatus.REVOKED);
+      expect(em.save).toHaveBeenCalledWith(FaceProfileEntity, activeProfile);
+      // Audit riêng cho việc auto-revoke, tách khỏi ACCOUNT_ROLE_UPDATE.
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({
+          actionType: 'biometric.auto_revoked_on_role_downgrade',
+          entityType: 'face_profiles',
+          entityId: targetUserId,
+        }),
+      );
+    });
+
+    it('[U12] BA 2026-08-03 — Đổi role trong nội bộ nhóm exempt (SYSTEM_ADMIN→BUSINESS_ADMIN): không revoke', async () => {
+      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      setup({
+        roles: { 'role-ba': { isActive: true } },
+        currentActiveRoleIds: ['role-sa'],
+        involvedRoles: [
+          { id: 'role-sa', roleCode: 'SYSTEM_ADMIN' },
+          { id: 'role-ba', roleCode: 'BUSINESS_ADMIN' },
+        ],
+        existingRowByRoleId: {},
+        removeRows: [{ roleId: 'role-sa', isActive: true }],
+        finalActiveRoles: [
+          { id: 'role-ba', roleCode: 'BUSINESS_ADMIN', roleName: 'BA' },
+        ],
+        activeFaceProfiles: [activeProfile],
+      });
+
+      await service.updateUserRoles(targetUserId, ['role-ba'], actorId, {});
+
+      expect(activeProfile.status).toBe(FaceProfileStatus.ACTIVE);
+      expect(em.save).not.toHaveBeenCalledWith(
+        FaceProfileEntity,
+        expect.anything(),
+      );
     });
 
     it('[U9] Rollback — WRITE trong transaction lỗi thì reject (atomic)', async () => {

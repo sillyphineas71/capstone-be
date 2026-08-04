@@ -42,7 +42,7 @@ export class AdminBiometricReviewController {
   constructor(private readonly service: AdminBiometricReviewService) {}
 
   @Get()
-  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
   @RequirePermissions('account.biometric.review')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async list(@Query() query: ListBiometricSubmissionsQueryDto) {
@@ -55,7 +55,7 @@ export class AdminBiometricReviewController {
   }
 
   @Get(':faceProfileId')
-  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
   @RequirePermissions('account.biometric.review')
   async detail(
     @Param('faceProfileId', biometricSubmissionIdPipe()) faceProfileId: string,
@@ -69,7 +69,7 @@ export class AdminBiometricReviewController {
   }
 
   @Get(':faceProfileId/download-url')
-  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
   @RequirePermissions('account.biometric.download')
   async downloadUrl(
     @Param('faceProfileId', biometricSubmissionIdPipe()) faceProfileId: string,
@@ -88,7 +88,7 @@ export class AdminBiometricReviewController {
 
   @Post(':faceProfileId/approve')
   @HttpCode(200)
-  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
   @RequirePermissions('account.biometric.review')
   async approve(
     @Param('faceProfileId', biometricSubmissionIdPipe()) faceProfileId: string,
@@ -107,7 +107,7 @@ export class AdminBiometricReviewController {
 
   @Post(':faceProfileId/reject')
   @HttpCode(200)
-  @RequireRoles('SYSTEM_ADMIN', 'MANAGER')
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
   @RequirePermissions('account.biometric.review')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   async reject(

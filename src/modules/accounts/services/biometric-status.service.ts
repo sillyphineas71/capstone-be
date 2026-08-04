@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { UserEntity } from '../entities/user.entity.js';
 import { FaceProfileEntity } from '../entities/face-profile.entity.js';
 import {
@@ -8,6 +8,8 @@ import {
   FaceProfileStatusRow,
   BiometricReviewStatus,
 } from '../../../common/utils/biometric-status-resolver.util.js';
+import { isBiometricExemptRole } from '../../../common/utils/biometric-exempt-roles.util.js';
+import { getActiveRoleCodes } from '../utils/active-role-codes.util.js';
 import { BiometricStatusResponseDto } from '../dto/biometric-status-response.dto.js';
 
 /**
@@ -28,6 +30,7 @@ export class BiometricStatusService {
     private readonly userRepo: Repository<UserEntity>,
     @InjectRepository(FaceProfileEntity)
     private readonly faceProfileRepo: Repository<FaceProfileEntity>,
+    private readonly dataSource: DataSource,
   ) {}
 
   async getStatus(userId: string): Promise<BiometricStatusResponseDto> {
@@ -55,6 +58,21 @@ export class BiometricStatusService {
     }));
 
     const resolution = resolveBiometricReviewStatus(rows);
+
+    // BA 2026-08-03: Business Admin/System Admin không cần sinh trắc học vì
+    // không trực tiếp tham dự họp qua FaceGate — miễn trừ 2 cờ, giữ nguyên
+    // biometricReviewStatus gốc (không thêm giá trị enum mới).
+    const roleCodes = await getActiveRoleCodes(this.dataSource.manager, userId);
+    if (isBiometricExemptRole(roleCodes)) {
+      return {
+        biometricReviewStatus: resolution.biometricReviewStatus,
+        avatarUrl: user.avatarUrl,
+        biometricRequired: false,
+        shouldShowBiometricPopup: false,
+        message:
+          'Tài khoản Business Admin/System Admin không yêu cầu đăng ký sinh trắc học.',
+      };
+    }
 
     return {
       biometricReviewStatus: resolution.biometricReviewStatus,

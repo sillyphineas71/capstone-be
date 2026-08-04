@@ -16,6 +16,7 @@ import { AuthzReadRepository } from '../repositories/authz-read.repository';
 import { UsersAuthRepository } from '../repositories/users-auth.repository';
 import { BiometricStatusRawRepository } from '../repositories/biometric-status-raw.repository';
 import { resolveBiometricReviewStatus } from '../../../common/utils/biometric-status-resolver.util';
+import { isBiometricExemptRole } from '../../../common/utils/biometric-exempt-roles.util';
 import {
   AuthUserSummary,
   LoginSuccessData,
@@ -179,6 +180,17 @@ export class LoginService {
         `Failed to resolve biometric review status for user ${user.id}; defaulting to not_uploaded.`,
         error instanceof Error ? error.stack : undefined,
       );
+    }
+
+    // BA 2026-08-03: Business Admin/System Admin không cần sinh trắc học vì
+    // không trực tiếp tham dự họp qua FaceGate — miễn trừ 2 cờ, giữ nguyên
+    // biometricReviewStatus gốc (không thêm giá trị enum mới).
+    if (isBiometricExemptRole(authz.roles)) {
+      biometricReview = {
+        ...biometricReview,
+        biometricRequired: false,
+        shouldShowBiometricPopup: false,
+      };
     }
 
     const summary: AuthUserSummary = {

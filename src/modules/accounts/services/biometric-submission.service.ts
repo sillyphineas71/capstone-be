@@ -27,6 +27,8 @@ import { AuditLogEntity } from '../../administration/entities/audit-log.entity.j
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { detectImageMimeType } from '../utils/image-magic-bytes.util.js';
 import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
+import { getActiveRoleCodes } from '../utils/active-role-codes.util.js';
+import { isBiometricExemptRole } from '../../../common/utils/biometric-exempt-roles.util.js';
 import { BiometricSubmissionResponseDto } from '../dto/biometric-submission-response.dto.js';
 
 export interface UploadedBiometricFile {
@@ -87,6 +89,17 @@ export class BiometricSubmissionService {
       throw new ForbiddenException({
         code: 'ACCOUNT_NOT_ACTIVE',
         message: 'Tài khoản không ở trạng thái active.',
+      });
+    }
+
+    // ── Bước 4b (BA 2026-08-03): Business Admin/System Admin không cần sinh trắc
+    // học vì không trực tiếp tham dự họp qua FaceGate — chặn hẳn ở đây.
+    const roleCodes = await getActiveRoleCodes(this.dataSource.manager, userId);
+    if (isBiometricExemptRole(roleCodes)) {
+      throw new ForbiddenException({
+        code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE',
+        message:
+          'Tài khoản Business Admin/System Admin không cần đăng ký sinh trắc học vì không trực tiếp tham dự họp qua FaceGate.',
       });
     }
 

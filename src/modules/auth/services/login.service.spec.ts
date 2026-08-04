@@ -231,4 +231,42 @@ describe('LoginService', () => {
     expect(result.accessToken).toBe('access');
     expect(result.user.biometricReviewStatus).toBe('not_uploaded');
   });
+
+  it('BUSINESS_ADMIN → biometricRequired=false dù chưa upload (BA 2026-08-03)', async () => {
+    mockActiveLogin();
+    (
+      authzReadRepository.getEffectiveRolesAndPermissions as jest.Mock
+    ).mockResolvedValue({ roles: ['BUSINESS_ADMIN'], permissions: [] });
+    (
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([]);
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.user.biometricRequired).toBe(false);
+    expect(result.user.shouldShowBiometricPopup).toBe(false);
+  });
+
+  it('SYSTEM_ADMIN → biometricRequired=false dù có ảnh rejected (BA 2026-08-03)', async () => {
+    mockActiveLogin();
+    (
+      authzReadRepository.getEffectiveRolesAndPermissions as jest.Mock
+    ).mockResolvedValue({ roles: ['SYSTEM_ADMIN'], permissions: [] });
+    (
+      biometricStatusRawRepository.getFaceProfileRows as jest.Mock
+    ).mockResolvedValue([
+      { status: 'rejected', lastUpdatedAt: null, enrolledAt: null },
+    ]);
+
+    const result = await service.login(
+      { email: 'user@example.com', password: 'secret' },
+      {},
+    );
+
+    expect(result.user.biometricRequired).toBe(false);
+    expect(result.user.shouldShowBiometricPopup).toBe(false);
+  });
 });

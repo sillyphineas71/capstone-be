@@ -38,7 +38,7 @@ describe('BiometricSubmissionService', () => {
   let service: BiometricSubmissionService;
   let userRepo: { findOne: jest.Mock };
   let faceProfileRepo: { find: jest.Mock };
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; manager: { find: jest.Mock } };
   let cloudinary: { uploadImage: jest.Mock; deleteImage: jest.Mock };
   let configService: { get: jest.Mock };
   let insertCalls: Array<Record<string, unknown>>;
@@ -67,6 +67,8 @@ describe('BiometricSubmissionService', () => {
         };
         return cb(manager);
       }),
+      // default: user không giữ role nào → không exempt sinh trắc học (BA 2026-08-03).
+      manager: { find: jest.fn().mockResolvedValue([]) },
     };
 
     service = new BiometricSubmissionService(
@@ -84,6 +86,40 @@ describe('BiometricSubmissionService', () => {
       publicId: 'biometrics/x',
       secureUrl: 'https://res.cloudinary.com/demo/biometrics/x.jpg',
     });
+  });
+
+  it('BUSINESS_ADMIN → 403 BIOMETRIC_NOT_APPLICABLE_FOR_ROLE, không upload (BA 2026-08-03)', async () => {
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'BUSINESS_ADMIN' } },
+    ]);
+
+    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject(
+      {
+        response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
+      },
+    );
+    expect(cloudinary.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('SYSTEM_ADMIN → 403 BIOMETRIC_NOT_APPLICABLE_FOR_ROLE (BA 2026-08-03)', async () => {
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'SYSTEM_ADMIN' } },
+    ]);
+
+    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject(
+      {
+        response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
+      },
+    );
+  });
+
+  it('EMPLOYEE → không bị chặn, vẫn upload bình thường (BA 2026-08-03)', async () => {
+    dataSource.manager.find.mockResolvedValue([
+      { expiredAt: null, role: { roleCode: 'EMPLOYEE' } },
+    ]);
+
+    const result = await service.submit('u1', makeFile(), true);
+    expect(result.biometricReviewStatus).toBe('pending_review');
   });
 
   it('happy lần đầu (chưa có row) → pending_review + audit biometric.upload (AC-002)', async () => {
