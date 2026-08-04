@@ -63,6 +63,13 @@ export class QueryFailedFilter implements ExceptionFilter {
         field: 'bookingCode',
       };
     }
+    if (c.includes('meeting_requests_code') || c.includes('request_code')) {
+      return {
+        code: 'REQUEST_CODE_CONFLICT',
+        message: 'Không thể tạo mã yêu cầu đặt phòng, vui lòng thử lại',
+        field: 'requestCode',
+      };
+    }
 
     return {
       code: 'RESOURCE_ALREADY_EXISTS',

@@ -1084,10 +1084,16 @@ describe('MeetingsService', () => {
         if (data && typeof data === 'object' && !data.id) data.id = 'saved-id';
         return data;
       });
-      em.getRepository = jest.fn().mockImplementation((_entity: any) => ({
-        count: jest.fn().mockResolvedValue(0),
-        update: jest.fn().mockResolvedValue({ affected: 1 }),
-      }));
+      em.getRepository = jest.fn().mockImplementation((_entity: any) => {
+        const requestCodeQb = mockQueryBuilder();
+        requestCodeQb.getRawMany.mockResolvedValue([]);
+        requestCodeQb.getCount.mockResolvedValue(0);
+        return {
+          count: jest.fn().mockResolvedValue(0),
+          update: jest.fn().mockResolvedValue({ affected: 1 }),
+          createQueryBuilder: jest.fn().mockReturnValue(requestCodeQb),
+        };
+      });
       em.update = jest.fn().mockResolvedValue({ affected: 1 });
 
       const qb = mockQueryBuilder();
