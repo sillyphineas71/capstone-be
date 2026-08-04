@@ -10,6 +10,8 @@ interface AccessLogRow {
   event_time: Date | string;
   user_id: string | null;
   full_name: string | null;
+  room_id: string | null;
+  room_name: string | null;
   direction: string | null;
   match_state: string | null;
   similarity: string | null;
@@ -20,15 +22,31 @@ interface RoomRow {
   room_name: string;
 }
 
+interface CountRow {
+  total: string;
+  matched: string;
+  unmatched: string;
+}
+
+export interface RoomAccessLogQueryOptions {
+  date?: string;
+  page?: number;
+  limit?: number;
+  search?: string;
+}
+
 const FACE_EVENT_TYPE = 'ivss_face_event';
 /** Múi giờ nghiệp vụ — dùng cho CẢ mặc định `date` lẫn biên ngày trong SQL. */
 const BUSINESS_TIMEZONE = 'Asia/Ho_Chi_Minh';
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 20;
 
 /**
- * IvssRoomAccessLogService (RAL-001 / Màn 2) — nhật ký ra/vào của MỘT PHÒNG theo NGÀY.
+ * IvssRoomAccessLogService (RAL-001 / Màn 2) — nhật ký ra/vào theo NGÀY, cho MỘT PHÒNG
+ * hoặc TOÀN HỆ THỐNG (ALS-002: `roomId` null → không lọc phòng).
  *
  * Khác Màn 1 (`IvssPresenceQueryService`, góc nhìn theo CUỘC HỌP): ở đây lấy MỌI
- * `ivss_face_event` của phòng trong ngày, KỂ CẢ người không dự họp nào và event chưa
+ * `ivss_face_event` trong ngày, KỂ CẢ người không dự họp nào và event chưa
  * khớp danh tính — phục vụ giám sát an ninh.
  *
  * 100% READ-ONLY: không ghi DB, không gọi bridge, không emit WS.
@@ -58,31 +76,47 @@ export class IvssRoomAccessLogService {
     }).format(new Date());
   }
 
-  /** matchState 'unmatched_location' | 'unmatched_identity' → người lạ/ngoài lịch. */
-  private isStranger(matchState: string | null): boolean {
+  /**
+   * [ALS-002] Ngữ nghĩa CŨ của isStranger — giữ lại dưới tên `isUnmatched` để FE
+   * đang đọc field cũ không vỡ. Xem doc trong room-access-log-response.dto.ts.
+   */
+  private isUnmatched(matchState: string | null): boolean {
     return typeof matchState === 'string' && matchState.startsWith('unmatched');
   }
 
+  /**
+   * @param roomId null → toàn hệ thống (GET /ivss/access-log); có giá trị → 1 phòng
+   *               (GET /ivss/rooms/:roomId/access-log, kiểm tồn tại trước).
+   */
   async getRoomAccessLog(
-    roomId: string,
-    date?: string,
+    roomId: string | null,
+    options: RoomAccessLogQueryOptions = {},
   ): Promise<RoomAccessLogResponseDto> {
-    const day = date ?? this.todayStr();
+    const day = options.date ?? this.todayStr();
+    const page = options.page ?? DEFAULT_PAGE;
+    const limit = options.limit ?? DEFAULT_LIMIT;
+    const search = options.search?.trim() ? options.search.trim() : null;
+    const offset = (page - 1) * limit;
 
-    // Phòng phải tồn tại (loại soft-delete) — mirror cách RoomStatusService kiểm.
-    const rooms: RoomRow[] = await this.dataSource.manager.query(
-      `SELECT room_name FROM rooms WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
-      [roomId],
-    );
-    if (!rooms[0]) {
-      throw new NotFoundException({
-        code: 'ROOM_NOT_FOUND',
-        message: 'Room not found.',
-      });
+    let roomName: string | null = null;
+    if (roomId) {
+      // Phòng phải tồn tại (loại soft-delete) — mirror cách RoomStatusService kiểm.
+      const rooms: RoomRow[] = await this.dataSource.manager.query(
+        `SELECT room_name FROM rooms WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [roomId],
+      );
+      if (!rooms[0]) {
+        throw new NotFoundException({
+          code: 'ROOM_NOT_FOUND',
+          message: 'Room not found.',
+        });
+      }
+      roomName = rooms[0].room_name ?? null;
     }
 
     // LEFT JOIN users: event chưa khớp danh tính có payload_json->>'userId' = NULL
-    // (hoặc uid lạ) → full_name null, KHÔNG loại dòng khỏi kết quả.
+    // (hoặc uid lạ) → full_name null, KHÔNG loại dòng khỏi kết quả (trừ khi có `search`,
+    // vì lọc theo tên thì dòng không có tên hiển nhiên không khớp).
     //
     // Biên ngày: [00:00, 24:00) GIỜ VIỆT NAM, KHÔNG phụ thuộc timezone phiên DB.
     // ⚠ RDS production chạy UTC. Để `$2::date` trần thì "ngày 28/7" bị hiểu là
@@ -95,24 +129,53 @@ export class IvssRoomAccessLogService {
     // lệch +7h SAI HƯỚNG, còn tệ hơn bản gốc. Có `::timestamp` thì phép đổi đúng
     // chiều: '00:00 ngày đó giờ VN' → timestamptz '2026-07-28 17:00:00+00'.
     // Đã nghiệm thu bằng psql với SET TIME ZONE 'UTC'.
+    const whereSql = `
+        WHERE e.event_type = $1
+          AND e.event_time >= ($2::date::timestamp AT TIME ZONE '${BUSINESS_TIMEZONE}')
+          AND e.event_time <  (($2::date + interval '1 day')::timestamp AT TIME ZONE '${BUSINESS_TIMEZONE}')
+          AND ($3::uuid IS NULL OR e.room_id = $3::uuid)
+          AND ($4::text IS NULL OR u.full_name ILIKE '%' || $4::text || '%')`;
+    const fromSql = `
+         FROM iot_device_events e
+         LEFT JOIN users u
+                ON u.id = NULLIF(e.payload_json->>'userId', '')::uuid
+         LEFT JOIN rooms r ON r.id = e.room_id`;
+    const filterParams = [FACE_EVENT_TYPE, day, roomId, search];
+
+    // Đếm trên TOÀN BỘ kết quả lọc (không chỉ trang hiện tại) — matched/unmatched phải
+    // phản ánh cả ngày, nếu đếm trong trang thì số liệu vô nghĩa khi phân trang.
+    const countRows: CountRow[] = await this.dataSource.manager.query(
+      `SELECT COUNT(*)::text AS total,
+              COUNT(*) FILTER (
+                WHERE e.payload_json->>'matchState' = 'matched'
+              )::text AS matched,
+              COUNT(*) FILTER (
+                WHERE e.payload_json->>'matchState' LIKE 'unmatched%'
+              )::text AS unmatched
+         ${fromSql}
+         ${whereSql}`,
+      filterParams,
+    );
+    const total = parseInt(countRows[0]?.total ?? '0', 10);
+    const matchedCount = parseInt(countRows[0]?.matched ?? '0', 10);
+    const unmatchedCount = parseInt(countRows[0]?.unmatched ?? '0', 10);
+
     const rows: AccessLogRow[] = await this.dataSource.manager.query(
       `SELECT e.id,
               e.event_time,
               e.payload_json->>'userId'     AS user_id,
               u.full_name                   AS full_name,
+              e.room_id                     AS room_id,
+              r.room_name                   AS room_name,
               e.payload_json->>'direction'  AS direction,
               e.payload_json->>'matchState' AS match_state,
               e.payload_json->>'similarity' AS similarity,
               e.meeting_id                  AS meeting_id
-         FROM iot_device_events e
-         LEFT JOIN users u
-                ON u.id = NULLIF(e.payload_json->>'userId', '')::uuid
-        WHERE e.event_type = $3
-          AND e.room_id = $1
-          AND e.event_time >= ($2::date::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')
-          AND e.event_time <  (($2::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')
-        ORDER BY e.event_time ASC`,
-      [roomId, day, FACE_EVENT_TYPE],
+         ${fromSql}
+         ${whereSql}
+        ORDER BY e.event_time ASC
+        LIMIT $5 OFFSET $6`,
+      [...filterParams, limit, offset],
     );
 
     const events: RoomAccessLogEventDto[] = rows.map((r) => {
@@ -122,26 +185,32 @@ export class IvssRoomAccessLogService {
         eventTime: new Date(r.event_time).toISOString(),
         userId: r.user_id ?? null,
         fullName: r.full_name ?? null,
+        roomId: r.room_id ?? null,
+        roomName: r.room_name ?? null,
         direction: r.direction ?? null,
         matchState: r.match_state ?? null,
         similarity: Number.isFinite(similarity) ? similarity : null,
         meetingId: r.meeting_id ?? null,
-        isStranger: this.isStranger(r.match_state),
+        // [ALS-002] "người lạ" = KHÔNG nhận diện được danh tính, KHÔNG phải
+        // "vào phòng không có lịch". Ngữ nghĩa cũ giữ ở isUnmatched.
+        isStranger: (r.user_id ?? null) === null,
+        isUnmatched: this.isUnmatched(r.match_state),
       };
     });
 
-    const matchedCount = events.filter(
-      (e) => e.matchState === 'matched',
-    ).length;
-    const unmatchedCount = events.filter((e) => e.isStranger).length;
-
     return {
       roomId,
-      roomName: rooms[0].room_name ?? null,
+      roomName,
       date: day,
-      totalEvents: events.length,
+      totalEvents: total,
       matchedCount,
       unmatchedCount,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: limit > 0 ? Math.ceil(total / limit) : 0,
+      },
       events,
     };
   }
