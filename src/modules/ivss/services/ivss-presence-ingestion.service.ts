@@ -426,14 +426,35 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     return out;
   }
 
+  /**
+   * Tìm cuộc họp đang diễn ra tại phòng, ở đúng thời điểm quẹt mặt.
+   *
+   * [F-B] Nhận CẢ `scheduled` lẫn `in_progress`, KHÔNG chỉ `in_progress` như
+   * trước. Cửa sổ thời gian (`BETWEEN start_time AND end_time`) mới là điều
+   * kiện quyết định "họp có đang diễn ra không" — `status` chỉ phản ánh đã có
+   * ai bấm "bắt đầu" chưa.
+   *
+   * Vì sao cần: cron `meeting-status-advance` (F-A) lật `scheduled` →
+   * `in_progress` mỗi phút, nên vẫn còn khe tối đa ~1 phút ngay đầu giờ mà
+   * họp còn `scheduled`. Trước fix, mọi lần quẹt mặt rơi vào khe đó bị tính
+   * `unmatched` vĩnh viễn (raw event đã ghi, không quay lại sửa). Nới điều
+   * kiện ở đây bịt khe đó, đồng thời giữ hệ thống chạy đúng cả khi cron bị
+   * tắt (`SCHEDULER_MEETING_STATUS_ENABLED=false`) — điểm danh không phụ
+   * thuộc vào việc cron có được bật hay không.
+   *
+   * VẪN loại `cancelled` (họp đã hủy không điểm danh), `completed` (đã kết
+   * thúc), `draft`/`pending_approval` (chưa được duyệt, chưa giữ phòng thật).
+   */
   private async resolveMeeting(
     roomId: string,
     eventTime: Date,
   ): Promise<string | null> {
     const rows: IdRow[] = await this.dataSource.manager.query(
       `SELECT id FROM meetings
-       WHERE room_id = $1 AND status = 'in_progress'
+       WHERE room_id = $1 AND status IN ('scheduled', 'in_progress')
          AND $2 BETWEEN start_time AND end_time
+         AND deleted_at IS NULL
+       ORDER BY start_time ASC
        LIMIT 1`,
       [roomId, eventTime],
     );
