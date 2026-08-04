@@ -180,6 +180,9 @@ export const envValidationSchema = Joi.object({
   SCHEDULER_EARLY_VACANCY_ENABLED: Joi.boolean().default(false),
   // recon B1: cron auto-complete meeting quá end_time (gated default OFF).
   SCHEDULER_AUTO_COMPLETE_ENABLED: Joi.boolean().default(false),
+  // F-A (MST-001): cron lật meetings.status theo thời gian mỗi phút
+  // (scheduled→in_progress→completed). Thay thế cờ auto-complete ở trên.
+  SCHEDULER_MEETING_STATUS_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_ENABLED: Joi.boolean().default(false),
   SCHEDULER_NOTIFICATION_REMINDER_CRON: Joi.string().default('0 * * * *'),
 

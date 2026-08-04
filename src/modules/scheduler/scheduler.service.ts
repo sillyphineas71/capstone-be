@@ -43,6 +43,7 @@ export class SchedulerService {
   private readonly crowdAlertEnabled: boolean;
   private readonly gatePairingEnabled: boolean;
   private readonly autoCompleteEnabled: boolean;
+  private readonly meetingStatusEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -110,13 +111,22 @@ export class SchedulerService {
       false,
     );
     // recon B1: cron auto-complete meeting quá end_time (gated default OFF).
+    // ⚠ [F-A] BỊ THAY THẾ bởi SCHEDULER_MEETING_STATUS_ENABLED bên dưới (cron
+    // meeting-status-advance làm CẢ start lẫn complete). Giữ cờ cũ để môi
+    // trường đã set không đổi hành vi đột ngột; bật CẢ HAI là thừa nhưng vô
+    // hại (đều idempotent, endMeeting có lock + check actualEndTime).
     this.autoCompleteEnabled = this.configService.get<boolean>(
       'SCHEDULER_AUTO_COMPLETE_ENABLED',
       false,
     );
+    // F-A (MST-001): cron lật status theo thời gian (start + complete).
+    this.meetingStatusEnabled = this.configService.get<boolean>(
+      'SCHEDULER_MEETING_STATUS_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled}`,
     );
   }
 
@@ -244,10 +254,43 @@ export class SchedulerService {
   }
 
   /**
+   * F-A (MST-001) — lật `meetings.status` theo thời gian, mỗi phút:
+   * `scheduled` → `in_progress` (tới giờ) → `completed` (quá giờ).
+   *
+   * Vì sao EVERY_MINUTE chứ không phải 5 phút như auto-complete cũ: trạng thái
+   * này chặn luồng điểm danh IVSS thời gian thực (`resolveMeeting` lọc theo
+   * status) — trễ 5 phút đầu giờ là 5 phút quẹt mặt bị tính `unmatched`.
+   *
+   * Gate SCHEDULER_ENABLED && SCHEDULER_MEETING_STATUS_ENABLED (default OFF).
+   * KHÔNG ném ra cron (ARCH-02).
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'meeting-status-advance' })
+  async advanceMeetingStatuses(): Promise<void> {
+    if (!this.schedulerEnabled || !this.meetingStatusEnabled) return;
+
+    try {
+      const r = await this.liveMeetingService.advanceMeetingStatuses();
+      this.logger.log(
+        `[Scheduler] meeting-status-advance: started=${r.started} scanned=${r.scanned} completed=${r.completed} skipped=${r.skipped} failed=${r.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] meeting-status-advance failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
    * recon B1 — auto-complete meeting đã quá end_time (reuse
    * LiveMeetingService.endMeeting(), KHÔNG viết lại logic kết thúc phiên).
    * Gate SCHEDULER_ENABLED && SCHEDULER_AUTO_COMPLETE_ENABLED (default OFF).
    * KHÔNG ném ra cron.
+   *
+   * ⚠ [F-A] BỊ THAY THẾ bởi cron `meeting-status-advance` ở trên (làm cả start
+   * lẫn complete). Chỉ giữ cho môi trường đã bật cờ cũ; môi trường mới nên
+   * dùng SCHEDULER_MEETING_STATUS_ENABLED.
    */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'auto-complete-meetings' })
   async autoCompleteMeetings(): Promise<void> {
