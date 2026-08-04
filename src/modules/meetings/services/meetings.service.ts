@@ -344,8 +344,46 @@ export class MeetingsService {
   }
 
   /**
-   * True khi lỗi là unique-violation trên mã họp/mã booking — CHỈ những lỗi này mới
-   * đáng retry. Lỗi nghiệp vụ (ROOM_CONFLICT, CAPACITY_EXCEEDED...) phải ném nguyên.
+   * Sinh mã meeting request duy nhất — ĐỘC LẬP với meetingCode.
+   *
+   * ⚠ Bản cũ dùng lại `meetingCode` làm `requestCode` (chỉ kiểm tồn tại trong
+   * `meetings.meeting_code`, không kiểm trong `meeting_requests.request_code`).
+   * `meeting_requests` không bao giờ bị xoá theo meeting (FK `SET NULL`), nên một
+   * mã đã "trống" ở bảng `meetings` vẫn có thể còn bị chiếm ở `meeting_requests` →
+   * 23505 trên `ux_meeting_requests_code` ngay ở lần tạo đầu tiên trong ngày.
+   * Nay sinh mã riêng theo đúng pattern MAX-seq + kiểm tồn tại như `generateMeetingCode`.
+   */
+  async generateRequestCode(prefix: string): Promise<string> {
+    const fullPrefix = `${prefix}-${this.todayStamp()}-`;
+    const repo = this.dataSource.getRepository(MeetingRequestEntity);
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rows = await repo
+        .createQueryBuilder('r')
+        .select('r.requestCode', 'code')
+        .where('r.requestCode LIKE :prefix', { prefix: `${fullPrefix}%` })
+        .getRawMany<{ code: string }>();
+
+      const next = this.maxSeqOf(
+        rows.map((r) => r.code),
+        fullPrefix,
+      );
+      const code = `${fullPrefix}${String(next + 1 + attempt).padStart(3, '0')}`;
+
+      const exists = await repo
+        .createQueryBuilder('r')
+        .where('r.requestCode = :code', { code })
+        .getCount();
+      if (exists === 0) return code;
+    }
+
+    return `${fullPrefix}${Date.now().toString().slice(-6)}`;
+  }
+
+  /**
+   * True khi lỗi là unique-violation trên mã họp/mã booking/mã request — CHỈ những
+   * lỗi này mới đáng retry. Lỗi nghiệp vụ (ROOM_CONFLICT, CAPACITY_EXCEEDED...) phải
+   * ném nguyên.
    */
   private isCodeConflict(error: unknown): boolean {
     const driverError = (error as { driverError?: { code?: string } })
@@ -355,7 +393,7 @@ export class MeetingsService {
       (error as { driverError?: { constraint?: string } })?.driverError
         ?.constraint ?? '';
     const message = (error as Error)?.message ?? '';
-    return /meetings_code|room_bookings_code|booking_code|meeting_code/i.test(
+    return /meetings_code|room_bookings_code|booking_code|meeting_code|meeting_requests_code|request_code/i.test(
       `${constraint} ${message}`,
     );
   }
@@ -599,6 +637,7 @@ export class MeetingsService {
     // `let` vì vòng retry bên dưới sẽ sinh lại khi đụng unique mã.
     let meetingCode = await this.generateMeetingCode();
     let bookingCode = await this.generateBookingCode();
+    let requestCode = await this.generateRequestCode('MR');
 
     const participantConflictResult = await this.checkParticipantConflicts(
       uniqueParticipantIds.filter((id) => id !== hostId),
@@ -644,7 +683,7 @@ export class MeetingsService {
           );
 
           request = em.create(MeetingRequestEntity, {
-            requestCode: meetingCode,
+            requestCode,
             meetingId: meeting.id,
             requestType: MeetingRequestType.CREATE_MEETING,
             requestedBy: authUser.userId,
@@ -781,6 +820,7 @@ export class MeetingsService {
           );
           meetingCode = await this.generateMeetingCode();
           bookingCode = await this.generateBookingCode();
+          requestCode = await this.generateRequestCode('MR');
           continue;
         }
         this.logger.error(
@@ -1712,26 +1752,39 @@ export class MeetingsService {
     return `BK-${dateStr}-${seq}`;
   }
 
+  /**
+   * ⚠ KHÔNG dùng `count(...) + 1`: hai request đồng thời cùng đọc một `count` → cùng
+   * seq → 23505 trên `ux_meeting_requests_code`. Nay dùng cùng pattern MAX-seq + kiểm
+   * tồn tại như `generateRequestCode`, chạy trong transaction `em` hiện tại.
+   */
   private async generateRequestCodeTransaction(
     em: EntityManager,
     prefix: string,
   ): Promise<string> {
-    const today = new Date();
-    const dateStr =
-      today.getFullYear().toString() +
-      String(today.getMonth() + 1).padStart(2, '0') +
-      String(today.getDate()).padStart(2, '0');
+    const fullPrefix = `${prefix}-${this.todayStamp()}-`;
+    const repo = em.getRepository(MeetingRequestEntity);
 
-    const count = await em.getRepository(MeetingRequestEntity).count({
-      where: {
-        requestedAt: MoreThanOrEqual(
-          new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-        ),
-      },
-    });
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rows = await repo
+        .createQueryBuilder('r')
+        .select('r.requestCode', 'code')
+        .where('r.requestCode LIKE :prefix', { prefix: `${fullPrefix}%` })
+        .getRawMany<{ code: string }>();
 
-    const seq = String(count + 1).padStart(3, '0');
-    return `${prefix}-${dateStr}-${seq}`;
+      const next = this.maxSeqOf(
+        rows.map((r) => r.code),
+        fullPrefix,
+      );
+      const code = `${fullPrefix}${String(next + 1 + attempt).padStart(3, '0')}`;
+
+      const exists = await repo
+        .createQueryBuilder('r')
+        .where('r.requestCode = :code', { code })
+        .getCount();
+      if (exists === 0) return code;
+    }
+
+    return `${fullPrefix}${Date.now().toString().slice(-6)}`;
   }
 
   // ── T009: Core Business Logic ──────────────────────────────────────

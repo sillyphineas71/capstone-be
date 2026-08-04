@@ -37,6 +37,13 @@ describe('QueryFailedFilter.mapUniqueViolation', () => {
     expect(r.message).not.toContain('phòng ban');
   });
 
+  it('ux_meeting_requests_code → REQUEST_CODE_CONFLICT, KHÔNG phải trung tính', () => {
+    const r = QueryFailedFilter.mapUniqueViolation('ux_meeting_requests_code');
+    expect(r.code).toBe('REQUEST_CODE_CONFLICT');
+    expect(r.field).toBe('requestCode');
+    expect(r.message).not.toContain('phòng ban');
+  });
+
   it('constraint lạ → mã trung tính, KHÔNG đoán bừa sang department', () => {
     const r = QueryFailedFilter.mapUniqueViolation('ux_something_else');
     expect(r.code).toBe('RESOURCE_ALREADY_EXISTS');
