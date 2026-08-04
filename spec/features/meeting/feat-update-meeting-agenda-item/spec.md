@@ -18,6 +18,7 @@
 | :--- | :--- | :--- |
 | 2026-07-17 | Tạo spec lần đầu cho UC-MM-10 (UC-28 Chỉnh sửa agenda). Quyết định kiến trúc: giữ PUT atomic-replace (UC-MM-09) và bổ sung PATCH single-item (hybrid, theo lựa chọn người dùng) | Toàn bộ file |
 | 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path đã đặc tả ở mục 9.1 của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
+| 2026-08-04 | Đồng bộ với fix UC-MM-09 (2026-08-04): nới rule chỉnh sửa agenda item cho phép cả `pending_approval` lẫn `scheduled` (trước đây chỉ `scheduled`, khiến agenda của meeting nhân viên tạo — luôn ở pending_approval chờ duyệt — không thể chỉnh sửa được). Vẫn chặn in_progress/completed/cancelled. | Mục Feature Summary, Preconditions, FR-010/011/017, BR2, bảng lỗi |
 
 ## Hướng dẫn viết EARS Requirements
 
@@ -45,7 +46,7 @@ Sau khi phân tích, đội ngũ đã quyết định theo hướng **Hybrid**: 
 
 ### 1.2 Mục tiêu
 
-Cho phép Host/Organizer/Admin (có quyền) chỉnh sửa **một** agenda item cụ thể của một meeting đang `scheduled`, mà không cần gửi lại toàn bộ danh sách agenda.
+Cho phép Host/Organizer/Admin (có quyền) chỉnh sửa **một** agenda item cụ thể của một meeting đang `pending_approval` hoặc `scheduled`, mà không cần gửi lại toàn bộ danh sách agenda.
 
 ### 1.3 Giá trị mang lại
 
@@ -87,7 +88,7 @@ Xem mục 18 (Clarifications Needed) — tất cả điểm mơ hồ đã đư�
 - Phải đăng nhập hợp lệ.
 - Write: `meetings.organizer_id` hoặc `meetings.host_id`, hoặc admin có permission `meeting.agenda.write`.
 - Meeting phải tồn tại, không bị xóa mềm.
-- Meeting phải ở trạng thái `scheduled`.
+- Meeting phải ở trạng thái `pending_approval` hoặc `scheduled`.
 - `agendaId` trong path phải thuộc đúng `meetingId` trong path.
 
 ---
@@ -99,7 +100,7 @@ Xem mục 18 (Clarifications Needed) — tất cả điểm mơ hồ đã đư�
 | PRE1 | Người dùng đã đăng nhập hợp lệ, JWT còn hiệu lực. |
 | PRE2 | Người dùng có quyền write (organizer/host/admin có permission `meeting.agenda.write`). |
 | PRE3 | Meeting tồn tại, không bị xóa mềm. |
-| PRE4 | Meeting đang ở trạng thái `scheduled`. |
+| PRE4 | Meeting đang ở trạng thái `pending_approval` hoặc `scheduled`. |
 | PRE5 | Meeting có `start_time`/`end_time` hợp lệ (`end_time > start_time`). |
 | PRE6 | Agenda item với `agendaId` tồn tại và thuộc `meetingId`. |
 
@@ -158,9 +159,9 @@ FR-009: WHEN PATCH và PUT /agendas (UC-MM-09) được gọi đồng thời tr�
 ### 6.3 State-driven Requirements
 
 ```text
-FR-010: WHILE meeting đang ở trạng thái scheduled, THE system SHALL cho phép PATCH agenda item.
+FR-010: WHILE meeting đang ở trạng thái pending_approval hoặc scheduled, THE system SHALL cho phép PATCH agenda item.
 
-FR-011: WHILE meeting đang ở trạng thái pending_approval, in_progress, completed, cancelled, THE system SHALL chặn PATCH agenda item (đồng nhất BR2/BR7 của UC-MM-09).
+FR-011: WHILE meeting đang ở trạng thái in_progress, completed, cancelled, THE system SHALL chặn PATCH agenda item (đồng nhất BR2/BR7 của UC-MM-09).
 ```
 
 ### 6.4 Optional Feature Requirements
@@ -180,7 +181,7 @@ FR-015: IF meeting không tồn tại hoặc đã bị xóa mềm, THEN THE syst
 
 FR-016: IF agendaId không tồn tại hoặc không thuộc meetingId trong path, THEN THE system SHALL trả 404 AGENDA_ITEM_NOT_FOUND.
 
-FR-017: IF meeting không ở trạng thái scheduled, THEN THE system SHALL trả 409 AGENDA_MEETING_STATUS_BLOCKED.
+FR-017: IF meeting không ở trạng thái pending_approval hoặc scheduled, THEN THE system SHALL trả 409 AGENDA_MEETING_STATUS_BLOCKED.
 
 FR-018: IF meeting.start_time hoặc end_time null, hoặc end_time <= start_time, THEN THE system SHALL trả 409 MEETING_TIME_INVALID_FOR_AGENDA.
 
@@ -213,7 +214,7 @@ FR-029: IF một điều kiện validation thất bại, THEN THE system SHALL t
 |---|---|---|
 | FR-001..003 | Ubiquitous | Partial update, field whitelist |
 | FR-004..009 | Event-driven | Order shift, owner/duration revalidate, audit, lock |
-| FR-010..011 | State-driven | Chỉ scheduled |
+| FR-010..011 | State-driven | pending_approval + scheduled |
 | FR-012 | Optional | Notification deferred |
 | FR-013..029 | Unwanted Behavior | Error handling đầy đủ |
 
@@ -224,7 +225,7 @@ FR-029: IF một điều kiện validation thất bại, THEN THE system SHALL t
 | ID | Mô tả |
 |---|---|
 | BR1 | Chỉ Host/Organizer (`meetings.host_id`/`meetings.organizer_id`) hoặc Admin có permission `meeting.agenda.write` được PATCH. Dùng chung permission với UC-MM-09, không tách riêng `meeting.agenda.update`. |
-| BR2 | Chỉ cho phép PATCH khi `meeting.status = scheduled`. |
+| BR2 | Chỉ cho phép PATCH khi `meeting.status` là `pending_approval` hoặc `scheduled`. |
 | BR3 | PATCH là partial update — field không gửi trong body giữ nguyên giá trị cũ trong DB. |
 | BR4 | Không cho phép PATCH các field runtime (`status`, `actualDurationMinutes`, `resultNote`) — thuộc in-meeting feature, ngoài phạm vi UC-MM-10. |
 | BR5 | `agendaOrder` khi thay đổi sẽ kích hoạt renormalize toàn bộ danh sách item của meeting đó (dịch chuyển các item nằm giữa vị trí cũ và vị trí mới). |
@@ -263,7 +264,7 @@ FR-029: IF một điều kiện validation thất bại, THEN THE system SHALL t
 | Agenda item không tồn tại/không thuộc meeting | `AGENDA_ITEM_NOT_FOUND` | 404 | 3 |
 | User không có quyền write | `AGENDA_WRITE_FORBIDDEN` | 403 | 4 |
 | `start_time`/`end_time` invalid | `MEETING_TIME_INVALID_FOR_AGENDA` | 409 | 5 |
-| Meeting không ở `scheduled` | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 6 |
+| Meeting không ở `pending_approval`/`scheduled` | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 6 |
 | `title` rỗng sau trim (nếu có) | `AGENDA_TITLE_REQUIRED` | 422 | 7 |
 | `title` > 255 ký tự (nếu có) | `AGENDA_TITLE_TOO_LONG` | 422 | 7 |
 | `description` > 2000 ký tự (nếu có) | `AGENDA_DESCRIPTION_TOO_LONG` | 422 | 7 |
@@ -389,7 +390,7 @@ PATCH phải thực hiện trong một database transaction, **dùng chung lock 
 
 1. **BEGIN TRANSACTION**
 2. Load meeting với `pessimistic_write` lock (cùng cơ chế PUT dùng) — đảm bảo PATCH/DELETE/PUT loại trừ lẫn nhau trên cùng meeting
-3. Validate: meeting tồn tại, không deleted, `start_time`/`end_time` hợp lệ, status = `scheduled`
+3. Validate: meeting tồn tại, không deleted, `start_time`/`end_time` hợp lệ, status ∈ {`pending_approval`, `scheduled`}
 4. Validate: user có quyền write
 5. Load agenda item theo `id = agendaId AND meeting_id = meetingId`; nếu không có → 404 `AGENDA_ITEM_NOT_FOUND`
 6. Validate body không rỗng, không chứa field ngoài whitelist
@@ -417,7 +418,7 @@ PATCH phải thực hiện trong một database transaction, **dùng chung lock 
 | 404 | `MEETING_NOT_FOUND` | meetingId sai/deleted |
 | 404 | `AGENDA_ITEM_NOT_FOUND` | agendaId sai hoặc không thuộc meeting |
 | 403 | `AGENDA_WRITE_FORBIDDEN` | Không có quyền write |
-| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở `scheduled` |
+| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở `pending_approval`/`scheduled` |
 | 409 | `MEETING_TIME_INVALID_FOR_AGENDA` | start/end time invalid |
 | 422 | `AGENDA_TITLE_REQUIRED` | Title rỗng sau trim |
 | 422 | `AGENDA_TITLE_TOO_LONG` | Title > 255 |
@@ -632,7 +633,7 @@ OOS-005: THE system SHALL NOT cho phép agendaId thuộc meeting khác được 
 | Audit | FR-007 | AC-001 | BR8 | - |
 | No-op | FR-008 | AC-013 | BR12 | - |
 | Shared lock với PUT | FR-009 | AC-014 | BR9 | - |
-| Scheduled only | FR-010, FR-011, FR-017 | AC-008 | BR2 | AGENDA_MEETING_STATUS_BLOCKED |
+| Pending_approval + scheduled only | FR-010, FR-011, FR-017 | AC-008 | BR2 | AGENDA_MEETING_STATUS_BLOCKED |
 | Unauthenticated | FR-013 | AC-005 | - | UNAUTHORIZED |
 | Write forbidden | FR-014 | AC-004 | BR1 | AGENDA_WRITE_FORBIDDEN |
 | Meeting not found | FR-015 | - | - | MEETING_NOT_FOUND |

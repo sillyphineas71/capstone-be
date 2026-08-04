@@ -17,6 +17,7 @@ import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
+import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 
 describe('MeetingsService.deleteAgendaItem', () => {
   let service: MeetingsService;
@@ -90,6 +91,9 @@ describe('MeetingsService.deleteAgendaItem', () => {
         .fn()
         .mockResolvedValue({ roles: [], permissions: [] }),
     } as unknown as jest.Mocked<AuthzReadRepository>;
+    const faceProvisioningService = {
+      deprovisionMeeting: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<FaceProvisioningService>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -98,6 +102,7 @@ describe('MeetingsService.deleteAgendaItem', () => {
         { provide: WarningTokenUtil, useValue: warningTokenUtil },
         { provide: NotificationsService, useValue: notificationsService },
         { provide: AuthzReadRepository, useValue: authzRepo },
+        { provide: FaceProvisioningService, useValue: faceProvisioningService },
       ],
     }).compile();
 
@@ -321,7 +326,6 @@ describe('MeetingsService.deleteAgendaItem', () => {
     MeetingStatus.COMPLETED,
     MeetingStatus.CANCELLED,
     MeetingStatus.IN_PROGRESS,
-    MeetingStatus.PENDING_APPROVAL,
   ])('[TC-09] rejects delete when meeting status is %s', async (status) => {
     meetingStatus = status;
     const item = allItems[0];
@@ -332,6 +336,19 @@ describe('MeetingsService.deleteAgendaItem', () => {
     await expect(
       service.deleteAgendaItem(meetingId, item.id, organizerId),
     ).rejects.toMatchObject({ message: 'AGENDA_MEETING_STATUS_BLOCKED' });
+  });
+
+  it('[TC-09b] allows delete when meeting status is pending_approval', async () => {
+    meetingStatus = MeetingStatus.PENDING_APPROVAL;
+    const item = allItems[0];
+
+    const result = await service.deleteAgendaItem(
+      meetingId,
+      item.id,
+      organizerId,
+    );
+
+    expect(result.deleted).toBe(true);
   });
 
   it('[TC-10] writes an audit log with a full snapshot and a null new value', async () => {

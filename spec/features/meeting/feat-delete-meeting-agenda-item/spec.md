@@ -19,6 +19,7 @@
 | :--- | :--- | :--- |
 | 2026-07-17 | Tạo spec lần đầu cho UC-MM-11 (UC-29 Xóa agenda). Hybrid: giữ PUT atomic-replace (UC-MM-09) và bổ sung DELETE single-item | Toàn bộ file |
 | 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path `DELETE /meetings/{meetingId}/agendas/{agendaId}` đã đặc tả ở FR-001 (mục 6.1) của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
+| 2026-08-04 | Đồng bộ với fix UC-MM-09 (2026-08-04): nới rule xóa agenda item cho phép cả `pending_approval` lẫn `scheduled` (trước đây chỉ `scheduled`, khiến agenda của meeting nhân viên tạo — luôn ở pending_approval chờ duyệt — không thể xóa/sửa được). Vẫn chặn in_progress/completed/cancelled. | Mục Feature Summary, Preconditions, FR-007/008/014, BR2, bảng lỗi |
 
 ## Hướng dẫn viết EARS Requirements
 
@@ -44,7 +45,7 @@ Theo quyết định Hybrid (đã áp dụng thống nhất với UC-MM-10): gi�
 
 ### 1.2 Mục tiêu
 
-Cho phép Host/Organizer/Admin (có quyền) xóa **một** agenda item cụ thể khỏi meeting đang `scheduled`, tự động renormalize thứ tự các item còn lại, mà không ảnh hưởng tới field khác của các item đó.
+Cho phép Host/Organizer/Admin (có quyền) xóa **một** agenda item cụ thể khỏi meeting đang `pending_approval` hoặc `scheduled`, tự động renormalize thứ tự các item còn lại, mà không ảnh hưởng tới field khác của các item đó.
 
 ### 1.3 Giá trị mang lại
 
@@ -84,7 +85,7 @@ Xem mục 18 (Clarifications Needed).
 - Phải đăng nhập hợp lệ.
 - Write: `meetings.organizer_id` hoặc `meetings.host_id`, hoặc admin có permission `meeting.agenda.write`.
 - Meeting phải tồn tại, không bị xóa mềm.
-- Meeting phải ở trạng thái `scheduled`.
+- Meeting phải ở trạng thái `pending_approval` hoặc `scheduled`.
 - `agendaId` trong path phải thuộc đúng `meetingId` trong path.
 
 ---
@@ -96,7 +97,7 @@ Xem mục 18 (Clarifications Needed).
 | PRE1 | Người dùng đã đăng nhập hợp lệ, JWT còn hiệu lực. |
 | PRE2 | Người dùng có quyền write (organizer/host/admin có permission `meeting.agenda.write`). |
 | PRE3 | Meeting tồn tại, không bị xóa mềm. |
-| PRE4 | Meeting đang ở trạng thái `scheduled`. |
+| PRE4 | Meeting đang ở trạng thái `pending_approval` hoặc `scheduled`. |
 | PRE5 | Agenda item với `agendaId` tồn tại và thuộc `meetingId`. |
 
 ---
@@ -146,9 +147,9 @@ FR-006: WHEN item bị xóa là item cuối cùng của agenda (agenda trở th�
 ### 6.3 State-driven Requirements
 
 ```text
-FR-007: WHILE meeting đang ở trạng thái scheduled, THE system SHALL cho phép DELETE agenda item.
+FR-007: WHILE meeting đang ở trạng thái pending_approval hoặc scheduled, THE system SHALL cho phép DELETE agenda item.
 
-FR-008: WHILE meeting đang ở trạng thái pending_approval, in_progress, completed, cancelled, THE system SHALL chặn DELETE agenda item (đồng nhất BR2/BR7 của UC-MM-09).
+FR-008: WHILE meeting đang ở trạng thái in_progress, completed, cancelled, THE system SHALL chặn DELETE agenda item (đồng nhất BR2/BR7 của UC-MM-09).
 ```
 
 ### 6.4 Optional Feature Requirements
@@ -168,7 +169,7 @@ FR-012: IF meeting không tồn tại hoặc đã bị xóa mềm, THEN THE syst
 
 FR-013: IF agendaId không tồn tại hoặc không thuộc meetingId trong path, THEN THE system SHALL trả 404 AGENDA_ITEM_NOT_FOUND. Áp dụng cho cả trường hợp gọi DELETE lần thứ hai trên cùng agendaId đã bị xóa trước đó (idempotency: lần đầu 200, lần sau 404 — không coi là thành công ngầm).
 
-FR-014: IF meeting không ở trạng thái scheduled, THEN THE system SHALL trả 409 AGENDA_MEETING_STATUS_BLOCKED.
+FR-014: IF meeting không ở trạng thái pending_approval hoặc scheduled, THEN THE system SHALL trả 409 AGENDA_MEETING_STATUS_BLOCKED.
 
 FR-015: IF transaction thất bại trong quá trình xóa/renormalize, THEN THE system SHALL rollback toàn bộ, item và agenda_order của các item khác giữ nguyên như trước khi xóa.
 
@@ -181,7 +182,7 @@ FR-016: IF một điều kiện validation thất bại, THEN THE system SHALL t
 |---|---|---|
 | FR-001..003 | Ubiquitous | Hard delete + renormalize |
 | FR-004..006 | Event-driven | Audit, shared lock, empty agenda |
-| FR-007..008 | State-driven | Chỉ scheduled |
+| FR-007..008 | State-driven | pending_approval + scheduled |
 | FR-009 | Optional | Notification deferred |
 | FR-010..016 | Unwanted Behavior | Error handling đầy đủ |
 
@@ -192,7 +193,7 @@ FR-016: IF một điều kiện validation thất bại, THEN THE system SHALL t
 | ID | Mô tả |
 |---|---|
 | BR1 | Chỉ Host/Organizer (`meetings.host_id`/`meetings.organizer_id`) hoặc Admin có permission `meeting.agenda.write` được DELETE. Dùng chung permission với UC-MM-09/UC-MM-10. |
-| BR2 | Chỉ cho phép DELETE khi `meeting.status = scheduled`. |
+| BR2 | Chỉ cho phép DELETE khi `meeting.status` là `pending_approval` hoặc `scheduled`. |
 | BR3 | Xóa là hard delete, không có soft-delete/`deleted_at` trên `meeting_agendas`. |
 | BR4 | Sau khi xóa, `agenda_order` của các item còn lại được renormalize liên tục 1..N (không gap). |
 | BR5 | Mọi thao tác xóa phải ghi audit log riêng biệt (`action_type = 'agenda_item_deleted'`), khác với `'agenda_saved'` của PUT và `'agenda_item_updated'` của PATCH. |
@@ -223,7 +224,7 @@ Endpoint DELETE không có request body — không cần DTO body validation.
 | Meeting không tồn tại/deleted | `MEETING_NOT_FOUND` | 404 | 2 |
 | Agenda item không tồn tại/không thuộc meeting/đã bị xóa trước đó | `AGENDA_ITEM_NOT_FOUND` | 404 | 3 |
 | User không có quyền write | `AGENDA_WRITE_FORBIDDEN` | 403 | 4 |
-| Meeting không ở `scheduled` | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 5 |
+| Meeting không ở `pending_approval`/`scheduled` | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 5 |
 
 ### 8.3 Normalization
 
@@ -269,8 +270,8 @@ Không có request body.
 ```json
 {
   "code": "AGENDA_MEETING_STATUS_BLOCKED",
-  "message": "Chỉ có thể chỉnh sửa chương trình họp khi cuộc họp đang ở trạng thái Đã lên lịch.",
-  "details": { "meetingId": "uuid", "currentStatus": "cancelled", "allowedStatus": "scheduled" }
+  "message": "Chỉ có thể chỉnh sửa chương trình họp khi cuộc họp đang chờ duyệt hoặc đã lên lịch.",
+  "details": { "meetingId": "uuid", "currentStatus": "cancelled", "allowedStatus": ["pending_approval", "scheduled"] }
 }
 ```
 
@@ -307,7 +308,7 @@ DELETE phải thực hiện trong một database transaction, **dùng chung lock
 
 1. **BEGIN TRANSACTION**
 2. Load meeting với `pessimistic_write` lock (cùng cơ chế PUT/PATCH dùng)
-3. Validate: meeting tồn tại, không deleted, status = `scheduled`
+3. Validate: meeting tồn tại, không deleted, status ∈ {`pending_approval`, `scheduled`}
 4. Validate: user có quyền write
 5. Load agenda item theo `id = agendaId AND meeting_id = meetingId`; nếu không có → 404 `AGENDA_ITEM_NOT_FOUND`
 6. Snapshot dữ liệu item (cho audit `old_value_json`)
@@ -331,7 +332,7 @@ DELETE phải thực hiện trong một database transaction, **dùng chung lock
 | 404 | `MEETING_NOT_FOUND` | meetingId sai/deleted |
 | 404 | `AGENDA_ITEM_NOT_FOUND` | agendaId sai, không thuộc meeting, hoặc đã bị xóa trước đó |
 | 403 | `AGENDA_WRITE_FORBIDDEN` | Không có quyền write |
-| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở `scheduled` |
+| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở `pending_approval`/`scheduled` |
 | 500 | `INTERNAL_ERROR` | Lỗi server |
 
 ---
@@ -427,6 +428,11 @@ AC-011:
 Given meeting ở trạng thái in_progress,
 When Host gửi DELETE agenda item,
 Then hệ thống trả 409 AGENDA_MEETING_STATUS_BLOCKED (đồng nhất FR-013 của UC-MM-09 — không cho chỉnh sửa agenda khi đang họp).
+
+AC-011a:
+Given meeting ở trạng thái pending_approval,
+When Host gửi DELETE agenda item,
+Then hệ thống xóa thành công (200), item bị xóa (đồng nhất BR2 đã nới ngày 2026-08-04).
 ```
 
 ### 15.5 Concurrency Cases
@@ -528,7 +534,7 @@ OOS-005: THE system SHALL NOT khôi phục lại item đã xóa (không có API 
 | Audit | FR-004 | AC-001 | BR5 | - |
 | Shared lock | FR-005 | AC-012, AC-013 | BR6 | - |
 | Empty agenda cho phép | FR-006 | AC-002 | BR9 | - |
-| Scheduled only | FR-007, FR-008, FR-014 | AC-009, AC-010, AC-011 | BR2 | AGENDA_MEETING_STATUS_BLOCKED |
+| Pending_approval + scheduled only | FR-007, FR-008, FR-014 | AC-009, AC-010, AC-011, AC-011a | BR2 | AGENDA_MEETING_STATUS_BLOCKED |
 | Notification deferred | FR-009 | - | - | - |
 | Unauthenticated | FR-010 | AC-005 | - | UNAUTHORIZED |
 | Write forbidden | FR-011 | AC-004 | BR1 | AGENDA_WRITE_FORBIDDEN |

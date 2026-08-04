@@ -22,6 +22,7 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
+import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 
 describe('MeetingsService.updateAgendaItem', () => {
   let service: MeetingsService;
@@ -97,6 +98,9 @@ describe('MeetingsService.updateAgendaItem', () => {
         .fn()
         .mockResolvedValue({ roles: [], permissions: [] }),
     } as unknown as jest.Mocked<AuthzReadRepository>;
+    const faceProvisioningService = {
+      deprovisionMeeting: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<FaceProvisioningService>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -105,6 +109,7 @@ describe('MeetingsService.updateAgendaItem', () => {
         { provide: WarningTokenUtil, useValue: warningTokenUtil },
         { provide: NotificationsService, useValue: notificationsService },
         { provide: AuthzReadRepository, useValue: authzRepo },
+        { provide: FaceProvisioningService, useValue: faceProvisioningService },
       ],
     }).compile();
 
@@ -430,6 +435,20 @@ describe('MeetingsService.updateAgendaItem', () => {
     await expect(
       service.updateAgendaItem(meetingId, currentItem.id, dto, organizerId),
     ).rejects.toMatchObject({ message: 'AGENDA_MEETING_STATUS_BLOCKED' });
+  });
+
+  it('allows update when the meeting is pending_approval', async () => {
+    meetingStatus = MeetingStatus.PENDING_APPROVAL;
+    const dto: UpdateAgendaItemDto = { title: 'Updated while pending' };
+
+    const result = await service.updateAgendaItem(
+      meetingId,
+      currentItem.id,
+      dto,
+      organizerId,
+    );
+
+    expect(result.title).toBe('Updated while pending');
   });
 
   it('[AC-004] rejects a regular participant (not organizer/host/admin)', async () => {

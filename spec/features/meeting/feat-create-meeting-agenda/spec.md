@@ -20,6 +20,7 @@
 | 2026-06-15 | Cập nhật spec theo kết quả clarify: idempotency, validation order, host resolution, max items, error codes, ACs bổ sung, GET metadata, in_progress lock, notification deferred | Các mục 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 |
 | 2026-06-15 | Fix consistency Round 3: GET JSON mục 9.1 (meetingStatus enum, durationStatus tách riêng, xóa duplicate key), bảng 8.2 đồng bộ thứ tự priority với FR-033, edge cases mục 16 (hard limit + external participant), thêm AC-016/AC-026 Given/When/Then, cập nhật traceability | Mục 8.2, 9.1, 15.6, 15.7, 16, 19 |
 | 2026-07-26 | Đính chính hiện trạng (BE-06): code controller từng khai route thiếu prefix `meetings/` (chạy nhầm ở root path, vd `:meetingId/agendas` thay vì `meetings/:meetingId/agendas`), đã sửa lại `meetings.controller.ts` ngày 2026-07-26 cho khớp đúng path đã đặc tả ở mục 9.1/9.2 của spec này. Spec không thay đổi nội dung, chỉ code được sửa. | Ghi chú, không đổi nội dung đặc tả |
+| 2026-08-04 | Fix bug: nhân viên tạo meeting (cần duyệt) nhập agenda ngay trong wizard tạo họp nhưng agenda bị mất trắng vì meeting mới tạo ở trạng thái `pending_approval`, trong khi rule cũ chỉ cho ghi agenda khi `scheduled`. Nới rule write agenda cho phép cả `pending_approval` lẫn `scheduled` (đồng bộ với convention đã dùng ở updateMeetingTime/updateMeetingRoom/participants — các thao tác chuẩn bị meeting trước khi duyệt). Vẫn chặn `in_progress`, `cancelled`, `completed`. | FR-011, FR-012, FR-020, mục 8.2 (bảng lỗi), 9.1 (isLockedForEditing) |
 
 ## Hướng dẫn viết EARS Requirements
 
@@ -180,9 +181,9 @@ FR-010: WHEN Host/Organizer gửi request PUT agendas với items chứa id khô
 ### 6.3 State-driven Requirements
 
 `	ext
-FR-011: WHILE meeting đang ở trạng thái scheduled, THE system SHALL cho phép Host/Organizer thực hiện thao tác write agenda.
+FR-011: WHILE meeting đang ở trạng thái pending_approval hoặc scheduled, THE system SHALL cho phép Host/Organizer thực hiện thao tác write agenda.
 
-FR-012: WHILE meeting đang ở trạng thái pending_approval, cancelled, completed, THE system SHALL chặn mọi thao tác write agenda.
+FR-012: WHILE meeting đang ở trạng thái cancelled, completed, THE system SHALL chặn mọi thao tác write agenda.
 
 FR-013: WHILE meeting đang ở trạng thái in_progress, THE system SHALL chặn write agenda (out-of-scope cho feature hiện tại; có thể mở ở feature sau).
 
@@ -206,7 +207,7 @@ FR-018: IF người dùng không có quyền write (không phải organizer, hos
 
 FR-019: IF meeting không tồn tại hoặc đã bị xóa mềm, THEN THE system SHALL trả về 404 Not Found.
 
-FR-020: IF meeting không ở trạng thái scheduled, THEN THE system SHALL trả về 409 Conflict và message: "Chỉ có thể chỉnh sửa chương trình họp khi cuộc họp đang ở trạng thái Đã lên lịch."
+FR-020: IF meeting không ở trạng thái pending_approval hoặc scheduled, THEN THE system SHALL trả về 409 Conflict với mã AGENDA_MEETING_STATUS_BLOCKED.
 
 FR-021: IF request PUT agendas có items missing hoặc items = null, THEN THE system SHALL trả về 400 với mã `AGENDA_ITEMS_REQUIRED`. Mảng items rỗng (được chấp nhận = clear agenda).
 
@@ -279,7 +280,7 @@ FR-033: IF một điều kiện business validation thất bại, THEN THE syste
 | ID | Mô tả |
 |---|---|
 | BR1 | Host/Organizer có toàn quyền write agenda. Participants chỉ có quyền read. |
-| BR2 | Chỉ cho phép write agenda khi meeting status là scheduled. |
+| BR2 | Chỉ cho phép write agenda khi meeting status là pending_approval hoặc scheduled. |
 | BR3 | Tổng plannedDurationMinutes của tất cả item không được vượt quá meeting duration (từ start_time đến end_time). |
 | BR4 | ownerId phải là internal participant của meeting (meeting_participants.user_id). Không hỗ trợ external participant làm owner vì FK đến users.id. |
 | BR5 | agenda_order được backend normalize theo thứ tự array trong request (1, 2, 3...). Không cho phép client tự đặt order tùy ý. |
@@ -327,7 +328,7 @@ FR-033: IF một điều kiện business validation thất bại, THEN THE syste
 | Meeting không tồn tại hoặc deleted | `MEETING_NOT_FOUND` | 404 | 3 |
 | User không có quyền read/write | `AGENDA_READ_FORBIDDEN` / `AGENDA_WRITE_FORBIDDEN` | 403 | 4 |
 | `start_time` hoặc `end_time` null, hoặc `end_time <= start_time` | `MEETING_TIME_INVALID_FOR_AGENDA` | 409 | 5 |
-| Meeting không ở `scheduled` (write) | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 6 |
+| Meeting không ở `pending_approval`/`scheduled` (write) | `AGENDA_MEETING_STATUS_BLOCKED` | 409 | 6 |
 | items.length > 50 | `AGENDA_ITEM_LIMIT_EXCEEDED` | 422 | 7 |
 | Duplicate item `id` trong request | `AGENDA_DUPLICATE_ITEM_ID` | 422 | 8 |
 | Item `id` không thuộc meeting này | `AGENDA_ITEM_NOT_IN_MEETING` | 422 | 9 |
@@ -490,11 +491,11 @@ Atomic replace toàn bộ agenda list. Host/Organizer gửi danh sách items mon
 `json
 {
   "code": "AGENDA_MEETING_STATUS_BLOCKED",
-  "message": "Chỉ có thể chỉnh sửa chương trình họp khi cuộc họp đang ở trạng thái Đã lên lịch.",
+  "message": "Chỉ có thể chỉnh sửa chương trình họp khi cuộc họp đang chờ duyệt hoặc đã lên lịch.",
   "details": {
     "meetingId": "uuid",
     "currentStatus": "cancelled",
-    "allowedStatus": "scheduled"
+    "allowedStatus": ["pending_approval", "scheduled"]
   }
 }
 `
@@ -578,7 +579,7 @@ PUT /api/v1/meetings/{meetingId}/agendas phải thực hiện trong một databa
 
 1. **BEGIN TRANSACTION**
 2. Load meeting (with lock: SELECT ... FOR UPDATE nếu cần pessimistic lock hoặc dùng optimistic locking)
-3. Validate: meeting tồn tại, không deleted, status = scheduled
+3. Validate: meeting tồn tại, không deleted, status ∈ {pending_approval, scheduled}
 4. Validate: user là organizer/host hoặc có permission meeting.agenda.write
 5. Validate: từng item trong request
    - title không empty, trim, 1-255 chars
@@ -614,7 +615,7 @@ PUT /api/v1/meetings/{meetingId}/agendas phải thực hiện trong một databa
 | 404 | `MEETING_NOT_FOUND` | MeetingId sai hoặc deleted | 3 |
 | 403 | `AGENDA_READ_FORBIDDEN` | User không có quyền read agenda | 4 |
 | 403 | `AGENDA_WRITE_FORBIDDEN` | User không có quyền write agenda | 4 |
-| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở scheduled (write) | 5 |
+| 409 | `AGENDA_MEETING_STATUS_BLOCKED` | Meeting không ở pending_approval/scheduled (write) | 5 |
 | 409 | `MEETING_TIME_INVALID_FOR_AGENDA` | start_time/end_time null hoặc end_time <= start_time | 6 |
 | 422 | `AGENDA_TITLE_REQUIRED` | Title trống sau trim | 7 |
 | 422 | `AGENDA_TITLE_TOO_LONG` | Title > 255 ký tự sau trim | 8 |
@@ -798,8 +799,8 @@ Then hệ thống rollback, không item nào được ghi, agenda giữ nguyên 
 ```text
 AC-017:
 Given một meeting ở trạng thái pending_approval,
-When Host/Organizer gửi PUT agendas,
-Then hệ thống trả về 409 AGENDA_MEETING_STATUS_BLOCKED.
+When Host/Organizer gửi PUT agendas hợp lệ,
+Then hệ thống lưu agenda thành công (200), cho phép Host/Organizer chuẩn bị chương trình họp trước khi meeting được duyệt (đồng nhất với updateMeetingTime/updateMeetingRoom).
 
 AC-018:
 Given Host/Organizer gửi PUT agendas với payload tương đương trạng thái hiện tại (no-op),
@@ -951,8 +952,8 @@ Tất cả clarify high-priority đã được chốt và cập nhật vào spec
 | Audit log | FR-008 | AC-001 | BR12 | - |
 | Meeting event | FR-009 | - | - | - |
 | Item id wrong meeting | FR-010 | AC-014 | BR14 | AGENDA_ITEM_NOT_IN_MEETING |
-| Scheduled only | FR-011 | AC-008, AC-009 | BR2, BR7 | AGENDA_MEETING_STATUS_BLOCKED |
-| Block non-scheduled | FR-012 | AC-008, AC-009 | BR7 | AGENDA_MEETING_STATUS_BLOCKED |
+| Pending_approval + scheduled only | FR-011 | AC-008, AC-009, AC-017 | BR2, BR7 | AGENDA_MEETING_STATUS_BLOCKED |
+| Block cancelled/completed | FR-012 | AC-008, AC-009 | BR7 | AGENDA_MEETING_STATUS_BLOCKED |
 | Block in-progress | FR-013 | - | BR7 | AGENDA_MEETING_STATUS_BLOCKED |
 | Duration > 0 | FR-014 | AC-013 | BR9 | AGENDA_INVALID_DURATION |
 | Notification deferred | FR-015 | - | - | - |
@@ -975,7 +976,7 @@ Tất cả clarify high-priority đã được chốt và cập nhật vào spec
 | No-op detection | FR-032 | AC-018 | BR15 | - |
 | Validation priority | FR-033 | - | BL-02 | - |
 | Items required | FR-021 | AC-019 | BR18 | AGENDA_ITEMS_REQUIRED |
-| Pending approval block | FR-020 | AC-017 | BR7 | AGENDA_MEETING_STATUS_BLOCKED |
+| Pending approval allowed | FR-011, FR-020 | AC-017 | BR7 | - |
 | in_progress GET lock | FR-011, FR-013 | AC-023 | BR7 | - |
 | Audit content | FR-008 | AC-024 | BR12 | - |
 | Item not in meeting | FR-010 | AC-025 | BR14 | AGENDA_ITEM_NOT_IN_MEETING |

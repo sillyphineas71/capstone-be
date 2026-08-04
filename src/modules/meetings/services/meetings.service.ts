@@ -4487,10 +4487,15 @@ export class MeetingsService {
 
   /**
    * Validate meeting status allows agenda editing.
-   * Only 'scheduled' status permits write operations.
+   * 'pending_approval' and 'scheduled' both permit write operations, matching
+   * the same convention as updateMeetingTime/updateMeetingRoom/participants
+   * (organizer can prepare the meeting, including agenda, before approval).
    */
   private validateMeetingStatusForAgendaWrite(meeting: MeetingEntity): void {
-    if (meeting.status !== MeetingStatus.SCHEDULED) {
+    if (
+      meeting.status !== MeetingStatus.PENDING_APPROVAL &&
+      meeting.status !== MeetingStatus.SCHEDULED
+    ) {
       throw new ConflictException('AGENDA_MEETING_STATUS_BLOCKED');
     }
   }
@@ -4556,14 +4561,10 @@ export class MeetingsService {
       totalPlannedDurationMinutes <= meetingDurationMinutes
         ? 'valid'
         : 'overflow';
-    const isLockedForEditing = meeting.status !== MeetingStatus.SCHEDULED;
-    let lockReason: string | null = null;
-    if (isLockedForEditing) {
-      lockReason =
-        meeting.status === MeetingStatus.IN_PROGRESS
-          ? 'MEETING_NOT_SCHEDULED'
-          : 'MEETING_NOT_SCHEDULED';
-    }
+    const isLockedForEditing =
+      meeting.status !== MeetingStatus.PENDING_APPROVAL &&
+      meeting.status !== MeetingStatus.SCHEDULED;
+    const lockReason = isLockedForEditing ? 'MEETING_NOT_SCHEDULED' : null;
 
     return new AgendaListResponseDto({
       meetingId: meeting.id,
