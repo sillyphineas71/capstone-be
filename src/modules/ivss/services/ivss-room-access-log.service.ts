@@ -30,6 +30,7 @@ interface CountRow {
 
 export interface RoomAccessLogQueryOptions {
   date?: string;
+  meetingId?: string;
   page?: number;
   limit?: number;
   search?: string;
@@ -102,6 +103,7 @@ export class IvssRoomAccessLogService {
     options: RoomAccessLogQueryOptions = {},
   ): Promise<RoomAccessLogResponseDto> {
     const day = options.date ?? this.todayStr();
+    const meetingId = options.meetingId ?? null;
     const page = options.page ?? DEFAULT_PAGE;
     const limit = options.limit ?? DEFAULT_LIMIT;
     const search = options.search?.trim() ? options.search.trim() : null;
@@ -143,13 +145,14 @@ export class IvssRoomAccessLogService {
           AND e.event_time >= ($2::date::timestamp AT TIME ZONE '${BUSINESS_TIMEZONE}')
           AND e.event_time <  (($2::date + interval '1 day')::timestamp AT TIME ZONE '${BUSINESS_TIMEZONE}')
           AND ($3::uuid IS NULL OR e.room_id = $3::uuid)
-          AND ($4::text IS NULL OR u.full_name ILIKE '%' || $4::text || '%')`;
+          AND ($4::text IS NULL OR u.full_name ILIKE '%' || $4::text || '%')
+          AND ($5::uuid IS NULL OR e.meeting_id = $5::uuid)`;
     const fromSql = `
          FROM iot_device_events e
          LEFT JOIN users u
                 ON u.id = NULLIF(e.payload_json->>'userId', '')::uuid
          LEFT JOIN rooms r ON r.id = e.room_id`;
-    const filterParams = [FACE_EVENT_TYPE, day, roomId, search];
+    const filterParams = [FACE_EVENT_TYPE, day, roomId, search, meetingId];
 
     // Đếm trên TOÀN BỘ kết quả lọc (không chỉ trang hiện tại) — matched/unmatched phải
     // phản ánh cả ngày, nếu đếm trong trang thì số liệu vô nghĩa khi phân trang.
@@ -183,7 +186,7 @@ export class IvssRoomAccessLogService {
          ${fromSql}
          ${whereSql}
         ORDER BY e.event_time ASC
-        LIMIT $5 OFFSET $6`,
+        LIMIT $6 OFFSET $7`,
       [...filterParams, limit, offset],
     );
 

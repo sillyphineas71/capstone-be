@@ -267,10 +267,11 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
     // rồi AT TIME ZONE chạy ngược chiều → biên lệch +7h SAI HƯỚNG (đã kiểm bằng psql).
     expect(q.sql).not.toMatch(/\$2::date AT TIME ZONE/);
     expect(q.sql).toContain('LEFT JOIN users u');
-    expect(q.params.slice(0, 4)).toEqual([
+    expect(q.params.slice(0, 5)).toEqual([
       'ivss_face_event',
       '2026-07-28',
       ROOM_ID,
+      null,
       null,
     ]);
   });
@@ -322,9 +323,9 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
         date: '2026-07-28',
       });
       const q = captured.find((c) => isEventQuery(c.sql))!;
-      expect(q.sql).toContain('LIMIT $5 OFFSET $6');
-      expect(q.params[4]).toBe(20);
-      expect(q.params[5]).toBe(0);
+      expect(q.sql).toContain('LIMIT $6 OFFSET $7');
+      expect(q.params[5]).toBe(20);
+      expect(q.params[6]).toBe(0);
       expect(r.pagination).toEqual({
         page: 1,
         limit: 20,
@@ -341,8 +342,8 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
         limit: 10,
       });
       const q = captured.find((c) => isEventQuery(c.sql))!;
-      expect(q.params[4]).toBe(10);
-      expect(q.params[5]).toBe(20);
+      expect(q.params[5]).toBe(10);
+      expect(q.params[6]).toBe(20);
       expect(r.pagination).toEqual({
         page: 3,
         limit: 10,
@@ -376,6 +377,43 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       });
       const q = captured.find((c) => isEventQuery(c.sql))!;
       expect(q.params[3]).toBeNull();
+    });
+  });
+
+  // ── meetingId: lọc theo ca họp cụ thể (AND với date, không thay biên ngày) ─
+  describe('meetingId', () => {
+    const MEETING_ID = '11111111-1111-4111-8111-111111111111';
+
+    it('truyền meetingId đúng → SQL nhận param $5 + clause AND với date, không OR', async () => {
+      wire({ events: [evt({ meeting_id: MEETING_ID })] });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+        meetingId: MEETING_ID,
+      });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.sql).toContain(
+        "AND ($5::uuid IS NULL OR e.meeting_id = $5::uuid)",
+      );
+      expect(q.params[4]).toBe(MEETING_ID);
+      expect(r.events[0].meetingId).toBe(MEETING_ID);
+    });
+
+    it('meetingId không tồn tại → mảng rỗng, không lỗi (mock giả lập COUNT/SELECT rỗng)', async () => {
+      wire({ events: [], counts: { total: '0', matched: '0', unmatched: '0' } });
+      const r = await service.getRoomAccessLog(ROOM_ID, {
+        date: '2026-07-28',
+        meetingId: MEETING_ID,
+      });
+      expect(r.events).toEqual([]);
+      expect(r.totalEvents).toBe(0);
+    });
+
+    it('không truyền meetingId → param $5 = null, giữ hành vi cũ (mọi event trong ngày)', async () => {
+      wire({ events: [evt()] });
+      const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
+      const q = captured.find((c) => isEventQuery(c.sql))!;
+      expect(q.params[4]).toBeNull();
+      expect(r.events).toHaveLength(1);
     });
   });
 

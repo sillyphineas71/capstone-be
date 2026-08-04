@@ -42,6 +42,7 @@ export class IvssRoomAccessController {
   async accessLogAll(@Query() query: QueryRoomAccessLogDto) {
     const data = await this.roomAccessLogService.getRoomAccessLog(null, {
       date: query.date,
+      meetingId: query.meetingId,
       page: query.page,
       limit: query.limit,
       search: query.search,
@@ -56,6 +57,7 @@ export class IvssRoomAccessController {
   ) {
     const data = await this.roomAccessLogService.getRoomAccessLog(roomId, {
       date: query.date,
+      meetingId: query.meetingId,
       page: query.page,
       limit: query.limit,
       search: query.search,
