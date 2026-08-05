@@ -332,10 +332,21 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     return rows[0]?.id ?? null;
   }
 
+  /**
+   * Nhận diện từ CẢ 2 nguồn mapping:
+   * - 'ivss'     — person-sync group "1", vòng đời theo cuộc họp.
+   * - 'portrait' — portrait-sync group "USERS", thường trực theo account/ảnh.
+   * Nguồn ghi giữ nguyên source riêng (khác vòng đời xoá); chỉ mở đường đọc.
+   * ORDER BY để mapping mới nhất thắng khi 1 người có cả 2 nguồn (tránh phụ
+   * thuộc thứ tự vật lý của bảng).
+   */
   private async resolveUser(szUid: string): Promise<string | null> {
     const rows: UserRow[] = await this.dataSource.manager.query(
       `SELECT user_id FROM device_user_mappings
-       WHERE device_person_id = $1 AND metadata_json->>'source' = 'ivss' AND deleted_at IS NULL
+       WHERE device_person_id = $1
+         AND metadata_json->>'source' IN ('ivss', 'portrait')
+         AND deleted_at IS NULL
+       ORDER BY last_synced_at DESC NULLS LAST, created_at DESC
        LIMIT 1`,
       [szUid],
     );

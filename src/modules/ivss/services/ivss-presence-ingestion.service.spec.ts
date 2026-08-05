@@ -583,4 +583,34 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       expect(payloadOf().meetingId).toBeNull();
     });
   });
+
+  // ── resolveUser đọc CẢ 2 nguồn mapping (group "1" = ivss, group "USERS" = portrait) ──
+  describe('resolveUser: ivss + portrait', () => {
+    it('user chỉ có mapping source=portrait → vẫn resolve ra userId', async () => {
+      wire();
+      // Mô phỏng DB: chỉ tồn tại hàng source='portrait' → chỉ trả row nếu SQL nhận 'portrait'.
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('FROM device_user_mappings')) {
+          captured.push({ sql, params });
+          return Promise.resolve(
+            sql.includes("'portrait'") ? [{ user_id: 'u-portrait' }] : [],
+          );
+        }
+        return base(sql, params);
+      });
+
+      await service.onFaceEvent(evt());
+
+      expect(payloadOf().userId).toBe('u-portrait');
+      const q = captured.find((c) =>
+        c.sql.includes('FROM device_user_mappings'),
+      )!;
+      expect(q.sql).toContain(
+        "metadata_json->>'source' IN ('ivss', 'portrait')",
+      );
+      // Xác định thứ tự khi 1 user có cả 2 nguồn (không phụ thuộc thứ tự vật lý).
+      expect(q.sql).toContain('ORDER BY last_synced_at DESC NULLS LAST');
+    });
+  });
 });
