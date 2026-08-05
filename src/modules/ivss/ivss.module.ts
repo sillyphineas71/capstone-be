@@ -19,8 +19,10 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
 import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
 import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
+import { IvssDeviceEventSnapshotController } from './controllers/ivss-device-event-snapshot.controller.js';
 import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
 import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
+import { JwtQueryOrHeaderAuthGuard } from '../auth/guards/jwt-query-or-header-auth.guard.js';
 import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
 
 /**
@@ -47,10 +49,15 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     IvssOccupancyController,
     // RAL-001 (Màn 2): nhật ký ra/vào theo phòng — prefix `ivss/rooms`, tách hẳn Màn 1.
     IvssRoomAccessController,
+    // F-F fix: TÁCH RIÊNG khỏi IvssRoomAccessController — route ảnh snapshot cần
+    // JwtQueryOrHeaderAuthGuard (fallback ?token=), 2 route access-log KHÔNG đụng.
+    IvssDeviceEventSnapshotController,
   ],
   providers: [
     ivssBridgeProvider,
     IvssInternalTokenGuard,
+    // F-F fix: guard riêng cho route snapshot (<img src> không gắn được header).
+    JwtQueryOrHeaderAuthGuard,
     // DefaultIvssEventHandler giữ registered (fallback/log), KHÔNG bind token.
     DefaultIvssEventHandler,
     IvssPresenceIngestionService,
