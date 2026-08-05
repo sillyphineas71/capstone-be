@@ -7,10 +7,17 @@ import type {
 } from '../../../common/ports/ivss-event-hook.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
+import { StorageService } from '../../storage/storage.service.js';
+import { saveEventSnapshot } from '../../../common/utils/save-event-snapshot.util.js';
 import {
   IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY,
   type PresenceSkippedReason,
 } from '../constants/zone-presence.constant.js';
+
+/** F-B/F-C: subfolder storage cho snapshot ảnh sự kiện IVSS (unmatched + zone appear). */
+const SNAPSHOT_FOLDER = 'stranger-snapshots';
+/** media_files.related_entity_type cho snapshot lưu từ luồng IVSS ingestion. */
+const SNAPSHOT_RELATED_ENTITY_TYPE = 'ivss_device_event';
 
 interface IdRow {
   id: string;
@@ -81,6 +88,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     private readonly websocketService: WebsocketService,
     private readonly configService: ConfigService,
     private readonly zonePresenceWriter: ZonePresenceWriterService,
+    private readonly storageService: StorageService,
   ) {
     this.realtimeEnabled = this.configService.get<boolean>(
       'IVSS_REALTIME_ENABLED',
@@ -153,6 +161,17 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         if (!chk.valid) presenceSkipped = chk.reason;
       }
 
+      // F-B: identity lạ (unmatched_identity/unmatched_both) + có ảnh → lưu snapshot
+      // (khả năng lạ mặt, đáng giữ ảnh để tra soát). SEC-01 vẫn giữ nguyên: ảnh KHÔNG
+      // bao giờ vào payload_json — chỉ media_files.id (snapshotFileId) đi vào cột riêng.
+      let snapshotFileId: string | null = null;
+      if (
+        matchState === 'unmatched_identity' ||
+        matchState === 'unmatched_both'
+      ) {
+        snapshotFileId = await this.saveSnapshotSafe(evt.imageBase64);
+      }
+
       // SEC-01: KHÔNG imageBase64; szUid metadata-only.
       const payload = {
         szUid,
@@ -174,10 +193,12 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       };
 
       // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
+      // F-B/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí các cột/tham
+      // số cũ (payload_json vẫn param $5, processed_status vẫn param $6).
       const insRows: IdRow[] = await this.dataSource.manager.query(
         `INSERT INTO iot_device_events
-           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
-         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6)
+           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id)
+         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7)
          RETURNING id`,
         [
           deviceId,
@@ -186,6 +207,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
           eventTime,
           JSON.stringify(payload),
           processedStatus,
+          snapshotFileId,
         ],
       );
       const sourceEventId = insRows[0]?.id ?? null;
@@ -322,6 +344,29 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       return { eventTime: t, utcFallback: false };
     }
     return { eventTime: new Date(), utcFallback: true };
+  }
+
+  /**
+   * F-B/F-C: lưu snapshot ảnh (nếu có) qua storageService + media_files — KHÔNG throw
+   * (webhook always-ack #36): lỗi storage/DB chỉ log + trả null, KHÔNG được chặn persist
+   * raw event. Không có ảnh (undefined/rỗng) → null, KHÔNG gọi storage.
+   */
+  private async saveSnapshotSafe(
+    imageBase64: string | null | undefined,
+  ): Promise<string | null> {
+    if (!imageBase64) return null;
+    try {
+      return await saveEventSnapshot(this.dataSource, this.storageService, {
+        imageBase64,
+        folder: SNAPSHOT_FOLDER,
+        relatedEntityType: SNAPSHOT_RELATED_ENTITY_TYPE,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `snapshot save failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+      return null;
+    }
   }
 
   private async resolveBridgeDeviceId(): Promise<string | null> {

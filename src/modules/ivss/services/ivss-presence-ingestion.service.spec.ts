@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { IvssPresenceIngestionService } from './ivss-presence-ingestion.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
+import { StorageService } from '../../storage/storage.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 const MEETING_UUID = '22222222-2222-2222-2222-222222222222';
@@ -23,6 +24,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   let dsMock: any;
   let wsMock: { emitToRoom: jest.Mock };
   let writerMock: any;
+  let storageMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
   const AREA_UUID = '33333333-3333-3333-3333-333333333333';
 
@@ -39,6 +41,8 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       directionMap?: Record<string, unknown> | null;
       directionMapThrows?: boolean;
       presenceMap?: Record<string, unknown> | null; // ZPW-001 channel_presence_zone_map
+      mediaFileId?: string | null; // F-B: id RETURNING của INSERT INTO media_files
+      mediaFileInsertThrows?: boolean;
     } = {},
   ) => {
     captured = [];
@@ -75,6 +79,12 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
           return Promise.reject(new Error('users query boom'));
         return Promise.resolve(over.fullName ?? [{ full_name: 'Alice' }]);
       }
+      // F-B: saveEventSnapshot() INSERT vào media_files (RETURNING id).
+      if (sql.includes('INSERT INTO media_files')) {
+        if (over.mediaFileInsertThrows)
+          return Promise.reject(new Error('media_files boom'));
+        return Promise.resolve([{ id: over.mediaFileId ?? 'media1' }]);
+      }
       if (sql.includes('INSERT INTO iot_device_events')) {
         if (over.insertThrows) return Promise.reject(new Error('db boom'));
         return Promise.resolve([{ id: 'evt1' }]); // QĐ-4: RETURNING id
@@ -86,6 +96,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   const insert = () =>
     captured.find((c) => c.sql.includes('INSERT INTO iot_device_events'));
   const payloadOf = () => JSON.parse(insert()!.params[4]);
+  const snapshotFileIdOf = () => insert()!.params[6];
 
   // IRP-001 (#40): build service với gate realtime ON/OFF (B1 — mirror configService.get bool).
   const build = async (realtime = false) => {
@@ -95,6 +106,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         { provide: DataSource, useValue: dsMock },
         { provide: WebsocketService, useValue: wsMock },
         { provide: ZonePresenceWriterService, useValue: writerMock },
+        { provide: StorageService, useValue: storageMock },
         {
           provide: ConfigService,
           useValue: {
@@ -113,6 +125,14 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     writerMock = {
       resolvePresenceZone: jest.fn().mockResolvedValue({ valid: true }),
       writeAppearEvent: jest.fn().mockResolvedValue({ presenceId: 'zpe1' }),
+    };
+    storageMock = {
+      saveFile: jest.fn().mockResolvedValue({
+        storageKey: 'stranger-snapshots/x.jpg',
+        publicUrl: 'http://localhost:3000/uploads/stranger-snapshots/x.jpg',
+        sizeBytes: 123,
+      }),
+      getDriver: jest.fn().mockReturnValue('local'),
     };
     service = await build(false);
   });
@@ -208,6 +228,80 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     expect(rawPayload).not.toContain('imageBase64');
     expect(rawPayload).not.toContain('SECRETBASE64DATA');
     expect(rawPayload).not.toContain('base64');
+  });
+
+  // ── F-B: snapshot cho unmatched_identity/unmatched_both ──
+  describe('F-B snapshot (unmatched identity)', () => {
+    const withImage = (over: any = {}) =>
+      evt({
+        imageBase64: 'data:image/jpeg;base64,SGVsbG8=',
+        ...over,
+      });
+
+    it('unmatched_identity (szUid lạ) + có ảnh → lưu snapshot, snapshot_file_id khác null', async () => {
+      wire({ user: [] });
+      await service.onFaceEvent(withImage());
+      expect(payloadOf().matchState).toBe('unmatched_identity');
+      expect(storageMock.saveFile).toHaveBeenCalledTimes(1);
+      expect(storageMock.saveFile.mock.calls[0][0]).toMatchObject({
+        folder: 'stranger-snapshots',
+      });
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('unmatched_both (szUid lạ + channel lạ) + có ảnh → lưu snapshot', async () => {
+      wire({ user: [], channelMap: {} });
+      await service.onFaceEvent(withImage());
+      expect(payloadOf().matchState).toBe('unmatched_both');
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('unmatched_location (KHÔNG phải identity/both) + có ảnh → KHÔNG lưu snapshot', async () => {
+      wire({ channelMap: {} }); // user OK, channel lạ → unmatched_location
+      await service.onFaceEvent(withImage());
+      expect(payloadOf().matchState).toBe('unmatched_location');
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('matched + có ảnh → KHÔNG lưu snapshot (F-B chỉ áp dụng unmatched identity/both)', async () => {
+      wire();
+      await service.onFaceEvent(withImage());
+      expect(payloadOf().matchState).toBe('matched');
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('unmatched_identity nhưng KHÔNG có ảnh → KHÔNG gọi storage, snapshot null', async () => {
+      wire({ user: [] });
+      await service.onFaceEvent(evt());
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('storage.saveFile lỗi → KHÔNG throw, raw event vẫn persist, snapshot_file_id null', async () => {
+      wire({ user: [] });
+      storageMock.saveFile.mockRejectedValueOnce(new Error('disk full'));
+      await expect(service.onFaceEvent(withImage())).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('INSERT media_files lỗi → KHÔNG throw, snapshot_file_id null, raw event vẫn persist', async () => {
+      wire({ user: [], mediaFileInsertThrows: true });
+      await expect(service.onFaceEvent(withImage())).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('SEC-01 vẫn giữ nguyên: payload_json KHÔNG chứa base64 dù đã lưu snapshot', async () => {
+      wire({ user: [] });
+      await service.onFaceEvent(withImage());
+      const rawPayload = insert()!.params[4];
+      expect(rawPayload).not.toContain('base64');
+      expect(rawPayload).not.toContain('SGVsbG8');
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
   });
 
   // ── defensive ──
@@ -561,12 +655,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       wire();
       await service.onFaceEvent(evt({ utc: nowIso() }));
       const q = captured.find((c) => c.sql.includes('FROM meetings'))!;
-      for (const s of [
-        'cancelled',
-        'completed',
-        'draft',
-        'pending_approval',
-      ]) {
+      for (const s of ['cancelled', 'completed', 'draft', 'pending_approval']) {
         expect(q.sql).not.toContain(s);
       }
     });
