@@ -18,4 +18,11 @@ export class AssignPermissionsResponseDto {
     type: [String],
   })
   skippedDuplicatedInRequest: string[];
+
+  @ApiProperty({
+    description:
+      'Permission ID được TỰ ĐỘNG thêm vào vì là quyền xem (read) mà 1 quyền thao tác trong request phụ thuộc — luôn là tập con của `assigned`, không âm thầm.',
+    type: [String],
+  })
+  autoAddedDueToDependency: string[];
 }

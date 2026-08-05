@@ -45,6 +45,18 @@ describe('RolePermissionsService', () => {
     isActive: true,
     moduleCode: 'admin',
   };
+  const mockZoneReadPermission = {
+    id: 'zone-read-uuid',
+    permissionCode: 'zones.zone.read',
+    isActive: true,
+    moduleCode: 'zones',
+  };
+  const mockZoneUpdatePermission = {
+    id: 'zone-update-uuid',
+    permissionCode: 'zones.zone.update',
+    isActive: true,
+    moduleCode: 'zones',
+  };
 
   const mockQueryRunner = {
     connect: jest.fn(),
@@ -57,7 +69,7 @@ describe('RolePermissionsService', () => {
 
   beforeEach(async () => {
     roleRepo = { findOne: jest.fn() } as any;
-    permRepo = { findByIds: jest.fn() } as any;
+    permRepo = { find: jest.fn() } as any;
     rpRepo = {
       find: jest.fn(),
       findOne: jest.fn(),
@@ -200,6 +212,56 @@ describe('RolePermissionsService', () => {
 
       expect(result.assigned).toEqual([]);
     });
+
+    it('[BE-2] should auto-add the read permission a write permission depends on', async () => {
+      roleRepo.findOne.mockResolvedValue(mockRole as any);
+      permRepo.find
+        .mockResolvedValueOnce([mockZoneUpdatePermission as any]) // requested lookup by id
+        .mockResolvedValueOnce([mockZoneReadPermission as any]); // dependency lookup by code
+      rpRepo.find.mockResolvedValue([]); // role has neither yet
+      rpRepo.create.mockReturnValue({} as any);
+      mockQueryRunner.manager.save.mockResolvedValue([]);
+
+      const result = await service.assign(
+        'role-uuid',
+        { permissionIds: [mockZoneUpdatePermission.id] },
+        'user-uuid',
+      );
+
+      expect([...result.assigned].sort()).toEqual(
+        [mockZoneUpdatePermission.id, mockZoneReadPermission.id].sort(),
+      );
+      expect(result.autoAddedDueToDependency).toEqual([
+        mockZoneReadPermission.id,
+      ]);
+    });
+
+    it('[BE-2] should not report a dependency as auto-added when requested explicitly', async () => {
+      roleRepo.findOne.mockResolvedValue(mockRole as any);
+      permRepo.find.mockResolvedValueOnce([
+        mockZoneUpdatePermission as any,
+        mockZoneReadPermission as any,
+      ]);
+      rpRepo.find.mockResolvedValue([]);
+      rpRepo.create.mockReturnValue({} as any);
+      mockQueryRunner.manager.save.mockResolvedValue([]);
+
+      const result = await service.assign(
+        'role-uuid',
+        {
+          permissionIds: [
+            mockZoneUpdatePermission.id,
+            mockZoneReadPermission.id,
+          ],
+        },
+        'user-uuid',
+      );
+
+      expect([...result.assigned].sort()).toEqual(
+        [mockZoneUpdatePermission.id, mockZoneReadPermission.id].sort(),
+      );
+      expect(result.autoAddedDueToDependency).toEqual([]);
+    });
   });
 
   describe('revoke', () => {
@@ -211,6 +273,12 @@ describe('RolePermissionsService', () => {
         permissionId: 'perm-uuid',
         permission: mockPermission,
       } as any);
+      rpRepo.find.mockResolvedValue([
+        {
+          permissionId: 'perm-uuid',
+          permission: mockPermission,
+        } as any,
+      ]);
       rpRepo.remove.mockResolvedValue({} as any);
 
       await service.revoke('role-uuid', 'perm-uuid', 'user-uuid');
@@ -218,6 +286,58 @@ describe('RolePermissionsService', () => {
       expect(auditLogs.logAction).toHaveBeenCalledWith(
         expect.objectContaining({ actionType: 'REVOKE_PERMISSION' }),
       );
+    });
+
+    it('[BE-3] should block revoking a read permission still required by an assigned dependent', async () => {
+      roleRepo.findOne.mockResolvedValue(mockRole as any);
+      rpRepo.findOne.mockResolvedValue({
+        id: 'rp-read-uuid',
+        roleId: 'role-uuid',
+        permissionId: mockZoneReadPermission.id,
+        permission: mockZoneReadPermission,
+      } as any);
+      rpRepo.find.mockResolvedValue([
+        {
+          permissionId: mockZoneReadPermission.id,
+          permission: mockZoneReadPermission,
+        } as any,
+        {
+          permissionId: mockZoneUpdatePermission.id,
+          permission: mockZoneUpdatePermission,
+        } as any,
+      ]);
+
+      await expect(
+        service.revoke('role-uuid', mockZoneReadPermission.id, 'user-uuid'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'PERMISSION_STILL_REQUIRED_BY_DEPENDENT',
+            details: { dependentPermissionCode: 'zones.zone.update' },
+          }),
+        }),
+      });
+      expect(rpRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('[BE-3] should allow revoking a read permission once its dependent is already gone', async () => {
+      roleRepo.findOne.mockResolvedValue(mockRole as any);
+      rpRepo.findOne.mockResolvedValue({
+        id: 'rp-read-uuid',
+        roleId: 'role-uuid',
+        permissionId: mockZoneReadPermission.id,
+        permission: mockZoneReadPermission,
+      } as any);
+      rpRepo.find.mockResolvedValue([
+        {
+          permissionId: mockZoneReadPermission.id,
+          permission: mockZoneReadPermission,
+        } as any,
+      ]);
+      rpRepo.remove.mockResolvedValue({} as any);
+
+      await service.revoke('role-uuid', mockZoneReadPermission.id, 'user-uuid');
+      expect(rpRepo.remove).toHaveBeenCalled();
     });
 
     it('[AC-018] should reject revoking admin permission from system role', async () => {
@@ -238,6 +358,9 @@ describe('RolePermissionsService', () => {
         id: 'rp-uuid',
         permission: mockPermission,
       } as any);
+      rpRepo.find.mockResolvedValue([
+        { permissionId: 'perm-uuid', permission: mockPermission } as any,
+      ]);
       rpRepo.remove.mockResolvedValue({} as any);
 
       await service.revoke('sysrole-uuid', 'perm-uuid', 'user-uuid');
