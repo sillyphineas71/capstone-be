@@ -200,6 +200,57 @@ describe('MediaFilesService (REC-006)', () => {
     expect(r.mimeType).toBe('video/mp4');
   });
 
+  // REGRESSION (2026-08-05, feat-attach-meeting-agenda-document): storageProvider
+  // 'local' che 2 quy ước — ffmpeg video (storage_key tuyệt đối dưới
+  // RECORDING_STORAGE_PATH) vs upload qua StorageService (storage_key tương đối,
+  // vd agenda attachment/audio track khi STORAGE_DRIVER=local). Trước fix, nhánh
+  // thứ 2 luôn bị xử lý như ffmpeg-video → ENOENT/500 dù file tồn tại thật.
+  it('resolvePlayback: local + storage_key TƯƠNG ĐỐI (StorageService upload) → resolve qua StorageService, KHÔNG đụng RECORDING_STORAGE_PATH', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({
+        storageProvider: 'local',
+        storageKey: 'agenda-attachments/f1.pdf',
+        fileType: 'document',
+        mimeType: 'application/pdf',
+      }),
+    );
+    const r = await service.resolvePlayback('f1');
+    expect(r.kind).toBe('remote');
+    if (r.kind !== 'remote') throw new Error('expected remote');
+    expect(r.storageKey).toBe('agenda-attachments/f1.pdf');
+    expect(r.size).toBe(2048);
+    expect(storageServiceMock.getObjectSize).toHaveBeenCalledWith(
+      'agenda-attachments/f1.pdf',
+    );
+    expect(fsMock.realpathSync).not.toHaveBeenCalled();
+    expect(fsMock.existsSync).not.toHaveBeenCalled();
+  });
+
+  it('resolvePlayback: local + storage_key tương đối nhưng file đã bị xóa khỏi ổ đĩa → 404 (không lộ lỗi hạ tầng)', async () => {
+    repoMock.findOne.mockResolvedValue(
+      baseRow({
+        storageProvider: 'local',
+        storageKey: 'agenda-attachments/gone.pdf',
+      }),
+    );
+    storageServiceMock.getObjectSize.mockRejectedValue(
+      new Error('ENOENT: no such file or directory'),
+    );
+    await expect(service.resolvePlayback('f1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('resolvePlayback: local + storage_key tuyệt đối nhưng RECORDING_STORAGE_PATH chưa từng được tạo → 404 sạch thay vì crash 500', async () => {
+    repoMock.findOne.mockResolvedValue(baseRow());
+    fsMock.realpathSync.mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    await expect(service.resolvePlayback('f1')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
   // REGRESSION (2026-07-31): sau khi deploy đổi STORAGE_DRIVER=s3, mọi audio upload được
   // lưu với storageProvider='s3'. Bản cũ chỉ chấp nhận LOCAL nên playback + secure-download
   // 404 với TOÀN BỘ file, dù object vẫn nằm nguyên trong bucket.

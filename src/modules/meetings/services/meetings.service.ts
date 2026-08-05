@@ -3512,6 +3512,8 @@ export class MeetingsService {
             siteName: room.siteName ?? null,
             areaName: room.areaName ?? null,
             location: room.locationDescription ?? null,
+            hasMicrophone: room.hasMicrophone,
+            allowRecording: room.allowRecording,
           })
         : null,
       organizer: new DetailUserDto({

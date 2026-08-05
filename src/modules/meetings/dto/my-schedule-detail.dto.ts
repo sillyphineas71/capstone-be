@@ -33,6 +33,8 @@ export class DetailRoomDto {
   siteName: string | null;
   areaName: string | null;
   location: string | null;
+  hasMicrophone: boolean;
+  allowRecording: boolean;
 
   constructor(data: DetailRoomDto) {
     this.id = data.id;
@@ -41,6 +43,8 @@ export class DetailRoomDto {
     this.siteName = data.siteName;
     this.areaName = data.areaName;
     this.location = data.location;
+    this.hasMicrophone = data.hasMicrophone;
+    this.allowRecording = data.allowRecording;
   }
 }
 

@@ -205,11 +205,50 @@ export class MediaFilesService {
       throw this.notFound();
     }
 
+    // `storageProvider: local` che 2 quy ước ghi file khác nhau:
+    //  - ffmpeg ghi video thẳng ra đĩa (recording-session.service.ts) → storage_key
+    //    là ĐƯỜNG DẪN TUYỆT ĐỐI đã nằm sẵn dưới RECORDING_STORAGE_PATH.
+    //  - Mọi upload qua StorageService (audio track khi STORAGE_DRIVER=local, agenda
+    //    attachment — feat-attach-meeting-agenda-document, minutes attachment, ...)
+    //    → storage_key là KEY TƯƠNG ĐỐI (vd 'agenda-attachments/<uuid>.pdf'), không
+    //    hề nằm dưới RECORDING_STORAGE_PATH. Trước 2026-08-05, nhánh này bị đối xử
+    //    như ffmpeg-video nên mọi file loại thứ 2 ném ENOENT/500 khi tải (agenda
+    //    attachment upload 201 OK nhưng secure-download luôn 500 — không do
+    //    STORAGE_DRIVER=s3 như bug 2026-07-31 mà do lẫn 2 quy ước path khi driver=local).
+    if (!path.isAbsolute(m.storageKey)) {
+      let size: number;
+      try {
+        size = await this.storageService.getObjectSize(m.storageKey);
+      } catch (err) {
+        this.logger.warn(
+          `Local (StorageService) resolve failed for ${m.id} (key=${m.storageKey}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        throw this.notFound();
+      }
+      return {
+        kind: 'remote',
+        storageKey: m.storageKey,
+        size,
+        mimeType: m.mimeType,
+        fileName: m.fileName,
+      };
+    }
+
     const baseDir = this.configService.get<string>(
       'RECORDING_STORAGE_PATH',
       './storage/recordings',
     );
-    const base = fs.realpathSync(path.resolve(baseDir));
+    let base: string;
+    try {
+      base = fs.realpathSync(path.resolve(baseDir));
+    } catch {
+      // Thư mục recordings chưa từng được tạo (chưa có video nào ghi trên môi
+      // trường này) → file chắc chắn không tồn tại, trả 404 sạch thay vì để
+      // realpathSync ném ENOENT chưa bắt (crash 500).
+      throw this.notFound();
+    }
     const resolved = path.resolve(m.storageKey);
     if (!resolved.startsWith(base + path.sep)) {
       throw this.notFound(); // file ngoài storage dir → KHÔNG serve.
