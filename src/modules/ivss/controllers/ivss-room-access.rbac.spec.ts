@@ -35,7 +35,7 @@ describe('IvssRoomAccessController — RBAC metadata (ALS-002)', () => {
     );
   });
 
-  it.each([['accessLogAll'], ['accessLog']])(
+  it.each([['accessLogAll'], ['accessLog'], ['deviceEventSnapshot']])(
     '%s: không tự đặt permission riêng đè lên class (tránh nới quyền ngoài ý muốn)',
     (method) => {
       const handler = (

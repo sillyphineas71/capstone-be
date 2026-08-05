@@ -17,6 +17,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
   let alertMock: any;
   let gateMock: any;
   let pairMock: any;
+  let storageMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
 
   const wire = (
@@ -26,6 +27,8 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       insertThrows?: boolean;
       zoneMap?: Record<string, string>; // channel → zone_uuid (config_json)
       dirMap?: Record<string, string>; // channel → enter/leave/seen
+      mediaFileId?: string | null; // F-D: id RETURNING của INSERT INTO media_files
+      mediaFileInsertThrows?: boolean;
     } = {},
   ) => {
     captured = [];
@@ -47,6 +50,12 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           );
         return Promise.resolve([]);
       }
+      // F-D: saveEventSnapshot() INSERT vào media_files (RETURNING id).
+      if (sql.includes('INSERT INTO media_files')) {
+        if (over.mediaFileInsertThrows)
+          return Promise.reject(new Error('media_files boom'));
+        return Promise.resolve([{ id: over.mediaFileId ?? 'media1' }]);
+      }
       if (sql.includes('INSERT INTO iot_device_events')) {
         if (over.insertThrows) return Promise.reject(new Error('db boom'));
         return Promise.resolve([{ id: 'evt1' }]); // QĐ-6: RETURNING id
@@ -62,6 +71,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
   const update = () =>
     captured.find((c) => c.sql.includes('UPDATE iot_device_events'));
   const payloadOf = () => JSON.parse(insert()!.params[2]);
+  const snapshotFileIdOf = () => insert()!.params[4];
   // channel mặc định 5 map sang zone gate + direction (dùng cho test có ghi gate log).
   const GATE = {
     zoneMap: { '5': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
@@ -79,11 +89,20 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     pairMock = {
       pairForLeaveLog: jest.fn().mockResolvedValue('skipped'),
     };
+    storageMock = {
+      saveFile: jest.fn().mockResolvedValue({
+        storageKey: 'anpr-snapshots/x.jpg',
+        publicUrl: 'http://localhost:3000/uploads/anpr-snapshots/x.jpg',
+        sizeBytes: 123,
+      }),
+      getDriver: jest.fn().mockReturnValue('local'),
+    };
     service = new VehicleResolveService(
       dsMock as DataSource,
       alertMock,
       gateMock,
       pairMock,
+      storageMock,
     );
   });
 
@@ -119,9 +138,10 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
   it('room/meeting NULL: INSERT literal NULL cho room_id/meeting_id', async () => {
     wire();
     await service.onVehicleEvent(evt());
-    // VALUES ($1, NULL, NULL, 'ivss_vehicle_event', ...) — 4 bind params (KHÔNG có room/meeting).
+    // VALUES ($1, NULL, NULL, 'ivss_vehicle_event', ...) — 5 bind params (KHÔNG có
+    // room/meeting; F-D thêm $5=snapshot_file_id ở CUỐI, KHÔNG đổi 4 param đầu).
     expect(insert()!.sql).toMatch(/VALUES \(\$1, NULL, NULL,/);
-    expect(insert()!.params).toHaveLength(4);
+    expect(insert()!.params).toHaveLength(5);
   });
 
   it('resolve query: plate_number + status active + deleted_at IS NULL', async () => {
@@ -193,6 +213,64 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     const p = payloadOf();
     expect(p.plateColor).toBe('white');
     expect(p.vehicleType).toBe('car');
+  });
+
+  // ── F-D: snapshot ANPR ──
+  describe('F-D snapshot', () => {
+    const withImage = (over: any = {}) =>
+      evt({ imageBase64: 'data:image/jpeg;base64,SGVsbG8=', ...over });
+
+    it('có ảnh + matched → lưu snapshot, snapshot_file_id khác null', async () => {
+      wire();
+      await service.onVehicleEvent(withImage());
+      expect(storageMock.saveFile).toHaveBeenCalledTimes(1);
+      expect(storageMock.saveFile.mock.calls[0][0]).toMatchObject({
+        folder: 'anpr-snapshots',
+      });
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('có ảnh + unmatched (biển lạ) → VẪN lưu snapshot (không điều kiện matchState)', async () => {
+      wire({ user: [] });
+      await service.onVehicleEvent(withImage());
+      expect(payloadOf().matchState).toBe('unmatched');
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('KHÔNG có ảnh (bridge chưa gửi, R7) → KHÔNG gọi storage, snapshot_file_id null, KHÔNG lỗi', async () => {
+      wire();
+      await expect(service.onVehicleEvent(evt())).resolves.toBeUndefined();
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('storage.saveFile lỗi → KHÔNG throw, raw event vẫn persist, snapshot_file_id null', async () => {
+      wire();
+      storageMock.saveFile.mockRejectedValueOnce(new Error('disk full'));
+      await expect(
+        service.onVehicleEvent(withImage()),
+      ).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('INSERT media_files lỗi → KHÔNG throw, snapshot_file_id null, raw event vẫn persist', async () => {
+      wire({ mediaFileInsertThrows: true });
+      await expect(
+        service.onVehicleEvent(withImage()),
+      ).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('SEC-01 vẫn giữ nguyên: payload_json KHÔNG chứa base64 dù đã lưu snapshot', async () => {
+      wire();
+      await service.onVehicleEvent(withImage());
+      const rawPayload = insert()!.params[2];
+      expect(rawPayload).not.toContain('base64');
+      expect(rawPayload).not.toContain('SGVsbG8');
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
   });
 
   // ── UC9 (VCC-001): wiring VehicleControlAlertService.evaluate ──
@@ -352,7 +430,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         direction: 'enter',
         channelId: 5,
       });
-      expect(insert()!.params).toHaveLength(4);
+      expect(insert()!.params).toHaveLength(5);
       expect(insert()!.sql).toContain('RETURNING id');
     });
 

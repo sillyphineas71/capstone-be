@@ -20,6 +20,7 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
 import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
 import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
+import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
 import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
 
 /**
@@ -62,6 +63,8 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     IvssPresenceQueryService,
     IvssPresenceReportService,
     IvssRoomAccessLogService,
+    // F-F: đọc ảnh snapshot của iot_device_events (F-B/F-C/F-D ghi).
+    DeviceEventSnapshotService,
     // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
     IvssOccupancyIngestService,
   ],

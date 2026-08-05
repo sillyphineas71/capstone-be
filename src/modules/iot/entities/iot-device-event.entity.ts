@@ -96,6 +96,13 @@ export class IoTDeviceEventEntity {
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
 
+  /**
+   * F-E — ảnh snapshot của event (nếu có), FK → media_files(id). Dùng chung cho
+   * IVSS unmatched (F-B), zone appear khả năng vi phạm (F-C), ANPR (F-D).
+   */
+  @Column({ name: 'snapshot_file_id', type: 'uuid', nullable: true })
+  snapshotFileId: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
