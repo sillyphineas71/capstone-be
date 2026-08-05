@@ -39,6 +39,7 @@ import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
 import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
 import { PaginationMeta } from '../dto/pagination-meta.dto.js';
+import { DepartmentMemberItemDto } from '../dto/department-member-item.dto.js';
 
 @ApiTags('Accounts')
 @Controller('departments')
@@ -156,6 +157,45 @@ export class DepartmentsController {
       message: 'Lấy danh sách phòng ban thành công',
       data: result.data,
       meta: result.meta,
+    };
+  }
+
+  @Get(':id/members')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('accounts.user.list')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Danh sách nhân viên trực thuộc trực tiếp 1 phòng ban',
+    description:
+      'Trả về toàn bộ nhân viên đang hoạt động (employment_status active/probation, account_status active) trực thuộc TRỰC TIẾP phòng ban (không đệ quy phòng ban con). Không phân trang. Dùng để FE nạp nhanh cả phòng ban vào danh sách người tham dự khi đặt lịch họp. Yêu cầu permission accounts.user.list (cùng permission dùng cho GET /users).',
+  })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Danh sách nhân viên phòng ban.',
+    type: [DepartmentMemberItemDto],
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission accounts.user.list).',
+  })
+  async listDepartmentMembers(@Param('id', ParseUUIDPipe) id: string): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentMemberItemDto[];
+  }> {
+    const data = await this.departmentsService.listDepartmentMembers(id);
+
+    return {
+      success: true,
+      message: 'Lấy danh sách nhân viên phòng ban thành công',
+      data,
     };
   }
 
