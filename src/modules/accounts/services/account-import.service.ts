@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { DataSource, In, IsNull } from 'typeorm';
 import * as ExcelJS from 'exceljs';
+import { randomUUID } from 'crypto';
 
 import {
   UsersService,
@@ -20,13 +21,27 @@ import {
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import {
+  FaceProfileEntity,
+  FaceProfileStatus,
+} from '../entities/face-profile.entity.js';
+import {
+  MediaFileEntity,
+  MediaFileType,
+  StorageProvider,
+} from '../../recording/entities/media-file.entity.js';
+import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+import { CloudinaryService } from '../../storage/cloudinary.service.js';
+import { detectImageMimeType } from '../utils/image-magic-bytes.util.js';
+import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
+import { isBiometricExemptRole } from '../../../common/utils/biometric-exempt-roles.util.js';
 
 import {
   MAX_IMPORT_ROWS,
   MAX_IMPORT_FILE_BYTES,
+  MAX_BIOMETRIC_PHOTO_BYTES,
   XLSX_MIME,
   ROLE_CODES_SEPARATOR,
   IMPORT_ACCOUNTS_HEADERS,
@@ -34,11 +49,20 @@ import {
   ImportAccountRowStatus,
   ImportAccountRowReason,
   ImportAccountRequestError,
+  ImportAccountBiometricStatus,
 } from '../constants/import-accounts.constants.js';
 import {
   ImportAccountReportDto,
   ImportAccountRowResult,
 } from '../dto/import-accounts-response.dto.js';
+
+/** Ảnh sinh trắc học kèm import — khớp theo tên file gốc = employee_code. */
+export interface UploadedAccountPhoto {
+  buffer: Buffer;
+  originalname: string;
+  mimetype?: string;
+  size: number;
+}
 
 interface ParsedAccountRow {
   row: number;
@@ -69,6 +93,7 @@ export class AccountImportService {
     private readonly dataSource: DataSource,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   // ════════════════════════════════════════════════════════════════
@@ -156,12 +181,32 @@ export class AccountImportService {
           originalname?: string;
         }
       | undefined,
-    options: { commit?: boolean },
+    options: { commit?: boolean; biometricConsentConfirmed?: boolean },
     actor: { userId: string },
     clientContext: UserClientContext,
+    photos: UploadedAccountPhoto[] = [],
   ): Promise<ImportAccountReportDto> {
     // ── Step 0: File validation ──
     this.validateFile(file);
+
+    // ── Step 0b: Sinh trắc học kèm theo (tùy chọn) — bắt buộc xác nhận consent
+    // khi commit thật, KHÔNG chặn ở preview vì preview chưa đụng gì tới ảnh.
+    if (
+      photos.length > 0 &&
+      options.commit === true &&
+      options.biometricConsentConfirmed !== true
+    ) {
+      throw new BadRequestException({
+        success: false,
+        message:
+          'Vui lòng xác nhận đã có sự đồng ý của nhân viên trước khi đính kèm ảnh sinh trắc học.',
+        error: {
+          code: ImportAccountRequestError.BIOMETRIC_CONSENT_REQUIRED,
+          details: {},
+        },
+      });
+    }
+    const photoMap = this.buildPhotoMap(photos);
 
     // ── Step 1: Parse ──
     const rows = await this.parseWorkbook(file!.buffer);
@@ -179,6 +224,15 @@ export class AccountImportService {
 
     // ── Step 5: Preview gate ──
     if (options.commit !== true) {
+      if (photos.length > 0) {
+        for (const s of states) {
+          if (s.isError) continue;
+          s.result.biometricStatus = this.previewBiometricStatus(
+            s,
+            photoMap,
+          );
+        }
+      }
       return new ImportAccountReportDto({
         mode: ImportAccountMode.PREVIEW,
         totalRows: states.length,
@@ -217,6 +271,18 @@ export class AccountImportService {
           fullName: state.resolved.fullName,
           tempPassword: persisted.tempPassword,
         });
+
+        // Đính ảnh sinh trắc học (nếu có gửi kèm) — KHÔNG được để lỗi ở đây
+        // làm rớt xuống catch bên dưới và ghi đè trạng thái SUCCESS của tài
+        // khoản vừa tạo thành công (attachBiometricPhoto tự bắt hết lỗi).
+        if (photos.length > 0) {
+          state.result.biometricStatus = await this.resolveBiometricForRow(
+            state,
+            persisted.user.id,
+            photoMap,
+            actor.userId,
+          );
+        }
       } catch (error: unknown) {
         state.result.status = ImportAccountRowStatus.FAILED;
         state.result.reason = this.extractErrorCode(error);
@@ -643,6 +709,168 @@ export class AccountImportService {
     } catch (err: unknown) {
       this.logger.error(
         `[AccountImport] Failed to write import audit: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Sinh trắc học kèm import (tùy chọn) — khớp ảnh theo employee_code
+  // ════════════════════════════════════════════════════════════════
+
+  /** Key = tên file gốc, bỏ đuôi mở rộng, lowercase, trim. */
+  private buildPhotoMap(
+    photos: UploadedAccountPhoto[],
+  ): Map<string, UploadedAccountPhoto> {
+    const map = new Map<string, UploadedAccountPhoto>();
+    for (const photo of photos) {
+      const base = (photo.originalname ?? '')
+        .replace(/\.[^./\\]+$/, '')
+        .trim()
+        .toLowerCase();
+      if (base) map.set(base, photo);
+    }
+    return map;
+  }
+
+  private matchPhotoForRow(
+    state: AccountRowState,
+    photoMap: Map<string, UploadedAccountPhoto>,
+  ): UploadedAccountPhoto | null {
+    const code = state.parsed.employeeCode?.trim().toLowerCase();
+    if (!code) return null;
+    return photoMap.get(code) ?? null;
+  }
+
+  /** Preview mode: chỉ báo trước sẽ khớp/không khớp, KHÔNG upload gì cả. */
+  private previewBiometricStatus(
+    state: AccountRowState,
+    photoMap: Map<string, UploadedAccountPhoto>,
+  ): ImportAccountBiometricStatus {
+    const photo = this.matchPhotoForRow(state, photoMap);
+    if (!photo) return ImportAccountBiometricStatus.NOT_PROVIDED;
+    const roleCodes = this.splitRoleCodes(state.parsed.roleCodes);
+    return isBiometricExemptRole(roleCodes)
+      ? ImportAccountBiometricStatus.ROLE_EXEMPT
+      : ImportAccountBiometricStatus.PENDING_COMMIT;
+  }
+
+  /** Commit mode: khớp ảnh rồi thực sự upload + tạo face_profiles nếu phù hợp. */
+  private async resolveBiometricForRow(
+    state: AccountRowState,
+    userId: string,
+    photoMap: Map<string, UploadedAccountPhoto>,
+    actorId: string,
+  ): Promise<ImportAccountBiometricStatus> {
+    const photo = this.matchPhotoForRow(state, photoMap);
+    if (!photo) return ImportAccountBiometricStatus.NOT_PROVIDED;
+
+    const roleCodes = this.splitRoleCodes(state.parsed.roleCodes);
+    if (isBiometricExemptRole(roleCodes)) {
+      return ImportAccountBiometricStatus.ROLE_EXEMPT;
+    }
+
+    return this.attachBiometricPhoto(userId, photo, actorId);
+  }
+
+  /**
+   * Upload ảnh + tạo media_files/face_profiles(status=pending_review), mirror
+   * transaction pattern của `BiometricSubmissionService.submit` nhưng khởi tạo
+   * bởi admin lúc import (enrolledBy=actorId, không phải chính user).
+   *
+   * KHÔNG bao giờ throw — mọi lỗi được bắt và trả về status code tương ứng,
+   * vì tài khoản đã tạo thành công rồi và không được phép bị đổi thành FAILED
+   * chỉ vì bước đính ảnh (phụ, không bắt buộc) gặp sự cố.
+   */
+  private async attachBiometricPhoto(
+    userId: string,
+    photo: UploadedAccountPhoto,
+    actorId: string,
+  ): Promise<ImportAccountBiometricStatus> {
+    if (photo.size > MAX_BIOMETRIC_PHOTO_BYTES) {
+      return ImportAccountBiometricStatus.FILE_TOO_LARGE;
+    }
+
+    const detectedMime = detectImageMimeType(photo.buffer);
+    if (!detectedMime) {
+      return ImportAccountBiometricStatus.INVALID_IMAGE;
+    }
+
+    let upload: { publicId: string; secureUrl: string };
+    try {
+      upload = await this.cloudinaryService.uploadImage(photo.buffer);
+    } catch (error) {
+      this.logger.error(
+        `[AccountImport] Cloudinary upload failed for user ${userId}: ${(error as Error).message}`,
+      );
+      return ImportAccountBiometricStatus.UPLOAD_FAILED;
+    }
+
+    const now = new Date();
+    const faceProfileId = randomUUID();
+    const mediaFileId = randomUUID();
+
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await manager.getRepository(MediaFileEntity).insert({
+          id: mediaFileId,
+          fileName: upload.publicId.split('/').pop() ?? upload.publicId,
+          fileType: MediaFileType.IMAGE,
+          mimeType: detectedMime,
+          storageProvider: StorageProvider.CLOUD_PROVIDER,
+          storageKey: upload.publicId,
+          fileUrl: upload.secureUrl,
+          relatedEntityType: 'face_profile',
+          relatedEntityId: faceProfileId,
+          uploadedBy: actorId,
+          isActive: true,
+        });
+
+        await manager.getRepository(FaceProfileEntity).insert({
+          id: faceProfileId,
+          userId,
+          profileCode: generateFaceProfileCode(),
+          status: FaceProfileStatus.PENDING_REVIEW,
+          primaryImageFileId: mediaFileId,
+          consentAt: now,
+          enrolledBy: actorId,
+          enrolledAt: now,
+          lastUpdatedAt: now,
+          sampleCount: 1,
+          metadataJson: { source: 'excel_import' },
+        });
+
+        await manager.getRepository(AuditLogEntity).insert({
+          userId,
+          actionType: 'biometric.import_upload',
+          entityType: 'face_profile',
+          entityId: faceProfileId,
+          newValueJson: {
+            status: 'pending_review',
+            mediaFileId,
+            source: 'excel_import',
+            enrolledBy: actorId,
+          },
+        });
+      });
+    } catch (error) {
+      await this.cleanupCloudinary(upload.publicId);
+      this.logger.error(
+        `[AccountImport] Biometric attach DB transaction failed for user ${userId}: ${(error as Error).message}`,
+      );
+      return ImportAccountBiometricStatus.UPLOAD_FAILED;
+    }
+
+    return ImportAccountBiometricStatus.ATTACHED;
+  }
+
+  /** Best-effort xóa Cloudinary object orphan; KHÔNG ném lỗi ra ngoài. */
+  private async cleanupCloudinary(publicId: string): Promise<void> {
+    try {
+      await this.cloudinaryService.deleteImage(publicId);
+      this.logger.log(`[AccountImport] Cleaned up orphan Cloudinary object: ${publicId}`);
+    } catch (cleanupError) {
+      this.logger.warn(
+        `[AccountImport] Failed to clean up orphan Cloudinary object ${publicId}: ${(cleanupError as Error).message}`,
       );
     }
   }

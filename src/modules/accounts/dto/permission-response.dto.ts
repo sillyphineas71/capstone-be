@@ -30,4 +30,11 @@ export class PermissionResponseDto {
     format: 'date-time',
   })
   updatedAt: Date;
+
+  @ApiProperty({
+    description:
+      'Danh sách permissionCode mà quyền này phụ thuộc (phải có quyền xem đi kèm để dùng được). Rỗng cho quyền read và quyền không có phụ thuộc.',
+    type: [String],
+  })
+  dependsOn: string[];
 }

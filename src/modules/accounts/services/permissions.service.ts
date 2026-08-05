@@ -12,6 +12,7 @@ import { UpdatePermissionDto } from '../dto/update-permission.dto.js';
 import { PermissionResponseDto } from '../dto/permission-response.dto.js';
 import { PaginationQueryDto } from '../dto/pagination-query.dto.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
+import { getPermissionDependencies } from '../constants/permission-dependencies.constant.js';
 
 @Injectable()
 export class PermissionsService {
@@ -181,6 +182,7 @@ export class PermissionsService {
       isActive: entity.isActive,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
+      dependsOn: getPermissionDependencies(entity.permissionCode),
     };
   }
 }

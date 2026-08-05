@@ -49,6 +49,7 @@ describe('RolePermissionsController', () => {
         assigned: ['perm-uuid'],
         skippedAlreadyAssigned: [],
         skippedDuplicatedInRequest: [],
+        autoAddedDueToDependency: [],
       });
       const user = { userId: 'user-uuid' };
 
@@ -71,6 +72,7 @@ describe('RolePermissionsController', () => {
         assigned: [],
         skippedAlreadyAssigned: ['perm-uuid'],
         skippedDuplicatedInRequest: [],
+        autoAddedDueToDependency: [],
       });
       const user = { userId: 'user-uuid' };
 

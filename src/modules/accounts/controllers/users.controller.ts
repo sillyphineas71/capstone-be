@@ -18,10 +18,11 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -44,7 +45,11 @@ import { AccountImportService } from '../services/account-import.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { ImportAccountsDto } from '../dto/import-accounts.dto.js';
 import { ImportAccountReportDto } from '../dto/import-accounts-response.dto.js';
-import { XLSX_MIME } from '../constants/import-accounts.constants.js';
+import {
+  XLSX_MIME,
+  MAX_IMPORT_ROWS,
+} from '../constants/import-accounts.constants.js';
+import { UploadedAccountPhoto } from '../services/account-import.service.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
 import { LockUserDto } from '../dto/lock-user.dto.js';
@@ -149,7 +154,12 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('accounts.user.import')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'file', maxCount: 1 },
+      { name: 'photos', maxCount: MAX_IMPORT_ROWS },
+    ]),
+  )
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -161,7 +171,8 @@ export class UsersController {
   @ApiOperation({
     summary: 'Tạo tài khoản nhân viên bằng import Excel',
     description:
-      'Tải lên file .xlsx danh sách nhân viên. commit=false trả preview kiểm tra (không ghi DB); commit=true tạo tài khoản cho các dòng hợp lệ (bỏ dòng lỗi), sinh mật khẩu tạm và gửi email credentials cho từng người.',
+      'Tải lên file .xlsx danh sách nhân viên. commit=false trả preview kiểm tra (không ghi DB); commit=true tạo tài khoản cho các dòng hợp lệ (bỏ dòng lỗi), sinh mật khẩu tạm và gửi email credentials cho từng người. ' +
+      'Có thể gửi kèm nhiều ảnh sinh trắc học (field `photos`, tùy chọn) — mỗi ảnh đặt tên file gốc = employee_code (vd EMP001.jpg) để hệ thống tự khớp; ảnh khớp được sẽ vào hàng chờ duyệt (pending_review) giống luồng tự nộp. Bắt buộc `biometricConsentConfirmed=true` nếu có gửi kèm ảnh và commit=true.',
   })
   @ApiBody({
     schema: {
@@ -169,6 +180,11 @@ export class UsersController {
       properties: {
         file: { type: 'string', format: 'binary' },
         commit: { type: 'boolean' },
+        photos: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+        biometricConsentConfirmed: { type: 'boolean' },
       },
       required: ['file'],
     },
@@ -177,13 +193,16 @@ export class UsersController {
     description: 'Không đủ quyền hạn (thiếu permission accounts.user.import).',
   })
   async importAccounts(
-    @UploadedFile()
-    file:
+    @UploadedFiles()
+    files:
       | {
-          buffer: Buffer;
-          mimetype?: string;
-          size?: number;
-          originalname?: string;
+          file?: Array<{
+            buffer: Buffer;
+            mimetype?: string;
+            size?: number;
+            originalname?: string;
+          }>;
+          photos?: UploadedAccountPhoto[];
         }
       | undefined,
     @Body() dto: ImportAccountsDto,
@@ -200,10 +219,11 @@ export class UsersController {
     const actorId = user?.userId || 'system';
 
     const result = await this.accountImportService.importAccounts(
-      file,
-      { commit: dto.commit },
+      files?.file?.[0],
+      { commit: dto.commit, biometricConsentConfirmed: dto.biometricConsentConfirmed },
       { userId: actorId },
       { ipAddress, userAgent, requestId },
+      files?.photos ?? [],
     );
 
     return {

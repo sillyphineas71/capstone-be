@@ -13,6 +13,10 @@ import { AssignPermissionsDto } from '../dto/assign-permissions.dto.js';
 import { AssignPermissionsResponseDto } from '../dto/assign-permissions-response.dto.js';
 import { RolePermissionResponseDto } from '../dto/role-permission-response.dto.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
+import {
+  PERMISSION_DEPENDENCIES,
+  getPermissionDependencies,
+} from '../constants/permission-dependencies.constant.js';
 
 @Injectable()
 export class RolePermissionsService {
@@ -61,6 +65,7 @@ export class RolePermissionsService {
         isActive: r.permission.isActive,
         createdAt: r.permission.createdAt,
         updatedAt: r.permission.updatedAt,
+        dependsOn: getPermissionDependencies(r.permission.permissionCode),
       },
     }));
   }
@@ -88,11 +93,11 @@ export class RolePermissionsService {
           )
         : [];
 
-    const permissions = await this.permissionRepo.find({
+    const requestedPermissions = await this.permissionRepo.find({
       where: { id: In(permissionIds) },
     });
-    if (permissions.length !== permissionIds.length) {
-      const foundIds = permissions.map((p) => p.id);
+    if (requestedPermissions.length !== permissionIds.length) {
+      const foundIds = requestedPermissions.map((p) => p.id);
       const missingIds = permissionIds.filter((id) => !foundIds.includes(id));
       throw new NotFoundException({
         success: false,
@@ -100,6 +105,51 @@ export class RolePermissionsService {
         error: { code: 'PERMISSION_NOT_FOUND', details: { missingIds } },
       });
     }
+
+    // Ràng buộc "quyền thao tác phải có quyền xem đi kèm": mở rộng request bằng
+    // các permission `read` mà permission được gán phụ thuộc, nếu chưa có trong
+    // request — cùng ngữ nghĩa auto-tick FE đã làm tạm ở UI roles-permissions,
+    // nhưng enforce ở tầng service để không phụ thuộc client nào gọi vào.
+    const requestedCodes = new Set(
+      requestedPermissions.map((p) => p.permissionCode),
+    );
+    const dependencyCodesNeeded = new Set<string>();
+    for (const permission of requestedPermissions) {
+      for (const depCode of PERMISSION_DEPENDENCIES[
+        permission.permissionCode
+      ] ?? []) {
+        if (!requestedCodes.has(depCode)) {
+          dependencyCodesNeeded.add(depCode);
+        }
+      }
+    }
+
+    let dependencyPermissions: PermissionEntity[] = [];
+    if (dependencyCodesNeeded.size > 0) {
+      dependencyPermissions = await this.permissionRepo.find({
+        where: { permissionCode: In([...dependencyCodesNeeded]) },
+      });
+      const foundDependencyCodes = new Set(
+        dependencyPermissions.map((p) => p.permissionCode),
+      );
+      const missingDependencyCodes = [...dependencyCodesNeeded].filter(
+        (code) => !foundDependencyCodes.has(code),
+      );
+      if (missingDependencyCodes.length > 0) {
+        throw new NotFoundException({
+          success: false,
+          message: `Permission phụ thuộc (dependsOn) không tồn tại trong catalog: ${missingDependencyCodes.join(', ')}`,
+          error: {
+            code: 'PERMISSION_DEPENDENCY_NOT_FOUND',
+            details: { missingDependencyCodes },
+          },
+        });
+      }
+    }
+
+    const autoAddedPermissionIds = dependencyPermissions.map((p) => p.id);
+    const permissions = [...requestedPermissions, ...dependencyPermissions];
+    permissionIds.push(...autoAddedPermissionIds);
 
     const inactivePerm = permissions.find((p) => !p.isActive);
     if (inactivePerm) {
@@ -134,12 +184,19 @@ export class RolePermissionsService {
         existingPermissionIds.has(pid),
       );
 
+      // Trong số permission được thêm tự động do phụ thuộc, chỉ những cái thực
+      // sự mới gán (chưa có sẵn ở role) mới cần báo cho client.
+      const autoAddedDueToDependency = autoAddedPermissionIds.filter((pid) =>
+        toAssign.includes(pid),
+      );
+
       if (toAssign.length === 0) {
         await queryRunner.rollbackTransaction();
         return {
           assigned: [],
           skippedAlreadyAssigned,
           skippedDuplicatedInRequest: duplicatesInRequest,
+          autoAddedDueToDependency: [],
         };
       }
 
@@ -165,6 +222,7 @@ export class RolePermissionsService {
           assignedPermissionIds: toAssign,
           skippedAlreadyAssigned,
           skippedDuplicatedInRequest: duplicatesInRequest,
+          autoAddedDueToDependency,
         },
       });
 
@@ -172,6 +230,7 @@ export class RolePermissionsService {
         assigned: toAssign,
         skippedAlreadyAssigned,
         skippedDuplicatedInRequest: duplicatesInRequest,
+        autoAddedDueToDependency,
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -217,6 +276,32 @@ export class RolePermissionsService {
         message:
           'Không thể gỡ permission module admin khỏi system role để tránh lockout hệ thống.',
         error: { code: 'CANNOT_REVOKE_SYSTEM_PERMISSION' },
+      });
+    }
+
+    // Ràng buộc "quyền thao tác phải có quyền xem đi kèm": chặn gỡ nếu role vẫn
+    // còn permission khác đang gán mà dependsOn chứa permission sắp gỡ.
+    const assignedRecords = await this.rolePermissionRepo.find({
+      where: { roleId },
+      relations: { permission: true },
+    });
+    const dependentRecord = assignedRecords.find(
+      (r) =>
+        r.permissionId !== permissionId &&
+        (PERMISSION_DEPENDENCIES[r.permission.permissionCode] ?? []).includes(
+          record.permission.permissionCode,
+        ),
+    );
+    if (dependentRecord) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: `Không thể gỡ '${record.permission.permissionCode}' vì '${dependentRecord.permission.permissionCode}' vẫn đang được gán và cần quyền này.`,
+        error: {
+          code: 'PERMISSION_STILL_REQUIRED_BY_DEPENDENT',
+          details: {
+            dependentPermissionCode: dependentRecord.permission.permissionCode,
+          },
+        },
       });
     }
 

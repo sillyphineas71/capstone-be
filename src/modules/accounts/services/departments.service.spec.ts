@@ -18,7 +18,8 @@ describe('DepartmentsService', () => {
   let service: DepartmentsService;
   let dataSource: jest.Mocked<DataSource>;
   let em: jest.Mocked<EntityManager>;
-  let repo: { findAndCount: jest.Mock };
+  let repo: { findAndCount: jest.Mock; findOne: jest.Mock };
+  let userRepo: { find: jest.Mock };
 
   const validDto: CreateDepartmentDto = {
     departmentCode: 'IT',
@@ -34,14 +35,19 @@ describe('DepartmentsService', () => {
       update: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
-    repo = { findAndCount: jest.fn() };
+    repo = { findAndCount: jest.fn(), findOne: jest.fn() };
+    userRepo = { find: jest.fn() };
     dataSource = {
       transaction: jest
         .fn()
         .mockImplementation((cb: (manager: EntityManager) => unknown) =>
           cb(em),
         ),
-      getRepository: jest.fn().mockReturnValue(repo),
+      getRepository: jest
+        .fn()
+        .mockImplementation((entity: unknown) =>
+          entity === UserEntity ? userRepo : repo,
+        ),
     } as unknown as jest.Mocked<DataSource>;
 
     const module: TestingModule = await Test.createTestingModule({
@@ -676,6 +682,120 @@ describe('DepartmentsService', () => {
         managerUserId: 'm1',
       });
       expect(r.data[0].createdAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('listDepartmentMembers', () => {
+    const dept = (over: Partial<DepartmentEntity> = {}) =>
+      ({
+        id: 'd1',
+        departmentCode: 'IT',
+        departmentName: 'CNTT',
+        parentDepartmentId: null,
+        managerUserId: null,
+        description: null,
+        isActive: true,
+        deletedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...over,
+      }) as DepartmentEntity;
+
+    const user = (over: Record<string, unknown> = {}) => ({
+      id: 'u1',
+      employeeCode: 'EMP001',
+      fullName: 'Nguyễn Văn A',
+      email: 'a@company.com',
+      phoneNumber: null,
+      avatarUrl: null,
+      positionTitle: 'Backend Engineer',
+      employmentStatus: 'active',
+      ...over,
+    });
+
+    it('[AC-005] phòng ban không tồn tại → NotFoundException DEPARTMENT_NOT_FOUND', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.listDepartmentMembers('missing')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(userRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('[AC-006] phòng ban tồn tại nhưng 0 nhân viên hợp lệ → trả mảng rỗng', async () => {
+      repo.findOne.mockResolvedValue(dept());
+      userRepo.find.mockResolvedValue([]);
+
+      const result = await service.listDepartmentMembers('d1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('[AC-001] trả đúng danh sách nhân viên trực thuộc phòng ban, đã lọc qua where (active/probation + account active)', async () => {
+      repo.findOne.mockResolvedValue(dept());
+      userRepo.find.mockResolvedValue([
+        user({ id: 'u1', fullName: 'Nguyễn Văn A' }),
+        user({
+          id: 'u2',
+          fullName: 'Trần Thị B',
+          employmentStatus: 'probation',
+        }),
+      ]);
+
+      const result = await service.listDepartmentMembers('d1');
+
+      expect(result).toHaveLength(2);
+      const whereArg = userRepo.find.mock.calls[0][0].where;
+      expect(whereArg.departmentId).toBe('d1');
+      expect(whereArg.accountStatus).toBe('active');
+    });
+
+    it('[AC-004] gắn isDepartmentManager=true đúng người khớp manager_user_id và đưa lên đầu danh sách', async () => {
+      repo.findOne.mockResolvedValue(dept({ managerUserId: 'u2' }));
+      userRepo.find.mockResolvedValue([
+        user({ id: 'u1', fullName: 'An Nguyễn' }),
+        user({ id: 'u2', fullName: 'Zoe Trần' }),
+      ]);
+
+      const result = await service.listDepartmentMembers('d1');
+
+      expect(result[0].id).toBe('u2');
+      expect(result[0].isDepartmentManager).toBe(true);
+      expect(result[1].isDepartmentManager).toBe(false);
+    });
+
+    it('sort theo fullName khi không ai là trưởng phòng', async () => {
+      repo.findOne.mockResolvedValue(dept({ managerUserId: null }));
+      userRepo.find.mockResolvedValue([
+        user({ id: 'u1', fullName: 'Zoe' }),
+        user({ id: 'u2', fullName: 'An' }),
+      ]);
+
+      const result = await service.listDepartmentMembers('d1');
+
+      expect(result.map((r) => r.fullName)).toEqual(['An', 'Zoe']);
+    });
+
+    it('[AC-008] response không chứa passwordHash hay field ngoài DTO', async () => {
+      repo.findOne.mockResolvedValue(dept());
+      userRepo.find.mockResolvedValue([user()]);
+
+      const result = await service.listDepartmentMembers('d1');
+
+      expect(result[0]).not.toHaveProperty('passwordHash');
+      expect(Object.keys(result[0]).sort()).toEqual(
+        [
+          'id',
+          'employeeCode',
+          'fullName',
+          'email',
+          'phoneNumber',
+          'avatarUrl',
+          'positionTitle',
+          'employmentStatus',
+          'isDepartmentManager',
+        ].sort(),
+      );
     });
   });
 });

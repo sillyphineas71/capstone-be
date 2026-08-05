@@ -20,6 +20,7 @@ export interface UserExportRow {
   email: string;
   phoneNumber: string | null;
   departmentId: string | null;
+  departmentName: string | null;
   accountStatus: string;
   roles: string[];
   createdAt: Date;
@@ -54,6 +55,7 @@ export class UserExportDataService {
   async listUsersForExport(filter: UserExportFilter): Promise<UserExportRow[]> {
     const qb = this.userRepo
       .createQueryBuilder('u')
+      .leftJoin('u.department', 'department')
       .where('u.deletedAt IS NULL');
 
     if (filter.departmentId) {
@@ -92,6 +94,7 @@ export class UserExportDataService {
       'u.departmentId',
       'u.accountStatus',
       'u.createdAt',
+      'department.departmentName',
     ])
       .orderBy('u.fullName', 'ASC')
       .take(MAX_EXPORT_ROWS);
@@ -123,6 +126,7 @@ export class UserExportDataService {
       email: u.email,
       phoneNumber: u.phoneNumber,
       departmentId: u.departmentId,
+      departmentName: u.department?.departmentName ?? null,
       accountStatus: u.accountStatus,
       roles: rolesMap.get(u.id) ?? [],
       createdAt: u.createdAt,

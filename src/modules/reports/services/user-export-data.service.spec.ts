@@ -15,6 +15,7 @@ describe('UserExportDataService (BE-04)', () => {
     email: 'a@test.com',
     phoneNumber: '0900000000',
     departmentId: 'dept-1',
+    department: { departmentName: 'Engineering' },
     accountStatus: 'active',
     createdAt: new Date('2026-01-01'),
     ...over,
@@ -22,6 +23,7 @@ describe('UserExportDataService (BE-04)', () => {
 
   beforeEach(() => {
     userQb = {
+      leftJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
@@ -125,5 +127,21 @@ describe('UserExportDataService (BE-04)', () => {
     userQb.getMany.mockResolvedValue([]);
     await service.listUsersForExport({});
     expect(userQb.take).toHaveBeenCalledWith(10000);
+  });
+
+  it('join department và trả về departmentName (không phải UUID thô)', async () => {
+    userQb.getMany.mockResolvedValue([userRow()]);
+    const result = await service.listUsersForExport({});
+    expect(userQb.leftJoin).toHaveBeenCalledWith('u.department', 'department');
+    expect(result[0].departmentName).toBe('Engineering');
+    expect(result[0].departmentId).toBe('dept-1');
+  });
+
+  it('user không có department (departmentId null) → departmentName null', async () => {
+    userQb.getMany.mockResolvedValue([
+      userRow({ departmentId: null, department: null }),
+    ]);
+    const result = await service.listUsersForExport({});
+    expect(result[0].departmentName).toBeNull();
   });
 });

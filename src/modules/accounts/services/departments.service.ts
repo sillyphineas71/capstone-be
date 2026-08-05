@@ -6,10 +6,14 @@
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DataSource, IsNull, ILike } from 'typeorm';
+import { DataSource, IsNull, ILike, In } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
-import { UserEntity } from '../entities/user.entity.js';
+import {
+  UserEntity,
+  AccountStatus,
+  EmploymentStatus,
+} from '../entities/user.entity.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -20,6 +24,7 @@ import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentResponseDto } from '../dto/department-response.dto.js';
 import { ListDepartmentsQueryDto } from '../dto/list-departments-query.dto.js';
 import { PaginationMeta } from '../dto/pagination-meta.dto.js';
+import { DepartmentMemberItemDto } from '../dto/department-member-item.dto.js';
 
 export interface ClientContext {
   ipAddress?: string;
@@ -544,6 +549,74 @@ export class DepartmentsService {
         totalPages: total === 0 ? 0 : Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * ACCT-DEPT-MEMBERS-001 — Liệt kê nhân viên trực thuộc TRỰC TIẾP 1 phòng ban
+   * (không đệ quy phòng ban con). Chỉ trả người employment_status ∈ {active, probation}
+   * và account_status='active'. Không phân trang (phục vụ UX "chọn cả phòng ban").
+   * Dùng để FE nạp nhanh vào participantUserIds khi đặt lịch họp — KHÔNG tính
+   * xung đột lịch ở đây (dùng POST /scheduling/participant-conflicts/check sẵn có).
+   */
+  async listDepartmentMembers(
+    departmentId: string,
+  ): Promise<DepartmentMemberItemDto[]> {
+    const department = await this.dataSource
+      .getRepository(DepartmentEntity)
+      .findOne({ where: { id: departmentId, deletedAt: IsNull() } });
+
+    if (!department) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Không tìm thấy phòng ban',
+        error: { code: 'DEPARTMENT_NOT_FOUND', details: { departmentId } },
+      });
+    }
+
+    const users = await this.dataSource.getRepository(UserEntity).find({
+      where: {
+        departmentId,
+        deletedAt: IsNull(),
+        accountStatus: AccountStatus.ACTIVE,
+        employmentStatus: In([
+          EmploymentStatus.ACTIVE,
+          EmploymentStatus.PROBATION,
+        ]),
+      },
+      select: {
+        id: true,
+        employeeCode: true,
+        fullName: true,
+        email: true,
+        phoneNumber: true,
+        avatarUrl: true,
+        positionTitle: true,
+        employmentStatus: true,
+      },
+    });
+
+    const items: DepartmentMemberItemDto[] = users.map((u) => ({
+      id: u.id,
+      employeeCode: u.employeeCode,
+      fullName: u.fullName,
+      email: u.email,
+      phoneNumber: u.phoneNumber,
+      avatarUrl: u.avatarUrl,
+      positionTitle: u.positionTitle,
+      employmentStatus: u.employmentStatus,
+      isDepartmentManager: u.id === department.managerUserId,
+    }));
+
+    // Trưởng phòng lên đầu, sau đó theo tên (FR-006) — không dựa vào ORDER BY của
+    // query trên vì manager_user_id thuộc bảng departments, không phải users.
+    items.sort((a, b) => {
+      if (a.isDepartmentManager !== b.isDepartmentManager) {
+        return a.isDepartmentManager ? -1 : 1;
+      }
+      return a.fullName.localeCompare(b.fullName);
+    });
+
+    return items;
   }
 
   /** Map DepartmentEntity → DepartmentResponseDto (dùng chung cho list). */
