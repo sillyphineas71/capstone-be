@@ -39,6 +39,7 @@ describe('AccountImportService', () => {
   let service: AccountImportService;
   let usersService: { persistAccount: jest.Mock };
   let notificationsService: { enqueueEmailNotification: jest.Mock };
+  let cloudinaryService: { uploadImage: jest.Mock; deleteImage: jest.Mock };
   let dataSource: any;
 
   // Mutable DB fixtures
@@ -61,6 +62,12 @@ describe('AccountImportService', () => {
     };
     notificationsService = {
       enqueueEmailNotification: jest.fn().mockResolvedValue({}),
+    };
+    cloudinaryService = {
+      uploadImage: jest
+        .fn()
+        .mockResolvedValue({ publicId: 'p1', secureUrl: 'https://x/p1.jpg' }),
+      deleteImage: jest.fn().mockResolvedValue(undefined),
     };
 
     const deptRepo = {
@@ -110,7 +117,13 @@ describe('AccountImportService', () => {
         if (entity === UserEntity) return userRepo;
         return { find: jest.fn().mockResolvedValue([]) };
       }),
-      transaction: jest.fn((cb: any) => cb({})),
+      transaction: jest.fn((cb: any) =>
+        cb({
+          getRepository: jest.fn(() => ({
+            insert: jest.fn().mockResolvedValue({}),
+          })),
+        }),
+      ),
       manager: { save: jest.fn().mockResolvedValue({}) },
     };
 
@@ -118,6 +131,7 @@ describe('AccountImportService', () => {
       dataSource,
       usersService as any,
       notificationsService as any,
+      cloudinaryService as any,
     );
   });
 
@@ -298,5 +312,162 @@ describe('AccountImportService', () => {
       String(sheet.getRow(1).getCell(i + 1).value ?? '').toLowerCase(),
     );
     expect(headers).toEqual([...IMPORT_ACCOUNTS_HEADERS]);
+  });
+
+  // ── Sinh trắc học kèm import (tùy chọn) ────────────────────────────────
+
+  const jpegPhoto = (originalname: string) => {
+    const buffer = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00]);
+    return { buffer, originalname, mimetype: 'image/jpeg', size: buffer.length };
+  };
+
+  it('commit + gửi kèm ảnh nhưng chưa xác nhận consent → BadRequestException', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+    ]);
+    await expect(
+      service.importAccounts(
+        fileOf(buf),
+        { commit: true },
+        actor,
+        ctx,
+        [jpegPhoto('EMP001.jpg')],
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(usersService.persistAccount).not.toHaveBeenCalled();
+  });
+
+  it('preview: báo trước ảnh khớp (pending_commit) và không khớp (not_provided), không upload gì', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+      {
+        full_name: 'B',
+        email: 'b@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP002',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: false },
+      actor,
+      ctx,
+      [jpegPhoto('EMP001.jpg')],
+    );
+    const rowA = report.results.find((r) => r.email === 'a@company.com');
+    const rowB = report.results.find((r) => r.email === 'b@company.com');
+    expect(rowA?.biometricStatus).toBe('pending_commit');
+    expect(rowB?.biometricStatus).toBe('not_provided');
+    expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('commit: ảnh khớp employee_code (không phân biệt hoa/thường/đuôi file) → upload + biometricStatus=attached', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true, biometricConsentConfirmed: true },
+      actor,
+      ctx,
+      [jpegPhoto('emp001.JPG')],
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.biometricStatus).toBe('attached');
+    expect(cloudinaryService.uploadImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('commit: role BUSINESS_ADMIN không cần sinh trắc học → role_exempt, không upload', async () => {
+    dbRoles.push({ id: 'role-badmin', roleCode: 'BUSINESS_ADMIN', isActive: true });
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'BUSINESS_ADMIN',
+        employee_code: 'EMP001',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true, biometricConsentConfirmed: true },
+      actor,
+      ctx,
+      [jpegPhoto('EMP001.jpg')],
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.biometricStatus).toBe('role_exempt');
+    expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('commit: file khớp tên nhưng không phải ảnh hợp lệ (magic bytes) → invalid_image', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+    ]);
+    const badFile = {
+      buffer: Buffer.from('not an image'),
+      originalname: 'EMP001.jpg',
+      mimetype: 'image/jpeg',
+      size: 12,
+    };
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true, biometricConsentConfirmed: true },
+      actor,
+      ctx,
+      [badFile],
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.biometricStatus).toBe('invalid_image');
+    expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('commit: không có employee_code trong file ảnh → not_provided, tài khoản vẫn tạo thành công', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP999',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true, biometricConsentConfirmed: true },
+      actor,
+      ctx,
+      [jpegPhoto('EMP001.jpg')],
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.biometricStatus).toBe('not_provided');
   });
 });

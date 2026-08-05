@@ -13,4 +13,16 @@ export class ImportAccountsDto {
   )
   @IsBoolean({ message: 'commit phải là boolean' })
   commit?: boolean;
+
+  /**
+   * Xác nhận đã có sự đồng ý của (các) nhân viên cho việc dùng ảnh đính kèm vào
+   * mục đích sinh trắc học FaceGate. Chỉ bắt buộc khi request có gửi kèm ảnh
+   * (field `photos`) và commit=true.
+   */
+  @IsOptional()
+  @Transform(
+    ({ value }: { value: unknown }) => value === 'true' || value === true,
+  )
+  @IsBoolean({ message: 'biometricConsentConfirmed phải là boolean' })
+  biometricConsentConfirmed?: boolean;
 }

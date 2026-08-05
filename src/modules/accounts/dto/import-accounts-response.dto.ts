@@ -14,6 +14,8 @@ export interface ImportAccountRowResult {
   status: ImportAccountRowStatus;
   reason?: string;
   userId?: string;
+  /** Chỉ có giá trị khi request có gửi kèm ảnh sinh trắc học (field `photos`). */
+  biometricStatus?: string;
 }
 
 /**
