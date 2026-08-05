@@ -43,6 +43,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       presenceMap?: Record<string, unknown> | null; // ZPW-001 channel_presence_zone_map
       mediaFileId?: string | null; // F-B: id RETURNING của INSERT INTO media_files
       mediaFileInsertThrows?: boolean;
+      alertRule?: Array<{
+        restricted_hours_json: { allowFrom?: string; allowTo?: string } | null;
+      }> | null; // F-C: SELECT restricted_hours_json FROM alert_rules
     } = {},
   ) => {
     captured = [];
@@ -79,6 +82,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
           return Promise.reject(new Error('users query boom'));
         return Promise.resolve(over.fullName ?? [{ full_name: 'Alice' }]);
       }
+      // F-C: SELECT restricted_hours_json FROM alert_rules (zone_id=$1, alert_type='intrusion').
+      if (sql.includes('FROM alert_rules'))
+        return Promise.resolve(over.alertRule ?? []);
       // F-B: saveEventSnapshot() INSERT vào media_files (RETURNING id).
       if (sql.includes('INSERT INTO media_files')) {
         if (over.mediaFileInsertThrows)
@@ -300,6 +306,143 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       const rawPayload = insert()!.params[4];
       expect(rawPayload).not.toContain('base64');
       expect(rawPayload).not.toContain('SGVsbG8');
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+  });
+
+  // ── F-C: snapshot cho zone appear "khả năng vi phạm" ──
+  describe('F-C snapshot (zone appear violation)', () => {
+    const AREA = AREA_UUID;
+    const withImage = (over: any = {}) =>
+      evt({ imageBase64: 'data:image/jpeg;base64,SGVsbG8=', ...over });
+    const HOURS_9AM_6PM = { allowFrom: '08:00', allowTo: '18:00' };
+
+    // Pin "now" theo giờ VN (UTC+7, không DST) → parseUtc (skew ±1h) + khung giờ đều
+    // tất định, KHÔNG phụ thuộc giờ chạy test thật.
+    const pinVn = (hh: number, mm: number): string => {
+      const d = new Date(Date.UTC(2026, 0, 15, hh - 7, mm));
+      jest.useFakeTimers({ now: d });
+      return d.toISOString();
+    };
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('appear sẽ ghi + rule intrusion active + NGOÀI giờ cho phép → lưu snapshot', async () => {
+      const iso = pinVn(22, 0); // 22h VN, ngoài 08-18
+      wire({
+        presenceMap: { '5': AREA },
+        alertRule: [{ restricted_hours_json: HOURS_9AM_6PM }],
+      });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('appear sẽ ghi + rule intrusion active + TRONG giờ cho phép → KHÔNG lưu snapshot', async () => {
+      const iso = pinVn(10, 0); // 10h VN, trong 08-18
+      wire({
+        presenceMap: { '5': AREA },
+        alertRule: [{ restricted_hours_json: HOURS_9AM_6PM }],
+      });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('appear sẽ ghi + KHÔNG có rule intrusion cho zone → KHÔNG lưu snapshot', async () => {
+      const iso = pinVn(22, 0);
+      wire({ presenceMap: { '5': AREA }, alertRule: [] });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('rule active + ngoài giờ nhưng KHÔNG có ảnh → KHÔNG gọi storage, snapshot null', async () => {
+      const iso = pinVn(22, 0);
+      wire({
+        presenceMap: { '5': AREA },
+        alertRule: [{ restricted_hours_json: HOURS_9AM_6PM }],
+      });
+      await service.onFaceEvent(evt({ utc: iso })); // KHÔNG imageBase64
+      expect(storageMock.saveFile).not.toHaveBeenCalled();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('presence-map trống (zone_unmapped, KHÔNG ghi appear) → KHÔNG tra alert_rules, KHÔNG lưu snapshot', async () => {
+      const iso = pinVn(22, 0);
+      wire(); // KHÔNG presenceMap
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(captured.some((c) => c.sql.includes('FROM alert_rules'))).toBe(
+        false,
+      );
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('presenceSkipped=unmatched_identity (userId null) → KHÔNG tra alert_rules', async () => {
+      const iso = pinVn(22, 0);
+      wire({ presenceMap: { '5': AREA }, user: [] });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(captured.some((c) => c.sql.includes('FROM alert_rules'))).toBe(
+        false,
+      );
+    });
+
+    it('rule KHÔNG có restricted_hours_json (fail-closed, mirror isViolation gốc) → LUÔN coi ngoài giờ → lưu snapshot dù đang giờ hành chính', async () => {
+      const iso = pinVn(10, 0); // giờ hành chính, nhưng rule KHÔNG cấu hình khung
+      wire({
+        presenceMap: { '5': AREA },
+        alertRule: [{ restricted_hours_json: null }],
+      });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(snapshotFileIdOf()).toBe('media1');
+    });
+
+    it('alert_rules query lỗi → KHÔNG throw, KHÔNG lưu snapshot (fail-safe)', async () => {
+      const iso = pinVn(22, 0);
+      captured = [];
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        captured.push({ sql, params });
+        if (sql.includes('FROM alert_rules'))
+          return Promise.reject(new Error('alert_rules boom'));
+        if (sql.includes('FROM iot_devices WHERE device_code'))
+          return Promise.resolve([{ id: 'bridge1' }]);
+        if (sql.includes('FROM meeting_participants'))
+          return Promise.resolve([{ id: 'p1' }]);
+        if (sql.includes('FROM device_user_mappings'))
+          return Promise.resolve([{ user_id: 'u1' }]);
+        if (sql.includes("config_key = 'ivss.channel_direction_map'"))
+          return Promise.resolve([{ config_json: null }]);
+        if (sql.includes("config_key = 'ivss.channel_room_map'"))
+          return Promise.resolve([{ config_json: { '5': ROOM_UUID } }]);
+        if (params?.[0] === 'ivss.channel_presence_zone_map')
+          return Promise.resolve([{ config_json: { '5': AREA } }]);
+        if (sql.includes('FROM meetings'))
+          return Promise.resolve([{ id: MEETING_UUID }]);
+        if (sql.includes('INSERT INTO iot_device_events'))
+          return Promise.resolve([{ id: 'evt1' }]);
+        return Promise.resolve(undefined);
+      });
+      await expect(
+        service.onFaceEvent(withImage({ utc: iso })),
+      ).resolves.toBeUndefined();
+      expect(snapshotFileIdOf()).toBeNull();
+    });
+
+    it('F-B và F-C cùng đúng lúc (identity lạ trên camera vừa presence) → chỉ lưu 1 lần, KHÔNG double-save', async () => {
+      const iso = pinVn(22, 0);
+      wire({
+        presenceMap: { '5': AREA },
+        participant: [], // userId có nhưng KHÔNG participant → matchState unmatched_identity
+        alertRule: [{ restricted_hours_json: HOURS_9AM_6PM }],
+      });
+      await service.onFaceEvent(withImage({ utc: iso }));
+      expect(payloadOf().matchState).toBe('unmatched_identity');
+      expect(storageMock.saveFile).toHaveBeenCalledTimes(1);
       expect(snapshotFileIdOf()).toBe('media1');
     });
   });
