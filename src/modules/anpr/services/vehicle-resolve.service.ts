@@ -7,11 +7,18 @@ import type {
 import { VehicleControlAlertService } from './vehicle-control-alert.service.js';
 import { GateAccessLogService } from '../../zones/services/gate-access-log.service.js';
 import { GateLogPairingService } from '../../zones/services/gate-log-pairing.service.js';
+import { StorageService } from '../../storage/storage.service.js';
+import { saveEventSnapshot } from '../../../common/utils/save-event-snapshot.util.js';
 import {
   IVSS_CHANNEL_ZONE_MAP_KEY,
   IVSS_CHANNEL_DIRECTION_MAP_KEY,
   type GateLogSkippedReason,
 } from '../constants/gate-writer.constant.js';
+
+/** F-D: subfolder storage cho snapshot ảnh sự kiện ANPR. */
+const SNAPSHOT_FOLDER = 'anpr-snapshots';
+/** media_files.related_entity_type cho snapshot lưu từ luồng ANPR ingestion. */
+const SNAPSHOT_RELATED_ENTITY_TYPE = 'anpr_device_event';
 
 interface IdRow {
   id: string;
@@ -63,6 +70,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
     private readonly vehicleControlAlertService: VehicleControlAlertService,
     private readonly gateAccessLogService: GateAccessLogService,
     private readonly gateLogPairingService: GateLogPairingService,
+    private readonly storageService: StorageService,
   ) {}
 
   async onVehicleEvent(evt: VehicleEvent): Promise<void> {
@@ -104,6 +112,11 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       else if (gateDirection === 'seen') preSkip = 'direction_seen';
       else if (evt.plateNumber.length > 16) preSkip = 'plate_too_long';
 
+      // F-D: có ảnh (bridge gửi — hiện CHƯA gửi cho ANPR, xem R7, nên thường null) → lưu
+      // snapshot. KHÔNG điều kiện matched/unmatched (khác F-B/F-C): biển số đáng giữ ảnh
+      // bất kể resolve được chủ xe hay không.
+      const snapshotFileId = await this.saveSnapshotSafe(evt.imageBase64);
+
       // SEC-01: KHÔNG imageBase64. userId nằm trong payload (schema KHÔNG có cột user_id).
       const payload = {
         plateRaw: evt.plateRaw,
@@ -126,14 +139,21 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
       // OQ-2: room_id/meeting_id literal NULL. QĐ-6: RETURNING id → event_id cho gate log.
       // FR-008b: INSERT chạy TRƯỚC evaluate() để có source_event_id. AC-006: lỗi INSERT KHÔNG
       // được chặn cảnh báo control-list → nuốt lỗi tại chỗ, eventId = null.
+      // F-D/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí cột/tham số cũ.
       let insRows: IdRow[] | undefined;
       try {
         insRows = await this.dataSource.manager.query(
           `INSERT INTO iot_device_events
-             (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status)
-           VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4)
+             (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id)
+           VALUES ($1, NULL, NULL, 'ivss_vehicle_event', $2, 'ivss', 'info', $3::jsonb, $4, $5)
            RETURNING id`,
-          [deviceId, eventTime, JSON.stringify(payload), processedStatus],
+          [
+            deviceId,
+            eventTime,
+            JSON.stringify(payload),
+            processedStatus,
+            snapshotFileId,
+          ],
         );
       } catch (e) {
         this.logger.error(
@@ -225,6 +245,29 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
        WHERE id = $2`,
       [reason, eventId],
     );
+  }
+
+  /**
+   * F-D: lưu snapshot ảnh (nếu có) qua storageService + media_files — KHÔNG throw
+   * (webhook UC4 always-ack): lỗi storage/DB chỉ log + trả null, KHÔNG được chặn
+   * persist raw event. Không có ảnh (bridge hiện chưa gửi, xem R7) → null, KHÔNG gọi storage.
+   */
+  private async saveSnapshotSafe(
+    imageBase64: string | null | undefined,
+  ): Promise<string | null> {
+    if (!imageBase64) return null;
+    try {
+      return await saveEventSnapshot(this.dataSource, this.storageService, {
+        imageBase64,
+        folder: SNAPSHOT_FOLDER,
+        relatedEntityType: SNAPSHOT_RELATED_ENTITY_TYPE,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `snapshot save failed: ${e instanceof Error ? e.message : 'unknown'}`,
+      );
+      return null;
+    }
   }
 
   private async resolveBridgeDeviceId(): Promise<string | null> {
