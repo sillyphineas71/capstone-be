@@ -20,6 +20,7 @@ describe('UserExportService (BE-04 — 2026-07-27, render đồng bộ)', () => 
     email: 'a@test.com',
     phoneNumber: '0900000000',
     departmentId: 'dept-1',
+    departmentName: 'Engineering',
     accountStatus: 'active',
     roles: ['employee'],
     createdAt: new Date('2026-01-01T00:00:00Z'),

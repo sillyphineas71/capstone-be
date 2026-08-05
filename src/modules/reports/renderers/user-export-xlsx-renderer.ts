@@ -6,6 +6,28 @@ export interface UserExportMeta {
   extractedByEmail: string;
 }
 
+const VN_TIMEZONE = 'Asia/Ho_Chi_Minh';
+
+/** Format theo giờ Việt Nam, dạng dd/MM/yyyy HH:mm:ss, dễ đọc trong Excel. */
+function formatVnDateTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat('vi-VN', {
+    timeZone: VN_TIMEZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+    .formatToParts(date)
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+  return `${parts.day}/${parts.month}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
 /**
  * renderUserExportXlsx (BE-04) — 1 sheet, 1 dòng/user. Mirror style
  * renderGateAccessXlsx (renderers/gate-access-xlsx-renderer.ts).
@@ -29,7 +51,7 @@ export async function renderUserExportXlsx(
 
   sheet.mergeCells('A2:H2');
   sheet.getCell('A2').value =
-    `Người tạo: ${meta.extractedByEmail}  |  Thời điểm xuất: ${meta.generatedAt.toISOString()}  |  Tổng số: ${rows.length}`;
+    `Người tạo: ${meta.extractedByEmail}  |  Thời điểm xuất: ${formatVnDateTime(meta.generatedAt)}  |  Tổng số: ${rows.length}`;
   sheet.getCell('A2').alignment = { horizontal: 'center' };
   sheet.addRow([]);
 
@@ -38,7 +60,7 @@ export async function renderUserExportXlsx(
     'Họ tên',
     'Email',
     'Số điện thoại',
-    'Phòng ban (ID)',
+    'Phòng ban',
     'Trạng thái',
     'Vai trò',
     'Ngày tạo',
@@ -59,10 +81,10 @@ export async function renderUserExportXlsx(
       row.fullName,
       row.email,
       row.phoneNumber ?? '',
-      row.departmentId ?? '',
+      row.departmentName ?? '',
       row.accountStatus,
       row.roles.join(', '),
-      row.createdAt.toISOString(),
+      formatVnDateTime(row.createdAt),
     ]);
   }
 
