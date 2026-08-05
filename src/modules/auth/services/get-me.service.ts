@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { AuthzReadRepository } from '../repositories/authz-read.repository.js';
 
 export interface GetMeResponseDto {
   id: string;
@@ -11,11 +12,15 @@ export interface GetMeResponseDto {
   departmentId: string | null;
   departmentName: string | null;
   roles: Array<{ id: string; roleCode: string; roleName: string }>;
+  permissions: string[];
 }
 
 @Injectable()
 export class GetMeService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly authzReadRepository: AuthzReadRepository,
+  ) {}
 
   async getMe(userId: string): Promise<GetMeResponseDto> {
     const rows = await this.dataSource.query(
@@ -51,6 +56,9 @@ export class GetMeService {
         roleName: row.role_name as string,
       }));
 
+    const { permissions } =
+      await this.authzReadRepository.getEffectiveRolesAndPermissions(userId);
+
     return {
       id: first.id as string,
       email: first.email as string,
@@ -61,6 +69,7 @@ export class GetMeService {
       departmentId: (first.department_id as string) ?? null,
       departmentName: (first.department_name as string) ?? null,
       roles,
+      permissions,
     };
   }
 }
