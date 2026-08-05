@@ -4,14 +4,17 @@ import {
   Param,
   ParseUUIDPipe,
   Query,
+  Res,
   UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 import { IvssRoomAccessLogService } from '../services/ivss-room-access-log.service.js';
+import { DeviceEventSnapshotService } from '../services/device-event-snapshot.service.js';
 import { QueryRoomAccessLogDto } from '../dto/query-room-access-log.dto.js';
 
 /**
@@ -36,6 +39,7 @@ import { QueryRoomAccessLogDto } from '../dto/query-room-access-log.dto.js';
 export class IvssRoomAccessController {
   constructor(
     private readonly roomAccessLogService: IvssRoomAccessLogService,
+    private readonly deviceEventSnapshotService: DeviceEventSnapshotService,
   ) {}
 
   @Get('access-log')
@@ -63,5 +67,21 @@ export class IvssRoomAccessController {
       search: query.search,
     });
     return { success: true, message: 'Room access log retrieved', data };
+  }
+
+  // F-F: ảnh snapshot của 1 iot_device_events row (F-B/F-C/F-D ghi). Cùng nhóm quyền
+  // access-log — dữ liệu ảnh cá nhân/biển số, KHÔNG rộng hơn access-log đang gate.
+  @Get('device-events/:eventId/snapshot')
+  async deviceEventSnapshot(
+    @Param('eventId', ParseUUIDPipe) eventId: string,
+    @Res() res: Response,
+  ) {
+    const snapshot = await this.deviceEventSnapshotService.getSnapshot(eventId);
+    res.setHeader('Content-Type', snapshot.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${snapshot.fileName}"`,
+    );
+    res.send(snapshot.buffer);
   }
 }
