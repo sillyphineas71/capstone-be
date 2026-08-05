@@ -748,6 +748,8 @@ describe('DepartmentsService', () => {
       const whereArg = userRepo.find.mock.calls[0][0].where;
       expect(whereArg.departmentId).toBe('d1');
       expect(whereArg.accountStatus).toBe('active');
+      expect(result[0].departmentCode).toBe('IT');
+      expect(result[0].departmentName).toBe('CNTT');
     });
 
     it('[AC-004] gắn isDepartmentManager=true đúng người khớp manager_user_id và đưa lên đầu danh sách', async () => {
@@ -786,6 +788,8 @@ describe('DepartmentsService', () => {
       expect(Object.keys(result[0]).sort()).toEqual(
         [
           'id',
+          'departmentCode',
+          'departmentName',
           'employeeCode',
           'fullName',
           'email',
