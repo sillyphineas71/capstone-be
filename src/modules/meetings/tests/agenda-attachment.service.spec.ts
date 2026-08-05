@@ -152,6 +152,43 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
       );
     });
 
+    // REGRESSION (2026-08-05): Multer/Busboy giải mã header filename multipart
+    // theo latin1 mặc định; trình duyệt gửi byte UTF-8 thật cho tên có dấu →
+    // ra mojibake nếu không sửa (phát hiện khi test thật với file
+    // "SRS-tiếng-Việt-3.docx" → lưu thành "SRS-tiáº¿ng-Viá»t-3.docx").
+    it('normalizes a UTF-8 filename that Multer mis-decoded as latin1 (mojibake fix)', async () => {
+      const correctName = 'SRS-tiếng-Việt-3.docx';
+      const mojibakeName = Buffer.from(correctName, 'utf8').toString('latin1');
+      const file = {
+        ...mockFile,
+        originalname: mojibakeName,
+        mimetype:
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      };
+
+      const result = await service.addAgendaAttachment(
+        meetingId,
+        agendaId,
+        file,
+        organizerId,
+      );
+
+      expect(result.fileName).toBe(correctName);
+      expect(mediaFileRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: correctName }),
+      );
+    });
+
+    it('keeps a plain ASCII filename unchanged', async () => {
+      const result = await service.addAgendaAttachment(
+        meetingId,
+        agendaId,
+        mockFile,
+        organizerId,
+      );
+      expect(result.fileName).toBe('report.pdf');
+    });
+
     it('throws AGENDA_ATTACHMENT_FILE_REQUIRED when no file', async () => {
       await expect(
         service.addAgendaAttachment(
