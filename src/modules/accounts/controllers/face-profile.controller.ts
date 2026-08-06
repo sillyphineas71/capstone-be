@@ -12,16 +12,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FaceProfileService } from '../services/face-profile.service.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
-
-// Mock PermissionsGuard — nhất quán recording/iot controller.
-const MockPermissionsGuard = class {
-  canActivate() {
-    return true;
-  }
-};
-const Permissions =
-  (...args: string[]) =>
-  (target: any, key?: any, descriptor?: any) => {};
+import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
+import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 const PORTRAIT_LIMIT =
   Number(process.env.FACE_PORTRAIT_MAX_BYTES) || 5 * 1024 * 1024;
@@ -33,8 +25,8 @@ export class FaceProfileController {
   // UC-17: enroll ảnh chân dung cho user.
   @Post('users/:userId/face-profile')
   @HttpCode(201)
-  @UseGuards(JwtAuthGuard, MockPermissionsGuard)
-  @Permissions('account.face.register')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('account.face.register')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: PORTRAIT_LIMIT } }),
   )
