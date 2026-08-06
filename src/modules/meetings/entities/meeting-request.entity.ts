@@ -30,6 +30,7 @@ export enum ApprovalStatus {
   REJECTED = 'rejected',
   APPLIED = 'applied',
   CANCELLED = 'cancelled',
+  EXPIRED = 'expired',
 }
 
 export enum ConflictCheckStatus {

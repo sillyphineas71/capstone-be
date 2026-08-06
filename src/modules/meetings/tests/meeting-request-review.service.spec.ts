@@ -166,6 +166,16 @@ describe('MeetingRequestReviewService', () => {
   describe('approve', () => {
     const approveDto: ApproveMeetingRequestDto = {};
 
+    // F-R4a: deadline duyệt = targetStartTime (mặc định 10:00 trong mockRequest).
+    // Đóng băng "now" TRƯỚC deadline cho các test hiện có (chưa hết hạn).
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-07-15T09:30:00Z'));
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     function setupSuccessMocks() {
       em.findOne
         .mockResolvedValueOnce(mockRequest())
@@ -463,6 +473,36 @@ describe('MeetingRequestReviewService', () => {
             { id: 'conflicting-booking' } as RoomBookingEntity,
           ]),
       });
+
+      await expect(
+        service.approve('request-uuid', approveDto, authUser, clientContext),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('F-R4a: should throw 409 REQUEST_EXPIRED when now > targetStartTime (CREATE_MEETING)', async () => {
+      em.findOne
+        .mockResolvedValueOnce(mockRequest())
+        .mockResolvedValueOnce(mockMeeting())
+        .mockResolvedValueOnce(mockBooking());
+      jest.setSystemTime(new Date('2026-07-15T10:00:01Z')); // sau targetStartTime 10:00
+
+      await expect(
+        service.approve('request-uuid', approveDto, authUser, clientContext),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('F-R4a: should throw 409 REQUEST_EXPIRED when now > NEW requested time (UPDATE_TIME)', async () => {
+      em.findOne
+        .mockResolvedValueOnce(
+          mockRequest({
+            requestType: MeetingRequestType.UPDATE_TIME,
+            requestedStartTime: new Date('2026-07-15T14:00:00Z'), // giờ MỚI xin đổi
+            requestedEndTime: new Date('2026-07-15T15:00:00Z'),
+          }),
+        )
+        .mockResolvedValueOnce(mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }))
+        .mockResolvedValueOnce(mockBooking({ status: RoomBookingStatus.APPROVED }));
+      jest.setSystemTime(new Date('2026-07-15T14:00:01Z')); // sau giờ mới xin đổi
 
       await expect(
         service.approve('request-uuid', approveDto, authUser, clientContext),

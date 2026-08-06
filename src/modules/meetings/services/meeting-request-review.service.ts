@@ -229,6 +229,20 @@ export class MeetingRequestReviewService {
       const targetStartTime = request.requestedStartTime || meeting.startTime;
       const targetEndTime = request.requestedEndTime || meeting.endTime;
 
+      // F-R4a: deadline duyệt = targetStartTime (CREATE_MEETING → giờ họp gốc;
+      // UPDATE_TIME/UPDATE_ROOM → giờ MỚI xin đổi). Quá hạn → chặn duyệt, KHÔNG
+      // tự expire ở đây (đó là việc của cron expireOverdueBatch()).
+      if (targetStartTime.getTime() <= Date.now()) {
+        throw new ConflictException({
+          success: false,
+          message: 'Yêu cầu đã quá hạn (đã qua giờ họp), không thể duyệt.',
+          error: {
+            code: 'REQUEST_EXPIRED',
+            details: { requestId, deadline: targetStartTime.toISOString() },
+          },
+        });
+      }
+
       const conflicts = await em.getRepository(RoomBookingEntity).find({
         where: {
           roomId: targetRoomId,
