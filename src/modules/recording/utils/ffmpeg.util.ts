@@ -61,3 +61,27 @@ export function spawnFfmpegConcat(
   const bin = process.env.FFMPEG_PATH || 'ffmpeg';
   return spawn(bin, buildConcatArgs(listPath, outPath), { windowsHide: true });
 }
+
+/**
+ * Build args ffmpeg remux (REC audio-upload): viết lại container mà KHÔNG
+ * transcode (`-c copy`) — sửa file `.webm` bị FE nối thô nhiều Blob chunk
+ * của MediaRecorder (mỗi `ondataavailable` là 1 fragment WebM riêng; nối
+ * bằng `new Blob([...])` không tạo lại Cues/Duration cho toàn file). File
+ * kết quả thiếu bảng chỉ mục seek khiến trình duyệt tua audio sai vị trí và
+ * ffprobe không đọc được `format.duration` (cùng gốc với lỗi
+ * AUDIO_DURATION_PROBE_FAILED đã fix ở worker transcription-job-runner.ts,
+ * áp dụng lại đây cho đúng file lưu trữ thật, không chỉ file tạm để đo).
+ * `-y` ghi đè outPath nếu tồn tại (tmp path luôn random nên chỉ để an toàn).
+ */
+export function buildRemuxArgs(inputPath: string, outPath: string): string[] {
+  return ['-y', '-i', inputPath, '-c', 'copy', outPath];
+}
+
+/** Spawn ffmpeg remux. FFMPEG_PATH lazy từ env. Path KHÔNG chứa credential. */
+export function spawnFfmpegRemux(
+  inputPath: string,
+  outPath: string,
+): ChildProcess {
+  const bin = process.env.FFMPEG_PATH || 'ffmpeg';
+  return spawn(bin, buildRemuxArgs(inputPath, outPath), { windowsHide: true });
+}

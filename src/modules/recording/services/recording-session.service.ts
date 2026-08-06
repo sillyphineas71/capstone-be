@@ -25,7 +25,7 @@ import { CreateAudioSessionDto } from '../dto/create-audio-session.dto.js';
 import { RecordingProcessManager } from './recording-process-manager.js';
 import { decryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { probeMedia, probeAudioDuration } from '../utils/ffprobe.util.js';
-import { spawnFfmpegConcat } from '../utils/ffmpeg.util.js';
+import { spawnFfmpegConcat, spawnFfmpegRemux } from '../utils/ffmpeg.util.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 interface RtspConfig {
@@ -45,6 +45,8 @@ export class RecordingSessionService {
   private static readonly POLL_MS = 250;
   // UC-114/115: timeout concat N segment → 1 file khi stop (ffmpeg -c copy, nhanh).
   private static readonly CONCAT_TIMEOUT_MS = 120000;
+  // REC audio-upload: timeout remux .webm nối thô từ MediaRecorder (ffmpeg -c copy, nhanh).
+  private static readonly FFMPEG_REMUX_TIMEOUT_MS = 15000;
 
   private static readonly SUPPORTED_AUDIO_EXTENSIONS = [
     '.wav',
@@ -855,14 +857,15 @@ export class RecordingSessionService {
     }
 
     const sessionId = randomUUID();
-    const checksum = createHash('sha256').update(file.buffer).digest('hex');
+    const audioBuffer = await this.remuxWebmBufferIfNeeded(file.buffer, ext);
+    const checksum = createHash('sha256').update(audioBuffer).digest('hex');
     const durationSeconds = await this.probeUploadedAudioDuration(
-      file.buffer,
+      audioBuffer,
       ext,
     );
 
     const saved = await this.storageService.saveFile({
-      buffer: file.buffer,
+      buffer: audioBuffer,
       originalName: file.originalname,
       folder: `recordings/${meetingId}`,
     });
@@ -887,7 +890,7 @@ export class RecordingSessionService {
         stoppedBy: userId,
         storageProvider: driver,
         storagePath: saved.storageKey,
-        fileSizeBytes: String(file.size),
+        fileSizeBytes: String(audioBuffer.length),
         durationSeconds,
         checksum,
       });
@@ -910,7 +913,7 @@ export class RecordingSessionService {
           sessionId,
           meetingId,
           userId,
-          String(file.size),
+          String(audioBuffer.length),
           checksum,
           durationSeconds,
         ],
@@ -1040,14 +1043,15 @@ export class RecordingSessionService {
       });
     }
 
-    const checksum = createHash('sha256').update(file.buffer).digest('hex');
+    const audioBuffer = await this.remuxWebmBufferIfNeeded(file.buffer, ext);
+    const checksum = createHash('sha256').update(audioBuffer).digest('hex');
     const durationSeconds = await this.probeUploadedAudioDuration(
-      file.buffer,
+      audioBuffer,
       ext,
     );
 
     const saved = await this.storageService.saveFile({
-      buffer: file.buffer,
+      buffer: audioBuffer,
       originalName: file.originalname,
       folder: `meetings/${meetingId}/sessions/${sessionId}/${userId}`,
     });
@@ -1077,7 +1081,7 @@ export class RecordingSessionService {
           meetingId,
           userId,
           userId,
-          String(file.size),
+          String(audioBuffer.length),
           checksum,
           durationSeconds,
         ],
@@ -1179,6 +1183,78 @@ export class RecordingSessionService {
     } finally {
       try {
         fs.unlinkSync(tmpPath);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  /**
+   * REC audio-upload — remux buffer `.webm` trước khi lưu/probe (best-effort,
+   * KHÔNG transcode, `-c copy`). FE (StationRecorder) tạo file bằng cách nối
+   * thô nhiều Blob chunk `MediaRecorder` (`new Blob([chunk1, chunk2, ...])`) —
+   * chỉ chunk đầu có EBML header/Segment info đầy đủ, file gộp thiếu Cues
+   * (bảng chỉ mục seek) và Duration đúng cho toàn bộ nội dung. Hệ quả: trình
+   * duyệt tua audio sai vị trí khi phát lại, và `probeAudioDuration()` phía
+   * dưới thường trả `null`. Remux ở đây viết lại đúng container 1 lần, sửa
+   * tận gốc cho MỌI nơi dùng lại file (web player, tải xuống, probe duration)
+   * — cùng kỹ thuật đã dùng ở worker `transcription-job-runner.ts` cho
+   * `AUDIO_DURATION_PROBE_FAILED`, nhưng áp dụng cho đúng file lưu trữ thật
+   * thay vì chỉ 1 bản tạm để đo. Lỗi/timeout → trả buffer gốc, KHÔNG chặn
+   * upload. Chỉ remux `.webm` vì đây là định dạng duy nhất tạo ra theo cách
+   * nối chunk này; `.wav/.mp3/.m4a/...` do người dùng tự thu không có vấn đề
+   * này nên bỏ qua để tránh tốn thời gian xử lý không cần thiết.
+   */
+  private async remuxWebmBufferIfNeeded(
+    buffer: Buffer,
+    ext: string,
+  ): Promise<Buffer> {
+    if (ext !== '.webm') return buffer;
+
+    const inPath = path.join(
+      os.tmpdir(),
+      `audio-remux-in-${randomUUID()}.webm`,
+    );
+    const outPath = path.join(
+      os.tmpdir(),
+      `audio-remux-out-${randomUUID()}.webm`,
+    );
+    try {
+      fs.writeFileSync(inPath, buffer);
+
+      const ok = await new Promise<boolean>((resolve) => {
+        const proc = spawnFfmpegRemux(inPath, outPath);
+        const timer = setTimeout(() => {
+          try {
+            proc.kill();
+          } catch {
+            // process có thể đã thoát
+          }
+          resolve(false);
+        }, RecordingSessionService.FFMPEG_REMUX_TIMEOUT_MS);
+        proc.on('error', () => {
+          clearTimeout(timer);
+          resolve(false);
+        });
+        proc.on('close', (code) => {
+          clearTimeout(timer);
+          resolve(code === 0);
+        });
+      });
+
+      if (!ok || !fs.existsSync(outPath)) return buffer;
+      const remuxed = fs.readFileSync(outPath);
+      return remuxed.length > 0 ? remuxed : buffer;
+    } catch {
+      return buffer;
+    } finally {
+      try {
+        fs.unlinkSync(inPath);
+      } catch {
+        // best-effort cleanup
+      }
+      try {
+        fs.unlinkSync(outPath);
       } catch {
         // best-effort cleanup
       }

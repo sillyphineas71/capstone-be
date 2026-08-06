@@ -15,6 +15,7 @@ import { RecordingProcessManager } from './recording-process-manager.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { encryptSecret } from '../../../common/utils/secret-crypto.util.js';
 import { redactUrl } from '../utils/ffmpeg.util.js';
+import * as ffmpegUtil from '../utils/ffmpeg.util.js';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 
@@ -752,6 +753,98 @@ describe('RecordingSessionService.uploadAudioForTranscription', () => {
       service.uploadAudioForTranscription('m1', goodFile(), 'u1'),
     ).rejects.toThrow(InternalServerErrorException);
     expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  // BUG-15b (2026-08-06): FE (StationRecorder) nối thô nhiều Blob chunk MediaRecorder
+  // → .webm thiếu Cues/Duration đúng → browser tua sai + probe duration ra null.
+  // Remux (-c copy) sửa tận gốc lúc upload, best-effort, chỉ áp dụng cho .webm.
+  describe('remux .webm (tua audio chính xác)', () => {
+    const webmFile = () => ({
+      buffer: Buffer.from('raw-fragmented-webm-bytes'),
+      originalname: 'station_recording.webm',
+      mimetype: 'audio/webm',
+      size: 26,
+    });
+
+    const fakeFfmpegProc = (opts: { code?: number; error?: Error } = {}) => {
+      const emitter = new EventEmitter() as any;
+      emitter.kill = jest.fn();
+      process.nextTick(() => {
+        if (opts.error) emitter.emit('error', opts.error);
+        else emitter.emit('close', opts.code ?? 0);
+      });
+      return emitter;
+    };
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('remux thành công → lưu buffer đã remux (khác buffer gốc), size/checksum theo buffer mới', async () => {
+      const remuxed = Buffer.from('fixed-webm-with-cues');
+      jest
+        .spyOn(ffmpegUtil, 'spawnFfmpegRemux')
+        .mockImplementation(() => fakeFfmpegProc({ code: 0 }));
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockReturnValue(remuxed as any);
+
+      const result = await service.uploadAudioForTranscription(
+        'm1',
+        webmFile(),
+        'u1',
+      );
+
+      expect(result.mediaFileId).toBe('media-1');
+      expect(storageMock.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: remuxed }),
+      );
+      const insertParams = qr.query.mock.calls[0][1];
+      expect(insertParams[9]).toBe(String(remuxed.length)); // file_size_bytes
+    });
+
+    it('remux thất bại (exit code khác 0) → fallback dùng buffer gốc, upload vẫn thành công', async () => {
+      jest
+        .spyOn(ffmpegUtil, 'spawnFfmpegRemux')
+        .mockImplementation(() => fakeFfmpegProc({ code: 1 }));
+
+      const original = webmFile();
+      const result = await service.uploadAudioForTranscription(
+        'm1',
+        original,
+        'u1',
+      );
+
+      expect(result.mediaFileId).toBe('media-1');
+      expect(storageMock.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: original.buffer }),
+      );
+    });
+
+    it('remux ném lỗi spawn → fallback dùng buffer gốc, không chặn upload', async () => {
+      jest
+        .spyOn(ffmpegUtil, 'spawnFfmpegRemux')
+        .mockImplementation(() =>
+          fakeFfmpegProc({ error: new Error('ENOENT: ffmpeg not found') }),
+        );
+
+      const original = webmFile();
+      const result = await service.uploadAudioForTranscription(
+        'm1',
+        original,
+        'u1',
+      );
+
+      expect(result.mediaFileId).toBe('media-1');
+      expect(storageMock.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: original.buffer }),
+      );
+    });
+
+    it('file .m4a (không phải .webm) → KHÔNG gọi remux', async () => {
+      const remuxSpy = jest.spyOn(ffmpegUtil, 'spawnFfmpegRemux');
+
+      await service.uploadAudioForTranscription('m1', goodFile(), 'u1');
+
+      expect(remuxSpy).not.toHaveBeenCalled();
+    });
   });
 });
 
