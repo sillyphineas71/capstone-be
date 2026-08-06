@@ -1863,6 +1863,8 @@ export class UsersService {
       'u.employeeCode',
       'u.accountStatus',
       'u.departmentId',
+      'u.avatarUrl',
+      'u.phoneNumber',
     ])
       .orderBy(sortColumn, sortDirection)
       .skip((page - 1) * limit)
@@ -1899,6 +1901,8 @@ export class UsersService {
       accountStatus: u.accountStatus,
       departmentId: u.departmentId,
       roles: rolesMap.get(u.id) ?? [],
+      avatarUrl: u.avatarUrl,
+      phoneNumber: u.phoneNumber,
     }));
 
     return { data, total };

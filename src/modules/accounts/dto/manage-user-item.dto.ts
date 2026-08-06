@@ -28,4 +28,20 @@ export class ManageUserItemDto {
     type: [String],
   })
   roles: string[];
+
+  @ApiProperty({
+    description: 'Đường dẫn ảnh đại diện của người dùng',
+    example: 'https://storage.example.com/avatars/user.jpg',
+    required: false,
+    nullable: true,
+  })
+  avatarUrl?: string | null;
+
+  @ApiProperty({
+    description: 'Số điện thoại của người dùng',
+    example: '0901234567',
+    required: false,
+    nullable: true,
+  })
+  phoneNumber?: string | null;
 }
