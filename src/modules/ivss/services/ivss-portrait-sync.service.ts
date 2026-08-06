@@ -140,23 +140,26 @@ export class IvssPortraitSyncService {
 
     // Idempotent (clone "Nợ #2" của person-sync): xoá person cũ trên portrait group
     // trước khi enroll, tránh 1 user nhiều szUID khi mapping cũ 'failed' hoặc DB lệch IVSS.
-    const stale: Array<{ device_person_id: string }> =
+    // Bug fix (device_person_id/device_person_code): deleteFace phải gửi
+    // device_person_code (personUid do BE tự tạo lúc enroll, khớp field szID
+    // bridge ghi) — KHÔNG phải device_person_id (szUid SDK tự sinh, outUid).
+    const stale: Array<{ device_person_code: string }> =
       await this.dataSource.manager.query(
-        `SELECT device_person_id FROM device_user_mappings
+        `SELECT device_person_code FROM device_user_mappings
          WHERE device_id = $1 AND user_id = $2
            AND metadata_json->>'source' = $3
-           AND device_person_id IS NOT NULL AND deleted_at IS NULL`,
+           AND device_person_code IS NOT NULL AND deleted_at IS NULL`,
         [deviceId, userId, MAPPING_SOURCE],
       );
     for (const s of stale) {
       try {
         await this.bridge.deleteFace({
           groupId: this.groupId,
-          personUid: s.device_person_id,
+          personUid: s.device_person_code,
         });
       } catch (e) {
         this.logger.warn(
-          `Portrait cleanup stale person ${s.device_person_id} failed: ${this.msg(e)} — tiếp tục enroll.`,
+          `Portrait cleanup stale person ${s.device_person_code} failed: ${this.msg(e)} — tiếp tục enroll.`,
         );
       }
     }
@@ -216,7 +219,9 @@ export class IvssPortraitSyncService {
     mp: PortraitMappingRow,
   ): Promise<PortraitRemoveResult> {
     try {
-      const personUid = mp.device_person_id ?? mp.device_person_code;
+      // Bug fix: gửi device_person_code (personUid BE tự tạo, khớp field
+      // szID) — KHÔNG ưu tiên device_person_id (szUid SDK tự sinh) như trước.
+      const personUid = mp.device_person_code;
       if (personUid && this.groupId) {
         const r = await this.bridge.deleteFace({
           groupId: this.groupId,
