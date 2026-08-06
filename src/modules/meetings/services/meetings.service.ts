@@ -5476,6 +5476,28 @@ export class MeetingsService {
   }
 
   /**
+   * Multer/Busboy giải mã header filename của multipart/form-data theo latin1
+   * mặc định (không tự đoán charset), trong khi trình duyệt hiện đại luôn gửi
+   * byte UTF-8 thật cho tên file có dấu → ra mojibake nếu không sửa (vd
+   * "SRS-tiếng-Việt-3.docx" thành "SRS-tiáº¿ng-Viá»t-3.docx", bug phát hiện
+   * 2026-08-05 khi retest agenda attachment với file tên tiếng Việt thật).
+   * Heuristic: re-decode byte của chuỗi (đang bị hiểu là latin1) sang UTF-8;
+   * nếu ra ký tự thay thế U+FFFD tức chuỗi gốc vốn không phải UTF-8 bị đọc
+   * nhầm (đã là ASCII/latin1 thật) → giữ nguyên, tránh làm hỏng ngược lại.
+   */
+  private normalizeUploadedFileName(name: string): string {
+    try {
+      const reDecoded = Buffer.from(name, 'latin1').toString('utf8');
+      if (reDecoded !== name && !reDecoded.includes('�')) {
+        return reDecoded;
+      }
+    } catch {
+      // giữ nguyên tên gốc nếu không decode được
+    }
+    return name;
+  }
+
+  /**
    * Gộp 1 query duy nhất để lấy attachments cho nhiều agenda item cùng lúc
    * (tránh N+1 khi getAgendas() trả danh sách nhiều item). Xem FR-007.
    */
@@ -5569,6 +5591,7 @@ export class MeetingsService {
         error: { code: 'AGENDA_ATTACHMENT_FILE_REQUIRED', details: {} },
       });
     }
+    file.originalname = this.normalizeUploadedFileName(file.originalname);
 
     const maxBytes = this.configService.get<number>(
       'AGENDA_ATTACHMENT_MAX_BYTES',

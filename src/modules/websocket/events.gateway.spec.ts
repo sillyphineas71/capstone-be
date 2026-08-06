@@ -56,3 +56,77 @@ describe('EventsGateway — IRP-001 (#40) subscribe per-meeting', () => {
     expect(ack).toEqual({ ok: false });
   });
 });
+
+describe('EventsGateway — feat-live-meeting-agenda-presentation', () => {
+  let gateway: EventsGateway;
+  let emitMock: jest.Mock;
+  let toMock: jest.Mock;
+
+  const AGENDA_UUID = '33333333-3333-3333-3333-333333333333';
+  const FILE_UUID = '44444444-4444-4444-4444-444444444444';
+
+  beforeEach(() => {
+    const config = { get: (_k: string, def: unknown) => def } as ConfigService;
+    gateway = new EventsGateway(config);
+    emitMock = jest.fn();
+    toMock = jest.fn().mockReturnValue({ emit: emitMock });
+    gateway.server = { to: toMock } as unknown as EventsGateway['server'];
+  });
+
+  it('agenda:present hợp lệ → broadcast agenda:presented vào đúng room meeting:<id>', () => {
+    const ack = gateway.handleAgendaPresent({
+      meetingId: MEETING_UUID,
+      agendaId: AGENDA_UUID,
+      fileId: FILE_UUID,
+      fileName: 'tai-lieu.pdf',
+      presentedBy: 'user-1',
+    });
+
+    expect(ack).toEqual({ ok: true });
+    expect(toMock).toHaveBeenCalledWith(`meeting:${MEETING_UUID}`);
+    expect(emitMock).toHaveBeenCalledWith(
+      'agenda:presented',
+      expect.objectContaining({
+        meetingId: MEETING_UUID,
+        agendaId: AGENDA_UUID,
+        fileId: FILE_UUID,
+        fileName: 'tai-lieu.pdf',
+        presentedBy: 'user-1',
+      }),
+    );
+  });
+
+  it('agenda:present thiếu fileId → no-op, không broadcast', () => {
+    const ack = gateway.handleAgendaPresent({
+      meetingId: MEETING_UUID,
+      agendaId: AGENDA_UUID,
+    });
+    expect(ack).toEqual({ ok: false });
+    expect(toMock).not.toHaveBeenCalled();
+  });
+
+  it('agenda:present meetingId không phải uuid → no-op', () => {
+    const ack = gateway.handleAgendaPresent({
+      meetingId: 'not-a-uuid',
+      agendaId: AGENDA_UUID,
+      fileId: FILE_UUID,
+    });
+    expect(ack).toEqual({ ok: false });
+    expect(toMock).not.toHaveBeenCalled();
+  });
+
+  it('agenda:present_stop hợp lệ → broadcast agenda:present_stopped', () => {
+    const ack = gateway.handleAgendaPresentStop({ meetingId: MEETING_UUID });
+    expect(ack).toEqual({ ok: true });
+    expect(toMock).toHaveBeenCalledWith(`meeting:${MEETING_UUID}`);
+    expect(emitMock).toHaveBeenCalledWith('agenda:present_stopped', {
+      meetingId: MEETING_UUID,
+    });
+  });
+
+  it('agenda:present_stop meetingId rác → no-op', () => {
+    const ack = gateway.handleAgendaPresentStop({ meetingId: 'x' });
+    expect(ack).toEqual({ ok: false });
+    expect(toMock).not.toHaveBeenCalled();
+  });
+});

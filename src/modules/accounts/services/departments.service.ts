@@ -597,6 +597,8 @@ export class DepartmentsService {
 
     const items: DepartmentMemberItemDto[] = users.map((u) => ({
       id: u.id,
+      departmentCode: department.departmentCode,
+      departmentName: department.departmentName,
       employeeCode: u.employeeCode,
       fullName: u.fullName,
       email: u.email,

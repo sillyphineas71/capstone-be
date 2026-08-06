@@ -17,6 +17,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-06 | Bổ sung `departmentCode`/`departmentName` vào từng phần tử response (yêu cầu trực tiếp của Thiếu Chủ) — endpoint đã live, FE đã tích hợp. Không đổi field khác, không đổi permission, không đổi logic lọc/sort. | Mục 7.2 (response mẫu), mục 5.2 |
 | 2026-08-05 | Khởi tạo spec — chốt scope tối thiểu sau khi đối chiếu schema thật và các API đã có sẵn (`GET /users`, `POST /scheduling/participant-conflicts/check`). Quyết định: KHÔNG đổi `CreateMeetingDto`/`meetings.service.ts`, KHÔNG thêm permission mới, KHÔNG tự tính conflict lịch trong endpoint này. | Toàn bộ file |
 
 ---
@@ -117,8 +118,9 @@ Ba quyết định sau đây làm giảm đáng kể phạm vi so với đề xu
 | `users` | Nguồn danh sách nhân viên | READ (`department_id`, `employment_status`, `account_status`, `deleted_at`) |
 
 ### 5.2 Business Rules Impact
-- **KHÔNG thay đổi schema.** Mọi field cần dùng (`users.department_id`, `users.position_title`, `departments.manager_user_id`) đã tồn tại trong v3.2 Compact.
+- **KHÔNG thay đổi schema.** Mọi field cần dùng (`users.department_id`, `users.position_title`, `departments.manager_user_id`, `departments.department_code`, `departments.department_name`) đã tồn tại trong v3.2 Compact.
 - **KHÔNG thêm bảng, KHÔNG thêm cột, KHÔNG thêm permission, KHÔNG thêm migration.**
+- (2026-08-06) `departmentCode`/`departmentName` trong mỗi phần tử lấy từ chính `department` đã fetch để check tồn tại (mục "Normal Flow" bước 3) — không query thêm, giá trị giống nhau cho mọi phần tử vì toàn bộ list thuộc cùng 1 phòng ban được truy vấn.
 
 ---
 
@@ -148,6 +150,8 @@ Auth: Bearer JWT (JwtAuthGuard + PermissionsGuard, permission accounts.user.list
   "data": [
     {
       "id": "uuid",
+      "departmentCode": "IT",
+      "departmentName": "Phòng Công nghệ thông tin",
       "employeeCode": "EMP0123",
       "fullName": "Nguyễn Văn A",
       "email": "a@company.com",
@@ -159,6 +163,8 @@ Auth: Bearer JWT (JwtAuthGuard + PermissionsGuard, permission accounts.user.list
     },
     {
       "id": "uuid",
+      "departmentCode": "IT",
+      "departmentName": "Phòng Công nghệ thông tin",
       "employeeCode": "EMP0456",
       "fullName": "Trần Thị B",
       "email": "b@company.com",

@@ -106,7 +106,7 @@ export function cleanupStaleTempDirs(now = Date.now()): string[] {
   return removed;
 }
 
-async function getAudioDurationSeconds(filePath: string): Promise<number> {
+async function probeContainerDurationSeconds(filePath: string): Promise<number> {
   const ffprobeBin = process.env['AI_WORKER_FFPROBE_BIN'] || 'ffprobe';
   const { stdout } = await execFileAsync(ffprobeBin, [
     '-v',
@@ -117,11 +117,61 @@ async function getAudioDurationSeconds(filePath: string): Promise<number> {
     'default=noprint_wrappers=1:nokey=1',
     filePath,
   ]);
-  const seconds = parseFloat(stdout.trim());
-  if (!Number.isFinite(seconds)) {
-    throw new Error('AUDIO_DURATION_PROBE_FAILED');
+  return parseFloat(stdout.trim());
+}
+
+/**
+ * Bug #4 (2026-08-05): file webm ghép từ nhiều chunk MediaRecorder phía
+ * client (StationRecorder.jsx/useStationRecording.js — chunk đầu có header
+ * EBML/Segment/Info hợp lệ nhưng Info.Duration không được ghi vì trình duyệt
+ * không biết trước tổng thời lượng lúc bắt đầu ghi; các chunk sau chỉ là
+ * Cluster nối thô qua `new Blob(chunks)`, không re-mux) khiến ffprobe đọc
+ * container-level duration ra "N/A" dù luồng audio bên trong vẫn nguyên vẹn.
+ * Trước đây điều này làm MỌI job STT từ trạm ghi âm cố định fail cứng với
+ * AUDIO_DURATION_PROBE_FAILED (non-retryable) — xác nhận bằng cách probe
+ * trực tiếp 1 file thật lấy từ MinIO: format=duration=N/A dù stream Opus vẫn
+ * decode được. Remux qua `ffmpeg -c copy` buộc decode lại toàn bộ stream và
+ * ghi đúng Duration vào output rồi probe lại — đã verify thủ công (N/A →
+ * 130.379s) trước khi đưa vào đây. Fallback này không tốn thêm chi phí cho
+ * file bình thường (upload thủ công qua AudioUploader.jsx) vì chỉ chạy khi
+ * probe lần đầu thất bại.
+ */
+async function getAudioDurationSeconds(filePath: string): Promise<number> {
+  const seconds = await probeContainerDurationSeconds(filePath);
+  if (Number.isFinite(seconds)) {
+    return seconds;
   }
-  return seconds;
+
+  const ffmpegBin = process.env['AI_WORKER_FFMPEG_BIN'] || 'ffmpeg';
+  const remuxedPath = `${filePath}.duration-fix.webm`;
+  try {
+    await execFileAsync(ffmpegBin, [
+      '-y',
+      '-v',
+      'error',
+      '-i',
+      filePath,
+      '-c',
+      'copy',
+      '-f',
+      'webm',
+      remuxedPath,
+    ]);
+    const remuxedSeconds = await probeContainerDurationSeconds(remuxedPath);
+    if (Number.isFinite(remuxedSeconds)) {
+      return remuxedSeconds;
+    }
+  } catch {
+    // remux thất bại — rơi xuống throw bên dưới, báo lỗi gốc cho job.
+  } finally {
+    try {
+      fs.unlinkSync(remuxedPath);
+    } catch {
+      // best-effort cleanup — file remux tạm có thể chưa từng được tạo ra.
+    }
+  }
+
+  throw new Error('AUDIO_DURATION_PROBE_FAILED');
 }
 
 function validateResultShape(

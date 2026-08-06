@@ -9,6 +9,12 @@ export class DepartmentMemberItemDto {
   @ApiProperty({ description: 'UUID người dùng' })
   id: string;
 
+  @ApiProperty({ description: 'Mã phòng ban' })
+  departmentCode: string;
+
+  @ApiProperty({ description: 'Tên phòng ban' })
+  departmentName: string;
+
   @ApiProperty({ description: 'Mã nhân viên', nullable: true })
   employeeCode: string | null;
 
