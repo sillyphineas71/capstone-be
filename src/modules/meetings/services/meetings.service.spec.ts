@@ -3189,5 +3189,97 @@ describe('MeetingsService', () => {
 
       expect(qb.orderBy).toHaveBeenCalledWith('mr.requestedAt', 'DESC');
     });
+
+    // F-R3: isEditRequest/displayLabel/old*/new* — chỉ populate cho UPDATE_TIME/
+    // UPDATE_ROOM, không có field thừa cho CREATE_MEETING.
+    it('[F-R3] CREATE_MEETING row → isEditRequest=false, old*/new* đều null', async () => {
+      const qb = mockRequestListQb();
+      qb.getManyAndCount.mockResolvedValue([
+        [
+          {
+            id: 'req-1',
+            requestCode: 'MT-001',
+            requestType: MeetingRequestType.CREATE_MEETING,
+            approvalStatus: ApprovalStatus.PENDING,
+            requestedAt: new Date('2026-07-15T09:00:00Z'),
+            requestedStartTime: new Date('2026-07-15T10:00:00Z'),
+            requestedEndTime: new Date('2026-07-15T11:00:00Z'),
+            conflictCheckStatus: ConflictCheckStatus.CLEAR,
+            conflictSummaryJson: null,
+            decisionAt: null,
+            rejectionReason: null,
+            requestedByUser: { id: 'u1', fullName: 'A', email: 'a@x.com' },
+            targetRoom: { id: 'room-1', roomName: 'P.101' },
+            decisionByUser: null,
+            meeting: {
+              id: 'm1',
+              title: 'Họp mới',
+              roomId: 'room-1',
+              hostId: 'u1',
+              startTime: new Date('2026-07-15T10:00:00Z'),
+              endTime: new Date('2026-07-15T11:00:00Z'),
+            },
+          },
+        ],
+        1,
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.findMeetingRequests({}, { userId: 'u1' });
+
+      const item = result.items[0];
+      expect(item.isEditRequest).toBe(false);
+      expect(item.displayLabel).toBe('Yêu cầu đặt phòng mới');
+      expect(item.oldStartTime).toBeNull();
+      expect(item.oldEndTime).toBeNull();
+      expect(item.oldRoomId).toBeNull();
+      expect(item.newStartTime).toBeNull();
+      expect(item.newRoomId).toBeNull();
+    });
+
+    it('[F-R3] UPDATE_TIME row → isEditRequest=true, old* lấy từ meeting hiện tại, new* lấy từ request', async () => {
+      const qb = mockRequestListQb();
+      qb.getManyAndCount.mockResolvedValue([
+        [
+          {
+            id: 'req-2',
+            requestCode: 'UPD-001',
+            requestType: MeetingRequestType.UPDATE_TIME,
+            approvalStatus: ApprovalStatus.PENDING,
+            requestedAt: new Date('2026-07-15T09:00:00Z'),
+            requestedStartTime: new Date('2026-07-15T14:00:00Z'), // giờ MỚI
+            requestedEndTime: new Date('2026-07-15T15:00:00Z'),
+            conflictCheckStatus: ConflictCheckStatus.CLEAR,
+            conflictSummaryJson: null,
+            decisionAt: null,
+            rejectionReason: null,
+            requestedByUser: { id: 'u1', fullName: 'A', email: 'a@x.com' },
+            targetRoom: { id: 'room-1', roomName: 'P.101' },
+            decisionByUser: null,
+            meeting: {
+              id: 'm1',
+              title: 'Họp đã duyệt',
+              roomId: 'room-1',
+              hostId: 'u1',
+              startTime: new Date('2026-07-15T10:00:00Z'), // giờ CŨ
+              endTime: new Date('2026-07-15T11:00:00Z'),
+            },
+          },
+        ],
+        1,
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.findMeetingRequests({}, { userId: 'u1' });
+
+      const item = result.items[0];
+      expect(item.isEditRequest).toBe(true);
+      expect(item.displayLabel).toBe('Yêu cầu chỉnh sửa');
+      expect(item.oldStartTime).toEqual(new Date('2026-07-15T10:00:00Z'));
+      expect(item.oldEndTime).toEqual(new Date('2026-07-15T11:00:00Z'));
+      expect(item.oldRoomId).toBe('room-1');
+      expect(item.newStartTime).toEqual(new Date('2026-07-15T14:00:00Z'));
+      expect(item.newRoomId).toBe('room-1');
+    });
   });
 });

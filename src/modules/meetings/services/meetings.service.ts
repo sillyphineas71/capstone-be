@@ -5904,6 +5904,8 @@ export class MeetingsService {
           'meeting.title',
           'meeting.roomId',
           'meeting.hostId',
+          'meeting.startTime',
+          'meeting.endTime',
           'room.id',
           'room.roomName',
           'decider.id',
@@ -6026,6 +6028,15 @@ export class MeetingsService {
                 title: mr.meeting.title,
                 roomId: mr.meeting.roomId,
                 hostId: mr.meeting.hostId,
+              }
+            : null,
+          // F-R3: snapshot giờ/phòng CŨ — chỉ dùng khi request là UPDATE_TIME/
+          // UPDATE_ROOM (DTO tự lọc theo isEditRequest, xem constructor).
+          mr.meeting
+            ? {
+                startTime: mr.meeting.startTime,
+                endTime: mr.meeting.endTime,
+                roomId: mr.meeting.roomId,
               }
             : null,
         );
