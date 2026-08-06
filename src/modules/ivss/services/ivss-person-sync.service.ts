@@ -176,23 +176,26 @@ export class IvssPersonSyncService {
     // Nợ #2: enroll idempotent — xoá person cũ trên IVSS trước khi enroll mới,
     // tránh 1 user nhiều szUID khi mapping cũ ở trạng thái failed hoặc DB lệch IVSS.
     // Chỉ chạy khi đã qua dedupe ở trên (mapping KHÔNG phải synced-sạch).
-    const stale: { device_person_id: string }[] =
+    // Bug fix (device_person_id/device_person_code): deleteFace phải gửi
+    // device_person_code (personUid do BE tự tạo lúc enroll, khớp field szID
+    // bridge ghi) — KHÔNG phải device_person_id (szUid SDK tự sinh, outUid).
+    const stale: { device_person_code: string }[] =
       await this.dataSource.manager.query(
-        `SELECT device_person_id FROM device_user_mappings
+        `SELECT device_person_code FROM device_user_mappings
          WHERE device_id = $1 AND user_id = $2
            AND metadata_json->>'source' = 'ivss'
-           AND device_person_id IS NOT NULL AND deleted_at IS NULL`,
+           AND device_person_code IS NOT NULL AND deleted_at IS NULL`,
         [deviceId, userId],
       );
     for (const s of stale) {
       try {
         await this.bridge.deleteFace({
           groupId: this.groupId,
-          personUid: s.device_person_id,
+          personUid: s.device_person_code,
         });
       } catch (e) {
         this.logger.warn(
-          `IVSS cleanup stale person ${s.device_person_id} failed: ${this.msg(e)} — tiếp tục enroll.`,
+          `IVSS cleanup stale person ${s.device_person_code} failed: ${this.msg(e)} — tiếp tục enroll.`,
         );
       }
     }
@@ -264,7 +267,7 @@ export class IvssPersonSyncService {
     for (const mp of maps) {
       try {
         // C3: deleteFace theo personUid mình gửi (device_person_code).
-        const personUid = mp.device_person_id;
+        const personUid = mp.device_person_code;
         if (personUid) {
           const r = await this.bridge.deleteFace({
             groupId: this.groupId,
