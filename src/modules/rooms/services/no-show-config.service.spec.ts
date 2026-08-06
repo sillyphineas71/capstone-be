@@ -110,14 +110,57 @@ describe('NoShowConfigService (NSL-001 #35)', () => {
     );
   });
 
-  it('getAll trả 3 key + source', async () => {
+  it('getAll trả 4 key (3 số + 1 bool) + source', async () => {
     repoMock.findOne.mockResolvedValue(null);
     const all = await service.getAll();
     expect(Object.keys(all)).toEqual([
       'thresholdMinutes',
       'warningGraceMinutes',
       'autoReleaseGraceMinutes',
+      'autoReleaseEnabled',
     ]);
     expect(all.warningGraceMinutes).toEqual({ value: 0, source: 'default' });
+  });
+
+  // ── autoReleaseEnabled (F1) ──
+  it('autoReleaseEnabled: không row + không env → default true', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    const r = await service.getEffectiveBoolValue();
+    expect(r).toEqual({ value: true, source: 'default' });
+  });
+
+  it('autoReleaseEnabled: row configValue="false" → source=system_configs', async () => {
+    repoMock.findOne.mockResolvedValue({ configValue: 'false' });
+    const r = await service.getEffectiveBoolValue();
+    expect(r).toEqual({ value: false, source: 'system_configs' });
+  });
+
+  it('autoReleaseEnabled: row rỗng + env=false → source=env', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    cfg = { NO_SHOW_AUTO_RELEASE_ENABLED: false };
+    const r = await service.getEffectiveBoolValue();
+    expect(r).toEqual({ value: false, source: 'env' });
+  });
+
+  it('update: autoReleaseEnabled=false → upsert key no_show.auto_release_enabled, valueType boolean', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    await service.update({ autoReleaseEnabled: false }, 'admin1');
+    expect(repoMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configKey: 'no_show.auto_release_enabled',
+        configValue: 'false',
+        valueType: 'boolean',
+        configGroup: 'no_show',
+        versionNo: 1,
+        updatedBy: 'admin1',
+      }),
+    );
+  });
+
+  it('update: chỉ autoReleaseEnabled (không field số nào) → KHÔNG ném NO_CONFIG_FIELDS', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    await expect(
+      service.update({ autoReleaseEnabled: true }, 'admin1'),
+    ).resolves.toBeDefined();
   });
 });

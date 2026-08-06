@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, Min, Max } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -26,4 +26,8 @@ export class UpdateNoShowConfigDto {
   @Min(1)
   @Max(1440)
   autoReleaseGraceMinutes?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  autoReleaseEnabled?: boolean;
 }

@@ -249,6 +249,12 @@ export class NoShowLifecycleService {
     released: number;
     skipped: number;
   }> {
+    // F3: đọc flag 1 lần/batch (NC-2 pattern). false → skip toàn bộ, không mutate.
+    const { autoReleaseEnabled } = await this.noShowConfigService.getValues();
+    if (!autoReleaseEnabled) {
+      return { scanned: 0, released: 0, skipped: 0 };
+    }
+
     const candidates: IdRow[] = await this.dataSource.manager.query(
       `SELECT nc.id
          FROM no_show_cases nc

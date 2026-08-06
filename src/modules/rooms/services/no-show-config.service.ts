@@ -12,6 +12,7 @@ export interface UpdateNoShowConfigInput {
   thresholdMinutes?: number;
   warningGraceMinutes?: number;
   autoReleaseGraceMinutes?: number;
+  autoReleaseEnabled?: boolean;
 }
 
 interface ConfigKeyDef {
@@ -21,7 +22,11 @@ interface ConfigKeyDef {
   min: number;
 }
 
-type ConfigField = keyof UpdateNoShowConfigInput;
+type ConfigField = keyof Omit<UpdateNoShowConfigInput, 'autoReleaseEnabled'>;
+
+const AUTO_RELEASE_ENABLED_KEY = 'no_show.auto_release_enabled';
+const AUTO_RELEASE_ENABLED_ENV = 'NO_SHOW_AUTO_RELEASE_ENABLED';
+const AUTO_RELEASE_ENABLED_DEFAULT = true;
 
 /**
  * NoShowConfigService (NSL-001 #35) — đọc/ghi ngưỡng no-show vào system_configs.
@@ -84,30 +89,63 @@ export class NoShowConfigService {
     return { value: def.def, source: 'default' };
   }
 
-  /** GET API: cả 3 key + source. */
-  async getAll(): Promise<
-    Record<ConfigField, { value: number; source: string }>
-  > {
-    const [thresholdMinutes, warningGraceMinutes, autoReleaseGraceMinutes] =
-      await Promise.all([
-        this.getEffectiveValue('thresholdMinutes'),
-        this.getEffectiveValue('warningGraceMinutes'),
-        this.getEffectiveValue('autoReleaseGraceMinutes'),
-      ]);
-    return { thresholdMinutes, warningGraceMinutes, autoReleaseGraceMinutes };
+  /** Đọc flag bool hiệu lực theo precedence system_configs → env → default true. */
+  async getEffectiveBoolValue(): Promise<{
+    value: boolean;
+    source: 'system_configs' | 'env' | 'default';
+  }> {
+    const repo = this.dataSource.getRepository(SystemConfigEntity);
+    const row = await repo.findOne({
+      where: { configKey: AUTO_RELEASE_ENABLED_KEY, isActive: true },
+    });
+    if (row?.configValue === 'true' || row?.configValue === 'false') {
+      return { value: row.configValue === 'true', source: 'system_configs' };
+    }
+    const envVal = this.configService.get<boolean>(AUTO_RELEASE_ENABLED_ENV);
+    if (envVal !== undefined) {
+      return { value: Boolean(envVal), source: 'env' };
+    }
+    return { value: AUTO_RELEASE_ENABLED_DEFAULT, source: 'default' };
   }
 
-  /** Đọc gọn dạng number (lifecycle dùng). */
+  /** GET API: cả 3 key số + flag bool + source. */
+  async getAll(): Promise<
+    Record<ConfigField, { value: number; source: string }> & {
+      autoReleaseEnabled: { value: boolean; source: string };
+    }
+  > {
+    const [
+      thresholdMinutes,
+      warningGraceMinutes,
+      autoReleaseGraceMinutes,
+      autoReleaseEnabled,
+    ] = await Promise.all([
+      this.getEffectiveValue('thresholdMinutes'),
+      this.getEffectiveValue('warningGraceMinutes'),
+      this.getEffectiveValue('autoReleaseGraceMinutes'),
+      this.getEffectiveBoolValue(),
+    ]);
+    return {
+      thresholdMinutes,
+      warningGraceMinutes,
+      autoReleaseGraceMinutes,
+      autoReleaseEnabled,
+    };
+  }
+
+  /** Đọc gọn dạng number/boolean (lifecycle dùng). */
   async getValues(): Promise<{
     thresholdMinutes: number;
     warningGraceMinutes: number;
     autoReleaseGraceMinutes: number;
+    autoReleaseEnabled: boolean;
   }> {
     const all = await this.getAll();
     return {
       thresholdMinutes: all.thresholdMinutes.value,
       warningGraceMinutes: all.warningGraceMinutes.value,
       autoReleaseGraceMinutes: all.autoReleaseGraceMinutes.value,
+      autoReleaseEnabled: all.autoReleaseEnabled.value,
     };
   }
 
@@ -115,11 +153,16 @@ export class NoShowConfigService {
   async update(
     input: UpdateNoShowConfigInput,
     adminId: string | null,
-  ): Promise<Record<ConfigField, { value: number; source: string }>> {
+  ): Promise<
+    Record<ConfigField, { value: number; source: string }> & {
+      autoReleaseEnabled: { value: boolean; source: string };
+    }
+  > {
     const provided = (
       Object.keys(NoShowConfigService.DEFS) as ConfigField[]
     ).filter((f) => input[f] !== undefined);
-    if (provided.length === 0) {
+    const boolProvided = input.autoReleaseEnabled !== undefined;
+    if (provided.length === 0 && !boolProvided) {
       throw new BadRequestException({
         code: 'NO_CONFIG_FIELDS',
         message: 'At least one config field is required.',
@@ -127,7 +170,7 @@ export class NoShowConfigService {
     }
 
     const repo = this.dataSource.getRepository(SystemConfigEntity);
-    const changed: Record<string, number> = {};
+    const changed: Record<string, number | boolean> = {};
 
     for (const f of provided) {
       const def = NoShowConfigService.DEFS[f];
@@ -162,6 +205,36 @@ export class NoShowConfigService {
         );
       }
       changed[def.key] = val;
+    }
+
+    if (boolProvided) {
+      const val = input.autoReleaseEnabled as boolean;
+      const existing = await repo.findOne({
+        where: { configKey: AUTO_RELEASE_ENABLED_KEY },
+      });
+      if (existing) {
+        existing.configValue = String(val);
+        existing.valueType = SystemConfigValueType.BOOLEAN;
+        existing.configGroup = 'no_show';
+        existing.isActive = true;
+        existing.updatedBy = adminId;
+        existing.versionNo = (existing.versionNo ?? 1) + 1;
+        await repo.save(existing);
+      } else {
+        await repo.save(
+          repo.create({
+            configKey: AUTO_RELEASE_ENABLED_KEY,
+            configValue: String(val),
+            valueType: SystemConfigValueType.BOOLEAN,
+            configGroup: 'no_show',
+            isSensitive: false,
+            isActive: true,
+            versionNo: 1,
+            updatedBy: adminId,
+          }),
+        );
+      }
+      changed[AUTO_RELEASE_ENABLED_KEY] = val;
     }
 
     // SEC-01: audit metadata = key→value đã đổi (không secret).

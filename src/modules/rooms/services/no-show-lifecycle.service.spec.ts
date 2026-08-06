@@ -49,6 +49,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
       thresholdMinutes: 15,
       warningGraceMinutes: 0,
       autoReleaseGraceMinutes: 5,
+      autoReleaseEnabled: true,
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -290,6 +291,15 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(r).toEqual({ scanned: 2, released: 1, skipped: 1 });
     expect(spy.mock.calls[0][0].reason).toBe('auto_release_no_show');
     expect(spy.mock.calls[0][0].mode).toBe('auto');
+  });
+
+  it('autoReleaseBatch: autoReleaseEnabled=false → skip toàn bộ, KHÔNG gọi release', async () => {
+    configValues.autoReleaseEnabled = false;
+    const spy = jest.spyOn(service, 'release');
+    const r = await service.autoReleaseBatch();
+    expect(r).toEqual({ scanned: 0, released: 0, skipped: 0 });
+    expect(spy).not.toHaveBeenCalled();
+    expect(dsMock.manager.query).not.toHaveBeenCalled();
   });
 
   // ── #33b manualRelease mapping (A) ──
