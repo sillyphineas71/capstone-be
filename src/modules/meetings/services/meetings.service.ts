@@ -1653,6 +1653,8 @@ export class MeetingsService {
     options?: {
       capacityWarningMode?: boolean;
       includeCurrentRoom?: boolean;
+      startTime?: Date;
+      endTime?: Date;
     },
   ): Promise<AvailableRoomDto[]> {
     const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
@@ -1667,8 +1669,44 @@ export class MeetingsService {
       });
     }
 
-    const startTime = meeting.startTime;
-    const endTime = meeting.endTime;
+    // startTime/endTime cho phép override để FE kiểm tra phòng theo khung giờ
+    // ĐANG GÕ THỬ (chưa lưu) khi sửa cuộc họp — mặc định vẫn dùng giờ đã lưu.
+    // Việc loại trừ chính booking hiện tại (includeCurrentRoom) áp dụng cho cả
+    // hai trường hợp vì currentRoomId luôn lấy từ meeting, không phụ thuộc
+    // startTime/endTime override.
+    if (
+      (options?.startTime && !options?.endTime) ||
+      (!options?.startTime && options?.endTime)
+    ) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message: 'startTime và endTime phải được truyền cùng nhau',
+        error: { code: 'INVALID_TIME_RANGE', details: {} },
+      });
+    }
+
+    if (options?.startTime && options?.endTime) {
+      if (
+        Number.isNaN(options.startTime.getTime()) ||
+        Number.isNaN(options.endTime.getTime())
+      ) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message: 'Định dạng thời gian không hợp lệ',
+          error: { code: 'INVALID_DATE_FORMAT', details: {} },
+        });
+      }
+      if (options.startTime >= options.endTime) {
+        throw new UnprocessableEntityException({
+          success: false,
+          message: 'Thời gian bắt đầu phải trước thời gian kết thúc',
+          error: { code: 'INVALID_TIME_RANGE', details: {} },
+        });
+      }
+    }
+
+    const startTime = options?.startTime ?? meeting.startTime;
+    const endTime = options?.endTime ?? meeting.endTime;
     const currentRoomId = meeting.roomId;
     const includeCurrent = options?.includeCurrentRoom ?? false;
 
