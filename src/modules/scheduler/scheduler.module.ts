@@ -11,6 +11,7 @@ import { RestrictedZoneModule } from '../restricted-zone/restricted-zone.module.
 import { CrowdAlertModule } from '../crowd-alert/crowd-alert.module.js';
 import { ZonesModule } from '../zones/zones.module.js';
 import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
+import { MeetingsModule } from '../meetings/meetings.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -42,6 +43,10 @@ import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
     // Cạnh scheduler → live-meeting MỘT CHIỀU (live-meeting chỉ import
     // AuthModule + WebsocketModule) ⇒ không circular.
     LiveMeetingModule,
+    // F-R4b: cron meeting-request-expire inject MeetingRequestReviewService.
+    // Cạnh scheduler → meetings MỘT CHIỀU (meetings không import scheduler,
+    // RoomsModule đã import MeetingsModule sẵn nên đây không phải circular mới).
+    MeetingsModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

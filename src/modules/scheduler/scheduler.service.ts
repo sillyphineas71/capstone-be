@@ -13,6 +13,7 @@ import { RestrictedZoneIntrusionService } from '../restricted-zone/services/rest
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
+import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -44,6 +45,7 @@ export class SchedulerService {
   private readonly gatePairingEnabled: boolean;
   private readonly autoCompleteEnabled: boolean;
   private readonly meetingStatusEnabled: boolean;
+  private readonly meetingRequestExpireEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -59,6 +61,7 @@ export class SchedulerService {
     private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
     private readonly gateLogPairingService: GateLogPairingService,
     private readonly liveMeetingService: LiveMeetingService,
+    private readonly meetingRequestReviewService: MeetingRequestReviewService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -124,9 +127,14 @@ export class SchedulerService {
       'SCHEDULER_MEETING_STATUS_ENABLED',
       false,
     );
+    // F-R4b: cron tự expire meeting_requests PENDING quá deadline (default OFF).
+    this.meetingRequestExpireEnabled = this.configService.get<boolean>(
+      'SCHEDULER_MEETING_REQUEST_EXPIRE_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled} | meeting-request-expire=${this.meetingRequestExpireEnabled}`,
     );
   }
 
@@ -276,6 +284,31 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] meeting-status-advance failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * F-R4b — meeting_requests PENDING quá deadline (requestedStartTime) tự
+   * chuyển EXPIRED: CREATE_MEETING → meeting CANCELLED; UPDATE_TIME/UPDATE_ROOM
+   * → meeting revert SCHEDULED (giữ nguyên giờ/phòng cũ).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_MEETING_REQUEST_EXPIRE_ENABLED (default
+   * OFF). KHÔNG ném ra cron (ARCH-02).
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'meeting-request-expire' })
+  async expireMeetingRequests(): Promise<void> {
+    if (!this.schedulerEnabled || !this.meetingRequestExpireEnabled) return;
+
+    try {
+      const r = await this.meetingRequestReviewService.expireOverdueBatch();
+      this.logger.log(
+        `[Scheduler] meeting-request-expire: scanned=${r.scanned} expired=${r.expired} failed=${r.failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] meeting-request-expire failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

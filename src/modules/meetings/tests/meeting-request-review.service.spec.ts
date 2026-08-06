@@ -733,4 +733,99 @@ describe('MeetingRequestReviewService', () => {
       expect(notifSaves).toHaveLength(0);
     });
   });
+
+  describe('expireOverdueBatch (F-R4b)', () => {
+    it('CREATE_MEETING PENDING quá deadline → meeting CANCELLED, booking CANCELLED, request EXPIRED', async () => {
+      dataSource.getRepository = jest.fn().mockReturnValue({
+        find: jest.fn().mockResolvedValue([mockRequest()]),
+      });
+      em.findOne
+        .mockResolvedValueOnce(mockRequest())
+        .mockResolvedValueOnce(
+          mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }),
+        )
+        .mockResolvedValueOnce(mockBooking({ status: RoomBookingStatus.PENDING }));
+
+      const result = await service.expireOverdueBatch();
+
+      expect(result).toEqual({ scanned: 1, expired: 1, failed: 0 });
+      expect(em.save).toHaveBeenCalledWith(
+        MeetingRequestEntity,
+        expect.objectContaining({ approvalStatus: ApprovalStatus.EXPIRED }),
+      );
+      expect(em.save).toHaveBeenCalledWith(
+        MeetingEntity,
+        expect.objectContaining({ status: MeetingStatus.CANCELLED }),
+      );
+      expect(em.save).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        expect.objectContaining({ status: RoomBookingStatus.CANCELLED }),
+      );
+    });
+
+    it('UPDATE_TIME PENDING quá giờ MỚI → request EXPIRED, meeting revert SCHEDULED, KHÔNG đụng start_time/room_id/booking', async () => {
+      const oldStart = new Date('2026-07-15T10:00:00Z');
+      dataSource.getRepository = jest.fn().mockReturnValue({
+        find: jest
+          .fn()
+          .mockResolvedValue([
+            mockRequest({ requestType: MeetingRequestType.UPDATE_TIME }),
+          ]),
+      });
+      em.findOne
+        .mockResolvedValueOnce(
+          mockRequest({ requestType: MeetingRequestType.UPDATE_TIME }),
+        )
+        .mockResolvedValueOnce(
+          mockMeeting({
+            status: MeetingStatus.PENDING_APPROVAL,
+            startTime: oldStart,
+            roomId: 'room-uuid',
+          }),
+        );
+
+      const result = await service.expireOverdueBatch();
+
+      expect(result).toEqual({ scanned: 1, expired: 1, failed: 0 });
+      expect(em.save).toHaveBeenCalledWith(
+        MeetingEntity,
+        expect.objectContaining({
+          status: MeetingStatus.SCHEDULED,
+          startTime: oldStart,
+          roomId: 'room-uuid',
+        }),
+      );
+      expect(em.save).not.toHaveBeenCalledWith(
+        RoomBookingEntity,
+        expect.anything(),
+      );
+    });
+
+    it('candidate đã được duyệt/từ chối ở tick khác (không còn PENDING) → skip, expired=0', async () => {
+      dataSource.getRepository = jest.fn().mockReturnValue({
+        find: jest.fn().mockResolvedValue([mockRequest()]),
+      });
+      em.findOne.mockResolvedValueOnce(
+        mockRequest({ approvalStatus: ApprovalStatus.APPROVED }),
+      );
+
+      const result = await service.expireOverdueBatch();
+
+      expect(result).toEqual({ scanned: 1, expired: 0, failed: 0 });
+      expect(em.save).not.toHaveBeenCalled();
+    });
+
+    it('1 candidate lỗi (transaction throw) KHÔNG chặn batch → failed=1', async () => {
+      dataSource.getRepository = jest.fn().mockReturnValue({
+        find: jest.fn().mockResolvedValue([mockRequest()]),
+      });
+      dataSource.transaction.mockImplementationOnce(async () => {
+        throw new Error('boom');
+      });
+
+      const result = await service.expireOverdueBatch();
+
+      expect(result).toEqual({ scanned: 1, expired: 0, failed: 1 });
+    });
+  });
 });

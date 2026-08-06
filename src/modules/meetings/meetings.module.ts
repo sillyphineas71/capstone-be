@@ -80,6 +80,8 @@ import { FromToConstraint } from './validators/from-to.constraint.js';
     IsIanaTimezoneConstraint,
     FromToConstraint,
   ],
-  exports: [TypeOrmModule],
+  // F-R4b: expose MeetingRequestReviewService cho SchedulerModule (cron
+  // meeting-request-expire gọi expireOverdueBatch()).
+  exports: [TypeOrmModule, MeetingRequestReviewService],
 })
 export class MeetingsModule {}

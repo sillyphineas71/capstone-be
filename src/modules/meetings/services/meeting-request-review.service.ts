@@ -907,4 +907,155 @@ export class MeetingRequestReviewService {
       );
     }
   }
+
+  /**
+   * F-R4b — quét meeting_requests PENDING đã quá deadline (requestedStartTime:
+   * giờ họp gốc với CREATE_MEETING, giờ MỚI xin đổi với UPDATE_TIME/UPDATE_ROOM)
+   * mà chưa ai duyệt/từ chối, tự chuyển sang EXPIRED. Gọi bởi cron
+   * `meeting-request-expire` (scheduler.service.ts), gated SCHEDULER_ENABLED &&
+   * SCHEDULER_MEETING_REQUEST_EXPIRE_ENABLED (default OFF). Mỗi request xử lý
+   * trong transaction riêng, lỗi 1 request KHÔNG chặn batch.
+   */
+  async expireOverdueBatch(): Promise<{
+    scanned: number;
+    expired: number;
+    failed: number;
+  }> {
+    const candidates = await this.dataSource
+      .getRepository(MeetingRequestEntity)
+      .find({
+        where: {
+          approvalStatus: ApprovalStatus.PENDING,
+          requestType: In([
+            MeetingRequestType.CREATE_MEETING,
+            MeetingRequestType.UPDATE_TIME,
+            MeetingRequestType.UPDATE_ROOM,
+          ]),
+          requestedStartTime: LessThanOrEqual(new Date()),
+        },
+      });
+
+    let expired = 0;
+    let failed = 0;
+    for (const candidate of candidates) {
+      try {
+        const done = await this.expireOne(candidate.id);
+        if (done) expired++;
+      } catch (e) {
+        failed++;
+        this.logger.error(
+          `expireOverdueBatch: request ${candidate.id} failed: ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    }
+    return { scanned: candidates.length, expired, failed };
+  }
+
+  /** Idempotent guard: re-check PENDING trong lock, trả false nếu đã xử lý ở tick khác. */
+  private async expireOne(requestId: string): Promise<boolean> {
+    return this.dataSource.transaction(async (em) => {
+      const request = await em.findOne(MeetingRequestEntity, {
+        where: { id: requestId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!request || request.approvalStatus !== ApprovalStatus.PENDING) {
+        return false;
+      }
+
+      const meeting = await em.findOne(MeetingEntity, {
+        where: { id: request.meetingId! },
+      });
+      if (!meeting || meeting.status !== MeetingStatus.PENDING_APPROVAL) {
+        return false;
+      }
+
+      const isUpdateRequest =
+        request.requestType === MeetingRequestType.UPDATE_TIME ||
+        request.requestType === MeetingRequestType.UPDATE_ROOM;
+      const now = new Date();
+      const reason =
+        'Yêu cầu đã hết hạn do không được duyệt trước giờ họp/giờ mới xin đổi.';
+
+      request.approvalStatus = ApprovalStatus.EXPIRED;
+      request.decisionAt = now;
+      await em.save(MeetingRequestEntity, request);
+
+      if (isUpdateRequest) {
+        // UPDATE_TIME/UPDATE_ROOM hết hạn: CHỈ bỏ cờ pending, quay lại
+        // SCHEDULED với giờ/phòng CŨ — start_time/room_id chưa từng bị ghi đè
+        // lúc pending (xem updateMeetingTime/updateMeetingRoom), nên KHÔNG
+        // đụng gì thêm. Booking vẫn giữ đúng slot cũ, không cần sửa.
+        meeting.status = MeetingStatus.SCHEDULED;
+        meeting.updatedAt = now;
+        await em.save(MeetingEntity, meeting);
+      } else {
+        // CREATE_MEETING hết hạn: booking chết hẳn — hủy meeting + booking.
+        meeting.status = MeetingStatus.CANCELLED;
+        meeting.cancellationReason = reason;
+        meeting.updatedAt = now;
+        await em.save(MeetingEntity, meeting);
+
+        const booking = await em.findOne(RoomBookingEntity, {
+          where: {
+            meetingId: meeting.id,
+            status: In([
+              RoomBookingStatus.PENDING,
+              RoomBookingStatus.APPROVED,
+              RoomBookingStatus.ACTIVE,
+            ]),
+          },
+          order: { createdAt: 'DESC' },
+        });
+        if (booking) {
+          booking.status = RoomBookingStatus.CANCELLED;
+          booking.cancellationReason = reason;
+          await em.save(RoomBookingEntity, booking);
+        }
+      }
+
+      const event = em.create(MeetingEventEntity, {
+        meetingId: meeting.id,
+        eventType: MeetingEventType.STATUS_CHANGED,
+        actorUserId: null,
+        sourceType: MeetingEventSourceType.SCHEDULER,
+        description: isUpdateRequest
+          ? `Yêu cầu ${request.requestType === MeetingRequestType.UPDATE_ROOM ? 'đổi phòng' : 'đổi thời gian'} cuộc họp "${meeting.title}" đã hết hạn (quá giờ mới xin đổi). Giữ nguyên lịch cũ.`
+          : `Yêu cầu cuộc họp "${meeting.title}" đã hết hạn do không được duyệt trước giờ họp. Cuộc họp đã bị hủy.`,
+        oldValueJson: {
+          approvalStatus: ApprovalStatus.PENDING,
+          meetingStatus: MeetingStatus.PENDING_APPROVAL,
+        } as any,
+        newValueJson: {
+          approvalStatus: ApprovalStatus.EXPIRED,
+          meetingStatus: meeting.status,
+        } as any,
+      });
+      await em.save(MeetingEventEntity, event);
+
+      const auditLog = em.create(AuditLogEntity, {
+        userId: null,
+        actionType: 'expire',
+        entityType: 'meeting_request',
+        entityId: request.id,
+        oldValueJson: {
+          approvalStatus: ApprovalStatus.PENDING,
+          meetingStatus: MeetingStatus.PENDING_APPROVAL,
+        },
+        newValueJson: {
+          approvalStatus: ApprovalStatus.EXPIRED,
+          meetingStatus: meeting.status,
+        },
+        metadataJson: {
+          meetingId: meeting.id,
+          requestType: request.requestType,
+        },
+        severity: AuditLogSeverity.WARNING,
+      });
+      await em.save(AuditLogEntity, auditLog);
+
+      return true;
+    });
+  }
 }
