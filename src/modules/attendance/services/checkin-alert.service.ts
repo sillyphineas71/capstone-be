@@ -26,6 +26,10 @@ import {
 import { RedisService } from '../../redis/redis.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import {
+  buildLateCheckinAlertEmail,
+  buildLateCheckinHostSummaryEmail,
+} from '../../mail/templates/builders.js';
+import {
   NotificationType,
   NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
@@ -389,6 +393,13 @@ export class CheckInAlertService {
             channel: NotificationChannel.EMAIL,
             subject,
             content,
+            emailHtml: buildLateCheckinAlertEmail({
+              fullName: participant.fullName,
+              meetingTitle: meeting.title,
+              roomName: meeting.roomName ?? null,
+              startTime: meeting.actualStartTime ?? meeting.startTime,
+              lateMinutes,
+            }),
             relatedEntityType: 'meeting',
             relatedEntityId: meeting.id,
             toEmails: [participant.email],
@@ -474,6 +485,10 @@ export class CheckInAlertService {
                 channel: NotificationChannel.EMAIL,
                 subject: hostSubject,
                 content: hostContent,
+                emailHtml: buildLateCheckinHostSummaryEmail({
+                  meetingTitle: meeting.title,
+                  alertedNames,
+                }),
                 relatedEntityType: 'meeting',
                 relatedEntityId: meeting.id,
                 toEmails: [hostUser.email],

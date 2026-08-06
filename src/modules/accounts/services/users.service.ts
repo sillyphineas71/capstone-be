@@ -24,6 +24,7 @@ import {
   EmploymentStatus,
   AccountStatus,
 } from '../entities/user.entity.js';
+import { buildAccountWelcomeEmail } from '../../mail/templates/builders.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
@@ -294,6 +295,11 @@ export class UsersService {
         channel: NotificationChannel.EMAIL,
         subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
         content: credentialContent,
+        emailHtml: buildAccountWelcomeEmail({
+          fullName: createdUser!.fullName,
+          email,
+          tempPassword: tempPassword!,
+        }),
         toEmails: [email],
         relatedEntityType: 'users',
         relatedEntityId: createdUser!.id,

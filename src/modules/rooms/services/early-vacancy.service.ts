@@ -8,6 +8,7 @@ import {
   NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
 import { EarlyVacancyConfigService } from './early-vacancy-config.service.js';
+import { buildEarlyVacancyAlertEmail } from '../../mail/templates/builders.js';
 
 interface CandidateRow {
   booking_id: string;
@@ -224,6 +225,10 @@ export class EarlyVacancyService {
             channel: NotificationChannel.EMAIL,
             subject,
             content,
+            emailHtml: buildEarlyVacancyAlertEmail({
+              roomId: cand.room_id,
+              emptyMinutes,
+            }),
             toEmails,
             payloadJson: meta,
           });

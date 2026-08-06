@@ -1,0 +1,407 @@
+/**
+ * Per-feature branded email builders. Mỗi hàm nhận dữ liệu đã có sẵn tại
+ * call site (không query thêm) và trả về HTML hoàn chỉnh (dùng renderEmailLayout).
+ */
+import {
+  escapeHtml,
+  formatDateTimeVN,
+  renderCallout,
+  renderEmailLayout,
+  renderInfoTable,
+  renderList,
+  renderParagraph,
+  type InfoRow,
+} from './layout.js';
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+
+export function buildOtpEmail(params: {
+  otp: string;
+  expiresMinutes: number;
+}): string {
+  const bodyHtml =
+    renderParagraph('Kính gửi bạn,') +
+    renderParagraph(
+      'Bạn (hoặc ai đó dùng email này) đã gửi yêu cầu đặt lại mật khẩu trên hệ thống Smart Meeting Management. Mã OTP xác thực của bạn là:',
+    ) +
+    `<div style="text-align:center;margin:8px 0 20px;">
+      <span style="display:inline-block;font-size:28px;font-weight:700;letter-spacing:6px;color:#1e3a8a;background-color:#eff6ff;padding:14px 28px;border-radius:8px;">${escapeHtml(params.otp)}</span>
+    </div>` +
+    renderCallout(
+      `Mã OTP có hiệu lực trong vòng <strong>${params.expiresMinutes} phút</strong>. Để bảo mật, vui lòng không chia sẻ mã này cho bất kỳ ai.`,
+      'warning',
+    ) +
+    renderParagraph(
+      'Nếu bạn không gửi yêu cầu này, vui lòng bỏ qua email này và kiểm tra lại bảo mật tài khoản.',
+    );
+  return renderEmailLayout({ heading: 'Khôi phục mật khẩu', bodyHtml });
+}
+
+// ── Accounts ──────────────────────────────────────────────────────────────
+
+export function buildAccountWelcomeEmail(params: {
+  fullName: string;
+  email: string;
+  tempPassword: string;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Kính gửi <strong>${escapeHtml(params.fullName)}</strong>,`,
+    ) +
+    renderParagraph(
+      'Tài khoản Smart Meeting Management của bạn đã được tạo thành công. Dưới đây là thông tin đăng nhập:',
+    ) +
+    renderInfoTable([
+      { label: 'Email đăng nhập', value: escapeHtml(params.email) },
+      {
+        label: 'Mật khẩu tạm thời',
+        value: `<code style="background-color:#f3f4f6;padding:2px 8px;border-radius:4px;">${escapeHtml(params.tempPassword)}</code>`,
+      },
+    ]) +
+    renderCallout(
+      'Vì lý do bảo mật, vui lòng đăng nhập và đổi mật khẩu ngay trong lần đăng nhập đầu tiên.',
+      'warning',
+    );
+  return renderEmailLayout({
+    heading: 'Tài khoản của bạn đã được tạo',
+    bodyHtml,
+  });
+}
+
+// ── Meetings ──────────────────────────────────────────────────────────────
+
+export function buildMeetingInviteEmail(params: {
+  meetingTitle: string;
+  startTime?: Date | string;
+  endTime?: Date | string;
+  roomName?: string | null;
+  message?: string | null;
+  agendaItems?: string[];
+}): string {
+  const rows: InfoRow[] = [
+    {
+      label: 'Cuộc họp',
+      value: `<strong>${escapeHtml(params.meetingTitle)}</strong>`,
+    },
+  ];
+  if (params.startTime && params.endTime) {
+    rows.push({
+      label: 'Thời gian',
+      value: `${escapeHtml(formatDateTimeVN(params.startTime))} &ndash; ${escapeHtml(formatDateTimeVN(params.endTime))}`,
+    });
+  } else if (params.startTime) {
+    rows.push({
+      label: 'Bắt đầu',
+      value: escapeHtml(formatDateTimeVN(params.startTime)),
+    });
+  }
+  if (params.roomName) {
+    rows.push({ label: 'Phòng họp', value: escapeHtml(params.roomName) });
+  }
+
+  let bodyHtml =
+    renderParagraph('Bạn được mời tham dự cuộc họp sau:') +
+    renderInfoTable(rows);
+  if (params.agendaItems && params.agendaItems.length > 0) {
+    bodyHtml +=
+      renderParagraph('<strong>Chương trình họp:</strong>') +
+      renderList(params.agendaItems.map((a) => escapeHtml(a)));
+  }
+  if (params.message) {
+    bodyHtml += renderCallout(escapeHtml(params.message), 'info');
+  }
+  return renderEmailLayout({
+    heading: 'Thư mời tham dự cuộc họp',
+    bodyHtml,
+  });
+}
+
+export function buildMeetingReminderEmail(params: {
+  meetingTitle: string;
+  startTime: Date | string;
+  roomName?: string | null;
+}): string {
+  const rows: InfoRow[] = [
+    {
+      label: 'Cuộc họp',
+      value: `<strong>${escapeHtml(params.meetingTitle)}</strong>`,
+    },
+    { label: 'Bắt đầu', value: escapeHtml(formatDateTimeVN(params.startTime)) },
+  ];
+  if (params.roomName) {
+    rows.push({ label: 'Phòng họp', value: escapeHtml(params.roomName) });
+  }
+  const bodyHtml =
+    renderParagraph('Đây là email nhắc lịch cho cuộc họp sắp diễn ra:') +
+    renderInfoTable(rows) +
+    renderParagraph('Vui lòng thu xếp tham dự đúng giờ.');
+  return renderEmailLayout({ heading: 'Nhắc lịch họp', bodyHtml });
+}
+
+export function buildMeetingTimeUpdatedEmail(params: {
+  meetingTitle: string;
+  oldStartTime?: Date | string | null;
+  oldEndTime?: Date | string | null;
+  newStartTime: Date | string;
+  newEndTime: Date | string;
+  changeReason?: string | null;
+}): string {
+  const rows: InfoRow[] = [];
+  if (params.oldStartTime && params.oldEndTime) {
+    rows.push({
+      label: 'Thời gian cũ',
+      value: `<span style="text-decoration:line-through;color:#9ca3af;">${escapeHtml(formatDateTimeVN(params.oldStartTime))} &ndash; ${escapeHtml(formatDateTimeVN(params.oldEndTime))}</span>`,
+    });
+  }
+  rows.push({
+    label: 'Thời gian mới',
+    value: `${escapeHtml(formatDateTimeVN(params.newStartTime))} &ndash; ${escapeHtml(formatDateTimeVN(params.newEndTime))}`,
+  });
+  const bodyHtml =
+    renderParagraph(
+      `Thời gian của cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã được cập nhật:`,
+    ) +
+    renderInfoTable(rows) +
+    (params.changeReason
+      ? renderCallout(
+          `Lý do thay đổi: ${escapeHtml(params.changeReason)}`,
+          'info',
+        )
+      : '');
+  return renderEmailLayout({
+    heading: 'Cập nhật thời gian cuộc họp',
+    bodyHtml,
+  });
+}
+
+export function buildMeetingRoomUpdatedEmail(params: {
+  meetingTitle: string;
+  oldRoomName?: string | null;
+  newRoomName: string;
+  changeReason?: string | null;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Phòng họp của cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã được thay đổi:`,
+    ) +
+    renderInfoTable([
+      {
+        label: 'Phòng cũ',
+        value: params.oldRoomName
+          ? `<span style="text-decoration:line-through;color:#9ca3af;">${escapeHtml(params.oldRoomName)}</span>`
+          : '<span style="color:#9ca3af;">(chưa có)</span>',
+      },
+      { label: 'Phòng mới', value: escapeHtml(params.newRoomName) },
+    ]) +
+    (params.changeReason
+      ? renderCallout(
+          `Lý do thay đổi: ${escapeHtml(params.changeReason)}`,
+          'info',
+        )
+      : '');
+  return renderEmailLayout({ heading: 'Cập nhật phòng họp', bodyHtml });
+}
+
+export function buildMeetingCancelledEmail(params: {
+  meetingTitle: string;
+  reason?: string | null;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã bị <strong style="color:#991b1b;">hủy</strong>.`,
+    ) +
+    (params.reason
+      ? renderCallout(`Lý do: ${escapeHtml(params.reason)}`, 'danger')
+      : '') +
+    renderParagraph('Vui lòng cập nhật lại lịch làm việc của bạn.');
+  return renderEmailLayout({ heading: 'Cuộc họp đã bị hủy', bodyHtml });
+}
+
+export function buildParticipantRemovedEmail(params: {
+  meetingTitle: string;
+  reason?: string | null;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Bạn đã bị gỡ khỏi danh sách tham dự cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong>.`,
+    ) +
+    (params.reason
+      ? renderCallout(`Lý do: ${escapeHtml(params.reason)}`, 'info')
+      : '') +
+    renderParagraph(
+      'Nếu bạn cho rằng đây là nhầm lẫn, vui lòng liên hệ người tổ chức cuộc họp.',
+    );
+  return renderEmailLayout({ heading: 'Bạn đã bị gỡ khỏi cuộc họp', bodyHtml });
+}
+
+export function buildMinutesPublishedEmail(params: {
+  meetingTitle: string;
+  minutesTitle: string;
+  message?: string | null;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Biên bản cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã được ban hành chính thức.`,
+    ) +
+    renderInfoTable([
+      { label: 'Tiêu đề biên bản', value: escapeHtml(params.minutesTitle) },
+    ]) +
+    (params.message ? renderCallout(escapeHtml(params.message), 'info') : '') +
+    renderParagraph('Vui lòng đăng nhập hệ thống để xem chi tiết biên bản.');
+  return renderEmailLayout({
+    heading: 'Biên bản họp đã được ban hành',
+    bodyHtml,
+  });
+}
+
+// ── Rooms ─────────────────────────────────────────────────────────────────
+
+export function buildRoomRemovedEmail(params: {
+  meetingTitle: string;
+  suggestedRooms: { roomName: string; roomCode: string; capacity: number }[];
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Phòng họp trước đây của cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã bị quản trị viên gỡ bỏ khỏi hệ thống.`,
+    ) +
+    renderCallout(
+      'Vui lòng chọn lại địa điểm mới cho cuộc họp để tránh gián đoạn.',
+      'warning',
+    ) +
+    (params.suggestedRooms.length > 0
+      ? renderParagraph('<strong>Gợi ý phòng thay thế phù hợp:</strong>') +
+        renderList(
+          params.suggestedRooms.map(
+            (r) =>
+              `${escapeHtml(r.roomName)} (${escapeHtml(r.roomCode)}) &mdash; sức chứa ${r.capacity} người`,
+          ),
+        )
+      : renderParagraph(
+          'Hiện chưa tìm được phòng thay thế phù hợp trong cùng khung giờ.',
+        ));
+  return renderEmailLayout({
+    heading: 'Phòng họp đã bị gỡ bỏ',
+    bodyHtml,
+  });
+}
+
+export function buildEarlyVacancyAlertEmail(params: {
+  roomId: string;
+  emptyMinutes: number;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      'Hệ thống phát hiện phòng họp đang trống trong khi cuộc họp vẫn được ghi nhận là đang diễn ra:',
+    ) +
+    renderInfoTable([
+      { label: 'Mã phòng', value: escapeHtml(params.roomId) },
+      { label: 'Thời gian trống', value: `${params.emptyMinutes} phút` },
+    ]) +
+    renderParagraph('Vui lòng kiểm tra lại tình trạng cuộc họp.');
+  return renderEmailLayout({ heading: 'Cảnh báo phòng trống sớm', bodyHtml });
+}
+
+export function buildNoShowAlertEmail(params: {
+  kind: 'warning' | 'released';
+  roomId: string;
+}): string {
+  const isWarning = params.kind === 'warning';
+  const bodyHtml =
+    renderParagraph(
+      isWarning
+        ? 'Phòng họp vẫn chưa ghi nhận có người tham dự sau giờ bắt đầu (cảnh báo no-show):'
+        : 'Phòng họp đã được tự động giải phóng do không có người tham dự (no-show):',
+    ) +
+    renderInfoTable([{ label: 'Mã phòng', value: escapeHtml(params.roomId) }]) +
+    (isWarning
+      ? renderCallout(
+          'Nếu cuộc họp vẫn diễn ra, vui lòng check-in ngay để tránh phòng bị tự động giải phóng.',
+          'warning',
+        )
+      : renderCallout(
+          'Phòng đã được mở lại cho người khác đặt sử dụng.',
+          'danger',
+        ));
+  return renderEmailLayout({
+    heading: isWarning ? 'Cảnh báo no-show' : 'Phòng đã được giải phóng',
+    bodyHtml,
+  });
+}
+
+// ── Attendance ────────────────────────────────────────────────────────────
+
+export function buildLateCheckinAlertEmail(params: {
+  fullName: string;
+  meetingTitle: string;
+  roomName?: string | null;
+  startTime: Date | string;
+  lateMinutes: number;
+}): string {
+  const rows: InfoRow[] = [
+    {
+      label: 'Cuộc họp',
+      value: `<strong>${escapeHtml(params.meetingTitle)}</strong>`,
+    },
+    {
+      label: 'Giờ bắt đầu',
+      value: escapeHtml(formatDateTimeVN(params.startTime)),
+    },
+    { label: 'Đã trễ', value: `${params.lateMinutes} phút` },
+  ];
+  if (params.roomName) {
+    rows.splice(1, 0, { label: 'Phòng', value: escapeHtml(params.roomName) });
+  }
+  const bodyHtml =
+    renderParagraph(
+      `Xin chào <strong>${escapeHtml(params.fullName)}</strong>,`,
+    ) +
+    renderParagraph('Bạn chưa check-in cho cuộc họp sau:') +
+    renderInfoTable(rows) +
+    renderCallout(
+      'Vui lòng check-in ngay tại phòng họp để đảm bảo được ghi nhận tham dự.',
+      'warning',
+    );
+  return renderEmailLayout({
+    heading: 'Nhắc nhở: Bạn chưa check-in',
+    bodyHtml,
+  });
+}
+
+export function buildLateCheckinHostSummaryEmail(params: {
+  meetingTitle: string;
+  alertedNames: string[];
+}): string {
+  const bodyHtml =
+    renderParagraph('Xin chào,') +
+    renderParagraph(
+      `Cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã bắt đầu nhưng có <strong>${params.alertedNames.length}</strong> người tham dự chưa check-in:`,
+    ) +
+    renderList(params.alertedNames.map((n) => escapeHtml(n))) +
+    renderParagraph('Vui lòng kiểm tra và nhắc nhở người tham dự.');
+  return renderEmailLayout({
+    heading: 'Tổng hợp người chưa check-in',
+    bodyHtml,
+  });
+}
+
+// ── Security / Face access ───────────────────────────────────────────────
+
+export function buildStrangerAlertEmail(params: {
+  deviceCode: string;
+  roomId?: string | null;
+}): string {
+  const rows: InfoRow[] = [
+    { label: 'Thiết bị', value: escapeHtml(params.deviceCode) },
+  ];
+  if (params.roomId) {
+    rows.push({ label: 'Khu vực / Phòng', value: escapeHtml(params.roomId) });
+  }
+  const bodyHtml =
+    renderCallout(
+      'Hệ thống phát hiện một khuôn mặt lạ (chưa đăng ký) tại thiết bị điểm danh.',
+      'danger',
+    ) +
+    renderInfoTable(rows) +
+    renderParagraph('Vui lòng kiểm tra camera/lịch sử truy cập để xác minh.');
+  return renderEmailLayout({ heading: 'Cảnh báo khuôn mặt lạ', bodyHtml });
+}

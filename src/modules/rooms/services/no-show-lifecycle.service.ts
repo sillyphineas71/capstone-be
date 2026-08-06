@@ -16,6 +16,7 @@ import {
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 import { AuditLogSeverity } from '../../administration/entities/audit-log.entity.js';
 import { NoShowConfigService } from './no-show-config.service.js';
+import { buildNoShowAlertEmail } from '../../mail/templates/builders.js';
 
 interface CaseRef {
   id: string;
@@ -416,6 +417,7 @@ export class NoShowLifecycleService {
             channel: NotificationChannel.EMAIL,
             subject,
             content,
+            emailHtml: buildNoShowAlertEmail({ kind, roomId: c.room_id }),
             toEmails,
             payloadJson: meta,
           });

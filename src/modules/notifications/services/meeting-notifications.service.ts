@@ -16,6 +16,12 @@ import {
   NotificationType,
 } from '../entities/notification.entity.js';
 import { NotificationsService } from '../notifications.service.js';
+import {
+  buildMeetingInviteEmail,
+  buildMeetingReminderEmail,
+  buildMeetingCancelledEmail,
+  buildMinutesPublishedEmail,
+} from '../../mail/templates/builders.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 
@@ -130,12 +136,27 @@ export class MeetingNotificationsService {
         if (ep.email) emails.push(ep.email);
       }
       if (emails.length > 0) {
+        let agendaItems: string[] | undefined;
+        if (dto.includeAgenda) {
+          const agendas = await this.agendaRepo.find({
+            where: { meetingId: meeting.id },
+            order: { agendaOrder: 'ASC' },
+          });
+          agendaItems = agendas.map((a) => a.title);
+        }
         const result = await this.notificationsService.enqueueEmailNotification(
           {
             notificationType: NotificationType.MEETING_INVITE,
             channel: NotificationChannel.EMAIL,
             subject: 'Thư mời họp: ' + meeting.title,
             content,
+            emailHtml: buildMeetingInviteEmail({
+              meetingTitle: meeting.title,
+              startTime: meeting.startTime,
+              endTime: meeting.endTime,
+              message: dto.message,
+              agendaItems,
+            }),
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
             toEmails: emails,
@@ -315,6 +336,10 @@ export class MeetingNotificationsService {
             channel: NotificationChannel.EMAIL,
             subject: 'Nhắc lịch họp: ' + meeting.title,
             content,
+            emailHtml: buildMeetingReminderEmail({
+              meetingTitle: meeting.title,
+              startTime: meeting.startTime,
+            }),
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
             toEmails: emails,
@@ -416,6 +441,10 @@ export class MeetingNotificationsService {
             channel: NotificationChannel.EMAIL,
             subject: 'Hủy cuộc họp: ' + meeting.title,
             content,
+            emailHtml: buildMeetingCancelledEmail({
+              meetingTitle: meeting.title,
+              reason,
+            }),
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
             toEmails: emails,
@@ -564,6 +593,11 @@ export class MeetingNotificationsService {
             channel: NotificationChannel.EMAIL,
             subject: 'Biên bản họp đã được ban hành: ' + meeting.title,
             content,
+            emailHtml: buildMinutesPublishedEmail({
+              meetingTitle: meeting.title,
+              minutesTitle: minutes.title,
+              message: dto.message ?? null,
+            }),
             relatedEntityType: 'meeting_minutes',
             relatedEntityId: minutes.id,
             toEmails: emails,

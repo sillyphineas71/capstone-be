@@ -39,6 +39,12 @@ export interface CreateNotificationDto {
 
 export interface EnqueueEmailNotificationDto extends CreateNotificationDto {
   toEmails: string[];
+  /**
+   * HTML branded sẵn cho email (xem `mail/templates/`). Khi có, worker dùng
+   * field này làm `html` gửi mail thay vì render thô từ `content`.
+   * KHÔNG được lưu vào `notifications.content` (giữ content DB là bản plain-text).
+   */
+  emailHtml?: string;
 }
 
 /**
@@ -139,6 +145,7 @@ export class NotificationsService {
           toEmails: dto.toEmails,
           subject: dto.subject,
           content: dto.content,
+          emailHtml: dto.emailHtml,
           payloadJson: dto.payloadJson,
         },
       );

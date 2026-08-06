@@ -11,6 +11,7 @@ import {
   NotificationChannel,
 } from '../../notifications/entities/notification.entity.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
+import { buildRoomRemovedEmail } from '../../mail/templates/builders.js';
 
 const MAX_SUGGESTED_ROOMS = 3;
 
@@ -104,6 +105,10 @@ export class RoomDeleteNotificationProcessor {
       channel: NotificationChannel.EMAIL,
       subject: `Phòng họp cho cuộc họp "${meeting.title}" đã bị gỡ bỏ`,
       content: `Phòng họp trước đây của cuộc họp "${meeting.title}" đã bị quản trị viên xóa khỏi hệ thống. Vui lòng chọn lại địa điểm mới.\n\nGợi ý phòng thay thế:\n${suggestionsText}`,
+      emailHtml: buildRoomRemovedEmail({
+        meetingTitle: meeting.title,
+        suggestedRooms,
+      }),
       toEmails: [organizer.email],
       relatedEntityType: 'meeting',
       relatedEntityId: meetingId,

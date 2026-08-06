@@ -67,6 +67,13 @@ import {
   NotificationDeliveryStatus,
 } from '../../notifications/entities/notification.entity.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import {
+  buildMeetingInviteEmail,
+  buildMeetingTimeUpdatedEmail,
+  buildMeetingRoomUpdatedEmail,
+  buildMeetingCancelledEmail,
+  buildParticipantRemovedEmail,
+} from '../../mail/templates/builders.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import {
@@ -1601,6 +1608,14 @@ export class MeetingsService {
               channel: NotificationChannel.EMAIL,
               subject: `Cập nhật thời gian cuộc họp: ${meeting.title}`,
               content: `Thời gian cuộc họp "${meeting.title}" đã được cập nhật.`,
+              emailHtml: buildMeetingTimeUpdatedEmail({
+                meetingTitle: meeting.title,
+                oldStartTime: oldMeetingData.startTime,
+                oldEndTime: oldMeetingData.endTime,
+                newStartTime: dto.startTime,
+                newEndTime: dto.endTime,
+                changeReason: dto.changeReason || null,
+              }),
               toEmails,
               relatedEntityType: 'meeting',
               relatedEntityId: meetingId,
@@ -2357,6 +2372,12 @@ export class MeetingsService {
               channel: NotificationChannel.EMAIL,
               subject: `Cập nhật phòng họp: ${meeting.title}`,
               content: `Phòng họp cho cuộc họp "${meeting.title}" đã được thay đổi từ "${oldRoomName}" sang "${newRoomName}".`,
+              emailHtml: buildMeetingRoomUpdatedEmail({
+                meetingTitle: meeting.title,
+                oldRoomName,
+                newRoomName,
+                changeReason: dto.changeReason || null,
+              }),
               toEmails,
               relatedEntityType: 'meeting',
               relatedEntityId: meetingId,
@@ -2760,6 +2781,10 @@ export class MeetingsService {
             channel: NotificationChannel.EMAIL,
             subject: `[CANCELLED] ${meeting.title}`,
             content: `Cuộc họp "${meeting.title}" đã bị hủy.${notificationReasonStr}`,
+            emailHtml: buildMeetingCancelledEmail({
+              meetingTitle: meeting.title,
+              reason: cancellationReason ?? null,
+            }),
             toEmails,
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
@@ -3242,6 +3267,11 @@ export class MeetingsService {
           channel: NotificationChannel.EMAIL,
           subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
           content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+          emailHtml: buildMeetingInviteEmail({
+            meetingTitle: meeting.title,
+            startTime: meeting.startTime,
+            endTime: meeting.endTime,
+          }),
           toEmails: [userEmail],
           relatedEntityType: 'meeting',
           relatedEntityId: meetingId,
@@ -3961,6 +3991,10 @@ export class MeetingsService {
             channel: NotificationChannel.EMAIL,
             subject: 'Bạn đã bị gỡ khỏi cuộc họp',
             content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+            emailHtml: buildParticipantRemovedEmail({
+              meetingTitle: meeting.title,
+              reason: body?.reason ?? null,
+            }),
             toEmails: [userEmail],
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
@@ -4232,6 +4266,11 @@ export class MeetingsService {
         channel: NotificationChannel.EMAIL,
         subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
         content: `Bạn đã được thêm vào cuộc họp "${meeting.title}".`,
+        emailHtml: buildMeetingInviteEmail({
+          meetingTitle: meeting.title,
+          startTime: meeting.startTime,
+          endTime: meeting.endTime,
+        }),
         toEmails: [dto.email],
         relatedEntityType: 'meeting',
         relatedEntityId: meetingId,
@@ -4459,6 +4498,10 @@ export class MeetingsService {
             channel: NotificationChannel.EMAIL,
             subject: 'Bạn đã bị gỡ khỏi cuộc họp',
             content: `Bạn đã bị gỡ khỏi cuộc họp "${meeting.title}".`,
+            emailHtml: buildParticipantRemovedEmail({
+              meetingTitle: meeting.title,
+              reason: body?.reason ?? null,
+            }),
             toEmails: [targetEmail],
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,
