@@ -9,22 +9,45 @@ export const MAX_IMPORT_FILE_BYTES = 2 * 1024 * 1024; // 2MB
 export const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-/**
- * Header chuẩn của template (đúng thứ tự cột trong sheet đầu tiên).
- */
-export const IMPORT_PARTICIPANTS_HEADERS = [
-  'type',
-  'email',
-  'employee_code',
-  'full_name',
-  'organization_name',
-  'phone_number',
-] as const;
-
 export enum ImportParticipantType {
   INTERNAL = 'internal',
   EXTERNAL = 'external',
 }
+
+/**
+ * Cột chuẩn của template (đúng thứ tự cột trong sheet đầu tiên).
+ * `key`: field nội bộ dùng khi đọc/ghi dữ liệu.
+ * `header`: tiêu đề hiển thị (tiếng Việt) trong file Excel.
+ */
+export const IMPORT_PARTICIPANTS_COLUMNS = [
+  { key: 'stt', header: 'STT' },
+  { key: 'type', header: 'Loại' },
+  { key: 'email', header: 'Email' },
+  { key: 'employee_code', header: 'Mã nhân viên' },
+  { key: 'full_name', header: 'Họ và tên' },
+  { key: 'organization_name', header: 'Tổ chức' },
+  { key: 'phone_number', header: 'Số điện thoại' },
+] as const;
+
+/**
+ * Header chuẩn của template (đúng thứ tự cột trong sheet đầu tiên).
+ */
+export const IMPORT_PARTICIPANTS_HEADERS = IMPORT_PARTICIPANTS_COLUMNS.map(
+  (c) => c.header,
+);
+
+/**
+ * Alias tiếng Việt cho giá trị cột "Loại", bên cạnh giá trị cũ (internal/external).
+ */
+export const IMPORT_PARTICIPANT_TYPE_ALIASES: Record<
+  string,
+  ImportParticipantType
+> = {
+  internal: ImportParticipantType.INTERNAL,
+  external: ImportParticipantType.EXTERNAL,
+  'nội bộ': ImportParticipantType.INTERNAL,
+  'khách ngoài': ImportParticipantType.EXTERNAL,
+};
 
 /**
  * Trạng thái của một dòng trong báo cáo import.

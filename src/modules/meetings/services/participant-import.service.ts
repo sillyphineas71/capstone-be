@@ -42,6 +42,8 @@ import {
   MAX_IMPORT_FILE_BYTES,
   XLSX_MIME,
   IMPORT_PARTICIPANTS_HEADERS,
+  IMPORT_PARTICIPANTS_COLUMNS,
+  IMPORT_PARTICIPANT_TYPE_ALIASES,
   ImportParticipantType,
   ImportRowStatus,
   ImportRowReason,
@@ -93,10 +95,10 @@ export class ParticipantImportService {
     workbook.created = new Date();
 
     const sheet = workbook.addWorksheet('Participants');
-    sheet.columns = IMPORT_PARTICIPANTS_HEADERS.map((header) => ({
-      header,
-      key: header,
-      width: 24,
+    sheet.columns = IMPORT_PARTICIPANTS_COLUMNS.map((c) => ({
+      header: c.header,
+      key: c.key,
+      width: c.key === 'stt' ? 8 : 24,
     }));
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true };
@@ -110,6 +112,7 @@ export class ParticipantImportService {
     });
 
     sheet.addRow({
+      stt: 1,
       type: 'internal',
       email: 'nhanvien@company.com',
       employee_code: '',
@@ -118,6 +121,7 @@ export class ParticipantImportService {
       phone_number: '',
     });
     sheet.addRow({
+      stt: 2,
       type: 'internal',
       email: '',
       employee_code: 'EMP0123',
@@ -126,6 +130,7 @@ export class ParticipantImportService {
       phone_number: '',
     });
     sheet.addRow({
+      stt: 3,
       type: 'external',
       email: 'khach@doitac.com',
       employee_code: '',
@@ -138,18 +143,19 @@ export class ParticipantImportService {
     guide.columns = [{ width: 24 }, { width: 70 }];
     const guideRows: [string, string][] = [
       ['Cột', 'Mô tả'],
+      ['STT', 'Số thứ tự dòng (tùy chọn, chỉ để tham khảo)'],
       [
-        'type',
-        'Bắt buộc: internal (nhân viên nội bộ) hoặc external (khách ngoài)',
+        'Loại',
+        'Bắt buộc: Nội bộ / internal (nhân viên nội bộ) hoặc Khách ngoài / external (khách ngoài)',
       ],
       [
-        'email',
+        'Email',
         'Internal: định danh chính (ưu tiên). External: email liên hệ (bắt buộc)',
       ],
-      ['employee_code', 'Internal: fallback khi email trống'],
-      ['full_name', 'External: bắt buộc'],
-      ['organization_name', 'External: tùy chọn'],
-      ['phone_number', 'External: tùy chọn'],
+      ['Mã nhân viên', 'Internal: fallback khi Email trống'],
+      ['Họ và tên', 'External: bắt buộc'],
+      ['Tổ chức', 'External: tùy chọn'],
+      ['Số điện thoại', 'External: tùy chọn'],
     ];
     guideRows.forEach((r, idx) => {
       const row = guide.addRow(r);
@@ -423,21 +429,27 @@ export class ParticipantImportService {
       });
     }
 
-    // Validate header
+    // Validate header: đúng số cột (7) và đúng tên cột theo thứ tự chuẩn.
     const headerRow = sheet.getRow(1);
     const actualHeaders = IMPORT_PARTICIPANTS_HEADERS.map((_, idx) =>
       this.cellString(headerRow.getCell(idx + 1)).toLowerCase(),
     );
     const headerMatches = IMPORT_PARTICIPANTS_HEADERS.every(
-      (expected, idx) => actualHeaders[idx] === expected,
+      (expected, idx) => actualHeaders[idx] === expected.toLowerCase(),
     );
-    if (!headerMatches) {
+    if (
+      sheet.columnCount > IMPORT_PARTICIPANTS_HEADERS.length ||
+      !headerMatches
+    ) {
       throw new BadRequestException({
         success: false,
-        message: 'Sai cấu trúc header. Vui lòng tải lại tệp mẫu.',
+        message: 'Sai nguyên mẫu. Vui lòng không tự ý thêm cột.',
         error: {
           code: ImportRequestError.INVALID_TEMPLATE,
-          details: { expectedHeaders: IMPORT_PARTICIPANTS_HEADERS },
+          details: {
+            expectedHeaders: IMPORT_PARTICIPANTS_HEADERS,
+            actualColumnCount: sheet.columnCount,
+          },
         },
       });
     }
@@ -446,14 +458,16 @@ export class ParticipantImportService {
     const lastRow = sheet.rowCount;
     for (let r = 2; r <= lastRow; r++) {
       const excelRow = sheet.getRow(r);
-      const type = this.cellString(excelRow.getCell(1)).toLowerCase();
-      const email = this.cellString(excelRow.getCell(2)).toLowerCase();
-      const employeeCode = this.cellString(excelRow.getCell(3));
-      const fullName = this.cellString(excelRow.getCell(4));
-      const organizationName = this.cellString(excelRow.getCell(5));
-      const phoneNumber = this.cellString(excelRow.getCell(6));
+      // Cột 1 = STT (chỉ tham khảo, không dùng trong logic).
+      const rawType = this.cellString(excelRow.getCell(2)).toLowerCase();
+      const type = IMPORT_PARTICIPANT_TYPE_ALIASES[rawType] ?? rawType;
+      const email = this.cellString(excelRow.getCell(3)).toLowerCase();
+      const employeeCode = this.cellString(excelRow.getCell(4));
+      const fullName = this.cellString(excelRow.getCell(5));
+      const organizationName = this.cellString(excelRow.getCell(6));
+      const phoneNumber = this.cellString(excelRow.getCell(7));
 
-      // Bỏ qua dòng hoàn toàn trống
+      // Bỏ qua dòng hoàn toàn trống, hoặc chỉ điền mỗi STT mà các cột khác trống
       if (
         !type &&
         !email &&

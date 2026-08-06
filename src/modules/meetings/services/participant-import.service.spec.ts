@@ -20,20 +20,28 @@ import {
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 import {
   IMPORT_PARTICIPANTS_HEADERS,
+  IMPORT_PARTICIPANTS_COLUMNS,
   XLSX_MIME,
   ImportRowStatus,
   ImportRowReason,
 } from '../constants/import-participants.constants.js';
 
-type AnyRow = Record<string, string>;
+type AnyRow = Record<string, string | number>;
 
 async function buildXlsx(
   rows: AnyRow[],
-  headers: readonly string[] = IMPORT_PARTICIPANTS_HEADERS,
+  columns: ReadonlyArray<{
+    key: string;
+    header: string;
+  }> = IMPORT_PARTICIPANTS_COLUMNS,
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const sheet = wb.addWorksheet('Participants');
-  sheet.columns = headers.map((h) => ({ header: h, key: h, width: 20 }));
+  sheet.columns = columns.map((c) => ({
+    header: c.header,
+    key: c.key,
+    width: 20,
+  }));
   rows.forEach((r) => sheet.addRow(r));
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf);
@@ -186,10 +194,64 @@ describe('ParticipantImportService', () => {
   });
 
   it('rejects wrong header', async () => {
-    const buf = await buildXlsx([{ wrong: 'x' }], ['wrong']);
+    const buf = await buildXlsx(
+      [{ wrong: 'x' }],
+      [{ key: 'wrong', header: 'wrong' }],
+    );
     await expect(
       service.importParticipants('meeting-1', fileOf(buf), {}, authUser, ctx),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects when an extra column is added beyond the 7 standard columns', async () => {
+    const buf = await buildXlsx(
+      [{ type: 'internal', email: 'an@company.com', extra: 'x' }],
+      [...IMPORT_PARTICIPANTS_COLUMNS, { key: 'extra', header: 'Extra' }],
+    );
+    await expect(
+      service.importParticipants('meeting-1', fileOf(buf), {}, authUser, ctx),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts Vietnamese "Loại" values (Nội bộ / Khách ngoài)', async () => {
+    const buf = await buildXlsx([
+      { stt: 1, type: 'Nội bộ', email: 'an@company.com' },
+      {
+        stt: 2,
+        type: 'Khách ngoài',
+        email: 'guest@ext.com',
+        full_name: 'Guest X',
+      },
+    ]);
+
+    const report = await service.importParticipants(
+      'meeting-1',
+      fileOf(buf),
+      {},
+      authUser,
+      ctx,
+    );
+
+    expect(report.successCount).toBe(2);
+    expect(report.failedCount).toBe(0);
+  });
+
+  it('skips rows where only STT is filled and the rest are empty', async () => {
+    const buf = await buildXlsx([
+      { stt: 1, type: 'internal', email: 'an@company.com' },
+      { stt: 2 },
+    ]);
+
+    const report = await service.importParticipants(
+      'meeting-1',
+      fileOf(buf),
+      {},
+      authUser,
+      ctx,
+    );
+
+    expect(report.totalRows).toBe(1);
+    expect(report.successCount).toBe(1);
   });
 
   it('commits internal + external rows and dispatches notifications', async () => {
@@ -307,7 +369,9 @@ describe('ParticipantImportService', () => {
     const headers = IMPORT_PARTICIPANTS_HEADERS.map((_, i) =>
       String(sheet.getRow(1).getCell(i + 1).value ?? '').toLowerCase(),
     );
-    expect(headers).toEqual([...IMPORT_PARTICIPANTS_HEADERS]);
+    expect(headers).toEqual(
+      IMPORT_PARTICIPANTS_HEADERS.map((h) => h.toLowerCase()),
+    );
   });
 
   it('marks status success/failed correctly in results', async () => {

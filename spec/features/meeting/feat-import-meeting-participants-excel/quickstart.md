@@ -8,6 +8,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-06 | Theo yêu cầu FE (`Docs/Nam_Sent/BE_REQUIREMENTS.md`): header đổi sang tiếng Việt + thêm cột STT (7 cột), `Loại` chấp nhận giá trị tiếng Việt, cập nhật bảng lỗi thường gặp | Mục 2, 7 |
 | 2026-07-10 | Khởi tạo quickstart cho import Excel | Toàn bộ file |
 
 ---
@@ -23,14 +24,18 @@ curl -X GET \
   -H "Authorization: Bearer <token>" \
   -o template.xlsx
 ```
-Điền dữ liệu theo 6 cột: `type`, `email`, `employee_code`, `full_name`, `organization_name`, `phone_number`.
+Điền dữ liệu theo đúng 7 cột, đúng thứ tự (không tự ý thêm/bớt/đổi tên cột): `STT`, `Loại`, `Email`, `Mã nhân viên`, `Họ và tên`, `Tổ chức`, `Số điện thoại`.
+
+Cột `Loại` chấp nhận `Nội bộ` / `internal` (nhân viên nội bộ) hoặc `Khách ngoài` / `external` (khách ngoài).
 
 Ví dụ nội dung:
-| type | email | employee_code | full_name | organization_name | phone_number |
-|---|---|---|---|---|---|
-| internal | an@company.com | | | | |
-| internal | | EMP0123 | | | |
-| external | guest@ext.com | | Nguyen Van B | Cty ABC | 0900000000 |
+| STT | Loại | Email | Mã nhân viên | Họ và tên | Tổ chức | Số điện thoại |
+|---|---|---|---|---|---|---|
+| 1 | Nội bộ | an@company.com | | | | |
+| 2 | Nội bộ | | EMP0123 | | | |
+| 3 | Khách ngoài | guest@ext.com | | Nguyen Van B | Cty ABC | 0900000000 |
+
+Dòng hoàn toàn trống, hoặc chỉ điền `STT` mà các cột còn lại đều trống, sẽ tự động được bỏ qua (không tính là lỗi).
 
 ## 3. Import (lần 1 — dry-run nếu có cảnh báo)
 ```bash
@@ -76,7 +81,7 @@ curl -X POST \
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 |---|---|---|
 | `400 INVALID_FILE_FORMAT` | Không phải `.xlsx` | Dùng đúng file template |
-| `400 INVALID_TEMPLATE` | Sai/thiếu header | Tải lại template chuẩn |
+| `400 INVALID_TEMPLATE` ("Sai nguyên mẫu. Vui lòng không tự ý thêm cột.") | Sai/thiếu header, hoặc thừa cột (> 7 cột) | Tải lại template chuẩn, không tự ý thêm cột |
 | `400 IMPORT_ROW_LIMIT_EXCEEDED` | > 200 dòng | Chia nhỏ file |
 | `403 FORBIDDEN_ACCESS` | Họp private, không phải Organizer/Host/Admin | Nhờ Organizer import |
 | Dòng `MISSING_IDENTIFIER` | Internal trống cả email lẫn mã NV | Điền ít nhất 1 |

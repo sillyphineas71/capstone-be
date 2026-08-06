@@ -8,6 +8,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-06 | Theo yêu cầu FE (`Docs/Nam_Sent/BE_REQUIREMENTS.md`): thêm cột `STT` đầu tiên, header hiển thị đổi sang tiếng Việt (STT/Loại/Email/Mã nhân viên/Họ và tên/Tổ chức/Số điện thoại), cột `Loại` chấp nhận thêm giá trị tiếng Việt (Nội bộ/Khách ngoài), validate số cột thực tế + bỏ qua dòng chỉ có STT | Mục 4 |
 | 2026-07-10 | Khởi tạo data-model cho tính năng import Excel | Toàn bộ file |
 
 ---
@@ -51,20 +52,25 @@ Feature này **KHÔNG thay đổi database schema**. Tất cả entities đã t�
 
 ## 4. Cấu trúc file Excel (không phải DB, là contract dữ liệu đầu vào)
 
-Sheet 1 — dữ liệu:
+Sheet 1 — dữ liệu. Header hiển thị (tiếng Việt) từ trái qua phải, đúng thứ tự, tối đa 7 cột:
 
-| Cột (header) | Bắt buộc | Áp dụng | Ghi chú |
-|---|---|---|---|
-| `type` | ✅ | cả 2 | `internal` \| `external` |
-| `email` | internal: ✅* / external: ✅ | cả 2 | Định danh chính internal; liên hệ external |
-| `employee_code` | ❌ | internal | Fallback khi `email` trống |
-| `full_name` | external: ✅ | external | Bắt buộc với khách ngoài |
-| `organization_name` | ❌ | external | |
-| `phone_number` | ❌ | external | |
+| # | Header hiển thị | Field nội bộ | Bắt buộc | Áp dụng | Ghi chú |
+|---|---|---|---|---|---|
+| 1 | `STT` | `stt` | ❌ | cả 2 | Chỉ tham khảo, không dùng trong logic |
+| 2 | `Loại` | `type` | ✅ | cả 2 | `internal`/`Nội bộ` \| `external`/`Khách ngoài` |
+| 3 | `Email` | `email` | internal: ✅* / external: ✅ | cả 2 | Định danh chính internal; liên hệ external |
+| 4 | `Mã nhân viên` | `employee_code` | ❌ | internal | Fallback khi `Email` trống |
+| 5 | `Họ và tên` | `full_name` | external: ✅ | external | Bắt buộc với khách ngoài |
+| 6 | `Tổ chức` | `organization_name` | ❌ | external | |
+| 7 | `Số điện thoại` | `phone_number` | ❌ | external | |
 
-\* Internal cần **ít nhất một** trong `email` / `employee_code`.
+\* Internal cần **ít nhất một** trong `Email` / `Mã nhân viên`.
 
-Sheet 2 (tuỳ chọn) — hướng dẫn điền + danh sách giá trị hợp lệ cho `type`.
+Validate cấu trúc:
+- Nếu số cột thực tế (`sheet.columnCount`) > 7, hoặc tên cột không khớp chuẩn theo đúng thứ tự trên → throw `INVALID_TEMPLATE`, message: `"Sai nguyên mẫu. Vui lòng không tự ý thêm cột."`.
+- Dòng hoàn toàn trống, hoặc chỉ có `STT` mà các cột còn lại đều trống → bỏ qua (skip), không tính là dòng lỗi.
+
+Sheet 2 (tuỳ chọn) — hướng dẫn điền + danh sách giá trị hợp lệ cho `Loại`.
 
 ---
 

@@ -16,6 +16,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-06 | Theo yêu cầu FE (`Docs/Nam_Sent/BE_REQUIREMENTS.md`): header đổi sang tiếng Việt + thêm cột STT, validate số cột thực tế, `Loại` chấp nhận giá trị tiếng Việt, bỏ qua dòng chỉ có STT | FR-003, FR-004 (mới FR-003a) |
 | 2026-07-10 | Khởi tạo spec cho tính năng import thành viên bằng Excel | Toàn bộ file |
 
 ---
@@ -95,8 +96,9 @@ Cho phép Organizer/Host/Meeting Manager tải lên một file Excel chứa danh
 ### 3.1 File & Parsing Requirements
 - **FR-001**: THE system SHALL cung cấp endpoint tải file Excel mẫu (template) chứa header chuẩn và dòng ví dụ.
 - **FR-002**: THE system SHALL chỉ chấp nhận file định dạng `.xlsx` (MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) và từ chối định dạng khác với lỗi rõ ràng.
-- **FR-003**: THE system SHALL parse file bằng `exceljs`, đọc sheet đầu tiên, ánh xạ cột theo header: `type`, `email`, `employee_code`, `full_name`, `organization_name`, `phone_number`.
-- **FR-004**: THE system SHALL từ chối file rỗng (0 dòng dữ liệu) hoặc vượt quá `MAX_IMPORT_ROWS` (mặc định 200) với lỗi `IMPORT_ROW_LIMIT_EXCEEDED`.
+- **FR-003**: THE system SHALL parse file bằng `exceljs`, đọc sheet đầu tiên, ánh xạ cột theo header hiển thị (tiếng Việt), đúng thứ tự: `STT`, `Loại`, `Email`, `Mã nhân viên`, `Họ và tên`, `Tổ chức`, `Số điện thoại`. Cột `Loại` chấp nhận cả giá trị tiếng Việt (`Nội bộ`/`Khách ngoài`) lẫn giá trị cũ (`internal`/`external`).
+- **FR-003a**: IF số cột thực tế (`sheet.columnCount`) vượt quá 7 cột chuẩn, HOẶC tên cột không khớp chuẩn theo đúng thứ tự, THE system SHALL throw lỗi `INVALID_TEMPLATE` với message `"Sai nguyên mẫu. Vui lòng không tự ý thêm cột."`.
+- **FR-004**: THE system SHALL từ chối file rỗng (0 dòng dữ liệu) hoặc vượt quá `MAX_IMPORT_ROWS` (mặc định 200) với lỗi `IMPORT_ROW_LIMIT_EXCEEDED`. THE system SHALL bỏ qua (skip, không tính là dòng dữ liệu/lỗi) các dòng hoàn toàn trống hoặc chỉ có `STT` mà các cột còn lại đều trống.
 - **FR-005**: THE system SHALL gắn số dòng gốc trong Excel vào từng kết quả để người dùng dễ đối chiếu.
 
 ### 3.2 Row Validation & Identity Resolution

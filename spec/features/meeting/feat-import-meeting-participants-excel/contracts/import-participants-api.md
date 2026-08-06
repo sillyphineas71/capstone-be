@@ -8,6 +8,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-06 | Theo yêu cầu FE (`Docs/Nam_Sent/BE_REQUIREMENTS.md`): template đổi header sang tiếng Việt + thêm cột STT (7 cột), validate số cột thực tế với message riêng, `Loại` chấp nhận giá trị tiếng Việt | Mục 1, 3.3 |
 | 2026-07-10 | Khởi tạo API contract cho import Excel | Toàn bộ file |
 
 ---
@@ -25,7 +26,9 @@
 | Content-Type | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
 | Content-Disposition | `attachment; filename="meeting-participants-template.xlsx"` |
 
-Template gồm: header 6 cột (`type`, `email`, `employee_code`, `full_name`, `organization_name`, `phone_number`), 2 dòng ví dụ (1 internal, 1 external), sheet hướng dẫn.
+Template gồm: header 7 cột, đúng thứ tự trái→phải: `STT`, `Loại`, `Email`, `Mã nhân viên`, `Họ và tên`, `Tổ chức`, `Số điện thoại`; 3 dòng ví dụ (2 internal, 1 external); sheet hướng dẫn.
+
+Cột `Loại` chấp nhận `Nội bộ`/`internal` (nhân viên nội bộ) hoặc `Khách ngoài`/`external` (khách ngoài) khi parse file upload.
 
 ---
 
@@ -107,7 +110,7 @@ Template gồm: header 6 cột (`type`, `email`, `employee_code`, `full_name`, `
 | Status | Code | Điều kiện |
 |---|---|---|
 | 400 | `INVALID_FILE_FORMAT` | Không phải `.xlsx` |
-| 400 | `INVALID_TEMPLATE` | File rỗng / sai header |
+| 400 | `INVALID_TEMPLATE` | File rỗng / sai tên cột hoặc sai thứ tự / thừa cột (> 7 cột thực tế theo `sheet.columnCount`) — message: `"Sai nguyên mẫu. Vui lòng không tự ý thêm cột."` |
 | 400 | `IMPORT_ROW_LIMIT_EXCEEDED` | > 200 dòng |
 | 400 | `FILE_TOO_LARGE` | Vượt giới hạn kích thước |
 | 400 | `INVALID_MEETING_STATUS` | Meeting không ở `scheduled`/`in_progress` |
@@ -121,8 +124,8 @@ Template gồm: header 6 cột (`type`, `email`, `employee_code`, `full_name`, `
 
 | Reason | Ý nghĩa |
 |---|---|
-| `INVALID_ROW_TYPE` | `type` không phải internal/external |
-| `MISSING_IDENTIFIER` | Internal thiếu cả email và employee_code |
+| `INVALID_ROW_TYPE` | `Loại` không phải internal/external (hoặc Nội bộ/Khách ngoài) |
+| `MISSING_IDENTIFIER` | Internal thiếu cả Email và Mã nhân viên |
 | `USER_NOT_FOUND` | Không tìm thấy user hoặc inactive |
 | `INVALID_EXTERNAL_ROW` | External thiếu full_name/email hợp lệ |
 | `DUPLICATE_IN_FILE` | Trùng trong chính file |
