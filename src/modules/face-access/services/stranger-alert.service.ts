@@ -14,6 +14,7 @@ import {
 import { ListStrangerAlertsQueryDto } from '../dto/list-stranger-alerts.query.dto.js';
 import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
 import { AlertsService } from '../../alerts/services/alerts.service.js';
+import { buildStrangerAlertEmail } from '../../mail/templates/builders.js';
 
 interface StrangerRow {
   device_id: string;
@@ -141,6 +142,10 @@ export class StrangerAlertService implements StrangerAlertHook {
         channel: NotificationChannel.EMAIL,
         subject: 'Cảnh báo khuôn mặt lạ',
         content,
+        emailHtml: buildStrangerAlertEmail({
+          deviceCode: evt.deviceCode,
+          roomId: evt.roomId ?? null,
+        }),
         toEmails: admins.emails,
         payloadJson: meta,
       });

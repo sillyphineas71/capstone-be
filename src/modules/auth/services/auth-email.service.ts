@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { MailService } from '../../mail/mail.service';
+import { buildOtpEmail } from '../../mail/templates/builders';
 
 @Injectable()
 export class AuthEmailService {
@@ -31,10 +32,12 @@ export class AuthEmailService {
       'He thong Smart Meeting Management',
     ].join('\n');
 
+    const html = buildOtpEmail({ otp, expiresMinutes: 10 });
     const result = await this.mailService.sendMail({
       to: email,
       subject,
       text,
+      html,
     });
 
     if (!result.success) {

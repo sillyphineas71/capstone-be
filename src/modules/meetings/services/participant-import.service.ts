@@ -15,6 +15,7 @@ import {
   ClientContext,
 } from './meetings.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { buildMeetingInviteEmail } from '../../mail/templates/builders.js';
 import {
   NotificationType,
   NotificationChannel,
@@ -793,6 +794,11 @@ export class ParticipantImportService {
           channel: NotificationChannel.EMAIL,
           subject: `Lời mời tham gia cuộc họp: ${meeting.title}`,
           content: `Bạn được mời tham gia cuộc họp "${meeting.title}".`,
+          emailHtml: buildMeetingInviteEmail({
+            meetingTitle: meeting.title,
+            startTime: meeting.startTime,
+            endTime: meeting.endTime,
+          }),
           toEmails: [email],
           relatedEntityType: 'meeting',
           relatedEntityId: meeting.id,

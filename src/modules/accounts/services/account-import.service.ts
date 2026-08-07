@@ -9,6 +9,7 @@ import {
   ResolvedAccountData,
 } from './users.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { buildAccountWelcomeEmail } from '../../mail/templates/builders.js';
 import {
   NotificationType,
   NotificationChannel,
@@ -672,6 +673,11 @@ export class AccountImportService {
         channel: NotificationChannel.EMAIL,
         subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
         content,
+        emailHtml: buildAccountWelcomeEmail({
+          fullName: acc.fullName,
+          email: acc.email,
+          tempPassword: acc.tempPassword,
+        }),
         toEmails: [acc.email],
         relatedEntityType: 'users',
         recipientScope: 'user_list',

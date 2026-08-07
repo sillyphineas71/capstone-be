@@ -104,11 +104,13 @@ describe('NotificationWorkerService', () => {
       startedAt: expect.any(Date),
     });
 
-    // Called mailService
+    // Called mailService — no emailHtml provided, so worker wraps plain content
+    // into the shared branded layout and derives a stripped-tag text fallback.
     expect(mailService.sendMail).toHaveBeenCalledWith({
       to: ['user@example.com'],
       subject: 'Test Subject',
-      html: '<p>Hello</p>',
+      html: expect.stringContaining('Hello'),
+      text: 'Hello',
     });
 
     // Marked notification SENT
@@ -256,7 +258,8 @@ describe('NotificationWorkerService', () => {
     expect(mailService.sendMail).toHaveBeenCalledWith({
       to: ['user1@example.com', 'user2@example.com'],
       subject: 'Test Subject',
-      html: '<p>Hello</p>',
+      html: expect.stringContaining('Hello'),
+      text: 'Hello',
     });
   });
 

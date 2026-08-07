@@ -4,6 +4,11 @@ import { Repository } from 'typeorm';
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { MailService } from '../mail/mail.service.js';
+import {
+  escapeHtml,
+  renderEmailLayout,
+  renderParagraph,
+} from '../mail/templates/layout.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
 import {
   BackgroundJobEntity,
@@ -20,6 +25,7 @@ interface SendEmailJobData {
   toEmails: string[];
   subject: string;
   content: string;
+  emailHtml?: string;
   payloadJson?: Record<string, unknown>;
 }
 
@@ -47,8 +53,14 @@ export class NotificationWorkerService extends WorkerHost {
       return { sent: false, notificationId: '' };
     }
 
-    const { notificationId, backgroundJobId, toEmails, subject, content } =
-      job.data;
+    const {
+      notificationId,
+      backgroundJobId,
+      toEmails,
+      subject,
+      content,
+      emailHtml,
+    } = job.data;
 
     const notification = await this.notificationRepo.findOne({
       where: { id: notificationId },
@@ -85,7 +97,8 @@ export class NotificationWorkerService extends WorkerHost {
     const result = await this.mailService.sendMail({
       to: recipients,
       subject: subject || '(No subject)',
-      html: content,
+      html: emailHtml || this.wrapPlainTextAsHtml(content),
+      text: this.stripHtmlTags(content),
     });
 
     if (!result.success) {
@@ -145,5 +158,19 @@ export class NotificationWorkerService extends WorkerHost {
         `[Worker] Job ${job.id} failed (attempt ${job.attemptsMade}/${maxAttempts}) � will retry: ${error.message}`,
       );
     }
+  }
+
+  /** Fallback khi caller chưa cung cấp emailHtml — bọc content plain-text vào layout chung. */
+  private wrapPlainTextAsHtml(content: string): string {
+    const escaped = escapeHtml(content).replace(/\n/g, '<br/>');
+    return renderEmailLayout({
+      heading: 'Thông báo',
+      bodyHtml: renderParagraph(escaped),
+    });
+  }
+
+  /** Dùng làm bản text/plain fallback — bóc tag HTML thô nếu content có chứa (VD <b>, <br/>). */
+  private stripHtmlTags(content: string): string {
+    return content.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
   }
 }

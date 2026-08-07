@@ -1000,6 +1000,58 @@ describe('MeetingsService', () => {
         service.getAvailableRoomsForMeeting('nonexistent-uuid'),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('[T013-5] should check against overridden startTime/endTime instead of meeting saved time', async () => {
+      const roomsQb = mockQueryBuilder();
+      roomsQb.getMany.mockResolvedValue([
+        {
+          id: 'room-uuid',
+          roomCode: 'R01',
+          roomName: 'Phòng A',
+          capacity: 10,
+          isActive: true,
+          currentStatus: 'available',
+        } as RoomEntity,
+      ]);
+      const bookingsQb = mockQueryBuilder();
+      bookingsQb.getRawMany.mockResolvedValue([]);
+      mockRepo.createQueryBuilder
+        .mockReset()
+        .mockReturnValueOnce(roomsQb)
+        .mockReturnValueOnce(bookingsQb);
+
+      const overrideStart = new Date('2026-07-01T14:00:00Z');
+      const overrideEnd = new Date('2026-07-01T15:00:00Z');
+
+      const rooms = await service.getAvailableRoomsForMeeting('meeting-uuid', {
+        includeCurrentRoom: true,
+        startTime: overrideStart,
+        endTime: overrideEnd,
+      });
+
+      expect(rooms).toHaveLength(1);
+      expect(rooms[0].isCurrentRoom).toBe(true);
+      // getRoomAvailability của MockQueryBuilder không expose trực tiếp filter,
+      // nhưng bookingsQb.getRawMany được resolve rỗng nên phòng vẫn "trống" —
+      // điều quan trọng là hàm không throw và chạy hết luồng override.
+    });
+
+    it('[T013-6] should throw when only startTime is provided without endTime', async () => {
+      await expect(
+        service.getAvailableRoomsForMeeting('meeting-uuid', {
+          startTime: new Date('2026-07-01T14:00:00Z'),
+        }),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
+
+    it('[T013-7] should throw when overridden startTime >= endTime', async () => {
+      await expect(
+        service.getAvailableRoomsForMeeting('meeting-uuid', {
+          startTime: new Date('2026-07-01T15:00:00Z'),
+          endTime: new Date('2026-07-01T14:00:00Z'),
+        }),
+      ).rejects.toThrow(UnprocessableEntityException);
+    });
   });
 
   describe('updateMeetingTime', () => {

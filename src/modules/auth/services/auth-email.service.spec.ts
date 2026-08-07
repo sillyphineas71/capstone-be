@@ -33,6 +33,7 @@ describe('AuthEmailService', () => {
       to: 'user@example.com',
       subject: expect.stringContaining('Kh�i ph?c m?t kh?u'),
       text: expect.stringContaining('123456'),
+      html: expect.stringContaining('123456'),
     });
   });
 

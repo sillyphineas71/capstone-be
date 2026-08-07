@@ -19,6 +19,11 @@ import {
 import { MeetingParticipantEntity } from '../entities/meeting-participant.entity.js';
 import { MeetingExternalParticipantEntity } from '../entities/meeting-external-participant.entity.js';
 import {
+  buildMeetingInviteEmail,
+  buildMeetingRoomUpdatedEmail,
+  buildMeetingTimeUpdatedEmail,
+} from '../../mail/templates/builders.js';
+import {
   MeetingEventEntity,
   MeetingEventType,
   MeetingEventSourceType,
@@ -517,6 +522,23 @@ export class MeetingRequestReviewService {
       : result.requestType === MeetingRequestType.UPDATE_ROOM
         ? `Phòng họp cho cuộc họp "${result.meetingTitle}" đã được thay đổi${result.oldRoomName && result.newRoomName ? ` từ "${result.oldRoomName}" sang "${result.newRoomName}"` : ''}.`
         : `Thời gian cuộc họp "${result.meetingTitle}" đã được cập nhật (${result.meetingStartTime.toISOString()} → ${result.meetingEndTime.toISOString()}).`;
+    const emailHtml = !isUpdateRequest
+      ? buildMeetingInviteEmail({
+          meetingTitle: result.meetingTitle,
+          startTime: result.meetingStartTime,
+          endTime: result.meetingEndTime,
+        })
+      : result.requestType === MeetingRequestType.UPDATE_ROOM
+        ? buildMeetingRoomUpdatedEmail({
+            meetingTitle: result.meetingTitle,
+            oldRoomName: result.oldRoomName,
+            newRoomName: result.newRoomName ?? '(chưa xác định)',
+          })
+        : buildMeetingTimeUpdatedEmail({
+            meetingTitle: result.meetingTitle,
+            newStartTime: result.meetingStartTime,
+            newEndTime: result.meetingEndTime,
+          });
 
     // 1. Internal participants — in-app
     for (const uid of result.participantIds) {
@@ -555,6 +577,7 @@ export class MeetingRequestReviewService {
             channel: NotificationChannel.EMAIL,
             subject,
             content,
+            emailHtml,
             toEmails: [email],
             relatedEntityType: 'meeting',
             relatedEntityId: meetingId,

@@ -366,6 +366,12 @@ export class MeetingsController {
     @Query('capacityWarningMode') capacityWarningMode?: string,
 
     @Query('includeCurrentRoom') includeCurrentRoom?: string,
+
+    // Override khung giờ để FE kiểm tra real-time theo giờ ĐANG GÕ THỬ khi
+    // sửa cuộc họp (chưa lưu) — không truyền thì dùng giờ đã lưu của meeting.
+    @Query('startTime') startTime?: string,
+
+    @Query('endTime') endTime?: string,
   ): Promise<{
     success: boolean;
 
@@ -377,6 +383,10 @@ export class MeetingsController {
       capacityWarningMode: capacityWarningMode === 'true',
 
       includeCurrentRoom: includeCurrentRoom === 'true',
+
+      startTime: startTime ? new Date(startTime) : undefined,
+
+      endTime: endTime ? new Date(endTime) : undefined,
     };
 
     const rooms = await this.meetingsService.getAvailableRoomsForMeeting(

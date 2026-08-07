@@ -177,6 +177,15 @@ export class LiveMeetingController {
   //  UC-IMM-03: Decide Extension Request (Approve/Reject)
   // ───────────────────────────────────────────────────────────
 
+  // @RequirePermissions() cố ý để trống — KHÔNG phải bug/thiếu tham số. PermissionsGuard
+  // chỉ kiểm tra permission tĩnh theo role; quyền quyết định request này còn phụ thuộc
+  // ruleSnapshotJson.approverIds theo TỪNG request cụ thể, guard route-level không biểu
+  // đạt được. Uỷ quyền thật nằm ở LiveMeetingService.decideExtension →
+  // checkDecidePermission() (gọi ngay dòng đầu, trước mọi mutation): ném ForbiddenException
+  // nếu user không có 'meeting.session.extension.override' VÀ không (có
+  // 'meeting.session.extension.decide' + có mặt trong approverIds của request). Xác nhận lại
+  // qua đọc trực tiếp service trước khi đổi decorator này — KHÔNG thêm permission code vào
+  // đây, sẽ chặn nhầm nhánh override hợp lệ.
   @Post('live-meetings/:meetingId/extension-requests/:requestId/decide')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
