@@ -1224,6 +1224,7 @@ export class MeetingsService {
     let bookingId = '';
     let notificationStatus = 'queued';
     let pendingApproval = false;
+    let stillPendingApproval = false;
     let requestId = '';
 
     try {
@@ -1250,6 +1251,9 @@ export class MeetingsService {
 
         if (lockedMeeting.status === MeetingStatus.PENDING_APPROVAL) {
           // ── 1b: chưa duyệt → sửa thoải mái, KHÔNG sinh request thứ 2 ──
+          // Meeting vẫn đang chờ duyệt lần đầu → KHÔNG được báo participants
+          // qua email (xem nhánh notification bên dưới).
+          stillPendingApproval = true;
           let booking: RoomBookingEntity | null = null;
 
           if (activeBooking) {
@@ -1516,9 +1520,10 @@ export class MeetingsService {
       throw error;
     }
 
-    if (pendingApproval) {
-      // ── 1c: chưa áp dụng gì cả — chỉ báo Manager có yêu cầu chờ duyệt,
-      // KHÔNG báo participants (họ chưa thấy thay đổi nào trên meeting) ──
+    if (pendingApproval || stillPendingApproval) {
+      // ── 1b/1c: chưa (còn) được duyệt — chỉ báo Manager có yêu cầu chờ
+      // duyệt, KHÔNG báo participants qua email (họ chưa thấy thay đổi
+      // nào được xác nhận trên meeting) ──
       try {
         const approverIds = await this.resolveApproverIds();
         if (approverIds.length > 0) {
@@ -2062,6 +2067,7 @@ export class MeetingsService {
     let newBookingId = '';
     let notificationStatus = 'queued';
     let pendingApproval = false;
+    let stillPendingApproval = false;
     let requestId = '';
 
     try {
@@ -2093,6 +2099,9 @@ export class MeetingsService {
 
         if (lockedMeeting.status === MeetingStatus.PENDING_APPROVAL) {
           // ── 1b: chưa duyệt → sửa thoải mái, KHÔNG sinh request thứ 2 ──
+          // Meeting vẫn đang chờ duyệt lần đầu → KHÔNG được báo participants
+          // qua email (xem nhánh notification bên dưới).
+          stillPendingApproval = true;
           await em.update(
             RoomBookingEntity,
             {
@@ -2308,9 +2317,10 @@ export class MeetingsService {
       throw error;
     }
 
-    if (pendingApproval) {
-      // ── 1c: chưa áp dụng gì cả — chỉ báo Manager có yêu cầu chờ duyệt,
-      // KHÔNG báo participants (phòng thực tế chưa đổi) ──
+    if (pendingApproval || stillPendingApproval) {
+      // ── 1b/1c: chưa (còn) được duyệt — chỉ báo Manager có yêu cầu chờ
+      // duyệt, KHÔNG báo participants qua email (phòng thực tế chưa được
+      // xác nhận trên meeting) ──
       try {
         const approverIds = await this.resolveApproverIds();
         if (approverIds.length > 0) {

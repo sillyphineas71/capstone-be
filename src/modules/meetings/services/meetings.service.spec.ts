@@ -1324,6 +1324,90 @@ describe('MeetingsService', () => {
       expect(result.notificationStatus).toBe('failed');
     });
 
+    it('[BUG-REPRO] PENDING_APPROVAL: KHÔNG gửi email cho participants khi sửa giờ (meeting chưa từng được Manager duyệt)', async () => {
+      setupMocks();
+      const pendingMeeting = { ...fakeMeeting, status: MeetingStatus.PENDING_APPROVAL };
+      mockRepo.findOne.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        const id = where.id;
+        if (id === 'meeting-uuid') return pendingMeeting;
+        if (id === 'room-uuid') return fakeRoom;
+        if (where.meetingId === 'meeting-uuid' && where.status)
+          return fakeActiveBooking;
+        return null;
+      });
+      // 2 participants khác actor — để chứng minh trước fix email THẬT SỰ sẽ
+      // được gửi cho họ, không phải "vô tình pass" vì thiếu recipient.
+      mockRepo.find.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        if (where.meetingId === 'meeting-uuid' && where.roomId) return [];
+        if (where.meetingId === 'meeting-uuid') {
+          return [{ userId: 'user-1' } as any, { userId: 'user-2' } as any];
+        }
+        return [];
+      });
+      em.find = jest
+        .fn()
+        .mockImplementation(async (_entity: any, options: any = {}) => {
+          const idVal = options?.where?.id;
+          if (idVal && idVal._value && Array.isArray(idVal._value)) {
+            return idVal._value.map((uid: string) => ({
+              id: uid,
+              email: uid + '@company.com',
+            }));
+          }
+          return [];
+        });
+      const fakePendingRequest = {
+        id: 'request-uuid',
+        meetingId: 'meeting-uuid',
+        approvalStatus: ApprovalStatus.PENDING,
+        requestPayloadJson: {},
+      };
+      em.findOne.mockImplementation(async (entity: any, options: any = {}) => {
+        if (!options?.lock) return null;
+        if (entity === MeetingEntity) return { ...pendingMeeting };
+        if (entity === RoomBookingEntity) return fakeActiveBooking;
+        if (entity === MeetingRequestEntity) return fakePendingRequest;
+        return null;
+      });
+      // Call #1 = participant time-conflict check (phải rỗng), các call sau
+      // = resolveApproverIds() → approverQb.
+      const conflictQb = mockQueryBuilder();
+      conflictQb.getMany.mockResolvedValue([]);
+      const approverQb = mockQueryBuilder();
+      approverQb.getMany.mockResolvedValue([
+        { id: 'approver-uuid' } as UserEntity,
+      ]);
+      mockRepo.createQueryBuilder
+        .mockReturnValueOnce(conflictQb)
+        .mockReturnValue(approverQb);
+
+      const result = await service.updateMeetingTime(
+        'meeting-uuid',
+        validDto,
+        authUser,
+        clientContext,
+      );
+
+      expect(result.pendingApproval).toBe(false);
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).not.toHaveBeenCalled();
+      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_TIME_UPDATED,
+        }),
+      );
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
+          channel: NotificationChannel.IN_APP,
+          recipientUserIds: ['approver-uuid'],
+        }),
+      );
+    });
+
     it('should throw 422 for past startTime', async () => {
       setupMocks();
       const pastDto = {
@@ -1800,6 +1884,78 @@ describe('MeetingsService', () => {
       );
 
       expect(result.notificationStatus).toBe('failed');
+    });
+
+    it('[BUG-REPRO] PENDING_APPROVAL: KHÔNG gửi email cho participants khi đổi phòng (meeting chưa từng được Manager duyệt)', async () => {
+      const future = new Date();
+      future.setDate(future.getDate() + 30);
+      const pendingMeeting = {
+        ...fakeMeeting,
+        status: MeetingStatus.PENDING_APPROVAL,
+        startTime: future,
+        endTime: new Date(future.getTime() + 60 * 60 * 1000),
+      };
+      setupFindOneMocks({ meeting: pendingMeeting });
+      mockRepo.count.mockResolvedValue(5);
+      // 2 participants khác actor — để chứng minh trước fix email THẬT SỰ sẽ
+      // được gửi cho họ, không phải "vô tình pass" vì thiếu recipient.
+      mockRepo.find.mockResolvedValue([
+        { userId: 'user-1' } as any,
+        { userId: 'user-2' } as any,
+      ]);
+      em.find = jest
+        .fn()
+        .mockImplementation(async (_entity: any, options: any = {}) => {
+          const idVal = options?.where?.id;
+          if (idVal && idVal._value && Array.isArray(idVal._value)) {
+            return idVal._value.map((uid: string) => ({
+              id: uid,
+              email: uid + '@company.com',
+            }));
+          }
+          return [];
+        });
+      em.findOne.mockResolvedValue(pendingMeeting);
+      em.update.mockResolvedValue({ affected: 1 } as any);
+      em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
+      em.save.mockImplementation(async (_entity: any, data: any) => {
+        if (data && typeof data === 'object') {
+          if (!data.id) data.id = 'saved-id';
+          return data;
+        }
+        return _entity;
+      });
+      em.count.mockResolvedValue(0);
+
+      const approverQb = mockQueryBuilder();
+      approverQb.getMany.mockResolvedValue([
+        { id: 'approver-uuid' } as UserEntity,
+      ]);
+      mockRepo.createQueryBuilder.mockReturnValue(approverQb);
+
+      const result = await service.updateMeetingRoom(
+        'meeting-uuid',
+        { newRoomId: 'new-room-uuid' },
+        authUser,
+        clientContext,
+      );
+
+      expect(result.pendingApproval).toBe(false);
+      expect(
+        mockNotificationsService.enqueueEmailNotification,
+      ).not.toHaveBeenCalled();
+      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_ROOM_UPDATED,
+        }),
+      );
+      expect(mockNotificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.MEETING_REQUEST_CREATED,
+          channel: NotificationChannel.IN_APP,
+          recipientUserIds: ['approver-uuid'],
+        }),
+      );
     });
   });
 
