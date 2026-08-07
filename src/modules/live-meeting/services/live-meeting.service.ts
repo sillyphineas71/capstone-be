@@ -1429,7 +1429,6 @@ export class LiveMeetingService {
       .andWhere('rb.status IN (:...statuses)', {
         statuses: ['pending', 'approved', 'active'],
       })
-      .andWhere('rb.deletedAt IS NULL')
       .andWhere('rb.reservedStartTime < :newEnd', {
         newEnd: requestedNewEndTime,
       })

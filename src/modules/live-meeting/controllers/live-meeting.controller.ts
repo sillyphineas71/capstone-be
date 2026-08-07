@@ -249,7 +249,7 @@ export class LiveMeetingController {
 
     return {
       success: true,
-      message: 'Danh sach diem danh cuoc hop',
+      message: result.message,
       data: result,
     };
   }
