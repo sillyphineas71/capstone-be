@@ -844,7 +844,7 @@ export class MeetingsService {
         await this.notificationsService.createNotification({
           notificationType: NotificationType.MEETING_REQUEST_CREATED,
           channel: NotificationChannel.IN_APP,
-          subject: `Y\u00ea\u0301u c\u00e2\u0300u ho\u0323p m\u01a1\u0301i: ${dto.title}`,
+          subject: `Y\u00eau c\u1ea7u h\u1ecdp m\u1edbi: ${dto.title}`,
           content: `Ng\u01b0\u01a1\u0300i du\u0300ng ${authUser.userId} \u0111a\u0303 ta\u0323o y\u00eau c\u00e2\u0300u cu\u00f4\u0323c ho\u0323p "${dto.title}" ch\u01a1\u0300 ph\u00ea duy\u00ea\u0323t.`,
           relatedEntityType: 'meeting_request',
           relatedEntityId: request!.id,
@@ -2537,7 +2537,7 @@ export class MeetingsService {
 
         // 4c. Query room_bookings with FOR UPDATE
         const bookings = await em.query(
-          `SELECT id, room_id, status, start_time, end_time
+          `SELECT id, room_id, status, reserved_start_time, reserved_end_time
            FROM room_bookings
            WHERE meeting_id = $1 AND status IN ('pending', 'approved')
            FOR UPDATE`,
