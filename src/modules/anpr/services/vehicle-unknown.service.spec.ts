@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { VehicleUnknownService } from './vehicle-unknown.service.js';
 
 const row = (over: any = {}) => ({
+  id: 'evt-1',
   plate_number: '30A12345',
   channel_id: 5,
   direction: 'enter',
@@ -39,10 +40,11 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     service = new VehicleUnknownService(dsMock as DataSource);
   });
 
-  it('list: map đúng 7 field + meta (total=25 limit=20 → totalPages=2)', async () => {
+  it('list: map đúng 8 field + meta (total=25 limit=20 → totalPages=2)', async () => {
     wire([row()], 25);
     const r = await service.listUnknown(q());
     expect(r.items[0]).toEqual({
+      id: 'evt-1',
       plateNumber: '30A12345',
       channelId: 5,
       direction: 'enter',
@@ -52,6 +54,14 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
       vehicleType: 'car',
     });
     expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
+  });
+
+  // ── id (F-F fix): FE dùng để gọi GET ivss/device-events/:id/snapshot ──
+  it('id: SELECT có cột id + output item.id khớp đúng iot_device_events.id', async () => {
+    wire([row({ id: 'a1b2c3d4-1111-2222-3333-444455556666' })]);
+    const r = await service.listUnknown(q());
+    expect(rowsCall()!.sql).toMatch(/SELECT id,/);
+    expect(r.items[0].id).toBe('a1b2c3d4-1111-2222-3333-444455556666');
   });
 
   it('C1-isolation: SQL chứa event_type=ivss_vehicle_event + matchState=unmatched (KHÔNG face)', async () => {

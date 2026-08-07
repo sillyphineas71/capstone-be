@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { VehicleHistoryService } from './vehicle-history.service.js';
 
 const row = (over: any = {}) => ({
+  id: 'evt-1',
   plate_number: '30A12345',
   channel_id: 5,
   direction: 'enter',
@@ -72,12 +73,27 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     const r = await service.listAll(q());
     expect(rowsCall()!.sql).toContain("(payload_json->>'channelId')::int");
     expect(r.items[0]).toMatchObject({
+      id: 'evt-1',
       plateNumber: '30A12345',
       channelId: 5,
       direction: 'enter',
       matchState: 'matched',
       utc: '2026-06-25T09:00:00.000Z',
     });
+  });
+
+  // ── id (F-F fix): FE dùng để gọi GET ivss/device-events/:id/snapshot ──
+  it('id: SELECT có cột id + output item.id khớp đúng iot_device_events.id', async () => {
+    wire([row({ id: 'a1b2c3d4-1111-2222-3333-444455556666' })]);
+    const r = await service.listAll(q());
+    expect(rowsCall()!.sql).toMatch(/SELECT id,/);
+    expect(r.items[0].id).toBe('a1b2c3d4-1111-2222-3333-444455556666');
+  });
+
+  it('id: listForUser cũng trả đúng id (KHÔNG chỉ listAll)', async () => {
+    wire([row({ id: 'evt-user-1' })]);
+    const r = await service.listForUser('u1', q());
+    expect(r.items[0].id).toBe('evt-user-1');
   });
 
   // ── ràng buộc: plate filter normalize ──

@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import type { ListUnknownVehiclesQueryDto } from '../dto/list-unknown-vehicles-query.dto.js';
 
 interface UnknownRow {
+  id: string;
   plate_number: string | null;
   channel_id: number | null;
   direction: string | null;
@@ -23,6 +24,8 @@ export interface PaginationMeta {
 }
 
 export interface UnknownVehicleItem {
+  /** iot_device_events.id — FE dùng để gọi GET ivss/device-events/:id/snapshot (404 nếu không có ảnh). */
+  id: string;
   plateNumber: string | null;
   channelId: number | null;
   direction: string | null;
@@ -75,7 +78,8 @@ export class VehicleUnknownService {
     const limitIdx = params.length + 1;
     const offsetIdx = params.length + 2;
     const rows: UnknownRow[] = await this.dataSource.manager.query(
-      `SELECT payload_json->>'plateNumber'        AS plate_number,
+      `SELECT id,
+              payload_json->>'plateNumber'        AS plate_number,
               (payload_json->>'channelId')::int   AS channel_id,
               payload_json->>'direction'          AS direction,
               event_time,
@@ -91,6 +95,7 @@ export class VehicleUnknownService {
 
     return {
       items: rows.map((r) => ({
+        id: r.id,
         plateNumber: r.plate_number,
         channelId: r.channel_id,
         direction: r.direction,
