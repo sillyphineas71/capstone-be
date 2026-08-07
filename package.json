@@ -25,7 +25,8 @@
     "migration:run": "npm run typeorm -- migration:run -d src/database/data-source.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d src/database/data-source.ts",
     "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
-    "migration:run:tsx": "tsx scripts/run-migrations.ts"
+    "migration:run:tsx": "tsx scripts/run-migrations.ts",
+    "cleanup:ivss-group1": "tsx scripts/cleanup-ivss-group1-mappings.ts"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.4",

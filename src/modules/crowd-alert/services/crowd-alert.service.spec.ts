@@ -207,4 +207,114 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
       expect(result.zonesScanned).toBe(1);
     });
   });
+
+  // ── evaluateZoneCountNow — đường TỨC THỜI (bên cạnh cron, KHÔNG thay thế) ──
+  describe('evaluateZoneCountNow (đường tức thời)', () => {
+    it('vượt ngưỡng → recordAlert gọi 1 lần, trả về true', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      const eventTime = new Date('2026-07-23T08:00:00Z');
+      const r = await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 30,
+        eventTime,
+        sourceEventId: 'zpe-1',
+      });
+      expect(r).toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(1);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alertType: 'crowd',
+          zoneId: 'zone-1',
+          ruleId: 'rule-1',
+          payloadJson: expect.objectContaining({
+            occupancyCount: 30,
+            threshold: 25,
+            sourceEventId: 'zpe-1',
+            occurredAt: eventTime.toISOString(),
+          }),
+        }),
+      );
+    });
+
+    it('chưa vượt ngưỡng → KHÔNG vi phạm, recordAlert KHÔNG gọi, trả về false', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      const r = await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 10,
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-2',
+      });
+      expect(r).toBe(false);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('không có rule crowd nào active cho zone → trả về false', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [] });
+      const r = await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 999,
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-3',
+      });
+      expect(r).toBe(false);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('rule threshold=NULL (chưa cấu hình) → bỏ qua rule đó, KHÔNG vi phạm', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ threshold: null })],
+      });
+      const r = await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 999,
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-4',
+      });
+      expect(r).toBe(false);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('gọi alertRulesService.list lọc ĐÚNG zoneId (KHÔNG tải toàn bộ rule rồi lọc JS)', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [] });
+      await service.evaluateZoneCountNow({
+        zoneId: 'zone-42',
+        occupancyCount: 1,
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-5',
+      });
+      expect(alertRulesMock.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alertType: 'crowd',
+          zoneId: 'zone-42',
+          enabled: true,
+        }),
+      );
+    });
+
+    it('dedupe qua recordAlert() có sẵn — gọi lại cho CÙNG zone (mô phỏng cron quét lại) → recordAlert vẫn được gọi (bump occurrenceCount), KHÔNG cần cờ chống trùng riêng', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      const eventTime = new Date('2026-07-23T08:00:00Z');
+      await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 30,
+        eventTime,
+        sourceEventId: 'zpe-6',
+      });
+      await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 30,
+        eventTime,
+        sourceEventId: 'zpe-6',
+      });
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(2);
+      expect(alertsMock.recordAlert).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ alertType: 'crowd', zoneId: 'zone-1' }),
+      );
+      expect(alertsMock.recordAlert).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ alertType: 'crowd', zoneId: 'zone-1' }),
+      );
+    });
+  });
 });

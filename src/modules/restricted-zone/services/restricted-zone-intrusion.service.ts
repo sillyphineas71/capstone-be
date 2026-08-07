@@ -7,6 +7,7 @@ import { SystemConfigEntity } from '../../administration/entities/system-config.
 import { AlertRuleEntity } from '../../alerts/entities/alert-rule.entity.js';
 import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
 import { AlertsService } from '../../alerts/services/alerts.service.js';
+import { vnMinutesOfDay } from '../../../common/utils/vn-restricted-hours.util.js';
 
 const CONFIG_GROUP = 'restricted_zone_intrusion';
 const GATE_LOG_WATERMARK_KEY = 'restricted_zone.gate_log_watermark';
@@ -123,6 +124,55 @@ export class RestrictedZoneIntrusionService {
     };
   }
 
+  /**
+   * Đường TỨC THỜI (bên cạnh cron `evaluateIntrusions()` — KHÔNG thay thế, cron vẫn
+   * chạy làm lưới quét bù cho các trường hợp bỏ lỡ, vd event đến lúc rule vừa bật).
+   * Gọi ngay sau khi 1 zone-presence "appear" event được ghi, để cảnh báo xuất hiện
+   * ngay thay vì đợi tới chu kỳ cron. isViolation() thuần tuý, không phụ thuộc
+   * watermark → gọi trực tiếp an toàn.
+   *
+   * Chỉ tải rule của ĐÚNG zoneId (query DB có `zoneId` filter sẵn trong
+   * `AlertRulesService.list()`) — KHÔNG dùng `loadZoneScopedIntrusionRules()` (tải
+   * TẤT CẢ zone rồi lọc JS, tốn cho đường per-event). Số rule intrusion active/zone
+   * thường 0-1 → 1 query nhẹ, không cần cache.
+   *
+   * Dedupe: KHÔNG thêm cờ "đã xử lý tức thời" nào — dựa hoàn toàn vào
+   * `AlertsService.recordAlert()` (unique index mở theo alertType+zoneId, §UC-123).
+   * Nếu cron quét lại đúng event này sau đó, `recordAlert()` chỉ bump
+   * `occurrenceCount` trên alert đã mở, KHÔNG tạo alert thứ 2 (không double-alert).
+   */
+  async evaluateZoneEventNow(args: {
+    zoneId: string;
+    userId: string | null;
+    eventTime: Date;
+    sourceTable: string;
+    sourceRowId: string;
+  }): Promise<boolean> {
+    const { items: rules } = await this.alertRulesService.list({
+      alertType: 'intrusion',
+      zoneId: args.zoneId,
+      enabled: true,
+      page: 1,
+      limit: 50,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    let violated = false;
+    for (const rule of rules) {
+      if (this.isViolation(rule, args.userId, args.eventTime)) {
+        violated = true;
+        await this.recordIntrusion(rule, {
+          sourceTable: args.sourceTable,
+          sourceRowId: args.sourceRowId,
+          userId: args.userId,
+          occurredAt: args.eventTime.toISOString(),
+        });
+      }
+    }
+    return violated;
+  }
+
   private async recordIntrusion(
     rule: AlertRuleEntity,
     payloadJson: Record<string, unknown>,
@@ -162,7 +212,13 @@ export class RestrictedZoneIntrusionService {
     return !allowed.includes(userId);
   }
 
-  /** Xử lý qua đêm: allowFrom > allowTo (vd 22:00→06:00) → trong khung nếu >=from HOẶC <=to. */
+  /**
+   * Xử lý qua đêm: allowFrom > allowTo (vd 22:00→06:00) → trong khung nếu >=from HOẶC <=to.
+   * `allowFrom`/`allowTo` là giờ VN theo cách admin nhập trên UI — so sánh PHẢI quy
+   * `occurredAt` về giờ VN (Asia/Ho_Chi_Minh) qua `vnMinutesOfDay()`, ĐỘC LẬP với TZ
+   * runtime của server (KHÔNG dùng Date#getHours()/getMinutes() — sai nếu server chạy
+   * UTC, xem vn-restricted-hours.util.ts).
+   */
   private isWithinAllowedHours(
     hours: { allowFrom: string; allowTo: string },
     occurredAt: Date,
@@ -173,7 +229,7 @@ export class RestrictedZoneIntrusionService {
     };
     const from = toMinutes(hours.allowFrom);
     const to = toMinutes(hours.allowTo);
-    const current = occurredAt.getHours() * 60 + occurredAt.getMinutes();
+    const current = vnMinutesOfDay(occurredAt);
 
     if (from <= to) {
       return current >= from && current <= to;

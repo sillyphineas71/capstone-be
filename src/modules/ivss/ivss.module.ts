@@ -4,6 +4,8 @@ import { AccountsModule } from '../accounts/accounts.module.js';
 import { WebsocketModule } from '../websocket/websocket.module.js';
 import { PresenceModule } from '../presence/presence.module.js';
 import { ZonesModule } from '../zones/zones.module.js';
+import { RestrictedZoneModule } from '../restricted-zone/restricted-zone.module.js';
+import { CrowdAlertModule } from '../crowd-alert/crowd-alert.module.js';
 import { IVSS_EVENT_HANDLER } from '../../common/ports/ivss-event-hook.js';
 import { IVSS_BRIDGE } from './ports/ivss-bridge.port.js';
 import { ivssBridgeProvider } from './ivss-bridge.factory.js';
@@ -20,6 +22,7 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
 import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
 import { IvssDeviceEventSnapshotController } from './controllers/ivss-device-event-snapshot.controller.js';
+import { IvssPortraitAdminController } from './controllers/ivss-portrait-admin.controller.js';
 import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
 import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
 import { JwtQueryOrHeaderAuthGuard } from '../auth/guards/jwt-query-or-header-auth.guard.js';
@@ -41,6 +44,15 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     // ZPW-001 (UC-109): lấy ZonePresenceWriterService (writer zone_presence_events) từ zones.
     // Cạnh ivss → zones một chiều (zones import Auth+Iot, KHÔNG import ivss) ⇒ không circular.
     ZonesModule,
+    // Đường đánh giá intrusion TỨC THỜI (bên cạnh cron evaluateIntrusions() —
+    // KHÔNG thay thế): lấy RestrictedZoneIntrusionService.evaluateZoneEventNow().
+    // Cạnh ivss → restricted-zone một chiều (restricted-zone chỉ import
+    // alerts, KHÔNG import ivss/zones module) ⇒ không circular.
+    RestrictedZoneModule,
+    // Đường đánh giá crowd TỨC THỜI (bên cạnh cron evaluateCrowdAlerts() — KHÔNG
+    // thay thế): lấy CrowdAlertService.evaluateZoneCountNow(). Cạnh ivss →
+    // crowd-alert một chiều (crowd-alert chỉ import alerts) ⇒ không circular.
+    CrowdAlertModule,
   ],
   controllers: [
     IvssWebhookController,
@@ -52,6 +64,8 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     // F-F fix: TÁCH RIÊNG khỏi IvssRoomAccessController — route ảnh snapshot cần
     // JwtQueryOrHeaderAuthGuard (fallback ?token=), 2 route access-log KHÔNG đụng.
     IvssDeviceEventSnapshotController,
+    // Phương án c, phần 2: force re-sync mapping portrait theo yêu cầu admin.
+    IvssPortraitAdminController,
   ],
   providers: [
     ivssBridgeProvider,

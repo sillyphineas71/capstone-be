@@ -176,6 +176,9 @@ export class IvssPersonSyncService {
     // Nợ #2: enroll idempotent — xoá person cũ trên IVSS trước khi enroll mới,
     // tránh 1 user nhiều szUID khi mapping cũ ở trạng thái failed hoặc DB lệch IVSS.
     // Chỉ chạy khi đã qua dedupe ở trên (mapping KHÔNG phải synced-sạch).
+    // deleteFace theo device_person_id (UID thiết bị tự sinh) — đối chiếu
+    // sep490_ams_be delFaceRecognitionDB (dòng 613-639, production). KHÔNG
+    // đổi thành device_person_code.
     const stale: { device_person_id: string }[] =
       await this.dataSource.manager.query(
         `SELECT device_person_id FROM device_user_mappings
@@ -263,7 +266,10 @@ export class IvssPersonSyncService {
     let failed = 0;
     for (const mp of maps) {
       try {
-        // C3: deleteFace theo personUid mình gửi (device_person_code).
+        // C3 (đính chính): deleteFace phải theo device_person_id (UID do THIẾT
+        // BỊ tự sinh lúc enroll) — KHÔNG phải device_person_code (sha256 BE tự
+        // tạo). Đối chiếu code THẬT sep490_ams_be, delFaceRecognitionDB dòng
+        // 613-639 (đã chạy production). KHÔNG đổi lại thành device_person_code.
         const personUid = mp.device_person_id;
         if (personUid) {
           const r = await this.bridge.deleteFace({
