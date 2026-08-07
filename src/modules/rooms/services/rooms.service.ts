@@ -209,11 +209,14 @@ export class RoomsService {
       });
     }
 
-    const roomName = dto.roomName.trim();
-    const areaName = dto.areaName.trim();
+    const roomName = dto.roomName !== undefined ? dto.roomName.trim() : room.roomName;
+    const areaName = dto.areaName !== undefined ? dto.areaName.trim() : room.areaName;
 
     // BR1: ten phong phai duy nhat, loai tru chinh ban ghi dang sua
-    await this.checkDuplicateRoomName(roomName, roomId);
+    // Chi kiem tra khi client thuc su doi roomName (partial update - BUG-007)
+    if (dto.roomName !== undefined) {
+      await this.checkDuplicateRoomName(roomName, roomId);
+    }
 
     const oldValueJson = {
       roomName: room.roomName,
@@ -231,7 +234,7 @@ export class RoomsService {
     const saved = await this.dataSource.transaction(async (em) => {
       room.roomName = roomName;
       room.areaName = areaName;
-      room.capacity = dto.capacity;
+      if (dto.capacity !== undefined) room.capacity = dto.capacity;
       if (dto.siteName !== undefined) room.siteName = dto.siteName;
       if (dto.locationDescription !== undefined)
         room.locationDescription = dto.locationDescription;

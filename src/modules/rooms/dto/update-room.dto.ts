@@ -12,15 +12,17 @@ import {
 import { RoomType } from '../entities/room.entity.js';
 
 export class UpdateRoomDto {
+  @IsOptional()
   @IsString({ message: 'roomName phai la chuoi ky tu' })
   @IsNotEmpty({ message: 'roomName khong duoc de trong' })
   @MaxLength(255, { message: 'roomName toi da 255 ky tu' })
-  roomName: string;
+  roomName?: string;
 
+  @IsOptional()
   @IsString({ message: 'areaName phai la chuoi ky tu' })
   @IsNotEmpty({ message: 'areaName khong duoc de trong' })
   @MaxLength(255, { message: 'areaName toi da 255 ky tu' })
-  areaName: string;
+  areaName?: string;
 
   @IsOptional()
   @IsString({ message: 'siteName phai la chuoi ky tu' })
@@ -31,10 +33,11 @@ export class UpdateRoomDto {
   @IsString({ message: 'locationDescription phai la chuoi ky tu' })
   locationDescription?: string;
 
+  @IsOptional()
   @IsInt({ message: 'capacity phai la so nguyen' })
   @Min(1, { message: 'capacity phai tu 1 tro len' })
   @Max(1000, { message: 'capacity khong duoc vuot qua 1000' })
-  capacity: number;
+  capacity?: number;
 
   @IsOptional()
   @IsEnum(RoomType, {
