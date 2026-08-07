@@ -9,13 +9,12 @@ import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { saveEventSnapshot } from '../../../common/utils/save-event-snapshot.util.js';
-import { isOutsideAllowedHoursVn } from '../../../common/utils/vn-restricted-hours.util.js';
 import {
   IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY,
   type PresenceSkippedReason,
 } from '../constants/zone-presence.constant.js';
 
-/** F-B/F-C: subfolder storage cho snapshot ảnh sự kiện IVSS (unmatched + zone appear). */
+/** Subfolder storage cho snapshot ảnh sự kiện IVSS (mọi matchState có imageBase64). */
 const SNAPSHOT_FOLDER = 'stranger-snapshots';
 /** media_files.related_entity_type cho snapshot lưu từ luồng IVSS ingestion. */
 const SNAPSHOT_RELATED_ENTITY_TYPE = 'ivss_device_event';
@@ -31,9 +30,6 @@ interface ConfigRow {
 }
 interface FullNameRow {
   full_name: string | null;
-}
-interface RestrictedHoursRow {
-  restricted_hours_json: { allowFrom?: string; allowTo?: string } | null;
 }
 
 /** IRP-001 (#40): payload realtime đẩy về client — SEC-01/C4 KHÔNG szUid/imageBase64/similarity. */
@@ -165,26 +161,13 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         if (!chk.valid) presenceSkipped = chk.reason;
       }
 
-      // F-B: identity lạ (unmatched_identity/unmatched_both) → khả năng lạ mặt, đáng
-      // giữ ảnh để tra soát.
-      const isUnmatchedIdentity =
-        matchState === 'unmatched_identity' || matchState === 'unmatched_both';
-
-      // F-C: bám ĐÚNG nhánh sẽ gọi zonePresenceWriter.writeAppearEvent() bên dưới
-      // (KHÔNG bám matchState — 2 trục độc lập, camera presence-only thường KHÔNG có
-      // roomId nên matchState hiếm khi 'matched'). Zone tra alert_rules là
-      // presenceZoneId (zone SAVP của nhánh appear), KHÔNG phải roomId.
-      const isZoneAppearViolation =
-        !presenceSkipped && presenceZoneId && userId
-          ? await this.isPotentialZoneViolation(presenceZoneId, eventTime)
-          : false;
-
+      // Quyết định mới (2026-08-07): lưu ảnh cho MỌI event có imageBase64, bất kể
+      // matchState (matched/unmatched_identity/unmatched_location/unmatched_both).
+      // Gate cũ theo matchState (F-B) và theo zone-violation/restricted-hours (F-C)
+      // đã bị bỏ — saveSnapshotSafe tự no-op (trả null) khi KHÔNG có ảnh.
       // SEC-01 vẫn giữ nguyên: ảnh KHÔNG bao giờ vào payload_json — chỉ media_files.id
       // (snapshotFileId) đi vào cột riêng snapshot_file_id.
-      let snapshotFileId: string | null = null;
-      if (isUnmatchedIdentity || isZoneAppearViolation) {
-        snapshotFileId = await this.saveSnapshotSafe(evt.imageBase64);
-      }
+      const snapshotFileId = await this.saveSnapshotSafe(evt.imageBase64);
 
       // SEC-01: KHÔNG imageBase64; szUid metadata-only.
       const payload = {
@@ -380,38 +363,6 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         `snapshot save failed: ${e instanceof Error ? e.message : 'unknown'}`,
       );
       return null;
-    }
-  }
-
-  /**
-   * F-C: "khả năng vi phạm" — zone (presenceZoneId của nhánh appear) đang có rule
-   * `alert_type='intrusion'` ACTIVE + hiện tại (giờ VN, KHÔNG theo TZ runtime của
-   * server — xem vn-restricted-hours.util.ts) NGOÀI restricted_hours_json. KHÔNG có
-   * rule / đang trong giờ cho phép → false (KHÔNG lưu ảnh). Lỗi query → false
-   * (fail-safe: thiếu rule để tra KHÔNG được chặn ingest).
-   */
-  private async isPotentialZoneViolation(
-    zoneId: string,
-    occurredAt: Date,
-  ): Promise<boolean> {
-    try {
-      const rows: RestrictedHoursRow[] = await this.dataSource.manager.query(
-        `SELECT restricted_hours_json FROM alert_rules
-         WHERE zone_id = $1 AND alert_type = 'intrusion' AND enabled = true
-           AND deleted_at IS NULL
-         LIMIT 1`,
-        [zoneId],
-      );
-      const rule = rows[0];
-      if (!rule) return false;
-      return isOutsideAllowedHoursVn(rule.restricted_hours_json, occurredAt);
-    } catch (e) {
-      this.logger.warn(
-        `alert_rules lookup failed (zone=${zoneId}): ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-      return false;
     }
   }
 
