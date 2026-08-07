@@ -298,4 +298,127 @@ describe('RestrictedZoneIntrusionService (ARZ-001 / UC-124)', () => {
       expect(where.eventType).toBe('appear');
     });
   });
+
+  // ── evaluateZoneEventNow — đường TỨC THỜI (bên cạnh cron, KHÔNG thay thế) ──
+  describe('evaluateZoneEventNow (đường tức thời)', () => {
+    it('vi phạm (ngoài giờ, ngoài allowlist) → recordAlert gọi 1 lần, trả về true', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [
+          rule({
+            restrictedHoursJson: { allowFrom: '07:00', allowTo: '18:00' },
+            allowedPersonIdsJson: ['user-ok'],
+          }),
+        ],
+      });
+      const eventTime = new Date('2026-07-23T22:00:00');
+      const r = await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-bad',
+        eventTime,
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-1',
+      });
+      expect(r).toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(1);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          ruleId: 'rule-1',
+          payloadJson: expect.objectContaining({
+            sourceTable: 'zone_presence_events',
+            sourceRowId: 'zpe-1',
+            userId: 'user-bad',
+            occurredAt: eventTime.toISOString(),
+          }),
+        }),
+      );
+    });
+
+    it('trong giờ cho phép → KHÔNG vi phạm, recordAlert KHÔNG gọi, trả về false', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [
+          rule({
+            restrictedHoursJson: { allowFrom: '07:00', allowTo: '18:00' },
+          }),
+        ],
+      });
+      const r = await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-any',
+        eventTime: new Date('2026-07-23T10:00:00'),
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-2',
+      });
+      expect(r).toBe(false);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('không có rule intrusion nào active cho zone → KHÔNG vi phạm, trả về false', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [] });
+      const r = await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-any',
+        eventTime: new Date('2026-07-23T22:00:00'),
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-3',
+      });
+      expect(r).toBe(false);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('gọi alertRulesService.list lọc ĐÚNG zoneId (KHÔNG tải toàn bộ rule rồi lọc JS)', async () => {
+      alertRulesMock.list.mockResolvedValue({ items: [] });
+      await service.evaluateZoneEventNow({
+        zoneId: 'zone-42',
+        userId: 'user-any',
+        eventTime: new Date('2026-07-23T22:00:00'),
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-4',
+      });
+      expect(alertRulesMock.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alertType: 'intrusion',
+          zoneId: 'zone-42',
+          enabled: true,
+        }),
+      );
+    });
+
+    it('dedupe qua recordAlert() có sẵn — GỌI LẠI evaluateZoneEventNow cho CÙNG zone (mô phỏng cron quét lại) → recordAlert vẫn được gọi (bump occurrenceCount), KHÔNG throw, KHÔNG cần cờ chống trùng riêng', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })], // 24/7, không allowlist → luôn vi phạm
+      });
+      const eventTime = new Date('2026-07-23T22:00:00');
+      // Lần 1: đường tức thời
+      await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-bad',
+        eventTime,
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-5',
+      });
+      // Lần 2: mô phỏng cron quét lại cùng event (watermark chưa kịp vượt qua) —
+      // gọi lại recordAlert cho cùng (alertType, zoneId). alertsMock ở đây chỉ
+      // verify SỐ LẦN GỌI — hành vi bump-not-duplicate là trách nhiệm CỦA
+      // AlertsService.recordAlert() (đã có unique index, test riêng ở
+      // alerts.service.spec.ts), KHÔNG phải logic của service này.
+      await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-bad',
+        eventTime,
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-5',
+      });
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(2);
+      expect(alertsMock.recordAlert).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ alertType: 'intrusion', zoneId: 'zone-1' }),
+      );
+      expect(alertsMock.recordAlert).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ alertType: 'intrusion', zoneId: 'zone-1' }),
+      );
+    });
+  });
 });

@@ -61,18 +61,13 @@ export class CrowdAlertService {
 
       for (const event of events) {
         eventsChecked++;
-        if ((event.occupancyCount ?? 0) >= threshold) {
+        if (this.isThresholdExceeded(rule, event.occupancyCount ?? 0)) {
           violationsFound++;
-          await this.alertsService.recordAlert({
-            alertType: 'crowd',
-            zoneId,
-            ruleId: rule.id,
-            payloadJson: {
-              occupancyCount: event.occupancyCount,
-              threshold,
-              sourceEventId: event.id,
-              occurredAt: event.eventTime.toISOString(),
-            },
+          await this.recordCrowdAlert(rule, {
+            occupancyCount: event.occupancyCount,
+            threshold,
+            sourceEventId: event.id,
+            occurredAt: event.eventTime.toISOString(),
           });
         }
         if (event.eventTime > maxTime) maxTime = event.eventTime;
@@ -90,6 +85,75 @@ export class CrowdAlertService {
       eventsChecked,
       violationsFound,
     };
+  }
+
+  /**
+   * Đường TỨC THỜI (bên cạnh cron `evaluateCrowdAlerts()` — KHÔNG thay thế, cron
+   * vẫn chạy làm lưới quét bù). Gọi ngay sau khi 1 count-event (`zone_presence_events
+   * .event_type='count'`) được ghi, để cảnh báo xuất hiện ngay thay vì đợi chu kỳ
+   * cron. `isThresholdExceeded()` thuần tuý, không phụ thuộc watermark → gọi trực
+   * tiếp an toàn.
+   *
+   * Chỉ tải rule của ĐÚNG zoneId (`AlertRulesService.list()` có sẵn filter `zoneId`)
+   * — KHÔNG dùng `loadZoneScopedCrowdRules()` (tải TẤT CẢ zone rồi lọc JS, tốn cho
+   * đường per-event). Mirror `RestrictedZoneIntrusionService.evaluateZoneEventNow()`.
+   *
+   * Dedupe: KHÔNG thêm cờ "đã xử lý tức thời" — dựa hoàn toàn vào
+   * `AlertsService.recordAlert()` (unique index mở theo alertType+zoneId, §UC-123).
+   * Cron quét lại đúng event này sau đó chỉ bump `occurrenceCount`, KHÔNG tạo alert
+   * thứ 2.
+   */
+  async evaluateZoneCountNow(args: {
+    zoneId: string;
+    occupancyCount: number;
+    eventTime: Date;
+    sourceEventId: string;
+  }): Promise<boolean> {
+    const { items: rules } = await this.alertRulesService.list({
+      alertType: 'crowd',
+      zoneId: args.zoneId,
+      enabled: true,
+      page: 1,
+      limit: 50,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    let violated = false;
+    for (const rule of rules) {
+      if (rule.threshold === null) continue; // mirror loadZoneScopedCrowdRules
+      if (this.isThresholdExceeded(rule, args.occupancyCount)) {
+        violated = true;
+        await this.recordCrowdAlert(rule, {
+          occupancyCount: args.occupancyCount,
+          threshold: rule.threshold,
+          sourceEventId: args.sourceEventId,
+          occurredAt: args.eventTime.toISOString(),
+        });
+      }
+    }
+    return violated;
+  }
+
+  /** isThresholdExceeded (spec §2.4) — thuần tuý, tách khỏi vòng lặp cron để tái dùng cho đường tức thời. */
+  private isThresholdExceeded(
+    rule: AlertRuleEntity,
+    occupancyCount: number,
+  ): boolean {
+    const threshold = rule.threshold as number; // caller đảm bảo threshold !== null
+    return occupancyCount >= threshold;
+  }
+
+  private async recordCrowdAlert(
+    rule: AlertRuleEntity,
+    payloadJson: Record<string, unknown>,
+  ): Promise<void> {
+    await this.alertsService.recordAlert({
+      alertType: 'crowd',
+      zoneId: rule.zoneId,
+      ruleId: rule.id,
+      payloadJson,
+    });
   }
 
   /** Chỉ rule crowd GẮN ZONE CỤ THỂ VÀ đã cấu hình threshold (spec §2.1/§2.4). */

@@ -6,6 +6,7 @@ import { IvssPresenceIngestionService } from './ivss-presence-ingestion.service.
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { RestrictedZoneIntrusionService } from '../../restricted-zone/services/restricted-zone-intrusion.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 const MEETING_UUID = '22222222-2222-2222-2222-222222222222';
@@ -25,6 +26,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   let wsMock: { emitToRoom: jest.Mock };
   let writerMock: any;
   let storageMock: any;
+  let intrusionMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
   const AREA_UUID = '33333333-3333-3333-3333-333333333333';
 
@@ -108,6 +110,10 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         { provide: ZonePresenceWriterService, useValue: writerMock },
         { provide: StorageService, useValue: storageMock },
         {
+          provide: RestrictedZoneIntrusionService,
+          useValue: intrusionMock,
+        },
+        {
           provide: ConfigService,
           useValue: {
             get: (key: string, def: unknown) =>
@@ -133,6 +139,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         sizeBytes: 123,
       }),
       getDriver: jest.fn().mockReturnValue('local'),
+    };
+    intrusionMock = {
+      evaluateZoneEventNow: jest.fn().mockResolvedValue(false),
     };
     service = await build(false);
   });
@@ -620,6 +629,59 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         service.onFaceEvent(evt({ utc: nowIso() })),
       ).resolves.toBeUndefined();
       expect(insert()).toBeDefined();
+    });
+  });
+
+  // ── Đường intrusion TỨC THỜI (bên cạnh cron 5 phút — KHÔNG thay thế) ──
+  describe('restricted-zone intrusion check (immediate)', () => {
+    const nowIso = () => new Date().toISOString();
+    const AREA = AREA_UUID;
+
+    it('appear ghi thành công → gọi evaluateZoneEventNow đúng zoneId/userId/eventTime/sourceRowId=presenceId', async () => {
+      const iso = nowIso();
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt({ utc: iso }));
+      expect(intrusionMock.evaluateZoneEventNow).toHaveBeenCalledTimes(1);
+      const arg = intrusionMock.evaluateZoneEventNow.mock.calls[0][0];
+      expect(arg.zoneId).toBe(AREA);
+      expect(arg.userId).toBe('u1');
+      expect(arg.eventTime.toISOString()).toBe(iso);
+      expect(arg.sourceTable).toBe('zone_presence_events');
+      expect(arg.sourceRowId).toBe('zpe1'); // presenceId trả về từ writeAppearEvent mock
+    });
+
+    it('appear KHÔNG ghi (presenceSkipped) → KHÔNG gọi evaluateZoneEventNow', async () => {
+      wire(); // KHÔNG presenceMap → zone_unmapped → không vào nhánh writeAppearEvent
+      await service.onFaceEvent(evt());
+      expect(intrusionMock.evaluateZoneEventNow).not.toHaveBeenCalled();
+    });
+
+    it('writeAppearEvent lỗi → KHÔNG gọi evaluateZoneEventNow (chỉ chạy SAU khi ghi appear thành công)', async () => {
+      writerMock.writeAppearEvent.mockRejectedValue(new Error('zpe boom'));
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt({ utc: nowIso() }));
+      expect(intrusionMock.evaluateZoneEventNow).not.toHaveBeenCalled();
+    });
+
+    it('evaluateZoneEventNow ném lỗi → onFaceEvent KHÔNG ném, raw event + appear vẫn đã ghi (try/catch riêng)', async () => {
+      intrusionMock.evaluateZoneEventNow.mockRejectedValue(
+        new Error('intrusion check boom'),
+      );
+      wire({ presenceMap: { '5': AREA } });
+      await expect(
+        service.onFaceEvent(evt({ utc: nowIso() })),
+      ).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('evaluateZoneEventNow trả true (vi phạm) → KHÔNG ảnh hưởng kết quả onFaceEvent (best-effort, không đổi payload/insert)', async () => {
+      intrusionMock.evaluateZoneEventNow.mockResolvedValue(true);
+      wire({ presenceMap: { '5': AREA } });
+      await expect(
+        service.onFaceEvent(evt({ utc: nowIso() })),
+      ).resolves.toBeUndefined();
+      expect(payloadOf().matchState).toBe('matched');
     });
   });
 

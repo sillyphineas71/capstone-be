@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { OccupancyPersistenceService } from '../../presence/services/occupancy-persistence.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
+import { CrowdAlertService } from '../../crowd-alert/services/crowd-alert.service.js';
 import { maskSensitiveMetadata } from '../../../common/utils/masking.util.js';
 import { OccupancyEventDto } from '../dto/occupancy-event.dto.js';
 
@@ -43,6 +44,7 @@ export class IvssOccupancyIngestService {
     private readonly dataSource: DataSource,
     private readonly occupancyPersistence: OccupancyPersistenceService,
     private readonly zonePresenceWriter: ZonePresenceWriterService,
+    private readonly crowdAlertService: CrowdAlertService,
   ) {}
 
   async ingest(dto: OccupancyEventDto): Promise<void> {
@@ -101,13 +103,32 @@ export class IvssOccupancyIngestService {
     // (giống room ở trên).
     const zoneId = await this.resolveZone(dto.channelId);
     if (zoneId) {
-      await this.zonePresenceWriter.writeCountEvent({
+      const { presenceId } = await this.zonePresenceWriter.writeCountEvent({
         zoneId,
         occupancyCount,
         eventTime,
         deviceId,
         metadata: { channelId: dto.channelId, source: 'ivss_occupancy' },
       });
+
+      // Đường TỨC THỜI (bên cạnh cron evaluateCrowdAlerts() 5 phút — KHÔNG thay
+      // thế, cron vẫn chạy làm lưới quét bù). try/catch RIÊNG — lỗi ở đây KHÔNG
+      // được làm hỏng luồng ghi occupancy chính (khác writeCountEvent ở trên,
+      // vốn CỐ Ý để throw trồi lên controller ack-always).
+      try {
+        await this.crowdAlertService.evaluateZoneCountNow({
+          zoneId,
+          occupancyCount,
+          eventTime,
+          sourceEventId: presenceId,
+        });
+      } catch (e) {
+        this.logger.error(
+          `crowd-alert check (immediate) failed (channel=${dto.channelId} zone=${zoneId}): ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
     } else {
       this.logger.warn(
         `Occupancy channel chưa map zone (channel=${dto.channelId}) — skip crowd-alert/heatmap write.`,

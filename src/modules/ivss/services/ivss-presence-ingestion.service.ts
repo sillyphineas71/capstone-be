@@ -8,6 +8,7 @@ import type {
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { RestrictedZoneIntrusionService } from '../../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { saveEventSnapshot } from '../../../common/utils/save-event-snapshot.util.js';
 import {
   IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY,
@@ -89,6 +90,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     private readonly configService: ConfigService,
     private readonly zonePresenceWriter: ZonePresenceWriterService,
     private readonly storageService: StorageService,
+    private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
   ) {
     this.realtimeEnabled = this.configService.get<boolean>(
       'IVSS_REALTIME_ENABLED',
@@ -230,7 +232,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       // skip (mọi presenceSkipped đã ở payload). try/catch NUỐT lỗi — KHÔNG vỡ điểm danh/ack.
       if (!presenceSkipped && presenceZoneId && userId) {
         try {
-          await this.zonePresenceWriter.writeAppearEvent({
+          const { presenceId } = await this.zonePresenceWriter.writeAppearEvent({
             zoneId: presenceZoneId,
             userId,
             eventTime,
@@ -242,6 +244,28 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
               sourceEventId,
             },
           });
+
+          // Đường TỨC THỜI (bên cạnh cron evaluateIntrusions() 5 phút — KHÔNG
+          // thay thế, cron vẫn chạy làm lưới quét bù). try/catch RIÊNG — lỗi ở
+          // đây KHÔNG được làm hỏng luồng ghi appear chính (always-ack #36).
+          // Dedupe alert dựa vào AlertsService.recordAlert() có sẵn (UQ mở
+          // theo alertType+zoneId) — cron quét lại event này sau đó chỉ bump
+          // occurrenceCount, KHÔNG tạo alert thứ 2.
+          try {
+            await this.restrictedZoneIntrusionService.evaluateZoneEventNow({
+              zoneId: presenceZoneId,
+              userId,
+              eventTime,
+              sourceTable: 'zone_presence_events',
+              sourceRowId: presenceId,
+            });
+          } catch (e) {
+            this.logger.error(
+              `restricted-zone intrusion check (immediate) failed (channel=${evt.channelId} szUid=${szUid}): ${
+                e instanceof Error ? e.message : 'unknown'
+              }`,
+            );
+          }
         } catch (e) {
           this.logger.error(
             `zone presence write failed (channel=${evt.channelId} szUid=${szUid}): ${
