@@ -60,7 +60,7 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
       if (sql.includes("sync_status = 'synced'") && sql.includes('SELECT id'))
         return Promise.resolve(over.live ?? []);
       // stale cleanup
-      if (sql.includes('SELECT device_person_code FROM device_user_mappings'))
+      if (sql.includes('SELECT device_person_id FROM device_user_mappings'))
         return Promise.resolve(over.stale ?? []);
       // upsert existence
       if (sql.includes('SELECT id FROM device_user_mappings'))
@@ -156,12 +156,11 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
   });
 
   it('idempotent (Nợ #2): xoá person cũ trước khi enroll khi mapping lệch', async () => {
-    // Bug fix: gửi device_person_code (personUid BE tự tạo), KHÔNG phải device_person_id (szUid SDK sinh).
-    wire({ stale: [{ device_person_code: 'OLD_PUID' }] });
+    wire({ stale: [{ device_person_id: 'OLD_SZ' }] });
     await service.enrollPortrait('u1');
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'portrait-grp',
-      personUid: 'OLD_PUID',
+      personUid: 'OLD_SZ',
     });
     expect(bridgeMock.enrollFace).toHaveBeenCalled();
   });
@@ -176,44 +175,15 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
   });
 
   // ── REMOVE ────────────────────────────────────────────────────────────────
-  it('remove ok: deleteFace gửi device_person_code (KHÔNG phải device_person_id) + soft-delete mapping', async () => {
-    wire({
-      mapping: [
-        {
-          id: 'm9',
-          user_id: 'u1',
-          device_person_id: 'SZP1',
-          device_person_code: 'PUID1',
-        },
-      ],
-    });
+  it('remove ok: deleteFace + soft-delete mapping', async () => {
+    wire({ mapping: [{ id: 'm9', user_id: 'u1', device_person_id: 'SZP1' }] });
     const r = await service.removePortrait('u1');
     expect(r).toBe('removed');
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'portrait-grp',
-      personUid: 'PUID1',
+      personUid: 'SZP1',
     });
     expect(sqlOf("SET sync_status = 'deleted'")).toBeDefined();
-  });
-
-  it('DONE: enroll xong xóa → deleteFace gửi device_person_code (personUid sha256), KHÔNG phải device_person_id (szUid SDK trả)', async () => {
-    const personUid = uidOf('u1');
-    // Mapping do chính enroll ghi ra: device_person_id = szUid trả về
-    // (SZP1, khác hẳn personUid) — device_person_code = personUid đã gửi lúc enroll.
-    wire({
-      mapping: [
-        {
-          id: 'm9',
-          user_id: 'u1',
-          device_person_id: 'SZP1',
-          device_person_code: personUid,
-        },
-      ],
-    });
-    await service.removePortrait('u1');
-    const sentArg = bridgeMock.deleteFace.mock.calls[0][0];
-    expect(sentArg.personUid).toBe(personUid);
-    expect(sentArg.personUid).not.toBe('SZP1');
   });
 
   it('remove: không có mapping portrait → noop', async () => {
@@ -223,16 +193,7 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
   });
 
   it('remove: bridge fail → GIỮ mapping để retry, return failed, KHÔNG throw', async () => {
-    wire({
-      mapping: [
-        {
-          id: 'm9',
-          user_id: 'u1',
-          device_person_id: 'SZP1',
-          device_person_code: 'PUID1',
-        },
-      ],
-    });
+    wire({ mapping: [{ id: 'm9', user_id: 'u1', device_person_id: 'SZP1' }] });
     bridgeMock.deleteFace.mockResolvedValue({
       ok: false,
       error: { code: 'BRIDGE_TIMEOUT', message: 't' },
@@ -242,24 +203,17 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
   });
 
   // ── RECONCILE ─────────────────────────────────────────────────────────────
-  it('reconcile: enroll user có ảnh active chưa synced + remove mapping hết điều kiện (deleteFace gửi device_person_code)', async () => {
+  it('reconcile: enroll user có ảnh active chưa synced + remove mapping hết điều kiện', async () => {
     wire({
       toEnroll: [{ user_id: 'u1' }],
-      toRemove: [
-        {
-          id: 'm2',
-          user_id: 'u2',
-          device_person_id: 'SZP2',
-          device_person_code: 'PUID2',
-        },
-      ],
+      toRemove: [{ id: 'm2', user_id: 'u2', device_person_id: 'SZP2' }],
     });
     const r = await service.reconcilePortraits();
     expect(r).toEqual({ scanned: 2, enrolled: 1, removed: 1, failed: 0 });
     expect(bridgeMock.enrollFace).toHaveBeenCalledTimes(1);
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'portrait-grp',
-      personUid: 'PUID2',
+      personUid: 'SZP2',
     });
   });
 

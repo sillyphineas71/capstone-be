@@ -66,8 +66,8 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
       if (sql.includes('FROM meetings')) return Promise.resolve([{ id: 'm1' }]);
       if (sql.includes('FROM meeting_participants'))
         return Promise.resolve([{ user_id: 'u1' }]);
-      // Nợ #2: stale person check (SELECT device_person_code …) — default không có stale.
-      if (sql.includes('SELECT device_person_code FROM device_user_mappings'))
+      // Nợ #2: stale person check (SELECT device_person_id …) — default không có stale.
+      if (sql.includes('SELECT device_person_id FROM device_user_mappings'))
         return Promise.resolve(over.stale ?? []);
       // dedupe live check (có sync_status='synced' + deleted_at)
       if (
@@ -200,13 +200,12 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
   });
 
   // ── Nợ #2: enroll idempotent ──
-  it('Nợ #2: mapping cũ còn device_person_code → deleteFace person cũ TRƯỚC enrollFace', async () => {
-    wireProvision({ stale: [{ device_person_code: 'PUID_OLD' }] });
+  it('Nợ #2: mapping cũ còn device_person_id → deleteFace person cũ TRƯỚC enrollFace', async () => {
+    wireProvision({ stale: [{ device_person_id: 'SZ_OLD' }] });
     const r = await service.provisionUpcoming();
-    // Bug fix: gửi device_person_code (personUid BE tự tạo), KHÔNG phải device_person_id (szUid SDK sinh).
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'SMRMPTS',
-      personUid: 'PUID_OLD',
+      personUid: 'SZ_OLD',
     });
     // Thứ tự bắt buộc: xoá sạch person cũ rồi mới enroll → 1 user chỉ còn 1 szUID.
     expect(bridgeMock.deleteFace.mock.invocationCallOrder[0]).toBeLessThan(
@@ -223,7 +222,7 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
   });
 
   it('Nợ #2: deleteFace person cũ throw → vẫn enroll (best-effort, KHÔNG chặn họp)', async () => {
-    wireProvision({ stale: [{ device_person_code: 'PUID_OLD' }] });
+    wireProvision({ stale: [{ device_person_id: 'SZ_OLD' }] });
     bridgeMock.deleteFace.mockRejectedValue(new Error('bridge down'));
     const r = await service.provisionUpcoming();
     expect(bridgeMock.enrollFace).toHaveBeenCalledTimes(1);
@@ -297,11 +296,10 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
     ]);
     const r = await service.cleanupEnded();
     expect(r).toMatchObject({ scanned: 1, removed: 1 });
-    // Bug fix: deleteFace theo device_person_code (personUid BE tự gửi lúc
-    // enroll, khớp field szID), KHÔNG phải device_person_id (szUid SDK sinh).
+    // deleteFace theo device_person_id (szUid IVSS trả), KHÔNG phải device_person_code.
     expect(bridgeMock.deleteFace).toHaveBeenCalledWith({
       groupId: 'SMRMPTS',
-      personUid: 'PUID1',
+      personUid: 'SZ1',
     });
     const upd = captured.find(
       (c) =>
@@ -309,27 +307,6 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
         c.sql.includes('deleted_at = now()'),
     );
     expect(upd).toBeDefined();
-  });
-
-  it('DONE: enroll xong xóa → deleteFace gửi device_person_code (personUid sha256), KHÔNG phải device_person_id (szUid SDK trả)', async () => {
-    const personUid = createHash('sha256')
-      .update('u1')
-      .digest('hex')
-      .slice(0, 32);
-    // Mapping do chính enroll ghi ra: device_person_id = szUid trả về (SZ1,
-    // khác hẳn personUid) — device_person_code = personUid đã gửi lúc enroll.
-    wireCleanup([
-      {
-        id: 'mp1',
-        user_id: 'u1',
-        device_person_id: 'SZ1',
-        device_person_code: personUid,
-      },
-    ]);
-    await service.cleanupEnded();
-    const sentArg = bridgeMock.deleteFace.mock.calls[0][0];
-    expect(sentArg.personUid).toBe(personUid);
-    expect(sentArg.personUid).not.toBe('SZ1');
   });
 
   it('cleanup deleteFace ok:false → giữ mapping (KHÔNG soft-delete)', async () => {
@@ -371,19 +348,9 @@ describe('IvssPersonSyncService (IPS-001 #37)', () => {
         return Promise.resolve([{ id: 'bridge1' }]);
       if (sql.includes('FROM device_user_mappings mp'))
         return Promise.resolve([
-          // device_person_code BẮT BUỘC có — deleteFace chỉ được gọi khi mapping có personUid.
-          {
-            id: 'mp1',
-            user_id: 'u1',
-            device_person_id: 'SZ1',
-            device_person_code: 'PUID1',
-          },
-          {
-            id: 'mp2',
-            user_id: 'u2',
-            device_person_id: 'SZ2',
-            device_person_code: 'PUID2',
-          },
+          // device_person_id BẮT BUỘC có — deleteFace chỉ được gọi khi mapping có szUid.
+          { id: 'mp1', user_id: 'u1', device_person_id: 'SZ1' },
+          { id: 'mp2', user_id: 'u2', device_person_id: 'SZ2' },
         ]);
       return Promise.resolve(undefined);
     });
