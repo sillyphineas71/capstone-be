@@ -216,7 +216,7 @@ export class MinutesService {
         if (existing) {
           throw new ConflictException({
             success: false,
-            message: 'Cuá»™c há»p nÃ y Ä‘Ã£ cÃ³ biÃªn báº£n há»p',
+            message: 'Cuộc họp này đã có biên bản họp',
             error: {
               code: 'MINUTES_ALREADY_EXISTS',
               details: { meetingId, existingMinutesId: existing.id },
