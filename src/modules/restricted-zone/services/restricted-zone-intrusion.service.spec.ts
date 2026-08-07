@@ -226,6 +226,68 @@ describe('RestrictedZoneIntrusionService (ARZ-001 / UC-124)', () => {
     });
   });
 
+  // ── DONE: isWithinAllowedHours phải quy đổi giờ VN (Asia/Ho_Chi_Minh), ĐỘC LẬP
+  // với TZ runtime của server (KHÔNG dùng Date#getHours() local) ──
+  describe('isWithinAllowedHours — quy đổi giờ VN độc lập TZ server', () => {
+    it('occurredAt=2026-08-07T05:56:00Z (UTC) → hiểu đúng 12:56 giờ VN, trong khung 08:00-18:00 → KHÔNG vi phạm', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [
+          rule({
+            restrictedHoursJson: { allowFrom: '08:00', allowTo: '18:00' },
+          }),
+        ],
+      });
+      gateLogRepo.find.mockResolvedValue([
+        {
+          id: 'log1',
+          userId: null, // userId NULL bình thường LUÔN vi phạm — nếu vẫn 0 vi phạm
+          // tức nhánh "trong khung giờ" đã thắng, chứng minh quy đổi giờ VN đúng.
+          accessTime: new Date('2026-08-07T05:56:00.000Z'),
+        },
+      ]);
+      const r = await service.evaluateIntrusions();
+      expect(r.violationsFound).toBe(0);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('case biên: occurredAt=2026-08-06T17:10:00Z (UTC) = 00:10 giờ VN NGÀY KẾ TIẾP (qua đêm 22:00-06:00) → trong khung, KHÔNG vi phạm dù UTC/VN lệch ngày', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [
+          rule({
+            restrictedHoursJson: { allowFrom: '22:00', allowTo: '06:00' },
+          }),
+        ],
+      });
+      gateLogRepo.find.mockResolvedValue([
+        {
+          id: 'log1',
+          userId: null,
+          // UTC 2026-08-06T17:10:00Z + 7h = 2026-08-07T00:10 giờ VN — ngày VN đã
+          // sang 07/08 trong khi ngày UTC vẫn còn 06/08 (lệch ngày).
+          accessTime: new Date('2026-08-06T17:10:00.000Z'),
+        },
+      ]);
+      const r = await service.evaluateIntrusions();
+      expect(r.violationsFound).toBe(0);
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
+    });
+
+    it('đối chứng: occurredAt=2026-08-07T05:56:00Z (12:56 VN) nhưng khung 08:00-18:00 KHÔNG áp dụng (rỗng) → userId NULL vẫn vi phạm như thường (nhánh giờ không nuốt hết logic)', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })], // không có khung giờ → hạn chế 24/7
+      });
+      gateLogRepo.find.mockResolvedValue([
+        {
+          id: 'log1',
+          userId: null,
+          accessTime: new Date('2026-08-07T05:56:00.000Z'),
+        },
+      ]);
+      const r = await service.evaluateIntrusions();
+      expect(r.violationsFound).toBe(1);
+    });
+  });
+
   describe('loadZoneScopedIntrusionRules (§2.1)', () => {
     it('loại bỏ rule zoneId=NULL (toàn khuôn viên) khỏi tập quét', async () => {
       alertRulesMock.list.mockResolvedValue({

@@ -7,6 +7,7 @@ import { SystemConfigEntity } from '../../administration/entities/system-config.
 import { AlertRuleEntity } from '../../alerts/entities/alert-rule.entity.js';
 import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
 import { AlertsService } from '../../alerts/services/alerts.service.js';
+import { vnMinutesOfDay } from '../../../common/utils/vn-restricted-hours.util.js';
 
 const CONFIG_GROUP = 'restricted_zone_intrusion';
 const GATE_LOG_WATERMARK_KEY = 'restricted_zone.gate_log_watermark';
@@ -211,7 +212,13 @@ export class RestrictedZoneIntrusionService {
     return !allowed.includes(userId);
   }
 
-  /** Xử lý qua đêm: allowFrom > allowTo (vd 22:00→06:00) → trong khung nếu >=from HOẶC <=to. */
+  /**
+   * Xử lý qua đêm: allowFrom > allowTo (vd 22:00→06:00) → trong khung nếu >=from HOẶC <=to.
+   * `allowFrom`/`allowTo` là giờ VN theo cách admin nhập trên UI — so sánh PHẢI quy
+   * `occurredAt` về giờ VN (Asia/Ho_Chi_Minh) qua `vnMinutesOfDay()`, ĐỘC LẬP với TZ
+   * runtime của server (KHÔNG dùng Date#getHours()/getMinutes() — sai nếu server chạy
+   * UTC, xem vn-restricted-hours.util.ts).
+   */
   private isWithinAllowedHours(
     hours: { allowFrom: string; allowTo: string },
     occurredAt: Date,
@@ -222,7 +229,7 @@ export class RestrictedZoneIntrusionService {
     };
     const from = toMinutes(hours.allowFrom);
     const to = toMinutes(hours.allowTo);
-    const current = occurredAt.getHours() * 60 + occurredAt.getMinutes();
+    const current = vnMinutesOfDay(occurredAt);
 
     if (from <= to) {
       return current >= from && current <= to;

@@ -5,6 +5,7 @@ import { BadRequestException } from '@nestjs/common';
 import { IvssOccupancyIngestService } from './ivss-occupancy-ingest.service.js';
 import { OccupancyPersistenceService } from '../../presence/services/occupancy-persistence.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
+import { CrowdAlertService } from '../../crowd-alert/services/crowd-alert.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 
@@ -13,6 +14,7 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
   let dataSourceMock: any;
   let persistMock: { persist: jest.Mock };
   let zonePresenceWriterMock: { writeCountEvent: jest.Mock };
+  let crowdAlertMock: { evaluateZoneCountNow: jest.Mock };
   let bridgeRows: any[];
   let channelMap: Record<string, unknown> | null;
   let zoneChannelMap: Record<string, unknown> | null;
@@ -59,6 +61,9 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
     zonePresenceWriterMock = {
       writeCountEvent: jest.fn().mockResolvedValue({ presenceId: 'zpe-1' }),
     };
+    crowdAlertMock = {
+      evaluateZoneCountNow: jest.fn().mockResolvedValue(false),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -69,6 +74,7 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
           provide: ZonePresenceWriterService,
           useValue: zonePresenceWriterMock,
         },
+        { provide: CrowdAlertService, useValue: crowdAlertMock },
       ],
     }).compile();
     service = module.get(IvssOccupancyIngestService);
@@ -191,5 +197,50 @@ describe('IvssOccupancyIngestService (IVSS-OCC-001 / A-OCC)', () => {
     await service.ingest(dto({ channelId: 5 }));
     expect(persistMock.persist).not.toHaveBeenCalled();
     expect(zonePresenceWriterMock.writeCountEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Đường crowd-alert TỨC THỜI (bên cạnh cron 5 phút — KHÔNG thay thế) ──
+  describe('crowd-alert check (immediate)', () => {
+    it('writeCountEvent thành công → gọi evaluateZoneCountNow đúng zoneId/occupancyCount/eventTime/sourceEventId=presenceId', async () => {
+      zoneChannelMap = { '5': ZONE_UUID };
+      await service.ingest(dto({ number: 42 }));
+      expect(crowdAlertMock.evaluateZoneCountNow).toHaveBeenCalledTimes(1);
+      const arg = crowdAlertMock.evaluateZoneCountNow.mock.calls[0][0];
+      expect(arg.zoneId).toBe(ZONE_UUID);
+      expect(arg.occupancyCount).toBe(42);
+      expect(arg.eventTime).toBeInstanceOf(Date);
+      expect(arg.sourceEventId).toBe('zpe-1'); // presenceId trả về từ writeCountEvent mock
+    });
+
+    it('channel KHÔNG map zone → KHÔNG gọi evaluateZoneCountNow', async () => {
+      zoneChannelMap = null;
+      await service.ingest(dto());
+      expect(crowdAlertMock.evaluateZoneCountNow).not.toHaveBeenCalled();
+    });
+
+    it('writeCountEvent lỗi → KHÔNG gọi evaluateZoneCountNow (chỉ chạy SAU khi ghi thành công), lỗi vẫn trồi lên (ack-always ở controller)', async () => {
+      zoneChannelMap = { '5': ZONE_UUID };
+      zonePresenceWriterMock.writeCountEvent.mockRejectedValue(
+        new Error('write boom'),
+      );
+      await expect(service.ingest(dto())).rejects.toThrow('write boom');
+      expect(crowdAlertMock.evaluateZoneCountNow).not.toHaveBeenCalled();
+    });
+
+    it('evaluateZoneCountNow ném lỗi → ingest() KHÔNG ném (try/catch riêng, khác writeCountEvent)', async () => {
+      zoneChannelMap = { '5': ZONE_UUID };
+      crowdAlertMock.evaluateZoneCountNow.mockRejectedValue(
+        new Error('crowd check boom'),
+      );
+      await expect(service.ingest(dto())).resolves.toBeUndefined();
+      expect(zonePresenceWriterMock.writeCountEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('evaluateZoneCountNow trả true (vượt ngưỡng) → KHÔNG ảnh hưởng kết quả ingest() (best-effort)', async () => {
+      zoneChannelMap = { '5': ZONE_UUID };
+      crowdAlertMock.evaluateZoneCountNow.mockResolvedValue(true);
+      await expect(service.ingest(dto())).resolves.toBeUndefined();
+      expect(persistMock.persist).toHaveBeenCalledTimes(1);
+    });
   });
 });

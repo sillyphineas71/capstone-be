@@ -6,11 +6,11 @@ export interface RestrictedHoursWindow {
 /**
  * Phút-trong-ngày theo giờ Việt Nam (Asia/Ho_Chi_Minh), ĐỘC LẬP với TZ runtime của
  * process Node — dùng Intl.DateTimeFormat thay vì Date#getHours()/getMinutes() (local
- * theo TZ máy chủ, sai nếu server chạy UTC). Bản gốc bị bug này ở
- * restricted-zone-intrusion.service.ts#isWithinAllowedHours (KHÔNG sửa ở đây, ngoài
- * phạm vi task) — hàm này là bản THAY THẾ, timezone-safe, dùng cho ingestion-time check.
+ * theo TZ máy chủ, sai nếu server chạy UTC). Dùng chung cho `isOutsideAllowedHoursVn`
+ * (ingestion-time check) VÀ `RestrictedZoneIntrusionService#isWithinAllowedHours`
+ * (đã fix cùng bug timezone, import trực tiếp hàm này — KHÔNG viết trùng).
  */
-function vnMinutesOfDay(date: Date): number {
+export function vnMinutesOfDay(date: Date): number {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Ho_Chi_Minh',
     hour: '2-digit',
