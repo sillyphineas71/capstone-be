@@ -69,6 +69,15 @@ export class IvssPortraitSyncService {
   }
 
   /**
+   * Lưới an toàn nền (phương án c, phần 1): mapping 'synced' quá cũ có thể đã
+   * lệch szUID trên thiết bị (xoá/enroll lại tay ngoài BE — không track được).
+   * TTL dài vì đây chỉ là fallback cuối, không phải cơ chế chính.
+   */
+  private get ttlDays(): number {
+    return this.configService.get<number>('IVSS_PORTRAIT_TTL_DAYS', 21);
+  }
+
+  /**
    * personUid stable per-user. Clone hàm của IvssPersonSyncService (KHÔNG import private).
    * Trùng giá trị với group họp là VÔ HẠI: deleteFace/enrollFace đều scope theo groupId.
    */
@@ -195,6 +204,34 @@ export class IvssPortraitSyncService {
     return 'enrolled';
   }
 
+  // ── FORCE RE-SYNC (phương án c, phần 2) ────────────────────────────────────
+  /**
+   * Admin force re-sync 1 user: hạ mapping portrait về 'pending' — KHÔNG tự
+   * enroll ngay (tránh block HTTP response chờ SDK call). reconcilePortraits()
+   * (cron) sẽ tự nhặt ở lượt tick kế tiếp, đi qua đúng enrollPortrait() đã có
+   * (tự xoá device_person_id cũ trước khi enroll mới). Trả false nếu user
+   * KHÔNG có mapping portrait nào (chưa từng enroll) — caller trả 404.
+   */
+  async resyncMapping(userId: string): Promise<boolean> {
+    const deviceId = await this.resolveBridgeDeviceId();
+    if (!deviceId) return false;
+
+    const updated: IdRow[] = await this.dataSource.manager.query(
+      `UPDATE device_user_mappings
+          SET sync_status = 'pending',
+              face_registered = false,
+              last_sync_error = NULL,
+              updated_at = now()
+        WHERE device_id = $1
+          AND user_id = $2
+          AND deleted_at IS NULL
+          AND metadata_json->>'source' = $3
+        RETURNING id`,
+      [deviceId, userId, MAPPING_SOURCE],
+    );
+    return updated.length > 0;
+  }
+
   // ── REMOVE ────────────────────────────────────────────────────────────────
   /** Gỡ chân dung 1 user khỏi portrait group. Best-effort, KHÔNG throw. */
   async removePortrait(userId: string): Promise<PortraitRemoveResult> {
@@ -277,6 +314,25 @@ export class IvssPortraitSyncService {
     let enrolled = 0;
     let removed = 0;
     let failed = 0;
+
+    // (0) Lưới an toàn TTL (phương án c, phần 1): mapping 'synced' đã quá
+    // ttlDays kể từ lần sync gần nhất → hạ về 'pending' để bước (1) bên dưới
+    // tự nhặt lại (NOT EXISTS ... sync_status='synced' không còn khớp nữa).
+    // Tái dùng ĐÚNG cơ chế đã có (xem admin-biometric-review.service.ts) —
+    // KHÔNG tự enroll/xoá gì ở đây, chỉ đánh dấu để (1) xử lý.
+    await this.dataSource.manager.query(
+      `UPDATE device_user_mappings
+          SET sync_status = 'pending',
+              face_registered = false,
+              last_sync_error = NULL,
+              updated_at = now()
+        WHERE device_id = $1
+          AND deleted_at IS NULL
+          AND sync_status = 'synced'
+          AND metadata_json->>'source' = $2
+          AND last_synced_at < now() - ($3::int * interval '1 day')`,
+      [deviceId, MAPPING_SOURCE, this.ttlDays],
+    );
 
     // (1) Cần enroll: ảnh đã duyệt + account active, chưa có mapping portrait synced.
     const toEnroll: UserIdRow[] = await this.dataSource.manager.query(

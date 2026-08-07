@@ -35,6 +35,7 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
       mapping?: any[];
       toEnroll?: any[];
       toRemove?: any[];
+      resync?: any[];
     } = {},
   ) => {
     captured = [];
@@ -56,6 +57,12 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
         sql.includes('SELECT id, user_id, device_person_id, device_person_code')
       )
         return Promise.resolve(over.mapping ?? []);
+      // resyncMapping: UPDATE ... RETURNING id (khác TTL sweep — TTL sweep KHÔNG RETURNING).
+      if (
+        sql.includes("SET sync_status = 'pending'") &&
+        sql.includes('RETURNING id')
+      )
+        return Promise.resolve(over.resync ?? []);
       // enroll dedupe
       if (sql.includes("sync_status = 'synced'") && sql.includes('SELECT id'))
         return Promise.resolve(over.live ?? []);
@@ -202,6 +209,40 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
     expect(sqlOf("SET sync_status = 'deleted'")).toBeUndefined();
   });
 
+  // ── FORCE RE-SYNC (phương án c, phần 2) ─────────────────────────────────
+  it('resyncMapping: có mapping portrait → UPDATE sync_status=pending, trả true', async () => {
+    wire({ resync: [{ id: 'map1' }] });
+    const r = await service.resyncMapping('u1');
+    expect(r).toBe(true);
+    const upd = captured.find(
+      (c) =>
+        c.sql.includes("SET sync_status = 'pending'") &&
+        c.sql.includes('RETURNING id'),
+    );
+    expect(upd).toBeDefined();
+    expect(upd!.sql).toContain('AND user_id = $2');
+    expect(upd!.sql).toContain("metadata_json->>'source' = $3");
+    expect(upd!.params).toEqual(['pbridge1', 'u1', 'portrait']);
+  });
+
+  it('resyncMapping: user KHÔNG có mapping portrait nào (chưa từng enroll) → trả false', async () => {
+    wire({ resync: [] });
+    const r = await service.resyncMapping('u1');
+    expect(r).toBe(false);
+  });
+
+  it('resyncMapping: bridge device chưa sẵn → trả false, KHÔNG throw', async () => {
+    wire({ bridge: [] });
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM iot_devices WHERE device_code'))
+        return Promise.resolve([]);
+      if (sql.includes('INSERT INTO iot_devices'))
+        return Promise.reject(new Error('seed fail'));
+      return Promise.resolve([]);
+    });
+    await expect(service.resyncMapping('u1')).resolves.toBe(false);
+  });
+
   // ── RECONCILE ─────────────────────────────────────────────────────────────
   it('reconcile: enroll user có ảnh active chưa synced + remove mapping hết điều kiện', async () => {
     wire({
@@ -250,5 +291,57 @@ describe('IvssPortraitSyncService (PORTRAIT-001 / UC-109+110)', () => {
     const r = await service.reconcilePortraits();
     expect(r.failed).toBe(1);
     expect(r.enrolled).toBe(0);
+  });
+
+  // ── TTL sweep (phương án c, phần 1) ─────────────────────────────────────
+  it('reconcile: TTL sweep hạ mapping synced quá hạn về pending TRƯỚC khi chọn toEnroll, dùng ttlDays mặc định 21', async () => {
+    wire();
+    await service.reconcilePortraits();
+    const ttl = captured.find(
+      (c) =>
+        c.sql.includes("SET sync_status = 'pending'") &&
+        c.sql.includes('last_synced_at <') &&
+        !c.sql.includes('RETURNING id'), // phân biệt với resyncMapping (có RETURNING id)
+    );
+    expect(ttl).toBeDefined();
+    expect(ttl!.sql).toContain("sync_status = 'synced'");
+    expect(ttl!.sql).toContain("metadata_json->>'source' = $2");
+    expect(ttl!.params).toEqual(['pbridge1', 'portrait', 21]);
+  });
+
+  it('reconcile: ttlDays đọc từ config IVSS_PORTRAIT_TTL_DAYS (override khác default)', async () => {
+    cfg = { IVSS_PORTRAIT_GROUP: 'portrait-grp', IVSS_PORTRAIT_TTL_DAYS: 7 };
+    wire();
+    await service.reconcilePortraits();
+    const ttl = captured.find(
+      (c) =>
+        c.sql.includes("SET sync_status = 'pending'") &&
+        c.sql.includes('last_synced_at <') &&
+        !c.sql.includes('RETURNING id'),
+    );
+    expect(ttl!.params).toEqual(['pbridge1', 'portrait', 7]);
+  });
+
+  it('mapping quá TTL đã bị hạ pending (giả lập tick trước) → tick này lọt vào toEnroll, enroll lại với device_person_id MỚI khác cũ', async () => {
+    bridgeMock.enrollFace.mockResolvedValue({
+      ok: true,
+      data: { szUid: 'SZP_NEW' },
+    });
+    wire({
+      // TTL đã hạ 'pending' ở tick trước → NOT EXISTS(...sync_status='synced') không còn loại user này → lọt vào toEnroll.
+      toEnroll: [{ user_id: 'u1' }],
+      // Dòng mapping CŨ (device_person_id='648' theo bối cảnh) vẫn còn (chỉ đổi sync_status) → upsert đi nhánh UPDATE.
+      existing: [{ id: 'map-old-1' }],
+    });
+    const r = await service.reconcilePortraits();
+    expect(r.enrolled).toBe(1);
+    const upd = captured.find(
+      (c) =>
+        c.sql.includes('UPDATE device_user_mappings SET') &&
+        c.sql.includes('deleted_at = NULL'),
+    );
+    expect(upd).toBeDefined();
+    expect(upd!.params).toContain('SZP_NEW'); // device_person_id MỚI
+    expect(upd!.params).not.toContain('648'); // KHÔNG còn giá trị cũ
   });
 });

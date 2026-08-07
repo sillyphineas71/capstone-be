@@ -20,6 +20,7 @@ import { IvssPresenceController } from './controllers/ivss-presence.controller.j
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
 import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
 import { IvssDeviceEventSnapshotController } from './controllers/ivss-device-event-snapshot.controller.js';
+import { IvssPortraitAdminController } from './controllers/ivss-portrait-admin.controller.js';
 import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
 import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
 import { JwtQueryOrHeaderAuthGuard } from '../auth/guards/jwt-query-or-header-auth.guard.js';
@@ -52,6 +53,8 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     // F-F fix: TÁCH RIÊNG khỏi IvssRoomAccessController — route ảnh snapshot cần
     // JwtQueryOrHeaderAuthGuard (fallback ?token=), 2 route access-log KHÔNG đụng.
     IvssDeviceEventSnapshotController,
+    // Phương án c, phần 2: force re-sync mapping portrait theo yêu cầu admin.
+    IvssPortraitAdminController,
   ],
   providers: [
     ivssBridgeProvider,
