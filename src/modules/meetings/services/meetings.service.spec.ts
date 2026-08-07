@@ -1064,6 +1064,51 @@ describe('MeetingsService', () => {
         }),
       ).rejects.toThrow(UnprocessableEntityException);
     });
+
+    it('[T013-8] should exclude bookings of the meeting itself from the room-conflict check (regression: self-conflict bug)', async () => {
+      // fakeMeeting.roomId === 'room-uuid' đang có booking CHÍNH cuộc họp này
+      // chiếm chỗ trùng khung giờ đang kiểm tra — trước fix, room-conflict
+      // query không loại trừ meetingId nên room-uuid luôn bị coi là "đã bận"
+      // dù includeCurrentRoom=true, khiến FE báo nhầm "phòng không còn trống".
+      const roomsQb = mockQueryBuilder();
+      roomsQb.getMany.mockResolvedValue([
+        {
+          id: 'room-uuid',
+          roomCode: 'R01',
+          roomName: 'Phòng A',
+          capacity: 10,
+          isActive: true,
+          currentStatus: 'available',
+        } as RoomEntity,
+      ]);
+      const bookingsQb = mockQueryBuilder();
+      // Booking overlap query PHẢI loại trừ chính meetingId — mock trả rỗng
+      // để mô phỏng đúng hành vi sau khi loại trừ đúng (booking của chính
+      // meeting không được tính là "đang chiếm phòng").
+      bookingsQb.getRawMany.mockResolvedValue([]);
+      mockRepo.createQueryBuilder
+        .mockReset()
+        .mockReturnValueOnce(roomsQb)
+        .mockReturnValueOnce(bookingsQb);
+
+      const rooms = await service.getAvailableRoomsForMeeting('meeting-uuid', {
+        includeCurrentRoom: true,
+        startTime: new Date('2026-07-01T14:00:00Z'),
+        endTime: new Date('2026-07-01T15:00:00Z'),
+      });
+
+      // Xác nhận query builder có tự loại trừ chính meetingId khỏi tập
+      // booking-conflict — đây là điều kiện cốt lõi để sửa đúng bug, không
+      // chỉ đơn thuần khớp giá trị mock trả về.
+      expect(bookingsQb.andWhere).toHaveBeenCalledWith(
+        'rb.meetingId IS DISTINCT FROM :meetingId',
+        { meetingId: 'meeting-uuid' },
+      );
+
+      expect(rooms).toHaveLength(1);
+      expect(rooms[0].roomId).toBe('room-uuid');
+      expect(rooms[0].isCurrentRoom).toBe(true);
+    });
   });
 
   describe('updateMeetingTime', () => {

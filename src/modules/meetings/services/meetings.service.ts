@@ -1727,7 +1727,40 @@ export class MeetingsService {
     const currentRoomId = meeting.roomId;
     const includeCurrent = options?.includeCurrentRoom ?? false;
 
-    const allRooms = await this.getAvailableRooms(startTime, endTime);
+    // KHÔNG dùng this.getAvailableRooms(startTime, endTime) ở đây: hàm đó kiểm
+    // tra overlap với TẤT CẢ booking, kể cả booking của chính meetingId đang
+    // sửa — nên phòng hiện tại của meeting luôn bị loại khỏi allRooms và cờ
+    // includeCurrentRoom phía dưới không còn gì để "giữ lại" (bug tự-đụng-mình).
+    // Tự query ở đây, loại trừ booking thuộc chính meetingId khỏi tập overlap.
+    const activeRooms = await this.dataSource
+      .getRepository(RoomEntity)
+      .createQueryBuilder('room')
+      .where('room.isActive = :isActive', { isActive: true })
+      .andWhere('room.currentStatus != :inactiveStatus', {
+        inactiveStatus: 'inactive',
+      })
+      .getMany();
+
+    const bookedRoomIds = await this.dataSource
+      .getRepository(RoomBookingEntity)
+      .createQueryBuilder('rb')
+      .select('rb.roomId')
+      .where('rb.status IN (:...statuses)', {
+        statuses: [
+          RoomBookingStatus.PENDING,
+          RoomBookingStatus.APPROVED,
+          RoomBookingStatus.ACTIVE,
+        ],
+      })
+      .andWhere('rb.reservedStartTime < :endTime', { endTime })
+      .andWhere('rb.reservedEndTime > :startTime', { startTime })
+      .andWhere('rb.meetingId IS DISTINCT FROM :meetingId', { meetingId })
+      .getRawMany()
+      .then((rows) => rows.map((r: { rb_room_id: string }) => r.rb_room_id));
+
+    const allRooms = activeRooms.filter(
+      (room) => !bookedRoomIds.includes(room.id),
+    );
 
     let attendeeCount = 0;
     if (options?.capacityWarningMode) {
