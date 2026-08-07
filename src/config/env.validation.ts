@@ -228,6 +228,12 @@ export const envValidationSchema = Joi.object({
   NOSHOW_INTERNAL_TOKEN: Joi.string().allow('').default(''),
   // NSC-001: ngưỡng no-show (phút) — fallback khi system_configs chưa cấu hình (#35).
   NO_SHOW_THRESHOLD_MINUTES: Joi.number().integer().min(1).default(15),
+  // ASC-001: ngưỡng auto-resolve security_alerts (phút) — fallback khi
+  // system_configs chưa cấu hình.
+  SECURITY_ALERTS_AUTO_RESOLVE_TIMEOUT_MINUTES: Joi.number()
+    .integer()
+    .min(1)
+    .default(15),
   // NSL-001 (#32/#33/#35): grace cảnh báo + grace auto-release (phút) + bật email cảnh báo.
   NO_SHOW_WARNING_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
   NO_SHOW_AUTO_RELEASE_GRACE_MINUTES: Joi.number().integer().min(1).default(5),

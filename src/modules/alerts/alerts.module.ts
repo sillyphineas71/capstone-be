@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AdministrationModule } from '../administration/administration.module.js';
 import { AlertRuleEntity } from './entities/alert-rule.entity.js';
 import { SecurityAlertEntity } from './entities/security-alert.entity.js';
 import { PersonControlListEntity } from './entities/person-control-list.entity.js';
@@ -12,6 +13,9 @@ import { AlertsController } from './controllers/alerts.controller.js';
 import { PersonControlListService } from './services/person-control-list.service.js';
 import { PersonControlListController } from './controllers/person-control-list.controller.js';
 import { PersonWatchlistCheckService } from './services/person-watchlist-check.service.js';
+import { SecurityAlertConfigService } from './services/security-alert-config.service.js';
+import { SecurityAlertConfigController } from './controllers/security-alert-config.controller.js';
+import { SecurityAlertAutoResolveService } from './services/security-alert-auto-resolve.service.js';
 
 /**
  * AlertsModule (SAVP Security Alert Center scope — SRS UC-121→125, UC-129).
@@ -56,23 +60,28 @@ import { PersonWatchlistCheckService } from './services/person-watchlist-check.s
     ]),
     AuthModule,
     NotificationsModule,
+    AdministrationModule,
   ],
   controllers: [
     AlertRulesController,
     AlertsController,
     PersonControlListController,
+    SecurityAlertConfigController,
   ],
   providers: [
     AlertRulesService,
     AlertsService,
     PersonControlListService,
     PersonWatchlistCheckService,
+    SecurityAlertConfigService,
+    SecurityAlertAutoResolveService,
   ],
   exports: [
     TypeOrmModule,
     AlertRulesService,
     AlertsService,
     PersonWatchlistCheckService,
+    SecurityAlertAutoResolveService,
   ],
 })
 export class AlertsModule {}

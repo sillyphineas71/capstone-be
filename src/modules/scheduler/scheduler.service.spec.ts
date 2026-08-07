@@ -15,6 +15,7 @@ import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.j
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
+import { SecurityAlertAutoResolveService } from '../alerts/services/security-alert-auto-resolve.service.js';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
   let detectMock: any;
@@ -28,6 +29,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let gatePairingMock: any;
   let liveMeetingMock: any;
   let meetingRequestReviewMock: any;
+  let securityAlertAutoResolveMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -121,6 +123,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         failed: 0,
       })),
     };
+    securityAlertAutoResolveMock = {
+      autoResolveExpired: jest.fn(async () => ({ scanned: 0, resolved: 0 })),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -146,6 +151,10 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         {
           provide: MeetingRequestReviewService,
           useValue: meetingRequestReviewMock,
+        },
+        {
+          provide: SecurityAlertAutoResolveService,
+          useValue: securityAlertAutoResolveMock,
         },
       ],
     }).compile();
@@ -433,5 +442,45 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
       new Error('boom'),
     );
     await expect(s.expireMeetingRequests()).resolves.toBeUndefined();
+  });
+
+  // ── ASC-001: cron security-alert-auto-resolve ──
+  it('securityAlertAutoResolve gate OFF (default) → KHÔNG gọi autoResolveExpired', async () => {
+    cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED default false
+    const s = await build();
+    await s.securityAlertAutoResolve();
+    expect(securityAlertAutoResolveMock.autoResolveExpired).not.toHaveBeenCalled();
+  });
+
+  it('securityAlertAutoResolve ON → gọi autoResolveExpired 1 lần', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED: true,
+    };
+    const s = await build();
+    await s.securityAlertAutoResolve();
+    expect(securityAlertAutoResolveMock.autoResolveExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('securityAlertAutoResolve: SCHEDULER_ENABLED=false → KHÔNG chạy dù cờ riêng bật', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: false,
+      SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED: true,
+    };
+    const s = await build();
+    await s.securityAlertAutoResolve();
+    expect(securityAlertAutoResolveMock.autoResolveExpired).not.toHaveBeenCalled();
+  });
+
+  it('securityAlertAutoResolve: autoResolveExpired throw → KHÔNG ném ra cron (ARCH-02)', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED: true,
+    };
+    const s = await build();
+    securityAlertAutoResolveMock.autoResolveExpired.mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(s.securityAlertAutoResolve()).resolves.toBeUndefined();
   });
 });

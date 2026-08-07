@@ -11,6 +11,7 @@ import { IvssPersonSyncService } from '../ivss/services/ivss-person-sync.service
 import { IvssPortraitSyncService } from '../ivss/services/ivss-portrait-sync.service.js';
 import { RestrictedZoneIntrusionService } from '../restricted-zone/services/restricted-zone-intrusion.service.js';
 import { CrowdAlertService } from '../crowd-alert/services/crowd-alert.service.js';
+import { SecurityAlertAutoResolveService } from '../alerts/services/security-alert-auto-resolve.service.js';
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
@@ -46,6 +47,7 @@ export class SchedulerService {
   private readonly autoCompleteEnabled: boolean;
   private readonly meetingStatusEnabled: boolean;
   private readonly meetingRequestExpireEnabled: boolean;
+  private readonly securityAlertAutoResolveEnabled: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -62,6 +64,7 @@ export class SchedulerService {
     private readonly gateLogPairingService: GateLogPairingService,
     private readonly liveMeetingService: LiveMeetingService,
     private readonly meetingRequestReviewService: MeetingRequestReviewService,
+    private readonly securityAlertAutoResolveService: SecurityAlertAutoResolveService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -132,9 +135,14 @@ export class SchedulerService {
       'SCHEDULER_MEETING_REQUEST_EXPIRE_ENABLED',
       false,
     );
+    // ASC-001: cron tự resolve security_alerts không tái phát quá N phút (default OFF).
+    this.securityAlertAutoResolveEnabled = this.configService.get<boolean>(
+      'SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled} | meeting-request-expire=${this.meetingRequestExpireEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled} | meeting-request-expire=${this.meetingRequestExpireEnabled} | security-alert-auto-resolve=${this.securityAlertAutoResolveEnabled}`,
     );
   }
 
@@ -434,6 +442,33 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] crowd-alert failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * ASC-001 — alert đang mở (status <> 'resolved') không tái phát mới
+   * (COALESCE(last_seen_at, triggered_at)) quá N phút (cấu hình qua
+   * SecurityAlertConfigService, mặc định 15 phút) → tự động resolved. Cron
+   * dọn dẹp ĐỘC LẬP, KHÔNG đụng recordAlert()/dedupe.
+   * Gate SCHEDULER_ENABLED && SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED
+   * (default OFF). KHÔNG ném ra cron.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'security-alert-auto-resolve' })
+  async securityAlertAutoResolve(): Promise<void> {
+    if (!this.schedulerEnabled || !this.securityAlertAutoResolveEnabled)
+      return;
+
+    try {
+      const r = await this.securityAlertAutoResolveService.autoResolveExpired();
+      this.logger.log(
+        `[Scheduler] security-alert-auto-resolve: scanned=${r.scanned} resolved=${r.resolved}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] security-alert-auto-resolve failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

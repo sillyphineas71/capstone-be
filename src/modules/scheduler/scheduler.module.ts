@@ -9,6 +9,7 @@ import { FaceAccessModule } from '../face-access/face-access.module.js';
 import { IvssModule } from '../ivss/ivss.module.js';
 import { RestrictedZoneModule } from '../restricted-zone/restricted-zone.module.js';
 import { CrowdAlertModule } from '../crowd-alert/crowd-alert.module.js';
+import { AlertsModule } from '../alerts/alerts.module.js';
 import { ZonesModule } from '../zones/zones.module.js';
 import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
@@ -36,6 +37,9 @@ import { MeetingsModule } from '../meetings/meetings.module.js';
     IvssModule,
     RestrictedZoneModule,
     CrowdAlertModule,
+    // ASC-001: cron security-alert-auto-resolve inject SecurityAlertAutoResolveService
+    // (alerts export). CrowdAlertModule đã import AlertsModule sẵn ⇒ không circular mới.
+    AlertsModule,
     // GAP-001 (UC-106): cron gate-log-pairing inject GateLogPairingService (zones export).
     // Cạnh scheduler → zones MỘT CHIỀU (zones KHÔNG import scheduler) ⇒ không circular.
     ZonesModule,
