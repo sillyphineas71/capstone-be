@@ -5,11 +5,13 @@ import { AuthUserSummary, LoginSuccessData } from '../types/login.types';
 export class LoginResponsePresenter {
   success(data: LoginSuccessData): {
     success: true;
+    message: string;
     data: LoginSuccessData;
     meta: Record<string, never>;
   } {
     return {
       success: true,
+      message: 'Đăng nhập thành công',
       data,
       meta: {},
     };
