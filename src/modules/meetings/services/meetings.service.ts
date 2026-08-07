@@ -146,6 +146,7 @@ import { UserSummaryDto } from '../dto/user-summary.dto.js';
 import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 
 import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
@@ -231,6 +232,7 @@ export class MeetingsService {
     private readonly faceProvisioningService: FaceProvisioningService,
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
+    private readonly guestInviteService: GuestInviteService,
   ) {}
 
   async getRoomAvailability(
@@ -2706,6 +2708,17 @@ export class MeetingsService {
     } catch (faceError: unknown) {
       this.logger.error(
         `[cancelMeeting] deprovisionMeeting failed for meeting ${meetingId}: ${(faceError as Error).message}`,
+      );
+    }
+
+    // GLA-001 (FR-GLA-015): thu hồi NGAY mọi phiên khách ngoài công ty của
+    // cuộc họp vừa hủy — không chờ TTL tự nhiên hết hạn. Best-effort, KHÔNG
+    // rollback việc hủy cuộc họp nếu bước này lỗi (mirror deprovisionMeeting).
+    try {
+      await this.guestInviteService.revokeAllForMeeting(meetingId);
+    } catch (guestRevokeError: unknown) {
+      this.logger.error(
+        `[cancelMeeting] revokeAllForMeeting (guest access) failed for meeting ${meetingId}: ${(guestRevokeError as Error).message}`,
       );
     }
 

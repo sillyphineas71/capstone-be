@@ -65,6 +65,7 @@ import { TimelineQueryDto } from '../dto/timeline-query.dto.js';
 import { TimelineItemDto } from '../dto/timeline-item.dto.js';
 import { DepartmentEntity } from '../../accounts/entities/department.entity.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 
 import { StartMeetingResponseDto } from '../dto/start-meeting-response.dto.js';
 import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
@@ -132,6 +133,7 @@ export class LiveMeetingService {
     private readonly queueService: QueueService,
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
+    private readonly guestInviteService: GuestInviteService,
   ) {
     this.schedulerQueueName = this.configService.get<string>(
       'QUEUE_SCHEDULER',
@@ -1989,6 +1991,16 @@ export class LiveMeetingService {
 
     // ── Step 9: Nhắc participant upload audio track (best-effort, Gap fix Nhóm A) ──
     await this.notifyAudioTrackUploadNeeded(meetingId, meeting.title);
+
+    // GLA-001 (FR-GLA-015): thu hồi NGAY mọi phiên khách ngoài công ty của
+    // cuộc họp vừa kết thúc — best-effort, KHÔNG chặn response endMeeting.
+    try {
+      await this.guestInviteService.revokeAllForMeeting(meetingId);
+    } catch (guestRevokeError: unknown) {
+      this.logger.error(
+        `[endMeeting] revokeAllForMeeting (guest access) failed for meeting ${meetingId}: ${(guestRevokeError as Error).message}`,
+      );
+    }
 
     return new EndMeetingResponseDto({
       meetingId: meeting.id,

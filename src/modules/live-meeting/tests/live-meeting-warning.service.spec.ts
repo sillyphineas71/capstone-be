@@ -26,6 +26,7 @@ import { WebsocketService } from '../../websocket/websocket.service.js';
 import { QueueService } from '../../queue/queue.service.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { ConfigService } from '@nestjs/config';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 
 describe('LiveMeetingService - scheduleWarningJob', () => {
   let service: LiveMeetingService;
@@ -90,6 +91,10 @@ describe('LiveMeetingService - scheduleWarningJob', () => {
         { provide: QueueService, useValue: mockQueueService },
         { provide: BackgroundJobsService, useValue: mockBackgroundJobsService },
         { provide: ConfigService, useValue: mockConfigService },
+        {
+          provide: GuestInviteService,
+          useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
+        },
       ],
     }).compile();
 
@@ -254,6 +259,10 @@ describe('LiveMeetingService - cancelWarningJob', () => {
         { provide: QueueService, useValue: mockQueueService },
         { provide: BackgroundJobsService, useValue: mockBackgroundJobsService },
         { provide: ConfigService, useValue: mockConfigService },
+        {
+          provide: GuestInviteService,
+          useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
+        },
       ],
     }).compile();
 
@@ -319,6 +328,7 @@ import {
 } from '../../administration/entities/background-job.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 import { ConfigService } from '@nestjs/config';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 
 describe('MeetingWarningService - processWarningJob', () => {
   let service: MeetingWarningService;

@@ -65,6 +65,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 describe('MeetingsService', () => {
@@ -75,6 +76,7 @@ describe('MeetingsService', () => {
   let mockNotificationsService: Record<string, jest.Mock>;
   let mockAuthzReadRepository: Record<string, jest.Mock>;
   let mockFaceProvisioningService: Record<string, jest.Mock>;
+  let mockGuestInviteService: Record<string, jest.Mock>;
   let mockRepo: jest.Mocked<
     Pick<
       Repository<any>,
@@ -139,6 +141,10 @@ describe('MeetingsService', () => {
       deprovisionMeeting: jest.fn().mockResolvedValue(undefined),
     };
 
+    mockGuestInviteService = {
+      revokeAllForMeeting: jest.fn().mockResolvedValue(0),
+    };
+
     em = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -187,6 +193,12 @@ describe('MeetingsService', () => {
             saveFile: jest.fn(),
             deleteFile: jest.fn().mockResolvedValue(undefined),
           },
+        },
+        {
+          // GLA-001: cancelMeeting() gọi revokeAllForMeeting() best-effort
+          // sau transaction — mock để không phá vỡ toàn bộ suite hiện có.
+          provide: GuestInviteService,
+          useValue: mockGuestInviteService,
         },
       ],
     }).compile();
@@ -1854,6 +1866,31 @@ describe('MeetingsService', () => {
       expect(result.cancelledBy).toBe('auth-user-uuid');
       expect(result.notificationStatus).toBe('queued');
       expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it('[GLA-001] should revoke all guest sessions for the meeting after cancelling (best-effort)', async () => {
+      mockRepo.findOne.mockResolvedValue(buildMeeting());
+      setupEmQueryFullFlow();
+      setupNotificationMocks();
+
+      await service.cancelMeeting('meeting-uuid', authUser, clientContext, 'Ly do');
+
+      expect(mockGuestInviteService.revokeAllForMeeting).toHaveBeenCalledWith(
+        'meeting-uuid',
+      );
+    });
+
+    it('[GLA-001] should NOT fail cancelMeeting when revokeAllForMeeting throws (best-effort)', async () => {
+      mockRepo.findOne.mockResolvedValue(buildMeeting());
+      setupEmQueryFullFlow();
+      setupNotificationMocks();
+      mockGuestInviteService.revokeAllForMeeting.mockRejectedValueOnce(
+        new Error('Redis down'),
+      );
+
+      await expect(
+        service.cancelMeeting('meeting-uuid', authUser, clientContext, 'Ly do'),
+      ).resolves.toBeDefined();
     });
 
     it('[T006-2] should cancel meeting as host (200)', async () => {

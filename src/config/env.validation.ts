@@ -73,6 +73,29 @@ export const envValidationSchema = Joi.object({
   AUTH_OTP_MAX_VERIFY_ATTEMPTS: Joi.number().integer().default(5),
   AUTH_OTP_PREFIX: Joi.string().default('auth:otp:password-reset:'),
 
+  // ─── E1. Guest Access (feat-external-guest-live-meeting-access, GLA-001) ──────
+  // Secret RIÊNG cho token phiên khách — BẮT BUỘC khác AUTH_ACCESS_TOKEN_SECRET/
+  // AUTH_REFRESH_TOKEN_SECRET (ranh giới bảo mật cốt lõi: khách không đi qua
+  // JwtAuthGuard nội bộ). Xem spec/features/guest-access/feat-external-guest-live-meeting-access.
+  GUEST_TOKEN_SECRET: Joi.string().min(16).required(),
+  GUEST_ACCESS_OTP_TTL_SECONDS: Joi.number().integer().default(600),
+  GUEST_ACCESS_OTP_MAX_RESENDS: Joi.number().integer().default(3),
+  GUEST_ACCESS_OTP_RESEND_WINDOW_SECONDS: Joi.number().integer().default(300),
+  GUEST_ACCESS_OTP_MAX_VERIFY_ATTEMPTS: Joi.number().integer().default(5),
+  GUEST_ACCESS_OTP_BLOCK_SECONDS: Joi.number().integer().default(900),
+  GUEST_ACCESS_SESSION_MAX_HOURS: Joi.number().integer().default(4),
+  GUEST_ACCESS_JOIN_WINDOW_BEFORE_MINUTES: Joi.number().integer().default(30),
+  GUEST_ACCESS_JOIN_WINDOW_AFTER_MINUTES: Joi.number().integer().default(15),
+  GUEST_ACCESS_INVITE_LINK_TTL_HOURS: Joi.number().integer().default(24),
+  GUEST_ACCESS_INVITE_BASE_URL: Joi.string()
+    .uri()
+    .default('http://localhost:5173/guest/join'),
+  GUEST_ACCESS_DEVICE_REMEMBER_DAYS: Joi.number().integer().default(30),
+  GUEST_ACCESS_LOBBY_ENABLED_DEFAULT: Joi.boolean().default(true),
+  GUEST_ACCESS_VERIFICATION_MODE_DEFAULT: Joi.string()
+    .valid('otp', 'magic_click')
+    .default('otp'),
+
   // ─── F. Rate Limit ───────────────────────────────────────────────────────────
   RATE_LIMIT_ENABLED: Joi.boolean().default(true),
   AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: Joi.number().integer().default(5),

@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
+import { AuthModule } from '../auth/auth.module.js';
+import { GuestAccessModule } from '../guest-access/guest-access.module.js';
 import { EventsGateway } from './events.gateway.js';
 import { WebsocketService } from './websocket.service.js';
 
@@ -16,7 +19,12 @@ import { WebsocketService } from './websocket.service.js';
  * TODO: Implement business realtime events (meeting status, presence, ...) khi cần.
  */
 @Module({
-  imports: [ConfigModule],
+  imports: [
+    ConfigModule,
+    JwtModule.register({}),
+    AuthModule,
+    GuestAccessModule,
+  ],
   providers: [EventsGateway, WebsocketService],
   exports: [WebsocketService],
 })

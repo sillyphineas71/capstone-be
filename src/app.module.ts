@@ -45,6 +45,7 @@ import { RestrictedZoneModule } from './modules/restricted-zone/restricted-zone.
 import { CampusDashboardModule } from './modules/campus-dashboard/campus-dashboard.module';
 import { CrowdAlertModule } from './modules/crowd-alert/crowd-alert.module';
 import { SearchModule } from './modules/search/search.module';
+import { GuestAccessModule } from './modules/guest-access/guest-access.module';
 
 /**
  * Dev-only module — chỉ load khi NODE_ENV=development.
@@ -125,6 +126,7 @@ void loadDevModule; // suppress unused warning
     CampusDashboardModule, // Bước 4 SAVP (CDB-001/UC-126, ZPT-001/UC-119, ZTH-001/UC-120): dashboard + timeline + heatmap khu vực
     CrowdAlertModule, // Bước 4 SAVP (ACR-001/UC-121): cron cảnh báo tụ tập đông người
     SearchModule, // SRCH-01: tìm kiếm tổng hợp đa nguồn (zone/device/vehicle/user/meeting)
+    GuestAccessModule, // GLA-001: khách ngoài công ty truy cập live-meeting qua magic link + OTP
     // ─── Dev-only (conditionally loaded) ───────────────────────────────────────
     ...devModules,
   ],

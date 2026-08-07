@@ -3,6 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-07 | Thêm module `guest-access` (GLA-001 — khách ngoài công ty truy cập live-meeting qua magic link + OTP) vào bảng module 4.1. Xem `spec/features/guest-access/feat-external-guest-live-meeting-access/`. | Mục 4.1 |
 | 2026-07-21 | Bổ sung MỞ RỘNG SCOPE SAVP (Đây là phần mở rộng của dự án): ghi chú TL;DR, thêm module `zones`/`anpr` vào bảng module 4.1, cập nhật database baseline 5.1/5.2, thêm mục 5.5 mô tả 4 bảng mới + 2 cột zone_id + index mới + quy tắc làm việc trên phần mở rộng | TL;DR, mục 1 (thứ tự ưu tiên), 4.1, 5.1, 5.2, 5.5 (mới) |
 | 2026-07-27 | **[Đợt P1, BE-09]** Đính chính mục 22.13 — path thật của system config admin endpoint là `/api/v1/system-configurations` (không phải `/system-configs`), PATCH nhận body `{key, value}` (không phải path param `:key`). Xem `spec/features/administration/feat-system-configurations/`. | Mục 22.13 |
 | 2026-06-06 | Sửa lỗi review: thêm device_user_mappings, cập nhật tech stack MQTT, update notification convention, xóa endpoint bảng đã remove | Các mục 3.1, 5.2, 18, 22 |
@@ -228,6 +229,7 @@ Backend đi theo hướng **modular monolith**:
 | `administration` | System config, audit logs, admin operations                         | `/src/modules/administration` |
 | `zones`          | *(Mở rộng SAVP)* Khu vực khuôn viên: entity zones/gate_access_logs/zone_presence_events (hiện schema-only, nghiệp vụ bổ sung theo UC-90→94) | `/src/modules/zones`          |
 | `anpr`           | *(Mở rộng SAVP)* Nhận diện biển số: vehicle registration, webhook biển số, vehicle_control_list | `/src/modules/anpr`           |
+| `guest-access`   | Khách ngoài công ty truy cập live-meeting qua magic link + OTP (GLA-001), KHÔNG đi qua RBAC nội bộ — secret JWT/guard riêng, không permission nào cho khách | `/src/modules/guest-access`   |
 | `common`         | Shared decorators, guards, pipes, filters, utils                    | `/src/common`                 |
 | `database`       | Database module, migration config, seed scripts                     | `/src/database`               |
 

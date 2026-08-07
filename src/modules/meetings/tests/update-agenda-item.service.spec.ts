@@ -23,6 +23,7 @@ import { AuthzReadRepository } from '../../auth/repositories/authz-read.reposito
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 import { ConfigService } from '@nestjs/config';
 import { StorageService } from '../../storage/storage.service.js';
 
@@ -122,6 +123,10 @@ describe('MeetingsService.updateAgendaItem', () => {
             saveFile: jest.fn(),
             deleteFile: jest.fn().mockResolvedValue(undefined),
           },
+        },
+        {
+          provide: GuestInviteService,
+          useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
         },
       ],
     }).compile();

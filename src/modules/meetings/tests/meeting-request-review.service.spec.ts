@@ -38,11 +38,15 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js';
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
 
 describe('MeetingRequestReviewService', () => {
   let service: MeetingRequestReviewService;
   let dataSource: jest.Mocked<DataSource>;
   let notificationsService: jest.Mocked<NotificationsService>;
+  let guestInviteService: jest.Mocked<GuestInviteService>;
+  let guestEmailService: jest.Mocked<GuestEmailService>;
   let em: jest.Mocked<EntityManager>;
 
   const authUser = { userId: 'approver-uuid' };
@@ -137,9 +141,12 @@ describe('MeetingRequestReviewService', () => {
           cb(em),
         ),
       manager: em,
-      getRepository: jest
-        .fn()
-        .mockReturnValue({ find: jest.fn().mockResolvedValue([]) }),
+      // GLA-001: sendGuestInviteEmails() goi getRepository(UserEntity).findOne()
+      // de lay ten host cho email moi khach — can findOne() ngoai find().
+      getRepository: jest.fn().mockReturnValue({
+        find: jest.fn().mockResolvedValue([]),
+        findOne: jest.fn().mockResolvedValue(null),
+      }),
     } as unknown as jest.Mocked<DataSource>;
 
     notificationsService = {
@@ -150,11 +157,43 @@ describe('MeetingRequestReviewService', () => {
       }),
     } as unknown as jest.Mocked<NotificationsService>;
 
+    // GLA-001: MeetingRequestReviewService.approve() sinh + gui link moi
+    // khach ngoai cong ty. Mock 2 service moi de KHONG cham DB/SMTP thuc su
+    // trong regression test cua feature co san nay.
+    guestInviteService = {
+      issueInvite: jest.fn().mockResolvedValue({
+        externalParticipantId: 'ep-uuid',
+        email: 'external@test.com',
+        secret: 'mock-secret',
+        link: 'https://app.local/guest/join/ep-uuid.mock-secret',
+        guestInvite: {
+          tokenHash: 'hash',
+          issuedAt: new Date().toISOString(),
+          issuedBy: authUser.userId,
+          expiresAt: new Date().toISOString(),
+          status: 'active',
+          invalidAfter: null,
+          firstJoinedAt: null,
+          lastJoinedAt: null,
+        },
+      }),
+      resolveInvite: jest.fn(),
+      markJoined: jest.fn(),
+      markRevoked: jest.fn(),
+    } as unknown as jest.Mocked<GuestInviteService>;
+
+    guestEmailService = {
+      sendInviteLink: jest.fn().mockResolvedValue(undefined),
+      sendOtp: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<GuestEmailService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MeetingRequestReviewService,
         { provide: DataSource, useValue: dataSource },
         { provide: NotificationsService, useValue: notificationsService },
+        { provide: GuestInviteService, useValue: guestInviteService },
+        { provide: GuestEmailService, useValue: guestEmailService },
       ],
     }).compile();
 
@@ -312,6 +351,110 @@ describe('MeetingRequestReviewService', () => {
       expect(
         notificationsService.enqueueEmailNotification,
       ).not.toHaveBeenCalled();
+    });
+
+    describe('GLA-001: guest invite issuance on approve()', () => {
+      it('should issue a guest invite and send the invite email for CREATE_MEETING with an emailed external participant', async () => {
+        setupSuccessMocks();
+        em.find = jest
+          .fn()
+          .mockResolvedValueOnce([]) // internal participants
+          .mockResolvedValueOnce([
+            {
+              id: 'ep-1',
+              email: 'external@test.com',
+            } as MeetingExternalParticipantEntity,
+          ]);
+
+        await service.approve(
+          'request-uuid',
+          approveDto,
+          authUser,
+          clientContext,
+        );
+
+        expect(guestInviteService.issueInvite).toHaveBeenCalledWith(
+          em,
+          expect.objectContaining({
+            externalParticipantId: 'ep-1',
+            email: 'external@test.com',
+          }),
+        );
+        expect(guestEmailService.sendInviteLink).toHaveBeenCalledWith(
+          expect.objectContaining({ to: 'external@test.com' }),
+        );
+      });
+
+      it('should skip external participants without an email (no invite issued, no throw)', async () => {
+        setupSuccessMocks();
+        em.find = jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ id: 'ep-1', email: null }]);
+
+        await expect(
+          service.approve('request-uuid', approveDto, authUser, clientContext),
+        ).resolves.toBeDefined();
+
+        expect(guestInviteService.issueInvite).not.toHaveBeenCalled();
+        expect(guestEmailService.sendInviteLink).not.toHaveBeenCalled();
+      });
+
+      it('should NOT issue guest invites for UPDATE_TIME requests, even with emailed external participants', async () => {
+        em.findOne
+          .mockResolvedValueOnce(
+            mockRequest({
+              requestType: MeetingRequestType.UPDATE_TIME,
+              requestedStartTime: new Date('2026-07-15T14:00:00Z'),
+              requestedEndTime: new Date('2026-07-15T15:00:00Z'),
+            }),
+          )
+          .mockResolvedValueOnce(
+            mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }),
+          )
+          .mockResolvedValueOnce(
+            mockBooking({ status: RoomBookingStatus.APPROVED }),
+          );
+        em.find = jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            {
+              id: 'ep-1',
+              email: 'external@test.com',
+            } as MeetingExternalParticipantEntity,
+          ]);
+
+        await service.approve(
+          'request-uuid',
+          approveDto,
+          authUser,
+          clientContext,
+        );
+
+        expect(guestInviteService.issueInvite).not.toHaveBeenCalled();
+        expect(guestEmailService.sendInviteLink).not.toHaveBeenCalled();
+      });
+
+      it('should NOT fail approve() when sending the guest invite email throws (best-effort)', async () => {
+        setupSuccessMocks();
+        em.find = jest
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            {
+              id: 'ep-1',
+              email: 'external@test.com',
+            } as MeetingExternalParticipantEntity,
+          ]);
+        guestEmailService.sendInviteLink.mockRejectedValueOnce(
+          new Error('SMTP down'),
+        );
+
+        await expect(
+          service.approve('request-uuid', approveDto, authUser, clientContext),
+        ).resolves.toBeDefined();
+      });
     });
 
     it('[AC-013] should create audit log with action_type approve', async () => {
@@ -500,8 +643,12 @@ describe('MeetingRequestReviewService', () => {
             requestedEndTime: new Date('2026-07-15T15:00:00Z'),
           }),
         )
-        .mockResolvedValueOnce(mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }))
-        .mockResolvedValueOnce(mockBooking({ status: RoomBookingStatus.APPROVED }));
+        .mockResolvedValueOnce(
+          mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }),
+        )
+        .mockResolvedValueOnce(
+          mockBooking({ status: RoomBookingStatus.APPROVED }),
+        );
       jest.setSystemTime(new Date('2026-07-15T14:00:01Z')); // sau giờ mới xin đổi
 
       await expect(
@@ -744,7 +891,9 @@ describe('MeetingRequestReviewService', () => {
         .mockResolvedValueOnce(
           mockMeeting({ status: MeetingStatus.PENDING_APPROVAL }),
         )
-        .mockResolvedValueOnce(mockBooking({ status: RoomBookingStatus.PENDING }));
+        .mockResolvedValueOnce(
+          mockBooking({ status: RoomBookingStatus.PENDING }),
+        );
 
       const result = await service.expireOverdueBatch();
 

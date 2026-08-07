@@ -44,6 +44,9 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
+import { GuestInviteIssueResult } from '../../guest-access/types/guest-invite-metadata.type.js';
 
 import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js';
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
@@ -68,6 +71,13 @@ interface MeetingApprovalResult {
   appliedAt: Date;
   participantIds: string[];
   externalEmails: string[];
+  /**
+   * GLA-001: lời mời khách vừa được sinh trong transaction này (CHỈ
+   * CREATE_MEETING, CHỈ khách có email — FR-GLA-004/006). Chứa secret gốc
+   * trong bộ nhớ tức thời để ghép mail SAU KHI transaction commit — không
+   * dùng lại đâu khác.
+   */
+  guestInvites: GuestInviteIssueResult[];
   requesterId: string;
   hostId: string | null;
   decisionNote: string | null;
@@ -82,6 +92,8 @@ export class MeetingRequestReviewService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
+    private readonly guestInviteService: GuestInviteService,
+    private readonly guestEmailService: GuestEmailService,
   ) {}
 
   async approve(
@@ -428,6 +440,25 @@ export class MeetingRequestReviewService {
         .map((ep) => ep.email)
         .filter((email): email is string => !!email);
 
+      // GLA-001 (FR-GLA-006): sinh lời mời khách CHỈ khi tạo mới cuộc họp
+      // (UPDATE_TIME/UPDATE_ROOM không đổi danh sách khách ngoài công ty —
+      // mirror đúng điều kiện `!isUpdateRequest` dùng cho email thông báo
+      // chung ở enqueueApprovalNotifications()). CHỈ khách có email — không
+      // có email thì không có nơi gửi OTP/link, bỏ qua không lỗi (FR-GLA-004).
+      const guestInvites: GuestInviteIssueResult[] = [];
+      if (request.requestType === MeetingRequestType.CREATE_MEETING) {
+        for (const ep of externalParticipants) {
+          if (!ep.email) continue;
+          const issued = await this.guestInviteService.issueInvite(em, {
+            externalParticipantId: ep.id,
+            email: ep.email,
+            meetingEndTime: targetEndTime,
+            issuedBy: authUser.userId,
+          });
+          guestInvites.push(issued);
+        }
+      }
+
       const auditLog = em.create(AuditLogEntity, {
         userId: authUser.userId,
         actionType: 'approve',
@@ -470,6 +501,7 @@ export class MeetingRequestReviewService {
         appliedAt: now,
         participantIds,
         externalEmails,
+        guestInvites,
         requesterId: request.requestedBy,
         hostId: meeting.hostId,
         decisionNote: dto.decisionNote || null,
@@ -484,6 +516,10 @@ export class MeetingRequestReviewService {
       authUser,
       clientContext,
     );
+    // GLA-001: gửi link mời khách SAU commit, độc lập với email thông báo
+    // chung ở trên. Best-effort — lỗi gửi mail KHÔNG rollback lời mời đã ghi
+    // (mirror writeNotificationFailureAudit ở enqueueApprovalNotifications).
+    await this.sendGuestInviteEmails(approvalResult, authUser, clientContext);
 
     return new ApproveResponseDto({
       requestId,
@@ -625,6 +661,70 @@ export class MeetingRequestReviewService {
           authUser,
           clientContext,
           `Failed to notify ${uid} of approval: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * GLA-001 (FR-GLA-006): gửi email chứa link mời cho từng khách vừa được
+   * sinh lời mời trong transaction `approve()`. Độc lập hoàn toàn với luồng
+   * `enqueueApprovalNotifications()` — mail này chứa BÍ MẬT (secret trong
+   * link), nên PHẢI đi qua `GuestEmailService` (gọi `MailService` trực tiếp,
+   * KHÔNG qua `NotificationsService` — xem `GuestEmailService` doc).
+   *
+   * Best-effort: lỗi gửi mail cho 1 khách KHÔNG ảnh hưởng khách khác, KHÔNG
+   * rollback lời mời đã ghi (đã commit trong transaction chính từ trước).
+   */
+  private async sendGuestInviteEmails(
+    result: MeetingApprovalResult,
+    authUser: AuthUser,
+    clientContext: ClientContext,
+  ): Promise<void> {
+    if (result.guestInvites.length === 0) return;
+
+    const hostId = result.hostId;
+    let hostName = 'Chưa xác định';
+    if (hostId) {
+      const host = await this.dataSource
+        .getRepository(UserEntity)
+        .findOne({ where: { id: hostId } });
+      if (host?.fullName) hostName = host.fullName;
+    }
+
+    for (const invite of result.guestInvites) {
+      try {
+        await this.guestEmailService.sendInviteLink({
+          to: invite.email,
+          meetingTitle: result.meetingTitle,
+          startTime: result.meetingStartTime,
+          endTime: result.meetingEndTime,
+          hostName,
+          link: invite.link,
+        });
+        await this.dataSource.manager.save(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'guest_invite_issued',
+          entityType: 'meeting_external_participant',
+          entityId: invite.externalParticipantId,
+          severity: AuditLogSeverity.INFO,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          metadataJson: {
+            meetingId: result.meetingId,
+            externalParticipantId: invite.externalParticipantId,
+            email: invite.email,
+          },
+        } as any);
+      } catch (error) {
+        this.logger.error(
+          `[Approve] Failed to send guest invite email to ${invite.email}: ${(error as Error).message}`,
+        );
+        await this.writeNotificationFailureAudit(
+          result.meetingId,
+          authUser,
+          clientContext,
+          `Failed to send guest invite to ${invite.email}: ${(error as Error).message}`,
         );
       }
     }

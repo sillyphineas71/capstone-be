@@ -405,3 +405,71 @@ export function buildStrangerAlertEmail(params: {
     renderParagraph('Vui lòng kiểm tra camera/lịch sử truy cập để xác minh.');
   return renderEmailLayout({ heading: 'Cảnh báo khuôn mặt lạ', bodyHtml });
 }
+
+// ── Guest Access (feat-external-guest-live-meeting-access, GLA-001) ───────
+//
+// LƯU Ý QUAN TRỌNG: 2 hàm dưới đây được gửi qua GuestEmailService.sendMail()
+// TRỰC TIẾP (mirror AuthEmailService), KHÔNG qua NotificationsService —
+// mail chứa link/OTP là bí mật, không được persist `content` vĩnh viễn vào
+// bảng `notifications`. Xem plan.md mục 2.2/7.1/7.3.
+
+function renderGuestLinkButton(link: string, label: string): string {
+  return `<div style="text-align:center;margin:8px 0 20px;">
+    <a href="${escapeHtml(link)}" style="display:inline-block;background-color:#1e3a8a;color:#ffffff;font-size:14px;font-weight:600;padding:12px 28px;border-radius:6px;text-decoration:none;">${escapeHtml(label)}</a>
+  </div>`;
+}
+
+export function buildGuestInviteEmail(params: {
+  meetingTitle: string;
+  startTime: Date | string;
+  endTime: Date | string;
+  hostName: string;
+  link: string;
+}): string {
+  const bodyHtml =
+    renderParagraph('Kính gửi Quý khách,') +
+    renderParagraph(
+      `Quý khách được mời tham dự cuộc họp sau tại Smart Meeting Management:`,
+    ) +
+    renderInfoTable([
+      {
+        label: 'Cuộc họp',
+        value: `<strong>${escapeHtml(params.meetingTitle)}</strong>`,
+      },
+      {
+        label: 'Thời gian',
+        value: `${escapeHtml(formatDateTimeVN(params.startTime))} &ndash; ${escapeHtml(formatDateTimeVN(params.endTime))}`,
+      },
+      { label: 'Chủ trì', value: escapeHtml(params.hostName) },
+    ]) +
+    renderParagraph('Bấm vào nút dưới đây để chuẩn bị tham gia:') +
+    renderGuestLinkButton(params.link, 'Xem thông tin cuộc họp') +
+    renderCallout(
+      'Đây chỉ là liên kết dẫn tới trang xác thực — Quý khách sẽ cần xác nhận qua mã OTP gửi tới email này trước khi được vào cuộc họp. Vui lòng không chia sẻ liên kết này cho người khác.',
+      'info',
+    );
+  return renderEmailLayout({ heading: 'Thư mời tham dự cuộc họp', bodyHtml });
+}
+
+export function buildGuestOtpEmail(params: {
+  otp: string;
+  meetingTitle: string;
+  expiresMinutes: number;
+}): string {
+  const bodyHtml =
+    renderParagraph('Kính gửi Quý khách,') +
+    renderParagraph(
+      `Quý khách vừa yêu cầu mã xác nhận để tham dự cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong>. Mã OTP xác thực của Quý khách là:`,
+    ) +
+    `<div style="text-align:center;margin:8px 0 20px;">
+      <span style="display:inline-block;font-size:28px;font-weight:700;letter-spacing:6px;color:#1e3a8a;background-color:#eff6ff;padding:14px 28px;border-radius:8px;">${escapeHtml(params.otp)}</span>
+    </div>` +
+    renderCallout(
+      `Mã OTP có hiệu lực trong vòng <strong>${params.expiresMinutes} phút</strong>. Để bảo mật, vui lòng không chia sẻ mã này cho bất kỳ ai, kể cả người trong tổ chức của Quý khách.`,
+      'warning',
+    ) +
+    renderParagraph(
+      'Nếu Quý khách không yêu cầu mã này, vui lòng bỏ qua email này.',
+    );
+  return renderEmailLayout({ heading: 'Mã xác nhận tham dự cuộc họp', bodyHtml });
+}

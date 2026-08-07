@@ -11,6 +11,16 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { DataSource } from 'typeorm';
+import { AuthConfigService } from '../auth/services/auth-config.service.js';
+import { GuestAccessConfigService } from '../guest-access/config/guest-access-config.service.js';
+import { GuestAccessCacheService } from '../guest-access/services/guest-access-cache.service.js';
+import { GuestAttendanceService } from '../guest-access/services/guest-attendance.service.js';
+import { GUEST_TOKEN_TYPE } from '../guest-access/constants/guest-access.constants.js';
+import { GuestJwtPayload } from '../guest-access/types/guest-jwt-payload.type.js';
+import { MeetingParticipantEntity } from '../meetings/entities/meeting-participant.entity.js';
+import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -18,17 +28,32 @@ const IVSS_MEETING_ROOM = (meetingId: string): string =>
   `ivss:meeting:${meetingId}`;
 const MEETING_ROOM = (meetingId: string): string => `meeting:${meetingId}`;
 
+type SocketIdentity =
+  | { type: 'employee'; userId: string }
+  | {
+      type: 'guest';
+      externalParticipantId: string;
+      meetingId: string;
+      jti: string;
+    };
+
 /**
- * EventsGateway — Basic Socket.IO gateway skeleton.
+ * EventsGateway — Socket.IO gateway.
  *
- * Chỉ setup connection lifecycle (connect/disconnect/init).
- * Chưa implement business realtime events.
+ * GLA-001 (FR-GLA-035/036) — xác thực handshake + kiểm tra phạm vi khi
+ * subscribe phòng cuộc họp. Đây là ĐIỀU KIỆN CHẶN RELEASE của feature khách
+ * ngoài công ty: không có bước này, mọi lớp OTP/token/lobby bị đi vòng qua
+ * chỉ bằng `socket.emit('meeting:subscribe', { meetingId })` vì trước đây
+ * gateway không xác thực gì.
  *
- * TODO: Thêm event handlers cho:
- * - Meeting status updates
- * - Presence detection events
- * - Room utilization updates
- * - Notification push
+ * PHẠM VI CỐ Ý THU HẸP so với đọc theo nghĩa đen của spec: KHÔNG disconnect
+ * mọi kết nối thiếu token ở `handleConnection()` (sẽ phá vỡ 2 luồng khác
+ * đang dùng chung gateway này mà auth vốn đã là ticket riêng, chưa làm:
+ * `ivss:subscribe` — có OWED-BLOCKER ghi rõ "auth handshake = ticket riêng",
+ * và `agenda:present`). Thay vào đó, CHỈ chặn cứng ở `meeting:subscribe` —
+ * đúng nơi lỗ hổng thật sự nằm (room này phát dữ liệu cuộc họp, bao gồm cho
+ * khách). Kết nối vẫn được nhận nếu không có token, chỉ không lấy được
+ * `identity` nên `meeting:subscribe` sẽ từ chối.
  */
 @WebSocketGateway({
   path: process.env['WS_PATH'] ?? '/ws',
@@ -50,7 +75,15 @@ export class EventsGateway
 
   private readonly logger = new Logger(EventsGateway.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
+    private readonly authConfigService: AuthConfigService,
+    private readonly guestAccessConfigService: GuestAccessConfigService,
+    private readonly guestAccessCacheService: GuestAccessCacheService,
+    private readonly guestAttendanceService: GuestAttendanceService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   afterInit(server: Server): void {
     const wsEnabled = this.configService.get<boolean>('WS_ENABLED', true);
@@ -64,14 +97,84 @@ export class EventsGateway
     void server;
   }
 
-  handleConnection(client: Socket): void {
+  async handleConnection(client: Socket): Promise<void> {
     this.logger.debug(`[WS] Client connected: ${client.id}`);
-    // TODO: Validate JWT nếu WS_AUTH_REQUIRED=true
-    // const wsAuthRequired = this.configService.get<boolean>('WS_AUTH_REQUIRED', true);
+    const identity = await this.resolveIdentity(client);
+    (client.data as { identity?: SocketIdentity | null }).identity = identity;
   }
 
   handleDisconnect(client: Socket): void {
     this.logger.debug(`[WS] Client disconnected: ${client.id}`);
+    const identity = (client.data as { identity?: SocketIdentity | null })
+      .identity;
+    if (identity?.type === 'guest') {
+      // Best-effort — không await để không giữ handler disconnect.
+      void this.guestAttendanceService.logLeave({
+        externalParticipantId: identity.externalParticipantId,
+        meetingId: identity.meetingId,
+        jti: identity.jti,
+      });
+    }
+  }
+
+  /**
+   * Thử verify token nhân viên trước (secret nội bộ), fallback sang token
+   * khách (secret riêng, spec FR-GLA-020). KHÔNG throw — trả `null` nếu cả 2
+   * đều thất bại hoặc không có token, để không phá vỡ các luồng WS khác
+   * chưa yêu cầu auth (xem doc class).
+   */
+  private async resolveIdentity(
+    client: Socket,
+  ): Promise<SocketIdentity | null> {
+    const token = this.extractToken(client);
+    if (!token) return null;
+
+    try {
+      const payload = await this.jwtService.verifyAsync<{ sub: string }>(
+        token,
+        { secret: this.authConfigService.getAccessTokenSecret() },
+      );
+      if (payload?.sub) {
+        return { type: 'employee', userId: payload.sub };
+      }
+    } catch {
+      // không phải token nhân viên hợp lệ — thử token khách
+    }
+
+    try {
+      const payload = await this.jwtService.verifyAsync<GuestJwtPayload>(
+        token,
+        { secret: this.guestAccessConfigService.getGuestTokenSecret() },
+      );
+      if (payload?.typ === GUEST_TOKEN_TYPE) {
+        const isRevoked = await this.guestAccessCacheService.isSessionRevoked(
+          payload.jti,
+        );
+        if (isRevoked) return null;
+        return {
+          type: 'guest',
+          externalParticipantId: payload.sub,
+          meetingId: payload.mid,
+          jti: payload.jti,
+        };
+      }
+    } catch {
+      // không phải token khách hợp lệ
+    }
+
+    return null;
+  }
+
+  private extractToken(client: Socket): string | undefined {
+    const authToken: unknown = client.handshake.auth?.['token'];
+    if (typeof authToken === 'string' && authToken.length > 0) {
+      return authToken;
+    }
+    const queryToken: unknown = client.handshake.query?.['token'];
+    if (typeof queryToken === 'string' && queryToken.length > 0) {
+      return queryToken;
+    }
+    return undefined;
   }
 
   /**
@@ -108,15 +211,51 @@ export class EventsGateway
     return { ok: true, room };
   }
 
+  /**
+   * GLA-001 (FR-GLA-036): điểm chặn thật sự. Nhân viên phải là
+   * participant/host của meetingId; khách phải khớp đúng `mid` trong token.
+   * Không có identity hợp lệ, hoặc sai phạm vi → từ chối, KHÔNG join room,
+   * ghi log cảnh báo (NFR-GLA-011 — tín hiệu dò quét/leo thang).
+   */
   @SubscribeMessage('meeting:subscribe')
-  handleMeetingSubscribe(
+  async handleMeetingSubscribe(
     @MessageBody() body: { meetingId?: string },
     @ConnectedSocket() client: Socket,
-  ): { ok: boolean; room?: string } {
+  ): Promise<{ ok: boolean; room?: string }> {
     const meetingId = body?.meetingId;
     if (typeof meetingId !== 'string' || !UUID_RE.test(meetingId)) {
       return { ok: false };
     }
+
+    const identity = (client.data as { identity?: SocketIdentity | null })
+      .identity;
+    if (!identity) {
+      this.logger.warn(
+        `[WS] meeting:subscribe rejected — no valid identity (socket=${client.id}, meetingId=${meetingId})`,
+      );
+      return { ok: false };
+    }
+
+    if (identity.type === 'guest') {
+      if (identity.meetingId !== meetingId) {
+        this.logger.warn(
+          `[WS] meeting:subscribe rejected — GUEST_MEETING_SCOPE_MISMATCH (ep=${identity.externalParticipantId}, tokenMid=${identity.meetingId}, requested=${meetingId})`,
+        );
+        return { ok: false };
+      }
+    } else {
+      const isParticipant = await this.isEmployeeMeetingParticipant(
+        identity.userId,
+        meetingId,
+      );
+      if (!isParticipant) {
+        this.logger.warn(
+          `[WS] meeting:subscribe rejected — user ${identity.userId} is not host/participant of meeting ${meetingId}`,
+        );
+        return { ok: false };
+      }
+    }
+
     const room = MEETING_ROOM(meetingId);
     void client.join(room);
     return { ok: true, room };
@@ -136,14 +275,30 @@ export class EventsGateway
     return { ok: true, room };
   }
 
+  private async isEmployeeMeetingParticipant(
+    userId: string,
+    meetingId: string,
+  ): Promise<boolean> {
+    const meeting = await this.dataSource
+      .getRepository(MeetingEntity)
+      .findOne({ where: { id: meetingId } });
+    if (!meeting || meeting.deletedAt) return false;
+    if (meeting.hostId === userId) return true;
+
+    const participant = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .findOne({ where: { meetingId, userId } });
+    return !!participant;
+  }
+
   /**
    * feat-live-meeting-agenda-presentation (2026-08-05): host "trình chiếu" 1
    * agenda attachment cho mọi người trong phòng họp đang xem tự do — không
    * đồng bộ pixel màn hình (không screen-share), chỉ broadcast "đang xem file
    * nào" để client tự mở link `downloadUrl` tương ứng (đã có sẵn qua
    * `GET /media-files/:fileId`). Không có business validation/persist ở đây —
-   * cùng mức tin cậy với `meeting:subscribe` hiện có (WS chưa auth, xem TODO
-   * đầu file). FE chịu trách nhiệm chỉ hiện nút "Trình chiếu" cho host.
+   * cùng mức tin cậy với `meeting:subscribe` TRƯỚC bản vá GLA-001. FE chịu
+   * trách nhiệm chỉ hiện nút "Trình chiếu" cho host.
    */
   @SubscribeMessage('agenda:present')
   handleAgendaPresent(

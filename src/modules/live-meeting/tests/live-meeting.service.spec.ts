@@ -28,6 +28,7 @@ import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
 import { QueueService } from '../../queue/queue.service.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { ConfigService } from '@nestjs/config';
+import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 
 describe('LiveMeetingService', () => {
   let service: LiveMeetingService;
@@ -36,6 +37,10 @@ describe('LiveMeetingService', () => {
 
   const mockWebsocketService = {
     emitToRoom: jest.fn(),
+  };
+
+  const mockGuestInviteService = {
+    revokeAllForMeeting: jest.fn().mockResolvedValue(0),
   };
 
   const now = new Date();
@@ -124,6 +129,12 @@ describe('LiveMeetingService', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          // GLA-001: endMeeting() gọi revokeAllForMeeting() best-effort sau
+          // transaction — mock để không phá vỡ toàn bộ suite hiện có.
+          provide: GuestInviteService,
+          useValue: mockGuestInviteService,
         },
       ],
     }).compile();
@@ -490,6 +501,37 @@ describe('LiveMeetingService', () => {
       expect(result.status).toBe(MeetingStatus.COMPLETED);
       expect(result.roomReleased).toBe(true);
       expect(result.duration).toBeGreaterThan(0);
+    });
+
+    // ────────────────────────────────────────
+    //  GLA-001: thu hồi phiên khách khi meeting completed
+    // ────────────────────────────────────────
+    it('[GLA-001] should revoke all guest sessions for the meeting after ending it (best-effort)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(mockGuestInviteService.revokeAllForMeeting).toHaveBeenCalledWith(
+        'm-001',
+      );
+    });
+
+    it('[GLA-001] should NOT fail endMeeting when revokeAllForMeeting throws (best-effort)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      mockGuestInviteService.revokeAllForMeeting.mockRejectedValueOnce(
+        new Error('Redis down'),
+      );
+
+      await expect(
+        service.endMeeting('m-001', { userId: 'host-1' }, {}),
+      ).resolves.toBeDefined();
     });
 
     // ────────────────────────────────────────

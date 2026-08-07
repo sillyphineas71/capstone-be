@@ -156,6 +156,20 @@ export class RedisService {
   }
 
   /**
+   * Xóa 1 phần tử khỏi Redis SET. Trả về số phần tử đã bị xóa (0 nếu không tồn tại).
+   */
+  async srem(key: string, member: string): Promise<number> {
+    try {
+      return await this.client.srem(key, member);
+    } catch (error) {
+      this.logger.error(
+        `Redis SREM failed for key=${key}: ${(error as Error).message}`,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Expose raw ioredis client nếu cần thao tác nâng cao.
    * Dùng cẩn thận — không dùng cho business logic thông thường.
    */

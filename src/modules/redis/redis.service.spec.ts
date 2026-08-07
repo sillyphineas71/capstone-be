@@ -21,6 +21,7 @@ describe('RedisService', () => {
     sadd: jest.fn(),
     sismember: jest.fn(),
     smembers: jest.fn(),
+    srem: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -189,6 +190,28 @@ describe('RedisService', () => {
     it('should propagate error and log it', async () => {
       mockRedisClient.smembers.mockRejectedValue(new Error('conn refused'));
       await expect(service.smembers('my-set')).rejects.toThrow('conn refused');
+    });
+  });
+
+  describe('srem()', () => {
+    it('should call redis srem and return count removed', async () => {
+      mockRedisClient.srem.mockResolvedValue(1);
+      const result = await service.srem('my-set', 'member-1');
+      expect(result).toBe(1);
+      expect(mockRedisClient.srem).toHaveBeenCalledWith('my-set', 'member-1');
+    });
+
+    it('should return 0 when member does not exist', async () => {
+      mockRedisClient.srem.mockResolvedValue(0);
+      const result = await service.srem('my-set', 'member-x');
+      expect(result).toBe(0);
+    });
+
+    it('should propagate error and log it', async () => {
+      mockRedisClient.srem.mockRejectedValue(new Error('conn refused'));
+      await expect(service.srem('my-set', 'member-1')).rejects.toThrow(
+        'conn refused',
+      );
     });
   });
 
