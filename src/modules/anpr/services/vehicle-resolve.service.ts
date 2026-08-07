@@ -45,6 +45,10 @@ const SKEW_MS = 60 * 60 * 1000; // 1h
 // OQ-3: eventAction → direction. Owed: chốt giá trị thật khi live (UC9).
 const ENTER_ACTIONS = new Set(['enter', 'in', 'entry', '1']);
 const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
+// OCR-MERGE: cửa sổ gộp nhiều lần đọc biển KHÁC NHAU cho CÙNG 1 lượt xe qua
+// (channel+direction giống, cách nhau ngắn) — NGẮN hơn khoảng cách đọc lặp
+// quan sát thực tế của 1 xe thật (~9-10s), để không gộp nhầm 2 xe kế tiếp.
+const OCR_MERGE_WINDOW_SECONDS = 15;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -134,7 +138,28 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
         // QĐ-10: lý do skip biết-trước (null nếu sẽ ghi gate log). zone_not_gate/duplicate
         // ghi SAU qua UPDATE (markGateLogSkipped).
         gateLogSkipped: preSkip,
+        // OCR-MERGE: phụ lục mọi chuỗi biển OCR đọc được cho lượt xe này (bắt đầu
+        // bằng chính lần đọc này); mergeIntoRecentEvent() nối thêm khi gộp lần đọc
+        // sau. plateNumber gốc ở trên KHÔNG đổi khi gộp — vẫn là lần đọc ĐẦU TIÊN.
+        rawReads: [evt.plateNumber],
       };
+
+      // OCR-MERGE (recon 2026-08-08): nhiều lần OCR đọc biển KHÁC NHAU cho CÙNG 1
+      // lượt xe qua (channel+direction giống, cách nhau < OCR_MERGE_WINDOW_SECONDS)
+      // → gộp vào row iot_device_events GẦN NHẤT thay vì tạo row mới (tránh spam
+      // "Biển lạ"). Mirror tinh thần bump AlertsService.recordAlert()/bumpOccurrence()
+      // (unique-index+23505 KHÔNG áp dụng được ở đây vì nội dung — plateNumber —
+      // chính là thứ không đáng tin giữa các lần đọc, nên dùng lookback SELECT
+      // best-effort thay vì unique constraint). KHÔNG evaluate() lại (đã evaluate ở
+      // lần INSERT gốc — tránh alert trùng) — merge() return SỚM, bỏ qua toàn bộ
+      // đoạn INSERT/evaluate/gate-log bên dưới cho lần đọc này.
+      const merged = await this.mergeIntoRecentEvent(
+        evt.channelId,
+        direction,
+        evt.plateNumber,
+        snapshotFileId,
+      );
+      if (merged) return;
 
       // OQ-2: room_id/meeting_id literal NULL. QĐ-6: RETURNING id → event_id cho gate log.
       // FR-008b: INSERT chạy TRƯỚC evaluate() để có source_event_id. AC-006: lỗi INSERT KHÔNG
@@ -230,6 +255,63 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
           e instanceof Error ? e.message : 'unknown'
         }`,
       );
+    }
+  }
+
+  /**
+   * OCR-MERGE: tra row iot_device_events GẦN NHẤT cùng channelId + direction, trong
+   * vòng OCR_MERGE_WINDOW_SECONDS giây — nếu có, UPDATE (bump) thay vì để caller
+   * INSERT row mới. Trả true nếu đã gộp (caller phải return ngay, KHÔNG INSERT/
+   * evaluate/gate-log cho lần đọc này — event gốc đã evaluate/gate-log rồi).
+   *
+   * Best-effort, KHÔNG throw: SELECT/UPDATE lỗi hoặc không thấy row → false (INSERT
+   * như bình thường). `rows?.[0]` tự vệ thay vì dựa vào catch để fallback (mirror
+   * getChannelZoneMap/getChannelDirectionMap — đọc lỗi = {}/không thấy, KHÔNG throw).
+   *
+   * snapshot_file_id: ưu tiên ảnh đã có (COALESCE giữ ảnh cũ nếu đã có, chỉ nhận
+   * ảnh mới khi row cũ CHƯA có).
+   */
+  private async mergeIntoRecentEvent(
+    channelId: number,
+    direction: Direction,
+    plateNumber: string,
+    snapshotFileId: string | null,
+  ): Promise<boolean> {
+    try {
+      const rows: Array<{ id: string }> | undefined =
+        await this.dataSource.manager.query(
+          `SELECT id FROM iot_device_events
+            WHERE event_type = 'ivss_vehicle_event'
+              AND payload_json->>'channelId' = $1
+              AND payload_json->>'direction' = $2
+              AND event_time > NOW() - ($3::int * INTERVAL '1 second')
+            ORDER BY event_time DESC
+            LIMIT 1`,
+          [String(channelId), direction, OCR_MERGE_WINDOW_SECONDS],
+        );
+      const recent = rows?.[0];
+      if (!recent) return false;
+
+      await this.dataSource.manager.query(
+        `UPDATE iot_device_events
+            SET event_time = NOW(),
+                payload_json = jsonb_set(
+                  payload_json,
+                  '{rawReads}',
+                  COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb
+                ),
+                snapshot_file_id = COALESCE(snapshot_file_id, $2)
+          WHERE id = $3`,
+        [JSON.stringify([plateNumber]), snapshotFileId, recent.id],
+      );
+      return true;
+    } catch (e) {
+      this.logger.warn(
+        `OCR merge check failed (channel=${channelId}): ${
+          e instanceof Error ? e.message : 'unknown'
+        } — fallback INSERT`,
+      );
+      return false;
     }
   }
 

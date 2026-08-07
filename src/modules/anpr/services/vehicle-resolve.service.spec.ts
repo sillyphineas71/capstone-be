@@ -578,4 +578,151 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(alertMock.evaluate).toHaveBeenCalledTimes(1);
     });
   });
+
+  // ── OCR-MERGE (recon 2026-08-08): gộp nhiều lần OCR đọc biển KHÁC NHAU cho
+  // CÙNG 1 lượt xe (channel+direction giống, cách nhau < 15s) thành 1 row —
+  // mirror tinh thần bump AlertsService.recordAlert()/bumpOccurrence().
+  describe('OCR-MERGE: gộp nhiều lần đọc OCR khác nhau cho cùng 1 lượt xe', () => {
+    const selectMerge = () =>
+      captured.find(
+        (c) =>
+          c.sql.includes('SELECT id FROM iot_device_events') &&
+          c.sql.includes("payload_json->>'channelId'"),
+      );
+    const mergeUpdate = () =>
+      captured.find(
+        (c) =>
+          c.sql.includes('UPDATE iot_device_events') &&
+          c.sql.includes('rawReads'),
+      );
+
+    // wire() riêng: cho phép giả lập lookback SELECT "DB có/không thấy row gần nhất
+    // khớp channelId+direction+cửa sổ 15s" — việc lọc THẬT theo direction/thời gian
+    // là logic Postgres (WHERE/interval), không mock lại ở đây; unit test chỉ xác
+    // nhận (a) code bind đúng tham số để DB lọc đúng, (b) code nhánh đúng theo kết
+    // quả DB trả về.
+    const wireMerge = (recentEventId: string | null) => {
+      captured = [];
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        captured.push({ sql, params });
+        if (sql.includes('FROM iot_devices WHERE device_code'))
+          return Promise.resolve([{ id: 'bridge1' }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([{ id: 'reg1', user_id: 'u1' }]);
+        if (sql.includes('FROM system_configs')) return Promise.resolve([]);
+        if (
+          sql.includes('SELECT id FROM iot_device_events') &&
+          sql.includes("payload_json->>'channelId'")
+        ) {
+          return Promise.resolve(recentEventId ? [{ id: recentEventId }] : []);
+        }
+        if (sql.includes('INSERT INTO iot_device_events'))
+          return Promise.resolve([{ id: 'evt-new' }]);
+        if (sql.includes('UPDATE iot_device_events'))
+          return Promise.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+    };
+
+    it('có row gần nhất cùng channel+direction trong cửa sổ → UPDATE (bump) + trả true', async () => {
+      wireMerge('evt-old');
+      const merged = await (service as any).mergeIntoRecentEvent(
+        5,
+        'enter',
+        '30A99999',
+        null,
+      );
+      expect(merged).toBe(true);
+      expect(mergeUpdate()).toBeDefined();
+    });
+
+    it('SELECT trả rỗng (DB không thấy row khớp) → false, KHÔNG UPDATE', async () => {
+      wireMerge(null);
+      const merged = await (service as any).mergeIntoRecentEvent(
+        5,
+        'enter',
+        '30A99999',
+        null,
+      );
+      expect(merged).toBe(false);
+      expect(mergeUpdate()).toBeUndefined();
+    });
+
+    it('SQL SELECT bind đúng channelId(string)/direction/cửa sổ 15s để DB tự lọc theo channel+direction+thời gian', async () => {
+      wireMerge(null);
+      await (service as any).mergeIntoRecentEvent(5, 'enter', '30A99999', null);
+      const sel = selectMerge();
+      expect(sel!.sql).toContain("event_type = 'ivss_vehicle_event'");
+      expect(sel!.sql).toContain("payload_json->>'channelId' = $1");
+      expect(sel!.sql).toContain("payload_json->>'direction' = $2");
+      expect(sel!.sql).toContain("INTERVAL '1 second'");
+      expect(sel!.params).toEqual(['5', 'enter', 15]);
+    });
+
+    it('UPDATE dùng COALESCE(snapshot_file_id, $2) — ưu tiên giữ ảnh cũ, chỉ nhận ảnh mới khi cũ NULL', async () => {
+      wireMerge('evt-old');
+      await (service as any).mergeIntoRecentEvent(
+        5,
+        'enter',
+        '30A99999',
+        'media-new',
+      );
+      const upd = mergeUpdate();
+      expect(upd!.sql).toContain('COALESCE(snapshot_file_id, $2)');
+      expect(upd!.params).toEqual([
+        JSON.stringify(['30A99999']),
+        'media-new',
+        'evt-old',
+      ]);
+    });
+
+    it('UPDATE append biển mới vào payload_json->rawReads qua jsonb_set + || (KHÔNG ghi đè mảng cũ)', async () => {
+      wireMerge('evt-old');
+      await (service as any).mergeIntoRecentEvent(5, 'enter', '30A99999', null);
+      const upd = mergeUpdate();
+      expect(upd!.sql).toContain("jsonb_set(");
+      expect(upd!.sql).toContain("'{rawReads}'");
+      expect(upd!.sql).toContain(
+        "COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb",
+      );
+    });
+
+    it('SELECT lỗi → false (NotThrow, fallback INSERT)', async () => {
+      dsMock.manager.query.mockRejectedValueOnce(new Error('db down'));
+      const merged = await (service as any).mergeIntoRecentEvent(
+        5,
+        'enter',
+        '30A99999',
+        null,
+      );
+      expect(merged).toBe(false);
+    });
+
+    it('DONE: 2 event cùng channel+direction cách nhau <15s (DB thấy row cũ) → gộp: KHÔNG INSERT mới, KHÔNG evaluate()/gate-log lại, rawReads chứa biển mới', async () => {
+      wireMerge('evt-old');
+      await service.onVehicleEvent(evt({ plateNumber: '30A11111' }));
+      expect(insert()).toBeUndefined();
+      const upd = mergeUpdate();
+      expect(upd).toBeDefined();
+      expect(upd!.params[0]).toBe(JSON.stringify(['30A11111']));
+      expect(alertMock.evaluate).not.toHaveBeenCalled();
+      expect(gateMock.writeGateLog).not.toHaveBeenCalled();
+    });
+
+    it('DONE: KHÔNG có row gần nhất (lần đầu / cách nhau >15s / khác direction — DB không thấy) → INSERT như bình thường, rawReads=[plateNumber gốc]', async () => {
+      wireMerge(null);
+      await service.onVehicleEvent(evt());
+      expect(insert()).toBeDefined();
+      expect(payloadOf().rawReads).toEqual(['30A12345']);
+      expect(alertMock.evaluate).toHaveBeenCalledTimes(1);
+    });
+
+    it('SELECT merge bind đúng direction hiện tại (enter/leave) — nền tảng để DB lọc đúng, tránh gộp nhầm 2 xe ngược chiều', async () => {
+      wireMerge(null);
+      await service.onVehicleEvent(evt({ eventAction: 'out' }));
+      expect(payloadOf().direction).toBe('leave');
+      const sel = selectMerge();
+      expect(sel!.params[1]).toBe('leave');
+    });
+  });
 });
