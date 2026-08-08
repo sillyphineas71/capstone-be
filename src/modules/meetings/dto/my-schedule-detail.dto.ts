@@ -99,12 +99,14 @@ export class DetailAgendaDto {
   title: string;
   durationMinutes: number | null;
   sortOrder: number;
+  attachments: DetailAttachmentDto[];
 
   constructor(data: DetailAgendaDto) {
     this.id = data.id;
     this.title = data.title;
     this.durationMinutes = data.durationMinutes;
     this.sortOrder = data.sortOrder;
+    this.attachments = data.attachments ?? [];
   }
 }
 

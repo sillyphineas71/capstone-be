@@ -3416,6 +3416,85 @@ describe('MeetingsService', () => {
       expect(result.userRole).toBe('attendee');
     });
 
+    it('[T036b] mỗi agenda item mang theo đúng attachments của riêng nó (regression: getMyScheduleDetail trước đây query attachments theo relatedEntityType="meeting" nên agendas[].attachments luôn rỗng dù addAgendaAttachment() đã lưu đúng dữ liệu với relatedEntityType="meeting_agenda")', async () => {
+      const mockMeeting = {
+        id: 'meeting-uuid',
+        meetingCode: 'MTG-001',
+        title: 'Test Meeting',
+        description: null,
+        startTime: new Date('2026-06-10T09:00:00Z'),
+        endTime: new Date('2026-06-10T10:30:00Z'),
+        timezone: 'Asia/Ho_Chi_Minh',
+        status: 'scheduled',
+        organizerId: 'org-user-id',
+        hostId: 'host-user-id',
+        roomId: null,
+        recurrenceRuleId: null,
+        parentMeetingId: null,
+        deletedAt: null,
+        organizer: { id: 'org-user-id', fullName: 'Org User', email: 'org@test.com' },
+        host: { id: 'host-user-id', fullName: 'Host User', email: 'host@test.com' },
+      };
+
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const where = options?.where ?? {};
+        if (where.id === 'meeting-uuid') return mockMeeting;
+        if (where.meetingId === 'meeting-uuid' && where.userId === 'participant-1') {
+          return { id: 'part-1', meetingId: 'meeting-uuid', userId: 'participant-1' };
+        }
+        return null;
+      });
+
+      const qb = buildScheduleQb({ getMany: jest.fn().mockResolvedValue([]) });
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const agendaRows = [
+        { id: 'agenda-1', title: 'Start', plannedDurationMinutes: 15, agendaOrder: 0 },
+        { id: 'agenda-2', title: 'middle', plannedDurationMinutes: 15, agendaOrder: 1 },
+      ];
+      const agendaAttachmentFiles = [
+        {
+          id: 'file-1',
+          fileName: 'ke-hoach.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: '1024',
+          fileUrl: 'https://storage.test/ke-hoach.pdf',
+          uploadedBy: 'host-user-id',
+          uploadedAt: new Date('2026-06-09T00:00:00Z'),
+          relatedEntityId: 'agenda-1',
+        },
+      ];
+
+      mockRepo.find = jest
+        .fn()
+        // 1. participants
+        .mockResolvedValueOnce([])
+        // 2. externalParticipants
+        .mockResolvedValueOnce([])
+        // 3. agendas
+        .mockResolvedValueOnce(agendaRows)
+        // 4. top-level meeting attachments (relatedEntityType='meeting')
+        .mockResolvedValueOnce([])
+        // 5. loadAgendaAttachmentsMap (relatedEntityType='meeting_agenda', gọi sau Promise.all)
+        .mockResolvedValueOnce(agendaAttachmentFiles);
+
+      const result = await service.getMyScheduleDetail(
+        'participant-1',
+        'meeting-uuid',
+      );
+
+      expect(result.agendas).toHaveLength(2);
+      expect(result.agendas[0].id).toBe('agenda-1');
+      expect(result.agendas[0].attachments).toHaveLength(1);
+      expect(result.agendas[0].attachments[0]).toMatchObject({
+        id: 'file-1',
+        fileName: 'ke-hoach.pdf',
+        fileType: 'application/pdf',
+      });
+      // agenda-2 không có file nào đính kèm → mảng rỗng, không bị lẫn file của agenda-1
+      expect(result.agendas[1].attachments).toEqual([]);
+    });
+
     it('[T037] non-participant throws 403', async () => {
       const mockMeeting = {
         id: 'meeting-uuid',
