@@ -245,3 +245,82 @@ describe('MediaFilesController list/detail/visibility (REC-006)', () => {
     expect(r.data).toMatchObject({ isActive: false });
   });
 });
+
+describe('MediaFilesController.secureDownload — Content-Disposition theo mimeType (feat-attach-meeting-agenda-document)', () => {
+  // Regression: trước đây luôn set "attachment" nên FE nhúng <iframe>/<img>/<video
+  // src={agendaDocUrl}> để xem trực tiếp trong phòng họp luôn ra khung trống —
+  // trình duyệt không render inline nội dung có Content-Disposition: attachment.
+  let controller: MediaFilesController;
+  let serviceMock: any;
+  let storageServiceMock: any;
+  let stream: FakeStream;
+
+  const setupResolved = (mimeType: string) => {
+    serviceMock = {
+      resolveSecureDownload: jest.fn().mockResolvedValue({
+        kind: 'local',
+        path: '/rec/f1.bin',
+        size: 1000,
+        mimeType,
+        fileName: 'ke-hoach.bin',
+      }),
+    };
+    storageServiceMock = {
+      verifySignedDownloadToken: jest.fn().mockReturnValue({ mediaFileId: 'f1' }),
+    };
+    controller = new MediaFilesController(storageServiceMock, serviceMock);
+    stream = new FakeStream();
+    createReadStreamMock.mockReturnValue(stream);
+  };
+
+  afterEach(() => jest.clearAllMocks());
+
+  it.each([
+    ['application/pdf'],
+    ['image/png'],
+    ['video/mp4'],
+    ['audio/mpeg'],
+  ])('mimeType=%s → Content-Disposition: inline', async (mimeType) => {
+    setupResolved(mimeType);
+    const res = fakeRes();
+    await controller.secureDownload(
+      'tok',
+      'f1',
+      { url: '/x' } as any,
+      res,
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      expect.stringMatching(/^inline;/),
+    );
+  });
+
+  it.each([
+    ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ['application/zip'],
+  ])('mimeType=%s → Content-Disposition: attachment (giữ nguyên hành vi tải xuống cũ)', async (mimeType) => {
+    setupResolved(mimeType);
+    const res = fakeRes();
+    await controller.secureDownload(
+      'tok',
+      'f1',
+      { url: '/x' } as any,
+      res,
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      expect.stringMatching(/^attachment;/),
+    );
+  });
+
+  it('token không hợp lệ → 403, không lộ nhánh Content-Disposition', async () => {
+    setupResolved('application/pdf');
+    storageServiceMock.verifySignedDownloadToken.mockReturnValue(null);
+    const res = fakeRes();
+    res.json = jest.fn();
+    await controller.secureDownload('bad-tok', 'f1', { url: '/x' } as any, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(serviceMock.resolveSecureDownload).not.toHaveBeenCalled();
+  });
+});

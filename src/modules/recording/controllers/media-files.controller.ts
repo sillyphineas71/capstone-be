@@ -204,9 +204,20 @@ export class MediaFilesController {
     // fileName lấy từ DB — nhánh remote không có đường dẫn đĩa để cắt lấy tên.
     const filename =
       m.fileName || (m.kind === 'local' ? m.path.split(/[\\/]/).pop() : 'file');
+    // feat-attach-meeting-agenda-document: FE nhúng ảnh/PDF/video trực tiếp
+    // (<img>/<iframe>/<video src={agendaDocUrl}>) để xem tài liệu ngay trong
+    // phòng họp thay vì bắt tải xuống trước. `Content-Disposition: attachment`
+    // ép trình duyệt tải file nên iframe/img luôn trống — chỉ những định dạng
+    // FE tự render inline mới bỏ "attachment"; các định dạng khác (docx/pptx/...)
+    // vẫn ép tải để không đổi hành vi nút "Tải xuống" hiện có.
+    const isInlineViewable =
+      m.mimeType === 'application/pdf' ||
+      m.mimeType.startsWith('image/') ||
+      m.mimeType.startsWith('video/') ||
+      m.mimeType.startsWith('audio/');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="' + filename + '"',
+      (isInlineViewable ? 'inline' : 'attachment') + '; filename="' + filename + '"',
     );
     res.writeHead(200, { 'Content-Length': m.size });
     const stream = await this.openMediaStream(m);
