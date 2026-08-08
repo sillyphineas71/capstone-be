@@ -51,4 +51,11 @@ export class ListVehicleHistoryQueryDto {
   @IsOptional()
   @IsIn(['matched', 'unmatched'])
   matchState?: string;
+
+  // Chỉ admin route (listAll) dùng — tìm theo tên chủ xe (users.full_name, ILIKE).
+  // listForUser KHÔNG expose owner/userId (privacy-by-design) nên field này vô nghĩa ở đó.
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  ownerName?: string;
 }

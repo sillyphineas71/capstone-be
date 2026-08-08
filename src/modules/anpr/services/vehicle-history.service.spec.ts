@@ -13,6 +13,11 @@ const row = (over: any = {}) => ({
   user_id: 'u1',
   is_blacklisted: false,
   list_type: null,
+  owner_id: null,
+  owner_full_name: null,
+  owner_avatar_url: null,
+  owner_email: null,
+  owner_department: null,
   ...over,
 });
 
@@ -42,7 +47,7 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
   });
 
   // ── user-scope ──
-  it("listForUser: WHERE payload_json->>'userId' = $1 (param u1); output KHÔNG userId", async () => {
+  it("listForUser: WHERE payload_json->>'userId' = $1 (param u1); output KHÔNG userId, KHÔNG owner", async () => {
     wire();
     const r = await service.listForUser('u1', q());
     const sql = rowsCall()!.sql;
@@ -51,6 +56,10 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     // SELECT KHÔNG có user_id column → item không có userId.
     expect(sql).not.toContain('AS user_id');
     expect(r.items[0]).not.toHaveProperty('userId');
+    // owner (yêu cầu FE 2026-08-08): privacy-by-design mirror userId — KHÔNG JOIN users
+    // ở listForUser, KHÔNG có field owner trong output.
+    expect(sql).not.toContain('LEFT JOIN users');
+    expect(r.items[0]).not.toHaveProperty('owner');
   });
 
   it('listAll: WHERE chỉ event_type; output CÓ userId', async () => {
@@ -138,10 +147,98 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
       expect(r.items[0].listType).toBe('watchlist');
     });
 
-    it('COUNT query KHÔNG cần JOIN (isBlacklisted không phải filter, chỉ hiển thị)', async () => {
+    it('COUNT query KHÔNG cần JOIN security_alerts (isBlacklisted không phải filter, chỉ hiển thị)', async () => {
       wire();
       await service.listAll(q());
       expect(countCall()!.sql).not.toContain('security_alerts');
+    });
+  });
+
+  // ── owner/ownerName (yêu cầu FE 2026-08-08): LEFT JOIN users/departments qua
+  // payload_json->>'userId' — CHỈ ở listAll (mirror lý do privacy của userId). ──
+  describe('owner/ownerName (LEFT JOIN users/departments — CHỈ listAll)', () => {
+    it('SQL: LEFT JOIN users u ON u.id = (...)::uuid + LEFT JOIN departments d ON d.id = u.department_id', async () => {
+      wire();
+      await service.listAll(q());
+      const sql = rowsCall()!.sql;
+      expect(sql).toContain(
+        "LEFT JOIN users u ON u.id = (iot_device_events.payload_json->>'userId')::uuid",
+      );
+      expect(sql).toContain('LEFT JOIN departments d ON d.id = u.department_id');
+      expect(sql).toContain('u.full_name');
+      expect(sql).toContain('u.avatar_url');
+      expect(sql).toContain('u.email');
+      expect(sql).toContain('d.department_name');
+    });
+
+    it('DONE: có user khớp → owner đầy đủ 5 field (id/fullName/avatarUrl/email/department)', async () => {
+      wire([
+        row({
+          owner_id: 'u1',
+          owner_full_name: 'Nguyễn Văn A',
+          owner_avatar_url: 'https://example.com/avatar.jpg',
+          owner_email: 'a.nguyen@email.com',
+          owner_department: 'Phòng IT',
+        }),
+      ]);
+      const r = await service.listAll(q());
+      expect(r.items[0].owner).toEqual({
+        id: 'u1',
+        fullName: 'Nguyễn Văn A',
+        avatarUrl: 'https://example.com/avatar.jpg',
+        email: 'a.nguyen@email.com',
+        department: 'Phòng IT',
+      });
+    });
+
+    it('DONE: unmatched (userId null → JOIN không khớp) → owner=null', async () => {
+      wire([row({ user_id: null, owner_id: null })]);
+      const r = await service.listAll(q());
+      expect(r.items[0].owner).toBeNull();
+    });
+
+    it('DONE: user chưa gán phòng ban (department_id null) → owner.department=null, các field khác vẫn đủ', async () => {
+      wire([
+        row({
+          owner_id: 'u2',
+          owner_full_name: 'Trần Thị B',
+          owner_avatar_url: null,
+          owner_email: 'b.tran@email.com',
+          owner_department: null,
+        }),
+      ]);
+      const r = await service.listAll(q());
+      expect(r.items[0].owner).toEqual({
+        id: 'u2',
+        fullName: 'Trần Thị B',
+        avatarUrl: null,
+        email: 'b.tran@email.com',
+        department: null,
+      });
+    });
+
+    it('ownerName filter → u.full_name ILIKE $n với %wildcard%, bind đúng vị trí', async () => {
+      wire();
+      await service.listAll(q({ ownerName: 'Nguyễn' }));
+      const c = rowsCall()!;
+      expect(c.sql).toContain('u.full_name ILIKE $1');
+      expect(c.params[0]).toBe('%Nguyễn%');
+    });
+
+    it('COUNT query CÓ JOIN users khi listAll (khác security_alerts) — cần cho filter ownerName chính xác', async () => {
+      wire();
+      await service.listAll(q({ ownerName: 'Nguyễn' }));
+      expect(countCall()!.sql).toContain('LEFT JOIN users u');
+      expect(countCall()!.sql).toContain('u.full_name ILIKE $1');
+      expect(countCall()!.params[0]).toBe('%Nguyễn%');
+    });
+
+    it('ownerName KHÔNG có tác dụng ở listForUser (DTO field bị bỏ qua, KHÔNG lỗi)', async () => {
+      wire();
+      const r = await service.listForUser('u1', q({ ownerName: 'Nguyễn' } as any));
+      const sql = rowsCall()!.sql;
+      expect(sql).not.toContain('full_name');
+      expect(r.items[0]).not.toHaveProperty('owner');
     });
   });
 
