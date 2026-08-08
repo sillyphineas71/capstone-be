@@ -5,6 +5,8 @@ import { DataSource } from 'typeorm';
 import { ZonePresenceEventEntity } from '../../zones/entities/zone-presence-event.entity.js';
 import { AlertRulesService } from '../../alerts/services/alert-rules.service.js';
 import { AlertsService } from '../../alerts/services/alerts.service.js';
+import { IVSS_BRIDGE } from '../../ivss/ports/ivss-bridge.port.js';
+import { StorageService } from '../../storage/storage.service.js';
 import { CrowdAlertService } from './crowd-alert.service.js';
 
 describe('CrowdAlertService (ACR-001 / UC-121)', () => {
@@ -14,6 +16,13 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
   let alertsMock: any;
   let configRepo: any;
   let dataSourceMock: any;
+  let ivssBridgeMock: any;
+  let storageServiceMock: any;
+
+  // zone_presence_zone_map hiện thẳng (channelId → zoneId) — reverse lookup đọc key này.
+  const zoneMapRow = (channelId: string | number, zoneId: string) => [
+    { config_json: { [String(channelId)]: zoneId } },
+  ];
 
   const rule = (over: any = {}): any => ({
     id: 'rule-1',
@@ -41,7 +50,18 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve(x)),
     };
-    dataSourceMock = { getRepository: jest.fn(() => configRepo) };
+    // Mặc định KHÔNG có channel_presence_zone_map (query rỗng) → resolveChannelIdForZone
+    // trả null → captureSnapshotForZone trả null → snapshotFileId=null cho MỌI test hiện
+    // có (chưa cần biết về snapshot) mà KHÔNG cần sửa từng test.
+    dataSourceMock = {
+      getRepository: jest.fn(() => configRepo),
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    };
+    ivssBridgeMock = { getSnapshot: jest.fn() };
+    storageServiceMock = {
+      saveFile: jest.fn(),
+      getDriver: jest.fn().mockReturnValue('local'),
+    };
   };
 
   const compile = async () => {
@@ -55,6 +75,8 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
         { provide: AlertRulesService, useValue: alertRulesMock },
         { provide: AlertsService, useValue: alertsMock },
         { provide: DataSource, useValue: dataSourceMock },
+        { provide: IVSS_BRIDGE, useValue: ivssBridgeMock },
+        { provide: StorageService, useValue: storageServiceMock },
       ],
     }).compile();
     service = module.get(CrowdAlertService);
@@ -76,6 +98,10 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
         alertType: 'crowd',
         zoneId: 'zone-1',
         ruleId: 'rule-1',
+        // Không có channel_presence_zone_map trong test này (dataSourceMock.manager.query
+        // mặc định trả rỗng) → resolveChannelIdForZone() miss → sourceEventId=null (top-level,
+        // FE đọc field này để hiện ảnh — KHÔNG còn field snapshotFileId trong payloadJson).
+        sourceEventId: null,
         payloadJson: {
           occupancyCount: 30,
           threshold: 25,
@@ -211,7 +237,9 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
   // ── evaluateZoneCountNow — đường TỨC THỜI (bên cạnh cron, KHÔNG thay thế) ──
   describe('evaluateZoneCountNow (đường tức thời)', () => {
     it('vượt ngưỡng → recordAlert gọi 1 lần, trả về true', async () => {
-      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ threshold: 25 })],
+      });
       const eventTime = new Date('2026-07-23T08:00:00Z');
       const r = await service.evaluateZoneCountNow({
         zoneId: 'zone-1',
@@ -237,7 +265,9 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
     });
 
     it('chưa vượt ngưỡng → KHÔNG vi phạm, recordAlert KHÔNG gọi, trả về false', async () => {
-      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ threshold: 25 })],
+      });
       const r = await service.evaluateZoneCountNow({
         zoneId: 'zone-1',
         occupancyCount: 10,
@@ -292,7 +322,9 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
     });
 
     it('dedupe qua recordAlert() có sẵn — gọi lại cho CÙNG zone (mô phỏng cron quét lại) → recordAlert vẫn được gọi (bump occurrenceCount), KHÔNG cần cờ chống trùng riêng', async () => {
-      alertRulesMock.list.mockResolvedValue({ items: [rule({ threshold: 25 })] });
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ threshold: 25 })],
+      });
       const eventTime = new Date('2026-07-23T08:00:00Z');
       await service.evaluateZoneCountNow({
         zoneId: 'zone-1',
@@ -315,6 +347,247 @@ describe('CrowdAlertService (ACR-001 / UC-121)', () => {
         2,
         expect.objectContaining({ alertType: 'crowd', zoneId: 'zone-1' }),
       );
+    });
+  });
+
+  // ── Bổ sung 2026-08-09: chụp ảnh chủ động qua bridge khi crowd vượt ngưỡng
+  // (best-effort side-effect, KHÔNG chặn/làm chậm luồng ghi alert chính) ──
+  // ── SỬA 2026-08-09: FE chỉ đọc security_alerts.source_event_id (cột top-level FK →
+  // iot_device_events.id) để hiện ảnh — KHÔNG đọc payload_json.snapshotFileId (bản trước).
+  // crowd-alert KHÔNG có raw event nào sẵn dùng lại được → phải tạo 1 dòng
+  // iot_device_events TỐI GIẢN làm neo (event_type='crowd_alert_snapshot') SAU khi lưu
+  // ảnh, rồi lấy .id làm sourceEventId — mirror restricted-zone-intrusion.service.ts. ──
+  describe('captureSnapshotForZone (chụp ảnh chủ động qua bridge + tạo dòng neo)', () => {
+    const triggerViolation = (zoneId = 'zone-1') =>
+      service.evaluateZoneCountNow({
+        zoneId,
+        occupancyCount: 30,
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-1',
+      });
+
+    // wire đủ 4 nhánh SQL: channel map / bridge device / INSERT anchor / (mặc định []).
+    const wireHappyPath = (
+      over: { channelId?: number; deviceId?: string; anchorId?: string } = {},
+    ) => {
+      const {
+        channelId = 7,
+        deviceId = 'bridge-device-1',
+        anchorId = 'ide-anchor-1',
+      } = over;
+      dataSourceMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM system_configs')) {
+          return Promise.resolve(zoneMapRow(channelId, 'zone-1'));
+        }
+        if (sql.includes('FROM iot_devices')) {
+          return Promise.resolve(deviceId ? [{ id: deviceId }] : []);
+        }
+        if (sql.includes('INSERT INTO media_files')) {
+          return Promise.resolve([{ id: 'media-crowd-1' }]);
+        }
+        if (sql.includes('INSERT INTO iot_device_events')) {
+          return Promise.resolve(anchorId ? [{ id: anchorId }] : []);
+        }
+        return Promise.resolve([]);
+      });
+    };
+
+    beforeEach(() => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ threshold: 25 })],
+      });
+    });
+
+    it('DONE: resolve channelId đúng qua đảo ngược channel_presence_zone_map + bridge chụp thành công + tạo dòng neo → sourceEventId = id dòng neo vừa tạo', async () => {
+      wireHappyPath();
+      storageServiceMock.saveFile.mockResolvedValue({
+        storageKey: 'crowd-alert-snapshots/x.jpg',
+        sizeBytes: 123,
+      });
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: true,
+        data: { imageBase64: 'SGVsbG8=' },
+      });
+
+      await triggerViolation();
+
+      expect(ivssBridgeMock.getSnapshot).toHaveBeenCalledWith(
+        { channelId: 7 },
+        6500,
+      );
+      expect(storageServiceMock.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({ folder: 'crowd-alert-snapshots' }),
+      );
+      expect(dataSourceMock.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO iot_device_events'),
+        expect.arrayContaining([
+          'bridge-device-1',
+          'zone-1',
+          'crowd_alert_snapshot',
+          JSON.stringify({ channelId: 7, zoneId: 'zone-1' }),
+          'media-crowd-1',
+        ]),
+      );
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: 'ide-anchor-1' }),
+      );
+      // payload_json KHÔNG còn snapshotFileId — FE không đọc field này nữa.
+      expect(
+        alertsMock.recordAlert.mock.calls[0][0].payloadJson,
+      ).not.toHaveProperty('snapshotFileId');
+    });
+
+    it('DONE: KHÔNG resolve được channelId (zone không có trong map) → sourceEventId=null, KHÔNG gọi bridge, alert vẫn tạo', async () => {
+      dataSourceMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM system_configs')) {
+          return Promise.resolve(zoneMapRow(7, 'zone-KHAC'));
+        }
+        return Promise.resolve([]);
+      });
+
+      await triggerViolation();
+
+      expect(ivssBridgeMock.getSnapshot).not.toHaveBeenCalled();
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: bridge trả success:false (thất bại nghiệp vụ, mirror BRIDGE_SNAPSHOT_FAILED) → sourceEventId=null, alert vẫn tạo bình thường', async () => {
+      dataSourceMock.manager.query.mockImplementation((sql: string) =>
+        sql.includes('FROM system_configs')
+          ? Promise.resolve(zoneMapRow(7, 'zone-1'))
+          : Promise.resolve([]),
+      );
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: false,
+        error: { code: 'BRIDGE_SNAPSHOT_FAILED', message: 'camera busy' },
+      });
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(storageServiceMock.saveFile).not.toHaveBeenCalled();
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: bridge timeout (BRIDGE_TIMEOUT) → sourceEventId=null, KHÔNG throw, alert vẫn tạo — không chặn luồng chính', async () => {
+      dataSourceMock.manager.query.mockImplementation((sql: string) =>
+        sql.includes('FROM system_configs')
+          ? Promise.resolve(zoneMapRow(7, 'zone-1'))
+          : Promise.resolve([]),
+      );
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: false,
+        error: {
+          code: 'BRIDGE_TIMEOUT',
+          message: 'IVSS bridge request timeout.',
+        },
+      });
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: bridge chụp OK nhưng lưu ảnh lỗi (storage down) → sourceEventId=null, KHÔNG throw, KHÔNG chặn ghi alert', async () => {
+      dataSourceMock.manager.query.mockImplementation((sql: string) =>
+        sql.includes('FROM system_configs')
+          ? Promise.resolve(zoneMapRow(7, 'zone-1'))
+          : Promise.resolve([]),
+      );
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: true,
+        data: { imageBase64: 'SGVsbG8=' },
+      });
+      storageServiceMock.saveFile.mockRejectedValue(new Error('disk full'));
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: resolveChannelIdForZone lỗi DB → sourceEventId=null, KHÔNG throw, KHÔNG gọi bridge', async () => {
+      dataSourceMock.manager.query.mockRejectedValue(new Error('db down'));
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(ivssBridgeMock.getSnapshot).not.toHaveBeenCalled();
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: bridge chụp OK + lưu ảnh OK NHƯNG chưa seed IVSS-BRIDGE device (device_id NOT NULL) → KHÔNG tạo dòng neo, sourceEventId=null, KHÔNG throw', async () => {
+      wireHappyPath({ deviceId: '' }); // FROM iot_devices → []
+      storageServiceMock.saveFile.mockResolvedValue({
+        storageKey: 'crowd-alert-snapshots/x.jpg',
+        sizeBytes: 123,
+      });
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: true,
+        data: { imageBase64: 'SGVsbG8=' },
+      });
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(dataSourceMock.manager.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO iot_device_events'),
+        expect.anything(),
+      );
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: đã có device + ảnh nhưng INSERT dòng neo lỗi (DB down) → sourceEventId=null, KHÔNG throw, KHÔNG chặn ghi alert', async () => {
+      dataSourceMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM system_configs')) {
+          return Promise.resolve(zoneMapRow(7, 'zone-1'));
+        }
+        if (sql.includes('FROM iot_devices')) {
+          return Promise.resolve([{ id: 'bridge-device-1' }]);
+        }
+        if (sql.includes('INSERT INTO media_files')) {
+          return Promise.resolve([{ id: 'media-crowd-1' }]);
+        }
+        if (sql.includes('INSERT INTO iot_device_events')) {
+          return Promise.reject(new Error('db down'));
+        }
+        return Promise.resolve([]);
+      });
+      storageServiceMock.saveFile.mockResolvedValue({
+        storageKey: 'crowd-alert-snapshots/x.jpg',
+        sizeBytes: 123,
+      });
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: true,
+        data: { imageBase64: 'SGVsbG8=' },
+      });
+
+      await expect(triggerViolation()).resolves.toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('KHÔNG đổi ngưỡng/logic đánh giá crowd hiện có — chưa vượt ngưỡng thì vẫn KHÔNG gọi bridge/recordAlert dù map/bridge có sẵn sàng', async () => {
+      wireHappyPath();
+      ivssBridgeMock.getSnapshot.mockResolvedValue({
+        ok: true,
+        data: { imageBase64: 'SGVsbG8=' },
+      });
+
+      const r = await service.evaluateZoneCountNow({
+        zoneId: 'zone-1',
+        occupancyCount: 10, // < threshold 25
+        eventTime: new Date('2026-07-23T08:00:00Z'),
+        sourceEventId: 'zpe-below',
+      });
+
+      expect(r).toBe(false);
+      expect(ivssBridgeMock.getSnapshot).not.toHaveBeenCalled();
+      expect(alertsMock.recordAlert).not.toHaveBeenCalled();
     });
   });
 });

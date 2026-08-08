@@ -10,7 +10,16 @@ import {
   IvssFaceRef,
   DeleteFaceInput,
   IvssStatus,
+  SnapshotInput,
+  IvssSnapshot,
 } from '../ports/ivss-bridge.port.js';
+
+/** Bridge tự bọc envelope riêng cho /api/ivss/snapshot (khác các endpoint khác). */
+interface RawSnapshotResponse {
+  success: boolean;
+  data?: string;
+  message?: string;
+}
 
 export interface IvssBridgeClientDeps {
   baseUrl: string; // vd http://localhost:8088
@@ -50,10 +59,43 @@ export class IvssBridgeClient implements IvssBridgePort {
     return this.request<IvssStatus>('GET', '/api/ivss/status');
   }
 
+  /**
+   * Bổ sung 2026-08-09 (crowd-alert snapshot chủ động, CONFIRMED endpoint):
+   * POST /api/ivss/snapshot?channelId={channelId} → { success:true, data: base64Jpeg }
+   * hoặc { success:false, message }. `timeoutMs` cho phép caller (crowd-alert) rút ngắn
+   * timeout riêng cho lần gọi này (mặc định `this.deps.timeoutMs` nếu không truyền) —
+   * KHÔNG đổi timeout của các method khác (enrollFace/deleteFace/status vẫn dùng mặc định).
+   * `success:false` (HTTP 200 hợp lệ nhưng thất bại nghiệp vụ) → map thành
+   * { ok:false, error:{code:'BRIDGE_SNAPSHOT_FAILED'} }, KHÔNG lẫn với BRIDGE_HTTP_ERROR.
+   */
+  async getSnapshot(
+    input: SnapshotInput,
+    timeoutMs?: number,
+  ): Promise<IvssResult<IvssSnapshot>> {
+    const res = await this.request<RawSnapshotResponse>(
+      'POST',
+      `/api/ivss/snapshot?channelId=${encodeURIComponent(String(input.channelId))}`,
+      undefined,
+      timeoutMs,
+    );
+    if (!res.ok) return res;
+    if (!res.data?.success || typeof res.data.data !== 'string') {
+      return {
+        ok: false,
+        error: {
+          code: 'BRIDGE_SNAPSHOT_FAILED',
+          message: res.data?.message ?? 'IVSS bridge snapshot failed.',
+        },
+      };
+    }
+    return { ok: true, data: { imageBase64: res.data.data } };
+  }
+
   private request<T>(
     method: string,
     path: string,
     bodyObj?: unknown,
+    timeoutMsOverride?: number,
   ): Promise<IvssResult<T>> {
     return new Promise<IvssResult<T>>((resolve) => {
       let url: URL;
@@ -128,7 +170,7 @@ export class IvssBridgeClient implements IvssBridgePort {
         });
       });
 
-      req.setTimeout(this.deps.timeoutMs, () => {
+      req.setTimeout(timeoutMsOverride ?? this.deps.timeoutMs, () => {
         timedOut = true;
         req.destroy();
         resolve({
