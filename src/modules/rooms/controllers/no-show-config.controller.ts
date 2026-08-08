@@ -10,6 +10,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { NoShowConfigService } from '../services/no-show-config.service.js';
 import { UpdateNoShowConfigDto } from '../dto/update-no-show-config.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -20,6 +21,7 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
  * NoShowConfigController (NSL-001 #35) — admin đọc/ghi ngưỡng no-show.
  * SEC-02: admin-only (R4 — GET cũng gated). Envelope thủ công {success,message,data}.
  */
+@ApiTags('Rooms - No-Show Config')
 @Controller('no-show-config')
 export class NoShowConfigController {
   constructor(private readonly noShowConfigService: NoShowConfigService) {}
@@ -27,6 +29,7 @@ export class NoShowConfigController {
   @Get()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.configure')
+  @ApiOperation({ summary: 'Admin xem toàn bộ ngưỡng cấu hình no-show hiện tại' })
   async get() {
     const data = await this.noShowConfigService.getAll();
     return { success: true, message: 'No-show config retrieved', data };
@@ -43,6 +46,7 @@ export class NoShowConfigController {
       transform: true,
     }),
   )
+  @ApiOperation({ summary: 'Admin cập nhật ngưỡng cấu hình no-show (≥1 field)' })
   async update(@Body() dto: UpdateNoShowConfigDto, @Req() req: any) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
     const data = await this.noShowConfigService.update(dto, userId);

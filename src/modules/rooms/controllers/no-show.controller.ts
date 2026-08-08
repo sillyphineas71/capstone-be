@@ -14,6 +14,7 @@ import {
   ValidationPipe,
   ParseUUIDPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { NoShowService } from '../services/no-show.service.js';
 import { NoShowLifecycleService } from '../services/no-show-lifecycle.service.js';
@@ -26,6 +27,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
+@ApiTags('Rooms - No-Show')
 @Controller()
 export class NoShowController {
   constructor(
@@ -37,6 +39,10 @@ export class NoShowController {
   @Post('internal/no-show-cases')
   @UseGuards(InternalTokenGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({
+    summary:
+      '[NỘI BỘ — token-gated, gọi bởi job phát hiện no-show, không phải endpoint public] Tạo mới 1 case no-show (idempotent — trả 201 nếu tạo mới, 200 nếu đã tồn tại)',
+  })
   async createInternal(
     @Body() dto: CreateNoShowDto,
     @Res({ passthrough: true }) res: Response,
@@ -60,6 +66,7 @@ export class NoShowController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({ summary: 'Xem danh sách case no-show (bảng giám sát phòng), có phân trang + lọc theo trạng thái/phòng' })
   async list(@Query() query: ListNoShowCasesQueryDto) {
     const { items, meta } = await this.noShowService.list(query);
     return {
@@ -76,6 +83,7 @@ export class NoShowController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.update')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({ summary: 'Cập nhật 1 case no-show (user xử lý)' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateNoShowDto,
@@ -97,6 +105,7 @@ export class NoShowController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.release')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({ summary: 'Admin giải phóng phòng thủ công cho 1 case no-show' })
   async release(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReleaseNoShowDto,
