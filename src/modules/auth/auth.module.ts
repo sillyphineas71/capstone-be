@@ -73,6 +73,7 @@ import { RefreshTokenService } from './services/refresh-token.service';
     LoginService,
     LogoutService,
     UsersAuthRepository,
+    BiometricStatusRawRepository,
     AuthzReadRepository,
     AuthAuditRepository,
     UsersResetRepository,
