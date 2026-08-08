@@ -14,12 +14,38 @@ import {
 } from '../../equipment/entities/equipment.entity.js';
 import { RoomSuggestionQueryDto } from '../dto/room-suggestion-query.dto.js';
 import { RoomSuggestionItemDto } from '../dto/room-suggestion-item.dto.js';
+import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 
 @Injectable()
 export class SchedulingService {
   constructor(
     @InjectEntityManager() private readonly entityManager: EntityManager,
   ) {}
+
+  /**
+   * Đọc `system_configs.room_booking_buffer_minutes` (Nhóm B, mặc định 15 phút nếu thiếu
+   * config/giá trị không hợp lệ). ORDER BY updated_at DESC vì config_key không có unique
+   * constraint trên RDS thật (có thể tồn tại nhiều dòng trùng key).
+   */
+  private async getRoomBookingBufferMs(): Promise<number> {
+    const DEFAULT_MINUTES = 15;
+    try {
+      const config = await this.entityManager
+        .getRepository(SystemConfigEntity)
+        .findOne({
+          where: { configKey: 'room_booking_buffer_minutes' },
+          order: { updatedAt: 'DESC' },
+        });
+      if (!config) return DEFAULT_MINUTES * 60_000;
+      const parsed = parseInt(config.configValue ?? '', 10);
+      if (isNaN(parsed) || parsed < 0) {
+        return DEFAULT_MINUTES * 60_000;
+      }
+      return parsed * 60_000;
+    } catch {
+      return DEFAULT_MINUTES * 60_000;
+    }
+  }
 
   /**
    * Lọc theo equipment_type mapping từ boolean query params.
@@ -78,10 +104,16 @@ export class SchedulingService {
     }
 
     // ──────────────────────────────────────────────
-    // Booking overlap exclusion (FR-009, FR-023)
-    // Chỉ tính conflict với pending/approved/active
-    // Back-to-back booking OK (không buffer time) (FR-023, AC-016)
+    // Booking overlap exclusion (FR-009, FR-023, FR-023b)
+    // Chỉ tính conflict với approved/active — pending của request khác không
+    // loại phòng khỏi danh sách gợi ý (Nhóm A, 2026-08-08). Manager là người
+    // quyết định duyệt request nào khi nhiều pending trùng phòng/giờ.
+    // Buffer tối thiểu bufferMinutes phút giữa 2 booking approved/active liền kề
+    // cùng phòng (Nhóm B, 2026-08-08) — back-to-back không còn OK (AC-016).
     // ──────────────────────────────────────────────
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStartTime = new Date(startTime.getTime() - bufferMs);
+    const bufferedEndTime = new Date(endTime.getTime() + bufferMs);
     query
       .andWhere((qb) => {
         const subQuery = qb
@@ -89,11 +121,10 @@ export class SchedulingService {
           .select('1')
           .from(RoomBookingEntity, 'booking')
           .where('booking.room_id = room.id')
-          .andWhere('booking.reserved_start_time < :endTime')
-          .andWhere('booking.reserved_end_time > :startTime')
+          .andWhere('booking.reserved_start_time < :bufferedEndTime')
+          .andWhere('booking.reserved_end_time > :bufferedStartTime')
           .andWhere('booking.status IN (:...conflictingStatuses)', {
             conflictingStatuses: [
-              RoomBookingStatus.PENDING,
               RoomBookingStatus.APPROVED,
               RoomBookingStatus.ACTIVE,
             ],
@@ -101,8 +132,8 @@ export class SchedulingService {
           .getQuery();
         return 'NOT EXISTS (' + subQuery + ')';
       })
-      .setParameter('startTime', startTime)
-      .setParameter('endTime', endTime);
+      .setParameter('bufferedStartTime', bufferedStartTime)
+      .setParameter('bufferedEndTime', bufferedEndTime);
 
     // ──────────────────────────────────────────────
     // Equipment EXISTS filter (FR-013)

@@ -6,6 +6,7 @@
 | 2026-07-18 | Khởi tạo spec — không có UC gốc trong Feature Table/API Contract chính thức, phát sinh từ yêu cầu bổ sung bắt buộc cho FE ("bổ sung, không có UC riêng nhưng bắt buộc cho FE") | Toàn bộ file |
 | 2026-07-18 | **[QUYẾT ĐỊNH PRODUCT OWNER]** Product Owner từ chối phương án bảng mới `notification_reads` đề xuất ở bản khởi tạo, xác nhận trực tiếp: "không đồng ý tạo table mới và thấy việc theo dõi notification_read là không cần thiết". Viết lại toàn bộ feature theo hướng đơn giản hóa: bỏ hẳn khái niệm "đã đọc" (`isRead`/`readAt`), bỏ hẳn endpoint `PATCH /notifications/:id/read`, chỉ còn `GET /notifications` (list) và `GET /notifications/:id` (detail) thuần túy đọc. Code đã rollback tương ứng: xóa migration `CreateNotificationReadsTable`, xóa `NotificationReadEntity`, xóa `markAsRead()` khỏi `NotificationsService`, xóa route `PATCH .../read` khỏi `NotificationsController`. | Toàn bộ file |
 | 2026-07-27 | **[ĐỢT P1, BE-07]** Tái áp dụng "đã đọc" — nhưng KHÔNG vi phạm quyết định PO ở dòng trên: KHÔNG có bảng mới, KHÔNG có cột JSON mới trên `notifications` (điều PO thực sự từ chối, xem §1.2 cập nhật). Trạng thái đọc lưu 100% ở Redis (TTL, tự rã), không phải baseline database. Thêm `isRead` vào response list/detail, thêm `PATCH /notifications/:id/read` + `PATCH /notifications/read-all`. Xem §1.2 (cập nhật), §mới "Cơ chế Redis". Chi tiết: `PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md` §3B. Nếu team coi đây là thay đổi quyết định nghiệp vụ (không chỉ kỹ thuật), cần PO xác nhận lại — ghi rõ ở residual. | §1.2, §1.3, §3 (FR mới), §5 (mới), §6, §7, §8 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm E] Thêm field `payloadJson` vào response `GET /notifications` (list) và `GET /notifications/:id` (detail). **Lưu ý: đây KHÔNG phải cột mới** — `notifications.payload_json` (jsonb) đã tồn tại sẵn trong baseline entity, dùng bởi các notification type khác (meeting invite/reminder) nhưng trước giờ bị `NotificationListItemDto`/`listMyNotifications`/`getMyNotificationDetail` lọc bỏ khi trả cho FE. Không vi phạm quyết định PO ở dòng 2026-07-18 (quyết định đó chỉ về cơ chế theo dõi "đã đọc", không liên quan `payload_json`). Mục đích: cho phép FE hiển thị chi tiết xung đột phòng khi thông báo `meeting_request_rejected` có đính kèm `conflictDetails`/`suggestedAlternatives` (xem `feat-review-meeting-request` FR-036/FR-038/FR-039). Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | §5.4 (Dữ liệu đầu ra), DTO `NotificationListItemDto` |
 
 > Nguồn gốc: **Không có UC gốc trong `docs/API_CONTRACT_v1.0.md`.** Endpoint gợi ý `GET /notifications` đã được liệt kê ở mục 22.13 ("API endpoint grouping gợi ý") của `CLAUDE.md` nhưng CHƯA có đặc tả chi tiết. Tạm đặt tên **UC-NOTI-01/02 (mới)**, chờ Product Owner gán số chính thức vào Feature Table.
 
@@ -138,7 +139,8 @@ Feature này **không thêm bảng, không thêm cột** trên `notifications`. 
       "relatedEntityId": "uuid",
       "priority": "normal",
       "createdAt": "ISO datetime",
-      "isRead": false
+      "isRead": false,
+      "payloadJson": null
     }
   ],
   "meta": { "page": 1, "limit": 20, "total": 42, "totalPages": 3 }

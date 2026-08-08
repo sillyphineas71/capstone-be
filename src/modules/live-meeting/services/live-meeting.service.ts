@@ -3747,6 +3747,7 @@ export class LiveMeetingService {
       alias + '.authorId = :currentUserId',
       alias + ".visibilityLevel = 'participants'",
       alias + ".visibilityLevel = 'public_internal'",
+      alias + ".visibilityLevel = 'guest_shared'",
     ];
     const params: Record<string, any> = { currentUserId };
 

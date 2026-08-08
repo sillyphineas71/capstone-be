@@ -4,6 +4,8 @@
 | 2026-06-16 | Tạo mới spec cho UC-SM-01 — Xem danh sách phòng họp đề xuất | Toàn bộ file |
 | 2026-06-16 | Hoàn thành implement toàn bộ code (module, DTO, service, controller, tests) | Toàn bộ file |
 | 2026-06-16 | Cập nhật logic sort phụ, rule thiết bị EXISTS, bỏ buffer time, fix duration max 24h, bổ sung limit 20 phòng, mapping thiết bị theo DB | Các mục 1, 3, 5, 6, 7 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm A] Booking overlap check chỉ tính status `approved`/`active` là chặn; booking `pending` KHÔNG còn loại phòng khỏi danh sách gợi ý. Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. (Lưu ý: buffer time giữa 2 cuộc họp — mục 1.5 dòng dưới — là phạm vi Nhóm B, CHƯA áp dụng ở đợt này.) | FR-009, FR-023, AC-009, mục 5.4 (State Model) |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm B] Áp dụng buffer 15 phút (mặc định, configurable qua `system_configs.room_booking_buffer_minutes`, seed migration `20260808000002`) giữa 2 booking `approved`/`active` liền kề cùng phòng — back-to-back booking KHÔNG còn được coi là hợp lệ. Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md`. | Mục 1.5, FR-023, FR-023b (mới), AC-016, AC-016b (mới) |
 
 ---
 
@@ -53,7 +55,7 @@ Mục tiêu của tính năng này là cho phép **Internal Employee** tra cứu
 ### 1.5 Định hướng tương lai (Future Enhancements)
 
 - Tham số lọc thiết bị hiện dùng boolean (`hasCamera`, `hasMicrophone`, `hasDisplay`) để tương thích API Contract hiện tại. Khuyến nghị tương lai chuyển sang dùng mảng `requiredEquipmentTypes` (ví dụ: `["camera", "microphone", "display", "speaker"]`) để cover toàn bộ enum `equipment_type`.
-- V1 không áp dụng buffer time giữa các cuộc họp (back-to-back booking được phép). Việc thêm buffer time (nếu cần) sẽ là một enhancement sau này và được quản lý qua `system_configs`.
+- ~~V1 không áp dụng buffer time giữa các cuộc họp (back-to-back booking được phép).~~ **[Cập nhật 2026-08-08, Nhóm B — ĐÃ TRIỂN KHAI]**: back-to-back booking (endTime của A = startTime của B) KHÔNG còn được coi là hợp lệ. Hệ thống áp dụng buffer tối thiểu giữa 2 booking `approved`/`active` liền kề cùng phòng, đọc từ `system_configs.room_booking_buffer_minutes` (mặc định 15 phút, seed qua migration `20260808000002-SeedRoomBookingBufferConfig`). Xem mục 3.7 (FR-023) và AC-016.
 
 ---
 
@@ -105,7 +107,7 @@ FR-007: WHEN hệ thống tìm thấy phòng đáp ứng tiêu chí, THE system 
 
 ```text
 FR-008: WHILE phòng đang ở trạng thái `maintenance` hoặc `inactive` (`current_status`), THE system SHALL không đưa phòng đó vào danh sách đề xuất.
-FR-009: WHILE phòng đã có booking overlap với khung giờ yêu cầu (booking status là `pending`, `approved` hoặc `active`), THE system SHALL loại phòng đó khỏi danh sách đề xuất.
+FR-009: WHILE phòng đã có booking overlap với khung giờ yêu cầu (booking status là `approved` hoặc `active`), THE system SHALL loại phòng đó khỏi danh sách đề xuất. Booking `pending` (yêu cầu khác đang chờ duyệt) KHÔNG loại phòng khỏi danh sách — nhiều request pending có thể cùng được gợi ý một phòng, Manager quyết định duyệt cái nào ở bước phê duyệt.
 ```
 
 ### 3.4 Optional Feature Requirements
@@ -139,7 +141,8 @@ FR-022: IF the user does not have `scheduling.suggest.rooms`, THEN THE system SH
 ### 3.7 Data & State Requirements
 
 ```text
-FR-023: WHEN yêu cầu gợi ý phòng được thực hiện, THE system SHALL kiểm tra booking overlap sử dụng logic: `existing.reserved_start_time < :endTime AND existing.reserved_end_time > :startTime`, chỉ tính conflict với booking có status là `pending`, `approved` hoặc `active` (cho phép back-to-back booking, mặc định buffer time = 0).
+FR-023: WHEN yêu cầu gợi ý phòng được thực hiện, THE system SHALL kiểm tra booking overlap có buffer sử dụng logic: `existing.reserved_start_time < :bufferedEndTime AND existing.reserved_end_time > :bufferedStartTime`, trong đó `bufferedStartTime = startTime - bufferMinutes` và `bufferedEndTime = endTime + bufferMinutes`, chỉ tính conflict với booking có status là `approved` hoặc `active` (booking `pending` không tính). `bufferMinutes` đọc từ `system_configs.room_booking_buffer_minutes` (mặc định 15 nếu thiếu config hoặc giá trị không hợp lệ — an toàn theo hướng KHÔNG chặn quá mức khi lỗi cấu hình... tức fallback 0 chỉ khi đọc config lỗi kỹ thuật, còn giá trị mặc định nghiệp vụ là 15, xem FR-023b).
+FR-023b: THE system SHALL đọc `bufferMinutes` từ `system_configs` với `configKey = 'room_booking_buffer_minutes'`, sắp xếp theo `updated_at DESC` và lấy dòng mới nhất (bảng `system_configs.config_key` không có unique constraint trên RDS thật, có thể tồn tại nhiều dòng trùng key). IF không tìm thấy config HOẶC giá trị không parse được thành số nguyên không âm, THEN THE system SHALL dùng giá trị mặc định 15 và ghi log cảnh báo.
 FR-024: THE system SHALL sắp xếp kết quả theo độ chênh lệch sức chứa tăng dần (`capacity - attendeeCount` ASC). Nếu bằng nhau, tiếp tục sắp xếp theo `room_name` tăng dần (ASC), rồi đến `room_code` tăng dần (ASC).
 FR-025: THE system SHALL giới hạn kết quả trả về tối đa 20 phòng phù hợp nhất sau khi đã sắp xếp. Không hỗ trợ phân trang (không dùng `page`, `pageSize`, `limit`).
 ```
@@ -275,7 +278,7 @@ NFR-011: THE system SHALL provide test cases for success flows, validation failu
 | `reserved` | Phòng đã được đặt trước | rooms.current_status |
 | `maintenance` | Phòng đang bảo trì — không đề xuất | rooms.current_status |
 | `inactive` | Phòng không hoạt động — không đề xuất | rooms.current_status |
-| `pending` | Booking đang chờ duyệt — tính là conflict | room_bookings.status |
+| `pending` | Booking đang chờ duyệt — KHÔNG tính là conflict (cập nhật 2026-08-08, Nhóm A) | room_bookings.status |
 | `approved` | Booking đã duyệt — tính là conflict | room_bookings.status |
 | `active` | Booking đang active — tính là conflict | room_bookings.status |
 | `completed` | Booking đã hoàn tất — không tính conflict | room_bookings.status |
@@ -393,9 +396,14 @@ When hệ thống xử lý gợi ý phòng,
 Then the system loại các phòng đó khỏi danh sách đề xuất.
 
 AC-009: [Business Rule — Booking overlap]
-Given phòng có booking overlap với khung giờ yêu cầu (booking status: pending/approved/active),
+Given phòng có booking overlap với khung giờ yêu cầu (booking status: approved/active),
 When hệ thống xử lý gợi ý phòng,
 Then the system loại phòng đó khỏi danh sách đề xuất.
+
+AC-009b: [Business Rule — Booking pending không loại phòng]
+Given phòng chỉ có booking `pending` (yêu cầu khác đang chờ duyệt) overlap với khung giờ yêu cầu, không có booking approved/active nào overlap,
+When hệ thống xử lý gợi ý phòng,
+Then the system VẪN đề xuất phòng đó (không loại khỏi danh sách).
 
 AC-010: [Business Rule — Sức chứa không đủ]
 Given phòng có capacity < attendeeCount,
@@ -428,10 +436,15 @@ When hệ thống xử lý gợi ý phòng,
 Then the system returns HTTP 200 với danh sách rỗng và message "Không tìm thấy phòng họp nào đáp ứng đủ các tiêu chí của bạn trong khung giờ này."
 (Không trả 404.)
 
-AC-016: [Business Rule — Back-to-back booking]
-Given phòng có booking kết thúc đúng bằng `startTime` hoặc bắt đầu đúng bằng `endTime` của yêu cầu gợi ý,
+AC-016: [Business Rule — Back-to-back booking trong khoảng buffer là conflict] (cập nhật 2026-08-08, Nhóm B)
+Given phòng có booking `approved`/`active` kết thúc đúng bằng `startTime` của yêu cầu gợi ý (hoặc cách nhau ít hơn `bufferMinutes`, mặc định 15 phút),
 When hệ thống xử lý gợi ý phòng,
-Then the system không coi đó là conflict (v1 không áp dụng buffer time).
+Then the system loại phòng đó khỏi danh sách đề xuất (coi là conflict — back-to-back không còn được phép).
+
+AC-016b: [Business Rule — Đủ khoảng cách buffer thì không conflict]
+Given phòng có booking `approved`/`active` kết thúc trước `startTime` của yêu cầu gợi ý ít nhất `bufferMinutes` phút (ví dụ booking kết thúc 13:45, yêu cầu gợi ý bắt đầu 14:00, buffer = 15 phút),
+When hệ thống xử lý gợi ý phòng,
+Then the system KHÔNG coi đó là conflict, vẫn đề xuất phòng.
 
 AC-017: [Business Rule — Bỏ qua tiêu chí khi truyền false]
 Given người dùng truyền `allowRecording=false`,
@@ -466,14 +479,16 @@ UC-SM-01 không xử lý việc giữ chỗ.
 | AC-006 | FR-021, ERR-006 | Unauthenticated |
 | AC-007 | FR-022, ERR-007 | Unauthorized |
 | AC-008 | FR-008, FR-001 | Room inactive/maintenance |
-| AC-009 | FR-009, FR-023 | Booking overlap |
+| AC-009 | FR-009, FR-023 | Booking overlap (approved/active) |
+| AC-009b | FR-009, FR-023 | Booking pending không loại phòng |
 | AC-010 | FR-002 | Insufficient capacity |
 | AC-011 | FR-003, FR-024 | Sorting by best fit and names |
 | AC-012 | FR-013 | Equipment EXISTS logic |
 | AC-013 | FR-006 | No equipment filter |
 | AC-014 | FR-020, ERR-008 | Empty result |
 | AC-015 | FR-004 | Concurrency snapshot |
-| AC-016 | FR-023 | Back-to-back booking |
+| AC-016 | FR-023, FR-023b | Back-to-back trong buffer → conflict |
+| AC-016b | FR-023, FR-023b | Đủ khoảng cách buffer → không conflict |
 | AC-017 | FR-012, FR-013 | Ignore filter on false |
 | AC-018 | FR-025 | Max 20 results limit |
 

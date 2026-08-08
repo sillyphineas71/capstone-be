@@ -14,6 +14,8 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-08 | Cập nhật quyết định clarify cho feature (recurring, capacity, suggested rooms, notification, enum, duration) | Các mục Out of Scope, Business Rules, Data Model, Notifications, Error Handling, EARS |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm A] Room conflict check chỉ tính booking `approved`/`active` là chặn; booking `pending` của meeting/request khác KHÔNG còn chặn (không tự động khiến phòng đang chọn biến mất khỏi danh sách gợi ý chỉ vì có request pending khác trùng giờ). Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | Mục 18.1 (CONF-001, CONF-004) |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm B] Room conflict overlap logic (CONF-002) đổi từ `existing.start_at < new.end_at AND existing.end_at > new.start_at` sang có buffer: cần khoảng cách tối thiểu `bufferMinutes` phút (mặc định 15, `system_configs.room_booking_buffer_minutes`) giữa 2 booking `approved`/`active` liền kề cùng phòng — back-to-back không còn hợp lệ. | Mục 18.1 (CONF-002, CONF-002b mới) |
 
 ---
 
@@ -772,10 +774,11 @@ AUD-009: THE system SHALL ghi `metadata_json` chứa changeReason và requestId 
 Room conflict được tính động từ `room_bookings` và `meetings`. Không dùng bảng `schedule_conflicts`.
 
 ```text
-CONF-001: THE system SHALL kiểm tra room conflict bằng cách query các booking đang active trong `room_bookings` cho cùng phòng trong khoảng thời gian yêu cầu.
-CONF-002: THE system SHALL sử dụng overlap logic: `existing.start_at < new.end_at AND existing.end_at > new.start_at`.
+CONF-001: THE system SHALL kiểm tra room conflict bằng cách query các booking ở trạng thái `approved` hoặc `active` trong `room_bookings` cho cùng phòng trong khoảng thời gian yêu cầu.
+CONF-002: THE system SHALL sử dụng overlap logic có buffer: `existing.start_at < (new.end_at + bufferMinutes) AND existing.end_at > (new.start_at - bufferMinutes)` — tương đương yêu cầu khoảng cách tối thiểu `bufferMinutes` phút giữa endTime của một booking và startTime của booking kế tiếp cùng phòng.
+CONF-002b: THE system SHALL đọc `bufferMinutes` từ `system_configs.room_booking_buffer_minutes` (mặc định 15 nếu thiếu/không hợp lệ, sắp xếp `updated_at DESC` khi đọc vì `config_key` không có unique constraint). Buffer chỉ áp dụng khi so sánh với booking `approved`/`active` (xem CONF-004) — không áp dụng cho booking `pending`.
 CONF-003: THE system SHALL loại trừ booking của chính meeting hiện tại khỏi kết quả conflict check.
-CONF-004: THE system SHALL loại trừ các booking đã cancelled, released, rejected khỏi conflict check.
+CONF-004: THE system SHALL loại trừ các booking đã cancelled, released, rejected, VÀ các booking `pending` (thuộc meeting/request khác) khỏi conflict check — booking `pending` không tính là đang chiếm phòng (xem `feat-create-meeting-manual` FR-012, `feat-review-meeting-request` FR-032/FR-033 để biết cơ chế Manager quyết định khi nhiều request pending trùng phòng/giờ).
 CONF-005: IF room conflict được phát hiện, THEN THE system SHALL đánh dấu `blocking: true` trong response.
 CONF-006: WHERE the current room is unavailable in the requested time range, THE system SHOULD return up to five suggested rooms that are available, active, capacity-sufficient, and closest to the original room requirements. Tiêu chí ưu tiên: cùng site_name/area_name, match thiết bị, capacity gần nhất nhưng đủ sức chứa.
 ```

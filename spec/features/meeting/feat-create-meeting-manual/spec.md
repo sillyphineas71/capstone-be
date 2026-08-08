@@ -5,6 +5,9 @@
 | 2026-06-08 | Cập nhật flow: tạo yêu cầu chờ duyệt (pending_approval), booking pending, thêm meeting_requests | Các dòng FR-002, FR-003, FR-008, FR-011, FR-012, FR-025, FR-030, FR-031, FR-DATA, AC, State Model, Section 1.4, OOS, Traceability |
 | 2026-06-08 | Chuẩn hóa permission code, sửa notification/audit/capacity/host rule, bổ sung FR-041/FR-042, transaction guardrail, làm rõ FR-037 | Toàn bộ file |
 | 2026-06-08 | Consistency fixes: FR-011 view-only, FR-039 removed, AC-001 4 participants, capacity_override_confirmed, approver resolution, entity field alignment, room isActive check | Các dòng FR-011, FR-039, AC-001, FR-014, FR-020, FR-033, Section 1.5/5.8, FR-DATA-003, notification/audit fields |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm A] Room conflict check lúc TẠO booking chỉ tính booking `approved`/`active` là chặn; booking `pending` của người khác KHÔNG còn chặn tạo mới (nhiều request pending cùng phòng/giờ được phép tồn tại song song, Manager quyết định duyệt cái nào ở bước approve — xem `feat-review-meeting-request`). Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | FR-005, FR-012, FR-017, Section 5.5 (Data Constraints), ERR-012, AC-007, Traceability (FR-017, FR-012) |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm B] Áp dụng buffer tối thiểu 15 phút (mặc định, đọc từ `system_configs.room_booking_buffer_minutes`) giữa booking mới và booking `approved`/`active` liền kề cùng phòng — back-to-back (endTime A = startTime B) không còn được coi là hợp lệ. | FR-012, FR-017, ERR-012 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm D] `GET /rooms/available` (dùng bởi bước "Tìm phòng họp" trước khi tạo) trả thêm field `pendingConflicts` cho mỗi phòng — liệt kê các meeting request `pending` KHÁC đang xin cùng phòng/khung giờ (chỉ mang tính thông tin, KHÔNG loại phòng khỏi danh sách, KHÔNG áp dụng buffer — xem FR-006b mới). | FR-006, FR-006b (mới) |
 
 > File này dùng làm đặc tả tính năng cho Spec Kit / Codex CLI khi chạy `$speckit-specify`.
 > Mục tiêu: tạo đặc tả tính năng rõ ràng, dễ kiểm tra, dễ chuyển tiếp sang plan/tasks/implementation.
@@ -242,9 +245,11 @@ FR-004: THE system SHALL ghi lại thông tin người tạo (`created_by`) và 
 ### 3.2 Event-driven Requirements
 
 ```text
-FR-005: WHEN người dùng gửi yêu cầu tạo cuộc họp với đầy đủ thông tin hợp lệ, THE system SHALL kiểm tra sơ bộ xung đột phòng họp (kiểm tra booking pending/approved khác) và lịch cá nhân, ghi kết quả vào `meeting_requests.conflict_summary_json` trước khi lưu.
+FR-005: WHEN người dùng gửi yêu cầu tạo cuộc họp với đầy đủ thông tin hợp lệ, THE system SHALL kiểm tra sơ bộ xung đột phòng họp (kiểm tra booking `approved`/`active` khác — booking `pending` của người khác KHÔNG tính là xung đột, xem FR-012) và lịch cá nhân, ghi kết quả vào `meeting_requests.conflict_summary_json` trước khi lưu.
 
 FR-006: WHEN người dùng chọn khung thời gian cho cuộc họp, THE system SHALL lọc danh sách phòng họp và chỉ hiển thị các phòng còn trống (available) trong khung giờ đó.
+
+FR-006b: [Nhóm D, 2026-08-08] WHEN trả danh sách phòng qua `GET /rooms/available`, THE system SHALL đính kèm cho mỗi phòng field `pendingConflicts: [{meetingTitle, requesterName, startTime, endTime}]` — liệt kê các `room_bookings` khác đang ở trạng thái `pending` (thuộc meeting request khác) overlap với khung giờ yêu cầu tại đúng phòng đó. Đây CHỈ là cảnh báo thông tin cho người dùng biết đã có người khác đang xin cùng slot — KHÔNG loại phòng khỏi danh sách, KHÔNG áp dụng buffer (buffer chỉ áp dụng cho booking `approved`/`active`, xem FR-012). Nếu không có pending nào khác, trả mảng rỗng `[]`.
 
 FR-007: WHEN người dùng hoàn tất việc chọn người tham dự và các thông tin khác, THE system SHALL cho phép người dùng kiểm tra lại toàn bộ thông tin trước khi xác nhận tạo.
 
@@ -260,7 +265,7 @@ FR-010: WHEN cuộc họp được tạo thành công và có external participa
 ```text
 FR-011: WHILE cuộc họp đang ở trạng thái `pending_approval`, THE system SHALL cho phép host và creator xem thông tin yêu cầu. Việc chỉnh sửa và hủy yêu cầu là trách nhiệm của feature riêng (xem OOS).
 
-FR-012: WHILE phòng họp có booking ở trạng thái `pending`, `approved` hoặc `active`, THE system SHALL không cho phép tạo booking mới có thời gian trùng lắp (overlap) với booking hiện tại — áp dụng cho mọi booking chưa kết thúc (pending/approved/active).
+FR-012: WHILE phòng họp có booking ở trạng thái `approved` hoặc `active`, THE system SHALL không cho phép tạo booking mới có thời gian trùng lắp HOẶC cách nhau ít hơn `bufferMinutes` phút (mặc định 15, đọc từ `system_configs.room_booking_buffer_minutes`, xem `feat-scheduling-room-suggestions` FR-023b) với booking hiện tại — tức là cần khoảng cách tối thiểu `bufferMinutes` phút giữa endTime của booking này và startTime của booking kia (áp dụng cả 2 chiều). Booking ở trạng thái `pending` (của một meeting request khác đang chờ duyệt) KHÔNG được tính là đang chiếm phòng và KHÔNG áp dụng buffer — nhiều request `pending` có thể cùng tồn tại cho cùng phòng/khung giờ; việc quyết định duyệt request nào thuộc trách nhiệm Manager/Approver ở bước phê duyệt (xem `feat-review-meeting-request`, FR-032/FR-033), lúc đó request được duyệt trước sẽ khiến các request pending còn lại nhận `ROOM_CONFLICT` khi được duyệt sau.
 
 FR-013: WHILE người dùng đang ở form tạo cuộc họp, THE system SHALL duy trì tính nhất quán của dữ liệu nhập và chỉ lưu khi người dùng xác nhận.
 ```
@@ -278,7 +283,7 @@ FR-016: WHERE hệ thống có cấu hình gửi in-app notification, THE system
 ### 3.5 Unwanted Behavior Requirements
 
 ```text
-FR-017: IF phòng họp được chọn đã có booking (ở bất kỳ trạng thái pending/approved/active nào) trùng thời gian (overlap), THEN THE system SHALL từ chối tạo yêu cầu, không lưu bất kỳ thay đổi nào và trả về thông báo lỗi xung đột phòng.
+FR-017: IF phòng họp được chọn đã có booking ở trạng thái `approved` hoặc `active` trùng thời gian HOẶC cách nhau ít hơn `bufferMinutes` phút (overlap có buffer, xem FR-012), THEN THE system SHALL từ chối tạo yêu cầu, không lưu bất kỳ thay đổi nào và trả về thông báo lỗi xung đột phòng. Booking `pending` của request khác không kích hoạt lỗi này (xem FR-012).
 
 FR-018: IF thời gian kết thúc nhỏ hơn hoặc bằng thời gian bắt đầu, THEN THE system SHALL từ chối yêu cầu và yêu cầu người dùng điều chỉnh lại thời gian.
 
@@ -380,12 +385,12 @@ FR-042: WHEN room booking được tạo, THE system SHALL tự động sinh `bo
 | FR-009 | Event-driven | UC-MM-01 (POST3, Bước 10) | Gửi thông báo cho approver |
 | FR-010 | Event-driven | UC-MM-01 (Bước 6) | External participants |
 | FR-011 | State-driven | UC-MM-01 (BR2) | Quyền host/creator xem thông tin khi pending_approval (edit/cancel là feature riêng) |
-| FR-012 | State-driven | UC-MM-01 (BR1, E1) | Double-booking prevention (mọi status) |
+| FR-012 | State-driven | UC-MM-01 (BR1, E1) | Double-booking prevention (chỉ approved/active, pending không chặn) |
 | FR-013 | State-driven | UC-MM-01 | Form consistency |
 | FR-014 | Optional Feature | UC-MM-01 (E3) | Capacity check + override |
 | FR-015 | Optional Feature | UC-MM-01 (POST3) | Email notification cho approver |
 | FR-016 | Optional Feature | UC-MM-01 (POST3) | In-app notification cho approver |
-| FR-017 | Unwanted Behavior | UC-MM-01 (E1) | Room conflict error (gồm pending booking) |
+| FR-017 | Unwanted Behavior | UC-MM-01 (E1) | Room conflict error (chỉ approved/active booking) |
 | FR-018 | Unwanted Behavior | UC-MM-01 (E2) | Invalid time range |
 | FR-019 | Unwanted Behavior | UC-MM-01 (E2) | Past time error |
 | FR-020 | Unwanted Behavior | UC-MM-01 (E3) | Capacity exceeded — hard reject |
@@ -572,7 +577,7 @@ NFR-017: THE system SHALL cung cấp test case cho: success flow, validation fai
 ### 5.5 Data Constraints
 
 - `meeting_code` phải là unique trong toàn hệ thống.
-- Một phòng họp chỉ được có duy nhất một booking ở trạng thái `pending`, `approved` hoặc `active` trong cùng một khung thời gian (không overlap) — áp dụng cho mọi booking chưa kết thúc.
+- Một phòng họp chỉ được có duy nhất một booking ở trạng thái `approved` hoặc `active` trong cùng một khung thời gian (không overlap). Nhiều booking `pending` (thuộc các request khác nhau) CÓ THỂ cùng tồn tại trùng khung thời gian — đây là chủ đích thiết kế (xem FR-012), không phải bug; ràng buộc "chỉ một cái được giữ phòng" chỉ áp dụng khi có booking chuyển sang `approved`.
 - `meeting_participants` có unique constraint trên cặp (meeting_id, user_id).
 - `meeting_requests` có unique constraint trên meeting_id cho cùng request_type (chỉ một request create_meeting cho mỗi meeting).
 - `start_time` phải nhỏ hơn `end_time`.
@@ -653,7 +658,7 @@ ERR-011: IF `room_id` không tồn tại hoặc phòng không active, THEN THE s
 ### 6.4 Conflict Errors
 
 ```text
-ERR-012: IF phòng họp được chọn đã có booking khác (pending/approved/active) trong cùng khung thời gian, THEN THE system SHALL reject the request và trả về lỗi "Phòng họp này vừa được đặt. Vui lòng chọn một phòng khác hoặc đổi khung giờ."
+ERR-012: IF phòng họp được chọn đã có booking khác ở trạng thái `approved`/`active` trong cùng khung thời gian, THEN THE system SHALL reject the request và trả về lỗi "Phòng họp này vừa được đặt. Vui lòng chọn một phòng khác hoặc đổi khung giờ." Booking `pending` không kích hoạt lỗi này.
 
 ERR-013: IF người dùng chọn participant có lịch họp khác trùng thời gian, THEN THE system SHALL hiển thị cảnh báo mềm (không chặn tạo) và đánh dấu participant đó là "Bận" trong giao diện chọn.
 ```
@@ -736,9 +741,14 @@ Then the system returns authorization error (403) và không tạo bất kỳ re
 
 ```text
 AC-007: Xung đột phòng họp (room double-booking)
-Given phòng họp A đã có booking pending/approved cho khung giờ 14:00-15:00,
+Given phòng họp A đã có booking `approved` hoặc `active` cho khung giờ 14:00-15:00,
 When người dùng tạo cuộc họp mới với phòng A, thời gian 14:00-15:00,
 Then the system rejects the request và trả về lỗi "Phòng họp này vừa được đặt. Vui lòng chọn một phòng khác hoặc đổi khung giờ."
+
+AC-007b: Nhiều request pending cùng phòng/giờ được phép tồn tại song song
+Given phòng họp A đã có một booking `pending` (thuộc request khác đang chờ duyệt) cho khung giờ 14:00-15:00, và KHÔNG có booking `approved`/`active` nào trùng giờ,
+When người dùng tạo cuộc họp mới với phòng A, thời gian 14:00-15:00,
+Then the system CHO PHÉP tạo request thành công (không reject), tạo thêm một `room_bookings` khác ở trạng thái `pending` cho cùng phòng/giờ. Việc chỉ một trong các request pending này được giữ phòng sẽ do Manager quyết định ở bước duyệt (xem `feat-review-meeting-request` AC-007).
 
 AC-008: Vượt quá sức chứa phòng (capacity exceeded)
 Given phòng A có capacity = 10,
@@ -800,7 +810,8 @@ Then the system tạo notification record với type thông báo yêu cầu mớ
 | AC-004 | FR-019, ERR-010 | Validation thời gian quá khứ |
 | AC-005 | FR-027, ERR-006 | Unauthenticated |
 | AC-006 | FR-028, ERR-007 | Missing permission |
-| AC-007 | FR-017, ERR-012 | Room double-booking (pending/approved) |
+| AC-007 | FR-017, ERR-012 | Room double-booking (approved/active) |
+| AC-007b | FR-012 | Nhiều request pending cùng phòng/giờ được phép song song |
 | AC-008 | FR-020 | Capacity exceeded |
 | AC-008b | FR-020, FR-014 | Capacity override |
 | AC-009 | FR-002, FR-030, FR-031b | State pending_approval + request pending |

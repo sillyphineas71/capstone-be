@@ -16,6 +16,9 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
 | 2026-06-09 | Cập nhật theo kết quả clarify: recurring meeting, booking status, conflict rule, changeReason, room capacity null, notification retry, permission | Các phần 1.4, 2.2, 3.1, 3.2, 3.5, 6.2, 6.3, 10.3, 10.4, 11, 13, 14, 15, 16, 18 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm A] Room conflict check chỉ tính booking `approved`/`active` là chặn; booking `pending` KHÔNG còn chặn đổi phòng. Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | FR-005, FR-027, BR18, mục ghi chú dòng ~854 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm B] Áp dụng buffer tối thiểu 15 phút (mặc định, `system_configs.room_booking_buffer_minutes`) giữa booking mới và booking `approved`/`active` liền kề cùng phòng khi đổi phòng — back-to-back không còn hợp lệ. | FR-005, FR-027, BR18 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm D] `GET /meetings/:meetingId/available-rooms` trả thêm field `pendingConflicts` cho mỗi phòng (danh sách meeting request `pending` khác đang xin cùng phòng/giờ) — chỉ mang tính thông tin cho nút "Kiểm tra trùng lịch & phòng" (Nhóm C), KHÔNG loại phòng khỏi danh sách, KHÔNG áp dụng buffer. | FR-005 |
 
 ## Hướng dẫn viết EARS Requirements
 
@@ -118,7 +121,7 @@ FR-004: THE system SHALL xác nhận phòng mới tồn tại, active và không
 ### 3.2 Event-driven Requirements
 
 ```text
-FR-005: WHEN người dùng gửi yêu cầu lấy danh sách phòng khả dụng cho một meeting, THE system SHALL lọc danh sách phòng còn trống (không có booking status pending, approved, active) trong khoảng thời gian từ meeting.start_time đến meeting.end_time, loại bỏ các phòng thiếu cấu hình capacity (capacity = null), và ngoại trừ phòng hiện tại nếu được yêu cầu.
+FR-005: WHEN người dùng gửi yêu cầu lấy danh sách phòng khả dụng cho một meeting, THE system SHALL lọc danh sách phòng còn trống (không có booking status `approved`, `active` trùng giờ HOẶC cách nhau ít hơn `bufferMinutes` phút — mặc định 15, `system_configs.room_booking_buffer_minutes`; booking `pending` của meeting/request khác KHÔNG loại phòng khỏi danh sách và không áp dụng buffer) trong khoảng thời gian từ meeting.start_time đến meeting.end_time, loại bỏ các phòng thiếu cấu hình capacity (capacity = null), và ngoại trừ phòng hiện tại nếu được yêu cầu. [Nhóm D, 2026-08-08] Mỗi phòng trả kèm `pendingConflicts: [{meetingTitle, requesterName, startTime, endTime}]` — các booking `pending` khác (không phải của chính meetingId đang sửa) overlap khung giờ tại đúng phòng đó, chỉ để cảnh báo thông tin, không ảnh hưởng danh sách trả về.
 
 FR-006: WHEN người dùng chọn phòng mới và gửi yêu cầu cập nhật, THE system SHALL kiểm tra lại room conflict tại thời điểm submit để tránh race condition.
 
@@ -174,7 +177,7 @@ FR-025: IF now >= meeting.start_time hoặc meeting đang ở trạng thái `in_
 
 FR-026: IF phòng mới không active hoặc đang maintenance/inactive/deleted, THEN THE system SHALL trả về lỗi và message: "Phòng họp này hiện không khả dụng."
 
-FR-027: IF phòng mới bị người khác đặt (tồn tại booking với status pending, approved, active) trong khoảng thời gian của meeting tại thời điểm submit, THEN THE system SHALL trả về 409 Conflict và message: "Phòng họp này vừa được đặt bởi người khác. Vui lòng chọn một phòng khả dụng khác."
+FR-027: IF phòng mới bị người khác đặt (tồn tại booking với status `approved` hoặc `active` trùng giờ hoặc cách nhau ít hơn `bufferMinutes` phút) trong khoảng thời gian của meeting tại thời điểm submit, THEN THE system SHALL trả về 409 Conflict và message: "Phòng họp này vừa được đặt bởi người khác. Vui lòng chọn một phòng khả dụng khác." Booking `pending` của request khác không kích hoạt lỗi này và không áp dụng buffer.
 
 FR-031: IF request trỏ vào recurring series master thay vì một instance cụ thể, THEN THE system SHALL trả về 409 Conflict với mã `RECURRING_SERIES_UPDATE_NOT_SUPPORTED`.
 
@@ -825,8 +828,8 @@ Sau khi đổi phòng thành công, hệ thống gửi notification async. Nếu
 | BR15 | Hệ thống phải ghi audit log cho hành động đổi phòng. |
 | BR16 | Hệ thống phải ghi meeting event để xem lại timeline thay đổi. |
 | BR17 | Không được tạo thêm bảng mới ngoài database v3.2 Compact. |
-| BR18 | Các booking có status pending, approved, active đều được xem là đang chiếm phòng khi check conflict. |
-| BR19 | Bỏ qua booking có status cancelled, released, hoặc booking cũ của chính meeting đang đổi phòng khi check conflict. |
+| BR18 | Các booking có status `approved` hoặc `active` được xem là đang chiếm phòng khi check conflict — kể cả khi chỉ cách nhau ít hơn `bufferMinutes` phút (mặc định 15, `system_configs.room_booking_buffer_minutes`, Nhóm B 2026-08-08), không chỉ khi overlap trực tiếp. Booking `pending` của meeting/request KHÁC không được xem là đang chiếm phòng và không áp dụng buffer — nhiều request pending có thể trùng phòng/giờ, Manager quyết định ở bước duyệt. |
+| BR19 | Bỏ qua booking có status cancelled, released, pending (của meeting/request khác), hoặc booking cũ của chính meeting đang đổi phòng khi check conflict. |
 | BR20 | Nếu phòng có capacity = null, coi như lỗi cấu hình, không cho phép đổi sang phòng này và trả lỗi ROOM_CAPACITY_NOT_CONFIGURED. |
 | BR21 | Request đổi phòng trỏ vào recurring series master sẽ bị từ chối với RECURRING_SERIES_UPDATE_NOT_SUPPORTED. |
 
@@ -851,7 +854,7 @@ Sau khi đổi phòng thành công, hệ thống gửi notification async. Nếu
 Đã clarify và cập nhật các phần (2026-06-09):
 - Xử lý recurring meeting instance (chỉ áp dụng 1 instance, không support series master).
 - Status booking cũ là `released`.
-- Quy tắc check conflict: bỏ qua `released`/`cancelled`, tính `pending`/`approved`/`active`.
+- Quy tắc check conflict (cập nhật 2026-08-08, xem BR18/BR19): bỏ qua `released`/`cancelled`/`pending` (của booking khác), chỉ tính `approved`/`active`.
 - Xử lý khi `rooms.capacity = null` là lỗi cấu hình (`ROOM_CAPACITY_NOT_CONFIGURED`).
 - Nơi lưu trữ `changeReason` và `confirmCapacityOverride` (requests, events, audit logs).
 - Thông báo cho cả Organizer và Host sau khi deduplicate.

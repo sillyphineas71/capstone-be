@@ -7,7 +7,15 @@ import {
   ForbiddenException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DataSource, In, LessThanOrEqual, MoreThanOrEqual, Not } from 'typeorm';
+import {
+  DataSource,
+  In,
+  LessThan,
+  LessThanOrEqual,
+  MoreThan,
+  MoreThanOrEqual,
+  Not,
+} from 'typeorm';
 
 import { MeetingEntity, MeetingStatus } from '../entities/meeting.entity.js';
 import {
@@ -42,6 +50,7 @@ import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
@@ -53,7 +62,9 @@ import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
 import { ApproveResponseDto } from '../dto/approve-response.dto.js';
 import { RejectResponseDto } from '../dto/reject-response.dto.js';
 
+import { MeetingsService } from './meetings.service.js';
 import type { AuthUser, ClientContext } from './meetings.service.js';
+import { ConflictDetailDto } from '../dto/conflict-detail.dto.js';
 
 const SUPPORTED_REQUEST_TYPES = [
   MeetingRequestType.CREATE_MEETING,
@@ -94,7 +105,33 @@ export class MeetingRequestReviewService {
     private readonly notificationsService: NotificationsService,
     private readonly guestInviteService: GuestInviteService,
     private readonly guestEmailService: GuestEmailService,
+    private readonly meetingsService: MeetingsService,
   ) {}
+
+  /**
+   * Đọc `system_configs.room_booking_buffer_minutes` (Nhóm B, mặc định 15 phút nếu thiếu
+   * config/giá trị không hợp lệ). ORDER BY updated_at DESC vì config_key không có unique
+   * constraint trên RDS thật (có thể tồn tại nhiều dòng trùng key).
+   */
+  private async getRoomBookingBufferMs(): Promise<number> {
+    const DEFAULT_MINUTES = 15;
+    try {
+      const config = await this.dataSource
+        .getRepository(SystemConfigEntity)
+        .findOne({
+          where: { configKey: 'room_booking_buffer_minutes' },
+          order: { updatedAt: 'DESC' },
+        });
+      if (!config) return DEFAULT_MINUTES * 60_000;
+      const parsed = parseInt(config.configValue ?? '', 10);
+      if (isNaN(parsed) || parsed < 0) {
+        return DEFAULT_MINUTES * 60_000;
+      }
+      return parsed * 60_000;
+    } catch {
+      return DEFAULT_MINUTES * 60_000;
+    }
+  }
 
   async approve(
     requestId: string,
@@ -260,17 +297,26 @@ export class MeetingRequestReviewService {
         });
       }
 
+      // Chỉ approved/active chặn — KHÔNG được thêm lại pending vào đây: vì
+      // pending không còn chặn nhau lúc tạo (feat-create-meeting-manual
+      // FR-012), nếu recheck này vẫn tính pending là chặn thì 2 request pending
+      // trùng phòng/giờ sẽ mãi mãi chặn lẫn nhau — Manager sẽ không approve
+      // được cái nào cả. Request được approve trước sẽ chuyển booking sang
+      // approved, khiến các request pending còn lại tự động bị chặn ở đây khi
+      // đến lượt duyệt — đó chính là cơ chế Manager "chọn ai được giữ phòng".
+      // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs với booking approved/active.
+      const bufferMs = await this.getRoomBookingBufferMs();
+      const bufferedTargetStart = new Date(
+        targetStartTime.getTime() - bufferMs,
+      );
+      const bufferedTargetEnd = new Date(targetEndTime.getTime() + bufferMs);
       const conflicts = await em.getRepository(RoomBookingEntity).find({
         where: {
           roomId: targetRoomId,
           id: Not(booking.id),
-          status: In([
-            RoomBookingStatus.PENDING,
-            RoomBookingStatus.APPROVED,
-            RoomBookingStatus.ACTIVE,
-          ]),
-          reservedStartTime: LessThanOrEqual(targetEndTime),
-          reservedEndTime: MoreThanOrEqual(targetStartTime),
+          status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
+          reservedStartTime: LessThan(bufferedTargetEnd),
+          reservedEndTime: MoreThan(bufferedTargetStart),
         },
       });
 
@@ -977,6 +1023,16 @@ export class MeetingRequestReviewService {
         appliedAt: now,
         requesterId: request.requestedBy,
         hostId: meeting.hostId,
+        // Nhóm E (2026-08-08) — dùng ở enqueueRejectionNotifications để đính
+        // kèm conflictDetails/suggestedAlternatives vào notification. KHÔNG
+        // dùng request.conflictSummaryJson: dữ liệu đó (nếu có) được ghi bởi
+        // approve() lúc phát hiện ROOM_CONFLICT rồi throw NGAY trong cùng
+        // transaction → transaction rollback → save đó KHÔNG BAO GIỜ thực sự
+        // commit xuống DB. Phải tự kiểm tra lại xung đột phòng TƯƠI tại đây.
+        bookingId: booking.id,
+        targetRoomId: request.targetRoomId ?? meeting.roomId,
+        requestedStartTime: request.requestedStartTime ?? meeting.startTime,
+        requestedEndTime: request.requestedEndTime ?? meeting.endTime,
       };
     });
 
@@ -1000,12 +1056,17 @@ export class MeetingRequestReviewService {
       meetingId: string;
       requesterId: string;
       hostId: string | null;
+      bookingId: string;
+      targetRoomId: string | null;
+      requestedStartTime: Date;
+      requestedEndTime: Date;
     },
     authUser: AuthUser,
     clientContext: ClientContext,
   ): Promise<void> {
     // Only the host is notified of a rejection — in-app only, no email.
     const hostUserId = result.hostId ?? result.requesterId;
+    const payloadJson = await this.buildRejectionConflictPayload(result);
     try {
       await this.notificationsService.createNotification({
         notificationType: NotificationType.MEETING_REQUEST_REJECTED,
@@ -1017,6 +1078,7 @@ export class MeetingRequestReviewService {
         recipientScope: 'user_list',
         recipientUserIds: [hostUserId],
         createdBy: authUser.userId,
+        ...(payloadJson ? { payloadJson } : {}),
       });
     } catch (error) {
       this.logger.error(
@@ -1029,6 +1091,74 @@ export class MeetingRequestReviewService {
         `Failed to notify ${hostUserId} of rejection: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Nhóm E (2026-08-08) — kiểm tra TƯƠI (không đọc từ conflict_summary_json —
+   * xem ghi chú tại lời gọi trong reject()) xem request vừa bị reject có đang
+   * xung đột phòng với booking `approved`/`active` khác không (cùng buffer
+   * policy với Nhóm A/B). Nếu có, enrich sang tên phòng/tên cuộc họp/tên host
+   * (FR-038) và gợi ý tối đa 5 phòng còn trống cùng khung giờ (FR-039, tái
+   * dùng MeetingsService.getAvailableRooms). Trả `null` nếu không có xung đột
+   * phòng — reject vì lý do khác (vd participant conflict, hoặc manager chỉ
+   * đơn giản không đồng ý) thì không đính kèm gì thêm.
+   */
+  private async buildRejectionConflictPayload(result: {
+    bookingId: string;
+    targetRoomId: string | null;
+    requestedStartTime: Date;
+    requestedEndTime: Date;
+  }): Promise<Record<string, unknown> | null> {
+    if (!result.targetRoomId) return null;
+
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStart = new Date(
+      result.requestedStartTime.getTime() - bufferMs,
+    );
+    const bufferedEnd = new Date(result.requestedEndTime.getTime() + bufferMs);
+
+    const bookings = await this.dataSource.getRepository(RoomBookingEntity).find({
+      where: {
+        roomId: result.targetRoomId,
+        id: Not(result.bookingId),
+        status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
+        reservedStartTime: LessThan(bufferedEnd),
+        reservedEndTime: MoreThan(bufferedStart),
+      },
+      relations: { room: true, meeting: true, bookedByUser: true },
+    });
+    if (bookings.length === 0) return null;
+
+    const conflictDetails: ConflictDetailDto[] = bookings.map((b) => ({
+      bookingId: b.id,
+      roomName: b.room?.roomName ?? null,
+      meetingTitle: b.meeting?.title ?? null,
+      startTime: b.reservedStartTime,
+      endTime: b.reservedEndTime,
+      hostName: b.bookedByUser?.fullName ?? null,
+    }));
+
+    let suggestedAlternatives: Array<{
+      roomId: string;
+      roomName: string;
+      capacity: number;
+    }> = [];
+    try {
+      const altRooms = await this.meetingsService.getAvailableRooms(
+        result.requestedStartTime,
+        result.requestedEndTime,
+      );
+      suggestedAlternatives = altRooms
+        .filter((r) => r.id !== result.targetRoomId)
+        .slice(0, 5)
+        .map((r) => ({ roomId: r.id, roomName: r.roomName, capacity: r.capacity }));
+    } catch (error) {
+      this.logger.warn(
+        `[Reject] Failed to build suggestedAlternatives: ${(error as Error).message}`,
+      );
+    }
+
+    return { conflictDetails, suggestedAlternatives };
   }
 
   /**
