@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -29,22 +30,28 @@ import {
  * Không truyền → giữ hành vi cũ (mọi event trong ngày, không lọc theo cuộc họp).
  */
 export class QueryRoomAccessLogDto {
+  @ApiPropertyOptional({
+    description: 'Ngày cần xem nhật ký, định dạng YYYY-MM-DD — thiếu thì mặc định hôm nay',
+  })
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
     message: 'date phải theo định dạng YYYY-MM-DD',
   })
   date?: string;
 
+  @ApiPropertyOptional({ description: 'Lọc theo ca họp cụ thể (AND với date)' })
   @IsOptional()
   @IsUUID('4', { message: 'meetingId phải là UUID hợp lệ' })
   meetingId?: string;
 
+  @ApiPropertyOptional({ description: 'Số trang', default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'page phải là số nguyên' })
   @Min(1, { message: 'page phải >= 1' })
   page?: number = 1;
 
+  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'limit phải là số nguyên' })
@@ -52,6 +59,9 @@ export class QueryRoomAccessLogDto {
   @Max(100, { message: 'limit tối đa 100' })
   limit?: number = 20;
 
+  @ApiPropertyOptional({
+    description: 'Tìm theo tên người (users.full_name, ILIKE) — event chưa khớp danh tính bị loại khi có search',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(200, { message: 'search tối đa 200 ký tự' })
