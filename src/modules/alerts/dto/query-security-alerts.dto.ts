@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsOptional,
   IsInt,
@@ -20,12 +21,14 @@ const SORT_FIELDS = ['triggeredAt', 'severity', 'status'] as const;
  * Sort mặc định `triggeredAt DESC` (đúng SRS "sort giảm dần theo thời gian").
  */
 export class QuerySecurityAlertsDto {
+  @ApiPropertyOptional({ description: 'Số trang', default: 1 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(1)
   page: number = 1;
 
+  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -33,33 +36,43 @@ export class QuerySecurityAlertsDto {
   @Max(100)
   limit: number = 20;
 
+  @ApiPropertyOptional({ description: 'Lọc theo loại sự kiện cảnh báo', enum: ALERT_TYPES })
   @Expose({ name: 'alert_type' })
   @IsOptional()
   @IsIn(ALERT_TYPES)
   alertType?: AlertType;
 
+  @ApiPropertyOptional({ description: 'Lọc theo khu vực' })
   @Expose({ name: 'zone_id' })
   @IsOptional()
   @IsUUID()
   zoneId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Lọc theo trạng thái xử lý (bỏ trống = trả tất cả, cảnh báo không tự ẩn)',
+    enum: SECURITY_ALERT_STATUSES,
+  })
   @IsOptional()
   @IsIn(SECURITY_ALERT_STATUSES)
   status?: (typeof SECURITY_ALERT_STATUSES)[number];
 
+  @ApiPropertyOptional({ description: 'Lọc từ thời điểm (ISO date)' })
   @IsOptional()
   @IsDateString()
   from?: string;
 
+  @ApiPropertyOptional({ description: 'Lọc đến thời điểm (ISO date)' })
   @IsOptional()
   @IsDateString()
   to?: string;
 
+  @ApiPropertyOptional({ description: 'Trường sắp xếp', enum: SORT_FIELDS, default: 'triggeredAt' })
   @Expose({ name: 'sort_by' })
   @IsOptional()
   @IsIn(SORT_FIELDS)
   sortBy: (typeof SORT_FIELDS)[number] = 'triggeredAt';
 
+  @ApiPropertyOptional({ description: 'Chiều sắp xếp', enum: ['asc', 'desc'], default: 'desc' })
   @Expose({ name: 'sort_order' })
   @IsOptional()
   @IsIn(['asc', 'desc'])

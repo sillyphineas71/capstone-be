@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsIn,
   IsInt,
@@ -35,12 +36,14 @@ const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** UC-122 §2.6: khung giờ cho phép của khu vực hạn chế (UC-124). */
 export class RestrictedHoursDto {
+  @ApiPropertyOptional({ description: 'Giờ bắt đầu cho phép áp dụng cảnh báo, định dạng HH:mm' })
   @Expose({ name: 'allow_from' })
   @IsOptional()
   @IsString()
   @Matches(HHMM_REGEX, { message: 'allow_from phải theo định dạng HH:mm' })
   allowFrom?: string;
 
+  @ApiPropertyOptional({ description: 'Giờ kết thúc cho phép áp dụng cảnh báo, định dạng HH:mm' })
   @Expose({ name: 'allow_to' })
   @IsOptional()
   @IsString()
@@ -55,29 +58,38 @@ export class RestrictedHoursDto {
  * SEC-01/02 của UC1/UC8.
  */
 export class CreateAlertRuleDto {
+  @ApiProperty({ description: 'Loại sự kiện kích hoạt cảnh báo', enum: ALERT_TYPES })
   @Expose({ name: 'alert_type' })
   @IsIn(ALERT_TYPES)
   alertType: AlertType;
 
+  @ApiPropertyOptional({ description: 'Khu vực áp dụng quy tắc; bỏ trống = toàn hệ thống' })
   @Expose({ name: 'zone_id' })
   @IsOptional()
   @IsUUID()
   zoneId?: string;
 
+  @ApiPropertyOptional({ description: 'Ngưỡng kích hoạt — bắt buộc khi alertType=crowd' })
   @ValidateIf((o: CreateAlertRuleDto) => o.alertType === 'crowd')
   @IsInt()
   @Min(1)
   threshold?: number;
 
+  @ApiProperty({ description: 'Danh sách kênh gửi thông báo', enum: ALERT_CHANNELS, isArray: true })
   @IsArray()
   @ArrayNotEmpty()
   @IsIn(ALERT_CHANNELS, { each: true })
   channels: AlertChannel[];
 
+  @ApiPropertyOptional({ description: 'Bật/tắt quy tắc ngay khi tạo (mặc định bật)' })
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'Khung giờ hạn chế áp dụng quy tắc; bỏ trống = áp dụng 24/7',
+    type: RestrictedHoursDto,
+  })
   @Expose({ name: 'restricted_hours_json' })
   @IsOptional()
   @IsObject()
@@ -85,6 +97,10 @@ export class CreateAlertRuleDto {
   @Type(() => RestrictedHoursDto)
   restrictedHoursJson?: RestrictedHoursDto;
 
+  @ApiPropertyOptional({
+    description: 'Danh sách person id được phép bỏ qua cảnh báo',
+    type: [String],
+  })
   @Expose({ name: 'allowed_person_ids_json' })
   @IsOptional()
   @IsArray()
