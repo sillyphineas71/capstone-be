@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, MaxLength } from 'class-validator';
 
 /**
@@ -8,11 +9,13 @@ import { IsString, IsOptional, IsBoolean, MaxLength } from 'class-validator';
  * field thừa nếu client lén gửi. Cả 2 field absent → no-op ở service (trả nguyên trạng).
  */
 export class UpdateVehicleControlListDto {
+  @ApiPropertyOptional({ description: 'Lý do đưa vào danh sách kiểm soát', maxLength: 255 })
   @IsOptional()
   @IsString()
   @MaxLength(255)
   reason?: string;
 
+  @ApiPropertyOptional({ description: 'Trạng thái kích hoạt' })
   @IsOptional()
   @IsBoolean()
   active?: boolean;

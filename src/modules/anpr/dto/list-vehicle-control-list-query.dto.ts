@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsOptional,
   IsInt,
@@ -24,12 +25,14 @@ import {
  * `@Transform` tay để 'false' → false thật.
  */
 export class ListVehicleControlListQueryDto {
+  @ApiPropertyOptional({ description: 'Số trang', default: 1 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(1)
   page: number = 1;
 
+  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -37,16 +40,19 @@ export class ListVehicleControlListQueryDto {
   @Max(100)
   limit: number = 20;
 
+  @ApiPropertyOptional({ description: 'Lọc theo biển số đã chuẩn hoá (khớp chính xác)', maxLength: 20 })
   @IsOptional()
   @IsString()
   @MaxLength(20)
   plate?: string;
 
+  @ApiPropertyOptional({ description: 'Lọc theo phân loại danh sách', enum: CONTROL_LIST_TYPES })
   @Expose({ name: 'list_type' })
   @IsOptional()
   @IsIn(CONTROL_LIST_TYPES)
   listType?: ControlListType;
 
+  @ApiPropertyOptional({ description: 'Lọc theo trạng thái kích hoạt' })
   @Transform(({ value }) =>
     value === undefined ? undefined : value === 'true',
   )

@@ -14,6 +14,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
@@ -43,6 +44,7 @@ const REGISTER_PIPE = new ValidationPipe({ whitelist: true, transform: true });
  *         @RequirePermissions), user_id từ body.
  * Cả 2 dùng chung service.register + cùng response mapper + envelope 201.
  */
+@ApiTags('ANPR - Vehicle Registration')
 @Controller('anpr')
 export class VehicleRegistrationController {
   constructor(
@@ -57,6 +59,7 @@ export class VehicleRegistrationController {
   @Get('vehicle-history')
   @UseGuards(JwtAuthGuard)
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Xem lịch sử ra/vào cổng của xe THUỘC VỀ chính user đang đăng nhập (chỉ matched)' })
   async historyOwn(
     @CurrentUser() user: { userId: string },
     @Query() query: ListVehicleHistoryQueryDto,
@@ -78,6 +81,7 @@ export class VehicleRegistrationController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('anpr.vehicle.history_view')
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Admin xem TOÀN BỘ lịch sử ra/vào cổng của mọi xe (matched + unmatched), có thông tin chủ xe' })
   async historyAll(@Query() query: ListVehicleHistoryQueryDto) {
     const { items, meta } = await this.vehicleHistoryService.listAll(query);
     return {
@@ -93,6 +97,7 @@ export class VehicleRegistrationController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('anpr.vehicle.unknown_view', 'vehicle_alert.read')
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Admin xem danh sách biển số lạ (đi qua camera nhưng chưa khớp đăng ký nào)' })
   async listUnknown(@Query() query: ListUnknownVehiclesQueryDto) {
     const { items, meta } = await this.vehicleUnknownService.listUnknown(query);
     return {
@@ -115,6 +120,7 @@ export class VehicleRegistrationController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('anpr.vehicle.admin_read')
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Admin xem/tra cứu biển số đăng ký của TẤT CẢ user trong hệ thống' })
   async listAll(@Query() query: AdminListVehicleRegistrationsQueryDto) {
     const { items, meta } =
       await this.vehicleRegistrationService.listAll(query);
@@ -132,6 +138,7 @@ export class VehicleRegistrationController {
   @Get('vehicle-registrations')
   @UseGuards(JwtAuthGuard)
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Xem danh sách biển số xe đã đăng ký CỦA CHÍNH user đang đăng nhập, có phân trang + lọc' })
   async list(
     @CurrentUser() user: { userId: string },
     @Query() query: ListVehicleRegistrationsQueryDto,
@@ -151,6 +158,7 @@ export class VehicleRegistrationController {
   // Detail 1 biển của current user — không thuộc/đã xóa → 404.
   @Get('vehicle-registrations/:id')
   @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Xem chi tiết 1 biển số đã đăng ký CỦA CHÍNH user đang đăng nhập (không thuộc/đã xóa → 404)' })
   async detail(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -171,6 +179,7 @@ export class VehicleRegistrationController {
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard)
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'User tự đăng ký 1 biển số xe cho chính mình (userId lấy từ JWT, không nhận từ body)' })
   async registerOwn(
     @CurrentUser() user: { userId: string },
     @Body() dto: CreateVehicleRegistrationDto,
@@ -192,6 +201,7 @@ export class VehicleRegistrationController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('anpr.vehicle.admin_register')
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Admin đăng ký hộ 1 biển số xe cho user bất kỳ (userId nhận từ body)' })
   async registerForUser(@Body() dto: AdminCreateVehicleRegistrationDto) {
     const entity = await this.vehicleRegistrationService.register(
       dto.userId,
@@ -210,6 +220,7 @@ export class VehicleRegistrationController {
   @Patch('vehicle-registrations/:id')
   @UseGuards(JwtAuthGuard)
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Sửa metadata (ghi chú/loại xe) của 1 biển số CỦA CHÍNH user đang đăng nhập' })
   async update(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -231,6 +242,7 @@ export class VehicleRegistrationController {
   @Patch('vehicle-registrations/:id/status')
   @UseGuards(JwtAuthGuard)
   @UsePipes(REGISTER_PIPE)
+  @ApiOperation({ summary: 'Bật/tắt (active↔disabled) 1 biển số CỦA CHÍNH user đang đăng nhập' })
   async updateStatus(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -251,6 +263,7 @@ export class VehicleRegistrationController {
   // Xóa-mềm. DELETE trả data:null (OQ-4).
   @Delete('vehicle-registrations/:id')
   @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Xóa mềm 1 biển số CỦA CHÍNH user đang đăng nhập' })
   async remove(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
