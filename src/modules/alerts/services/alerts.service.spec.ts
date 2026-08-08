@@ -28,6 +28,9 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
       findAndCount: jest.fn().mockResolvedValue([[], 0]),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(() => qb),
+      // bumpOccurrence() dùng raw SQL (jsonb_set atomic) thay vì createQueryBuilder —
+      // xem alerts.service.ts.
+      query: jest.fn().mockResolvedValue(undefined),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,7 +81,7 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         severity: 'critical', // PHẢI bị bỏ qua — alert đang mở giữ nguyên severity gốc
       });
       expect(r.isNew).toBe(false);
-      expect(qb.execute).toHaveBeenCalledTimes(1);
+      expect(repo.query).toHaveBeenCalledTimes(1); // bumpOccurrence() raw SQL, không còn createQueryBuilder
       expect(r.alert.occurrenceCount).toBe(2);
     });
 
@@ -131,6 +134,108 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
       await expect(service.recordAlert({ alertType: 'crowd' })).rejects.toBe(
         boom,
       );
+    });
+  });
+
+  describe('bumpOccurrence — payload_json.occurrences (fix "mất dấu vết nhiều người vi phạm")', () => {
+    // repo.query() ở đây là raw SQL (jsonb_set atomic, chạy thật trong Postgres khi production) —
+    // không có DB thật trong unit test này, nên repo.query mock TỰ MÔ PHỎNG đúng thuật toán
+    // append+cap mà câu SQL trong alerts.service.ts thực hiện (đọc params $2/$3 y hệt code
+    // thật truyền vào), để xác nhận HÀNH VI TÍCH LŨY qua nhiều lần gọi recordAlert() liên tiếp.
+    const makeStatefulQueryMock = (row: {
+      occurrenceCount: number;
+      payloadJson: Record<string, unknown>;
+    }) =>
+      jest.fn((_sql: string, params: unknown[]) => {
+        const [, entryJson, max] = params as [string, string, number];
+        const entry = JSON.parse(entryJson) as unknown;
+        const prior = (row.payloadJson.occurrences as unknown[]) ?? [];
+        row.occurrenceCount += 1;
+        row.payloadJson = {
+          ...row.payloadJson,
+          occurrences: [...prior, entry].slice(-max),
+        };
+        return Promise.resolve(undefined);
+      });
+
+    it('bump nhiều lần liên tiếp → occurrences tích lũy đúng, giữ thứ tự, không mất entry', async () => {
+      const row = {
+        id: 'alert-1',
+        alertType: 'intrusion',
+        zoneId: 'zone-1',
+        status: 'new',
+        occurrenceCount: 1,
+        payloadJson: {} as Record<string, unknown>,
+      };
+      repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+      repo.save.mockRejectedValue({ driverError: { code: '23505' } }); // luôn có alert mở → luôn bump
+      repo.query = makeStatefulQueryMock(row);
+
+      const violators = [
+        {
+          sourceEventId: 'evt-1',
+          userId: 'u1',
+          occurredAt: '2026-08-09T01:00:00.000Z',
+        },
+        {
+          sourceEventId: 'evt-2',
+          userId: 'u2',
+          occurredAt: '2026-08-09T01:05:00.000Z',
+        },
+        {
+          sourceEventId: 'evt-3',
+          userId: null,
+          occurredAt: '2026-08-09T01:10:00.000Z',
+        },
+      ];
+      let last;
+      for (const v of violators) {
+        last = await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: v.sourceEventId,
+          payloadJson: { userId: v.userId, occurredAt: v.occurredAt },
+        });
+      }
+
+      expect(repo.query).toHaveBeenCalledTimes(3);
+      expect(last!.isNew).toBe(false);
+      expect(last!.alert.payloadJson.occurrences).toEqual(violators);
+    });
+
+    it('payload_json.occurrences đã có đủ 20 phần tử → bump thêm 1 vẫn giữ đúng 20, drop entry cũ nhất', async () => {
+      const seeded = Array.from({ length: 20 }, (_, i) => ({
+        userId: `u${i}`,
+        sourceEventId: `evt-${i}`,
+        occurredAt: `2026-08-09T00:${String(i).padStart(2, '0')}:00.000Z`,
+      }));
+      const row = {
+        id: 'alert-2',
+        alertType: 'crowd',
+        zoneId: 'zone-9',
+        status: 'new',
+        occurrenceCount: 20,
+        payloadJson: { occurrences: seeded } as Record<string, unknown>,
+      };
+      repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+      repo.save.mockRejectedValueOnce({ driverError: { code: '23505' } });
+      repo.query = makeStatefulQueryMock(row);
+
+      const r = await service.recordAlert({
+        alertType: 'crowd',
+        zoneId: 'zone-9',
+        sourceEventId: 'evt-new',
+        payloadJson: { occurredAt: '2026-08-09T02:00:00.000Z' }, // crowd: không có userId
+      });
+
+      const occurrences = r.alert.payloadJson!.occurrences as unknown[];
+      expect(occurrences).toHaveLength(20);
+      expect(occurrences[0]).toEqual(seeded[1]); // entry cũ nhất (u0/evt-0) bị drop
+      expect(occurrences[19]).toEqual({
+        userId: null,
+        sourceEventId: 'evt-new',
+        occurredAt: '2026-08-09T02:00:00.000Z',
+      });
     });
   });
 

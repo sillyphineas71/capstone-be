@@ -22,6 +22,12 @@ import type { QuerySecurityAlertsDto } from '../dto/query-security-alerts.dto.js
 import type { ResolveSecurityAlertDto } from '../dto/resolve-security-alert.dto.js';
 import type { PaginationMeta } from '../types/pagination-meta.type.js';
 
+/**
+ * Trần số phần tử `payload_json.occurrences` giữ lại mỗi alert (mirror `loadHistory()`
+ * limit 20) — tránh phình payload vô hạn khi 1 alert bị bump hàng trăm lần.
+ */
+const MAX_OCCURRENCES_PER_ALERT = 20;
+
 /** ASC-001 §2.2: severity mặc định tĩnh theo alert_type khi caller KHÔNG truyền override. */
 const DEFAULT_SEVERITY_BY_TYPE: Record<string, AlertSeverity> = {
   intrusion: 'critical',
@@ -84,7 +90,7 @@ export class AlertsService {
 
     const open = await this.findOpenAlert(input.alertType, zoneId);
     if (open) {
-      const reloaded = await this.bumpOccurrence(open.id);
+      const reloaded = await this.bumpOccurrence(open.id, input);
       return { alert: reloaded, isNew: false };
     }
 
@@ -95,7 +101,7 @@ export class AlertsService {
 
     const openAfterRetry = await this.findOpenAlert(input.alertType, zoneId);
     if (openAfterRetry) {
-      const reloaded = await this.bumpOccurrence(openAfterRetry.id);
+      const reloaded = await this.bumpOccurrence(openAfterRetry.id, input);
       return { alert: reloaded, isNew: false };
     }
     throw new Error(
@@ -140,16 +146,60 @@ export class AlertsService {
     return this.repo.findOne({ where });
   }
 
-  private async bumpOccurrence(id: string): Promise<SecurityAlertEntity> {
-    await this.repo
-      .createQueryBuilder()
-      .update(SecurityAlertEntity)
-      .set({
-        lastSeenAt: () => 'NOW()',
-        occurrenceCount: () => '"occurrence_count" + 1',
-      })
-      .where('id = :id', { id })
-      .execute();
+  /**
+   * bumpOccurrence (fix 2026-08-09, recon "nhiều người vi phạm cùng 1 alert") — trước đây
+   * CHỈ update `last_seen_at`/`occurrence_count`, làm mất danh tính (`userId`/
+   * `sourceEventId`) của MỌI lần vi phạm sau lần đầu (chỉ alert gốc từ `tryInsert()` giữ
+   * được). Nay APPEND {userId, sourceEventId, occurredAt} của lần vi phạm hiện tại vào
+   * `payload_json.occurrences` — top-level `source_event_id`/`payload_json` gốc của alert
+   * VẪN giữ nguyên làm "đại diện" (ảnh chính hiển thị UI), `occurrences` chỉ bổ sung lịch
+   * sử đầy đủ. Cắt còn `MAX_OCCURRENCES_PER_ALERT` phần tử gần nhất.
+   *
+   * PHẢI atomic trong 1 câu UPDATE (đọc + ghi `payload_json` của CHÍNH row đang bị khoá bởi
+   * `WHERE id = $1`, giống hệt cách `occurrence_count = occurrence_count + 1` đã an toàn từ
+   * trước) — KHÔNG SELECT rồi UPDATE riêng ở tầng JS, vì đó là race giữa 2 bump gần như
+   * đồng thời (mất 1 entry). Áp dụng chung cho CẢ 5 alertType gọi `recordAlert()`
+   * (intrusion/crowd/stranger/vehicle_control_match/person_watchlist_match) — cùng 1 bài
+   * toán "mất dấu vết khi nhiều sự kiện bump vào 1 alert", không gate riêng theo loại.
+   */
+  private async bumpOccurrence(
+    id: string,
+    input: RecordAlertInput,
+  ): Promise<SecurityAlertEntity> {
+    const entry = {
+      userId: (input.payloadJson?.userId as string | null | undefined) ?? null,
+      sourceEventId: input.sourceEventId ?? null,
+      occurredAt:
+        (input.payloadJson?.occurredAt as string | undefined) ??
+        new Date().toISOString(),
+    };
+
+    await this.repo.query(
+      `UPDATE security_alerts
+          SET last_seen_at = NOW(),
+              occurrence_count = occurrence_count + 1,
+              payload_json = jsonb_set(
+                COALESCE(payload_json, '{}'::jsonb),
+                '{occurrences}',
+                (
+                  SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+                  FROM jsonb_array_elements(
+                         COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
+                         || jsonb_build_array($2::jsonb)
+                       ) WITH ORDINALITY AS t(elem, ord)
+                  WHERE ord > GREATEST(
+                    jsonb_array_length(
+                      COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
+                      || jsonb_build_array($2::jsonb)
+                    ) - $3,
+                    0
+                  )
+                ),
+                true
+              )
+        WHERE id = $1`,
+      [id, JSON.stringify(entry), MAX_OCCURRENCES_PER_ALERT],
+    );
     return this.getOrThrow(id);
   }
 

@@ -183,8 +183,11 @@ export class RestrictedZoneIntrusionService {
    * KHÔNG liên quan tới việc hiện ảnh nên không đụng.
    *
    * CHỈ áp dụng khi TẠO alert mới qua recordAlert() (INSERT nhánh mới — xem tryInsert());
-   * nếu recordAlert() bump alert đang mở (23505 → UPDATE occurrence_count), CẢ
-   * source_event_id LẪN payload gốc của alert đó GIỮ NGUYÊN — KHÔNG đổi cơ chế dedupe/bump.
+   * nếu recordAlert() bump alert đang mở (23505 → UPDATE occurrence_count), top-level
+   * source_event_id LẪN payload gốc của alert đó GIỮ NGUYÊN làm "đại diện" — KHÔNG đổi
+   * cơ chế dedupe/bump. `userId`/`sourceEventId` của lần vi phạm mới VẪN được giữ lại,
+   * append vào `payload_json.occurrences` bởi `AlertsService.bumpOccurrence()` (fix
+   * 2026-08-09, recon "nhiều người vi phạm cùng 1 alert") — KHÔNG mất dấu vết.
    */
   private async recordIntrusion(
     rule: AlertRuleEntity,
