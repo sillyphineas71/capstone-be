@@ -22,6 +22,7 @@ import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MustChangePasswordGuard } from './modules/auth/guards/must-change-password.guard';
+import { BiometricEnforcementGuard } from './modules/auth/guards/biometric-enforcement.guard';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { IotModule } from './modules/iot/iot.module';
@@ -145,6 +146,18 @@ void loadDevModule; // suppress unused warning
     {
       provide: APP_GUARD,
       useClass: MustChangePasswordGuard,
+    },
+    /**
+     * [2026-08-09] Docs/Nam_Sent/be-biometric-enforcement.md §2 — server-side enforcement
+     * cho luồng bắt buộc nộp sinh trắc học. Trước đây enforcement chỉ ở FE (bypass được
+     * qua Postman/DevTools). Đăng ký SAU MustChangePasswordGuard nên request.user cũng đã
+     * được populate. Routes whitelist (/me/biometric-status, /me/biometric-submission,
+     * /auth/refresh, /auth/logout, /auth/me) và role exempt (BUSINESS_ADMIN, SYSTEM_ADMIN)
+     * xem trong biometric-enforcement.guard.ts.
+     */
+    {
+      provide: APP_GUARD,
+      useClass: BiometricEnforcementGuard,
     },
   ],
 })

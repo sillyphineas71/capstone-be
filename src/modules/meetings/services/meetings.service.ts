@@ -3796,6 +3796,15 @@ export class MeetingsService {
         .findOne({ where: { meetingId } }),
     ]);
 
+    // Per-agenda attachments (media_files với relatedEntityType='meeting_agenda').
+    // Trước đây bị thiếu: DetailAgendaDto không có field attachments nên FE
+    // (trang chi tiết cuộc họp + phòng họp live) luôn thấy agenda rỗng file
+    // dù addAgendaAttachment() đã lưu đúng. Tái dùng loadAgendaAttachmentsMap
+    // (đã dùng ở listAgendas) để tránh N+1 và giữ nhất quán logic.
+    const agendaAttachmentsMap = await this.loadAgendaAttachmentsMap(
+      (agendas ?? []).map((a) => a.id),
+    );
+
     // ── 5. Assemble DTO ──
     return new MyScheduleDetailDto({
       meeting: new DetailMeetingDto({
@@ -3861,6 +3870,16 @@ export class MeetingsService {
             title: a.title,
             durationMinutes: a.plannedDurationMinutes,
             sortOrder: a.agendaOrder,
+            attachments: (agendaAttachmentsMap.get(a.id) ?? []).map(
+              (att) =>
+                new DetailAttachmentDto({
+                  id: att.id,
+                  fileName: att.fileName,
+                  fileUrl: att.fileUrl,
+                  fileType: att.mimeType,
+                  fileSize: att.fileSizeBytes,
+                }),
+            ),
           }),
       ),
       attachments: (attachments ?? []).map(
