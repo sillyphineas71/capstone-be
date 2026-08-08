@@ -22,6 +22,7 @@ import { PasswordResetService } from './services/password-reset.service';
 import { ChangePasswordCacheService } from './services/change-password-cache.service';
 import { ChangePasswordService } from './services/change-password.service';
 import { MustChangePasswordGuard } from './guards/must-change-password.guard';
+import { BiometricEnforcementGuard } from './guards/biometric-enforcement.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -53,6 +54,7 @@ import { RefreshTokenService } from './services/refresh-token.service';
     ChangePasswordCacheService,
     ChangePasswordService,
     MustChangePasswordGuard,
+    BiometricEnforcementGuard,
     // Guards exported for use in other modules (MeetingsModule, AccountsModule, etc.)
     JwtAuthGuard,
     PermissionsGuard,
@@ -84,6 +86,7 @@ import { RefreshTokenService } from './services/refresh-token.service';
     ChangePasswordCacheService,
     ChangePasswordService,
     MustChangePasswordGuard,
+    BiometricEnforcementGuard,
     // Guards exported for use in other modules
     JwtAuthGuard,
     PermissionsGuard,
