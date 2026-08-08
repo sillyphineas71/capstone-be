@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RedisService } from '../redis/redis.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import Redis from 'ioredis';
@@ -21,6 +22,7 @@ import Redis from 'ioredis';
  * Không trả về secret, credentials, hoặc config chi tiết.
  * Response chỉ chứa status và thông tin infrastructure layer.
  */
+@ApiTags('Health')
 @Controller('health')
 export class HealthController {
   private bullRedisClient: Redis | null = null;
@@ -59,6 +61,10 @@ export class HealthController {
 
   @Get()
   @HealthCheck()
+  @ApiOperation({
+    summary:
+      'Kiểm tra tình trạng hệ thống (DB, Redis, BullMQ Redis, storage local) — public, không yêu cầu đăng nhập',
+  })
   async check(): Promise<HealthCheckResult> {
     const checks: Array<() => Promise<unknown>> = [];
 

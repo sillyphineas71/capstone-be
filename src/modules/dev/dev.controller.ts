@@ -1,4 +1,5 @@
 import { Body, Controller, Post } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { MailService } from '../mail/mail.service.js';
 
 interface TestMailBody {
@@ -15,6 +16,7 @@ interface TestMailBody {
  * TUYỆT ĐỐI không expose ở production.
  * KHÔNG log bất kỳ secret, credential, password nào.
  */
+@ApiTags('Dev (chỉ NODE_ENV=development)')
 @Controller('dev')
 export class DevController {
   constructor(private readonly mailService: MailService) {}
@@ -28,6 +30,9 @@ export class DevController {
    * Response: { success, messageId?, error? }
    */
   @Post('test-mail')
+  @ApiOperation({
+    summary: 'Gửi thử 1 email qua SMTP đang cấu hình (dev only)',
+  })
   async testMail(@Body() body: TestMailBody): Promise<{
     success: boolean;
     messageId?: string;
@@ -58,6 +63,9 @@ export class DevController {
    * POST /api/v1/dev/test-mail-verify
    */
   @Post('test-mail-verify')
+  @ApiOperation({
+    summary: 'Kiểm tra kết nối SMTP đang cấu hình, KHÔNG gửi email (dev only)',
+  })
   async testMailVerify(): Promise<{ connected: boolean; message: string }> {
     const connected = await this.mailService.verifyConnection();
     return {
