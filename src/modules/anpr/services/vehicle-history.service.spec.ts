@@ -11,6 +11,8 @@ const row = (over: any = {}) => ({
   event_time: new Date('2026-06-25T09:00:00.000Z'),
   utc: '2026-06-25T09:00:00.000Z',
   user_id: 'u1',
+  is_blacklisted: false,
+  list_type: null,
   ...over,
 });
 
@@ -29,7 +31,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
   };
   const countCall = () => captured.find((c) => c.sql.includes('COUNT(*)'));
   const rowsCall = () =>
-    captured.find((c) => c.sql.includes('ORDER BY event_time DESC'));
+    captured.find((c) =>
+      c.sql.includes('ORDER BY iot_device_events.event_time DESC'),
+    );
   const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
 
   beforeEach(() => {
@@ -42,7 +46,7 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     const r = await service.listForUser('u1', q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("payload_json->>'userId' = $1");
+    expect(sql).toContain("iot_device_events.payload_json->>'userId' = $1");
     expect(rowsCall()!.params[0]).toBe('u1');
     // SELECT KHÔNG có user_id column → item không có userId.
     expect(sql).not.toContain('AS user_id');
@@ -53,9 +57,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     const r = await service.listAll(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
     expect(sql).not.toContain("payload_json->>'userId' = $");
-    expect(sql).toContain("payload_json->>'userId' AS user_id");
+    expect(sql).toContain("iot_device_events.payload_json->>'userId' AS user_id");
     expect(r.items[0].userId).toBe('u1');
   });
 
@@ -63,15 +67,17 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     await service.listAll(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
     expect(sql).not.toContain('face_verify');
     expect(sql).not.toContain('face_stranger');
   });
 
-  it('channelId cast ::int + output map đúng field', async () => {
+  it('channelId cast + output map đúng field', async () => {
     wire();
     const r = await service.listAll(q());
-    expect(rowsCall()!.sql).toContain("(payload_json->>'channelId')::int");
+    expect(rowsCall()!.sql).toContain(
+      "(iot_device_events.payload_json->>'channelId')::int",
+    );
     expect(r.items[0]).toMatchObject({
       id: 'evt-1',
       plateNumber: '30A12345',
@@ -86,7 +92,7 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
   it('id: SELECT có cột id + output item.id khớp đúng iot_device_events.id', async () => {
     wire([row({ id: 'a1b2c3d4-1111-2222-3333-444455556666' })]);
     const r = await service.listAll(q());
-    expect(rowsCall()!.sql).toMatch(/SELECT id,/);
+    expect(rowsCall()!.sql).toMatch(/SELECT iot_device_events\.id,/);
     expect(r.items[0].id).toBe('a1b2c3d4-1111-2222-3333-444455556666');
   });
 
@@ -96,12 +102,55 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     expect(r.items[0].id).toBe('evt-user-1');
   });
 
+  // ── isBlacklisted/listType (recon 2026-08-08, R1-R3): LEFT JOIN security_alerts
+  // qua FK source_event_id → iot_device_events.id (KHÔNG match theo plateNumber+
+  // thời gian). KHÔNG đụng luồng ghi (onVehicleEvent()/evaluate()) — chỉ tầng đọc. ──
+  describe('isBlacklisted/listType (LEFT JOIN security_alerts qua source_event_id)', () => {
+    it('SQL: LEFT JOIN security_alerts sa ON sa.source_event_id = iot_device_events.id AND sa.alert_type = vehicle_control_match', async () => {
+      wire();
+      await service.listAll(q());
+      const sql = rowsCall()!.sql;
+      expect(sql).toContain('LEFT JOIN security_alerts sa');
+      expect(sql).toContain('sa.source_event_id = iot_device_events.id');
+      expect(sql).toContain("sa.alert_type = 'vehicle_control_match'");
+      expect(sql).toContain('sa.id IS NOT NULL');
+      expect(sql).toContain("sa.payload_json->>'listType'");
+    });
+
+    it('DONE: có alert vehicle_control_match gắn qua source_event_id → isBlacklisted=true, listType từ DB (listAll)', async () => {
+      wire([row({ is_blacklisted: true, list_type: 'blocklist' })]);
+      const r = await service.listAll(q());
+      expect(r.items[0].isBlacklisted).toBe(true);
+      expect(r.items[0].listType).toBe('blocklist');
+    });
+
+    it('DONE: KHÔNG có alert (hoặc bị throttle trong cửa sổ 300s) → isBlacklisted=false, listType=null (listAll)', async () => {
+      wire([row({ is_blacklisted: false, list_type: null })]);
+      const r = await service.listAll(q());
+      expect(r.items[0].isBlacklisted).toBe(false);
+      expect(r.items[0].listType).toBeNull();
+    });
+
+    it('DONE: listForUser cũng trả đúng isBlacklisted/listType (KHÔNG chỉ listAll)', async () => {
+      wire([row({ is_blacklisted: true, list_type: 'watchlist' })]);
+      const r = await service.listForUser('u1', q());
+      expect(r.items[0].isBlacklisted).toBe(true);
+      expect(r.items[0].listType).toBe('watchlist');
+    });
+
+    it('COUNT query KHÔNG cần JOIN (isBlacklisted không phải filter, chỉ hiển thị)', async () => {
+      wire();
+      await service.listAll(q());
+      expect(countCall()!.sql).not.toContain('security_alerts');
+    });
+  });
+
   // ── ràng buộc: plate filter normalize ──
   it('plate filter normalize (cứng): "30A-123.45" → bind param "30A12345"', async () => {
     wire();
     await service.listAll(q({ plateNumber: '30A-123.45' }));
     const c = rowsCall()!;
-    expect(c.sql).toContain("payload_json->>'plateNumber' = $");
+    expect(c.sql).toContain("iot_device_events.payload_json->>'plateNumber' = $");
     expect(c.params).toContain('30A12345');
     expect(c.params).not.toContain('30A-123.45');
   });
@@ -110,7 +159,7 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     await service.listAll(q({ matchState: 'unmatched' }));
     const c = rowsCall()!;
-    expect(c.sql).toContain("payload_json->>'matchState' = $1");
+    expect(c.sql).toContain("iot_device_events.payload_json->>'matchState' = $1");
     expect(c.params[0]).toBe('unmatched');
   });
 
@@ -126,10 +175,10 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
       }),
     );
     const c = rowsCall()!;
-    expect(c.sql).toContain("payload_json->>'userId' = $1");
-    expect(c.sql).toContain('event_time >= $2');
-    expect(c.sql).toContain("payload_json->>'direction' = $3");
-    expect(c.sql).toContain("payload_json->>'plateNumber' = $4");
+    expect(c.sql).toContain("iot_device_events.payload_json->>'userId' = $1");
+    expect(c.sql).toContain('iot_device_events.event_time >= $2');
+    expect(c.sql).toContain("iot_device_events.payload_json->>'direction' = $3");
+    expect(c.sql).toContain("iot_device_events.payload_json->>'plateNumber' = $4");
     expect(c.sql).toContain('LIMIT $5 OFFSET $6');
     expect(c.params).toEqual([
       'u1',
@@ -154,8 +203,8 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
       q({ matchState: 'matched', from: '2026-06-01T00:00:00.000Z' }),
     );
     const c = rowsCall()!;
-    expect(c.sql).toContain("payload_json->>'matchState' = $1");
-    expect(c.sql).toContain('event_time >= $2');
+    expect(c.sql).toContain("iot_device_events.payload_json->>'matchState' = $1");
+    expect(c.sql).toContain('iot_device_events.event_time >= $2');
     expect(c.sql).toContain('LIMIT $3 OFFSET $4');
     expect(c.params).toEqual(['matched', '2026-06-01T00:00:00.000Z', 20, 0]);
   });
@@ -163,7 +212,7 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
   it('to filter → event_time <= $n', async () => {
     wire();
     await service.listAll(q({ to: '2026-06-30T00:00:00.000Z' }));
-    expect(rowsCall()!.sql).toContain('event_time <= $1');
+    expect(rowsCall()!.sql).toContain('iot_device_events.event_time <= $1');
   });
 
   it('meta total (COUNT, total=25 limit=20 → totalPages=2)', async () => {

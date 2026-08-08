@@ -80,6 +80,11 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
 
   beforeEach(() => {
     dsMock = { manager: { query: jest.fn() } };
+    // RACE FIX: onVehicleEvent() bọc merge-hoặc-insert trong this.dataSource.transaction(...)
+    // (mirror ChannelMapConfigService.spec.ts) — callback nhận `manager`, ở đây dùng LẠI
+    // dsMock.manager (cùng jest.fn `.query`) để mọi SQL-sniffing (`captured`/wire()/wireMerge())
+    // của test hiện có tiếp tục hoạt động không đổi, không cần EntityManager mock riêng.
+    dsMock.transaction = jest.fn((cb: (m: any) => unknown) => cb(dsMock.manager));
     alertMock = { evaluate: jest.fn().mockResolvedValue(undefined) };
     gateMock = {
       writeGateLog: jest
@@ -638,6 +643,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     it('có row gần nhất cùng channel+direction trong cửa sổ + plate đủ giống → UPDATE (bump) + trả true', async () => {
       wireMerge('evt-old', '30A99998'); // OCR lệch 1 ký tự cuối — vẫn coi cùng xe
       const merged = await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
         5,
         'enter',
         '30A99999',
@@ -650,6 +656,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     it('SELECT trả rỗng (DB không thấy row khớp) → false, KHÔNG UPDATE', async () => {
       wireMerge(null);
       const merged = await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
         5,
         'enter',
         '30A99999',
@@ -661,7 +668,13 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
 
     it('SQL SELECT bind đúng channelId(string)/direction/cửa sổ 15s để DB tự lọc theo channel+direction+thời gian', async () => {
       wireMerge(null);
-      await (service as any).mergeIntoRecentEvent(5, 'enter', '30A99999', null);
+      await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
+        5,
+        'enter',
+        '30A99999',
+        null,
+      );
       const sel = selectMerge();
       expect(sel!.sql).toContain("event_type = 'ivss_vehicle_event'");
       expect(sel!.sql).toContain("payload_json->>'channelId' = $1");
@@ -673,6 +686,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     it('UPDATE dùng COALESCE(snapshot_file_id, $2) — ưu tiên giữ ảnh cũ, chỉ nhận ảnh mới khi cũ NULL', async () => {
       wireMerge('evt-old', '30A99998');
       await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
         5,
         'enter',
         '30A99999',
@@ -689,7 +703,13 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
 
     it('UPDATE append biển mới vào payload_json->rawReads qua jsonb_set + || (KHÔNG ghi đè mảng cũ)', async () => {
       wireMerge('evt-old', '30A99998');
-      await (service as any).mergeIntoRecentEvent(5, 'enter', '30A99999', null);
+      await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
+        5,
+        'enter',
+        '30A99999',
+        null,
+      );
       const upd = mergeUpdate();
       expect(upd!.sql).toContain("jsonb_set(");
       expect(upd!.sql).toContain("'{rawReads}'");
@@ -701,6 +721,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     it('SELECT lỗi → false (NotThrow, fallback INSERT)', async () => {
       dsMock.manager.query.mockRejectedValueOnce(new Error('db down'));
       const merged = await (service as any).mergeIntoRecentEvent(
+        dsMock.manager,
         5,
         'enter',
         '30A99999',
@@ -737,6 +758,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       it('DONE: mergeIntoRecentEvent trực tiếp — "86886" vs row cũ "51L868" (2 xe khác nhau) → false, KHÔNG UPDATE dù cùng channel+direction+cửa sổ', async () => {
         wireMerge('evt-old', '51L868');
         const merged = await (service as any).mergeIntoRecentEvent(
+          dsMock.manager,
           5,
           'seen',
           '86886',
@@ -781,6 +803,105 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(payloadOf().direction).toBe('leave');
       const sel = selectMerge();
       expect(sel!.params[1]).toBe('leave');
+    });
+  });
+
+  // ── RACE FIX (bằng chứng thật production 2026-08-08): 2 event cùng biển/channel,
+  // event_time TRÙNG TUYỆT ĐỐI → trước đây cả 2 cùng INSERT (SELECT+INSERT là 2
+  // statement rời rạc, không gì khoá 2 request lại). Fix: bọc merge-hoặc-insert trong
+  // this.dataSource.transaction(...) + pg_advisory_xact_lock theo channelId.
+  describe('RACE FIX: pg_advisory_xact_lock chống 2 request đồng thời cùng channel tạo 2 row', () => {
+    it('DONE: Promise.all 2 request đồng thời, cùng channel, biển tương tự (isSimilarPlate) → CHỈ 1 row được tạo, request thứ 2 bump vào row của request thứ nhất', async () => {
+      // Trạng thái bảng iot_device_events giả lập (in-memory) — mô phỏng đúng ngữ nghĩa
+      // pg_advisory_xact_lock thật: request 2 chỉ bắt đầu SELECT sau khi request 1 đã
+      // COMMIT (INSERT xong), nên LUÔN thấy row vừa tạo — không còn cửa sổ race.
+      let insertedRow: { id: string; plate_number: string } | null = null;
+      let insertCount = 0;
+      let updateCount = 0;
+
+      // Mutex thủ công mô phỏng pg_advisory_xact_lock: request 2 PHẢI đợi transaction
+      // của request 1 chạy XONG HẲN (kể cả INSERT) rồi mới được bắt đầu callback của
+      // nó. Đây chính là hành vi cần chứng minh — KHÔNG có mutex này (code trước khi
+      // fix, gọi `this.dataSource.manager.query(...)` rời rạc KHÔNG qua transaction())
+      // thì 2 lệnh gọi sẽ interleave theo microtask, cả 2 đều SELECT ra `insertedRow
+      // = null` trước khi bên nào set nó → race y hệt bug thật đã xác nhận.
+      let lockChain: Promise<unknown> = Promise.resolve();
+      dsMock.transaction = jest.fn((cb: (m: any) => Promise<unknown>) => {
+        const run = lockChain.then(() => cb(dsMock.manager));
+        lockChain = run.catch(() => undefined);
+        return run;
+      });
+
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('FROM iot_devices WHERE device_code'))
+          return Promise.resolve([{ id: 'bridge1' }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([]); // unmatched — không quan trọng cho test này
+        if (sql.includes('FROM system_configs')) return Promise.resolve([]);
+        if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([{}]);
+        if (
+          sql.includes('SELECT id,') &&
+          sql.includes("payload_json->>'channelId'")
+        ) {
+          return Promise.resolve(insertedRow ? [insertedRow] : []);
+        }
+        if (sql.includes('INSERT INTO iot_device_events')) {
+          insertCount++;
+          const payload = JSON.parse(params[2]);
+          insertedRow = {
+            id: `evt-${insertCount}`,
+            plate_number: payload.plateNumber,
+          };
+          return Promise.resolve([{ id: insertedRow.id }]);
+        }
+        if (sql.includes('UPDATE iot_device_events')) {
+          updateCount++;
+          return Promise.resolve(undefined);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      await Promise.all([
+        service.onVehicleEvent(evt({ plateNumber: '30A11111' })),
+        service.onVehicleEvent(evt({ plateNumber: '30A11112' })), // OCR lệch 1 ký tự cuối — isSimilarPlate=true
+      ]);
+
+      expect(insertCount).toBe(1); // CHỈ 1 row được tạo
+      expect(updateCount).toBe(1); // request thứ 2 bump vào row của request thứ nhất, KHÔNG tạo row riêng
+    });
+
+    it('advisory lock bind đúng channelId qua hashtext (mirror hashtext(\'vehicle_channel_\' || channelId))', async () => {
+      captured = [];
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        captured.push({ sql, params });
+        if (sql.includes('FROM iot_devices WHERE device_code'))
+          return Promise.resolve([{ id: 'bridge1' }]);
+        if (sql.includes('FROM vehicle_registrations'))
+          return Promise.resolve([]);
+        if (sql.includes('FROM system_configs')) return Promise.resolve([]);
+        if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([{}]);
+        if (
+          sql.includes('SELECT id,') &&
+          sql.includes("payload_json->>'channelId'")
+        )
+          return Promise.resolve([]);
+        if (sql.includes('INSERT INTO iot_device_events'))
+          return Promise.resolve([{ id: 'evt-new' }]);
+        return Promise.resolve(undefined);
+      });
+      await service.onVehicleEvent(evt({ channelId: 7 }));
+      const lockCall = captured.find((c) =>
+        c.sql.includes('pg_advisory_xact_lock'),
+      );
+      expect(lockCall).toBeDefined();
+      expect(lockCall!.sql).toContain("hashtext('vehicle_channel_' || $1::text)");
+      expect(lockCall!.params).toEqual(['7']);
+    });
+
+    it('transaction() được gọi (không còn query() rời rạc cho merge-hoặc-insert)', async () => {
+      wire();
+      await service.onVehicleEvent(evt());
+      expect(dsMock.transaction).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -11,6 +11,8 @@ interface UnknownRow {
   utc: string | null;
   plate_color: string | null;
   vehicle_type: string | null;
+  is_blacklisted: boolean;
+  list_type: string | null;
 }
 interface CountRow {
   total: number;
@@ -33,6 +35,15 @@ export interface UnknownVehicleItem {
   utc: string | null;
   plateColor: string | null;
   vehicleType: string | null;
+  /**
+   * true nếu event này có 1 security_alerts.alert_type='vehicle_control_match' gắn qua
+   * source_event_id (recon 2026-08-08, R1-R3, mirror VehicleHistoryService). GIỚI HẠN
+   * ĐÃ BIẾT: evaluate() throttle 300s/plate (vehicle-control-alert.service.ts) — sự kiện
+   * bị throttle trong cùng cửa sổ có isBlacklisted=false dù xe đang trong control-list.
+   */
+  isBlacklisted: boolean;
+  /** security_alerts.payload_json->>'listType' ('blocklist'|'watchlist'); null nếu isBlacklisted=false. */
+  listType: string | null;
 }
 
 /**
@@ -43,6 +54,12 @@ export interface UnknownVehicleItem {
  *   → KHÔNG nhiễm face. JSON path TOP-LEVEL (UC5 lưu top-level, KHÁC face extracted_fields).
  * SEC-03: bind tham số (from/to/limit/offset). SEC-01: KHÔNG imageBase64 (UC5 vốn không lưu).
  * KHÔNG dùng VehicleRegistrationService (raw query riêng).
+ *
+ * isBlacklisted/listType (recon 2026-08-08, R1-R3, mirror VehicleHistoryService): LEFT
+ * JOIN security_alerts qua FK source_event_id → iot_device_events.id. KHÔNG đụng luồng
+ * ghi (onVehicleEvent()/evaluate()). Giới hạn ĐÃ BIẾT: evaluate() throttle 300s/plate →
+ * sự kiện bị throttle trong cùng cửa sổ có isBlacklisted=false dù xe đang trong
+ * control-list — KHÔNG cố sửa ở đây.
  */
 @Injectable()
 export class VehicleUnknownService {
@@ -56,15 +73,18 @@ export class VehicleUnknownService {
     const offset = (page - 1) * limit;
 
     // WHERE base = literal (KHÔNG user input). Time-range build động → bind ($1, $2...).
+    // `iot_device_events.` prefix BẮT BUỘC (KHÔNG chỉ để rõ ràng) — dùng chung cho cả
+    // COUNT (không JOIN) lẫn rows (có JOIN security_alerts, cũng có payload_json/id
+    // trùng tên → để trần sẽ ambiguous). Xem VehicleHistoryService cho lý do đầy đủ.
     const params: unknown[] = [];
-    let where = `event_type = 'ivss_vehicle_event' AND payload_json->>'matchState' = 'unmatched'`;
+    let where = `iot_device_events.event_type = 'ivss_vehicle_event' AND iot_device_events.payload_json->>'matchState' = 'unmatched'`;
     if (query.from) {
       params.push(query.from);
-      where += ` AND event_time >= $${params.length}`;
+      where += ` AND iot_device_events.event_time >= $${params.length}`;
     }
     if (query.to) {
       params.push(query.to);
-      where += ` AND event_time <= $${params.length}`;
+      where += ` AND iot_device_events.event_time <= $${params.length}`;
     }
 
     // total: COUNT cùng WHERE (KHÔNG limit/offset).
@@ -78,17 +98,22 @@ export class VehicleUnknownService {
     const limitIdx = params.length + 1;
     const offsetIdx = params.length + 2;
     const rows: UnknownRow[] = await this.dataSource.manager.query(
-      `SELECT id,
-              payload_json->>'plateNumber'        AS plate_number,
-              (payload_json->>'channelId')::int   AS channel_id,
-              payload_json->>'direction'          AS direction,
-              event_time,
-              payload_json->>'utc'                AS utc,
-              payload_json->>'plateColor'         AS plate_color,
-              payload_json->>'vehicleType'        AS vehicle_type
+      `SELECT iot_device_events.id,
+              iot_device_events.payload_json->>'plateNumber'        AS plate_number,
+              (iot_device_events.payload_json->>'channelId')::int   AS channel_id,
+              iot_device_events.payload_json->>'direction'          AS direction,
+              iot_device_events.event_time,
+              iot_device_events.payload_json->>'utc'                AS utc,
+              iot_device_events.payload_json->>'plateColor'         AS plate_color,
+              iot_device_events.payload_json->>'vehicleType'        AS vehicle_type,
+              sa.id IS NOT NULL                                     AS is_blacklisted,
+              sa.payload_json->>'listType'                          AS list_type
          FROM iot_device_events
+         LEFT JOIN security_alerts sa
+                ON sa.source_event_id = iot_device_events.id
+               AND sa.alert_type = 'vehicle_control_match'
         WHERE ${where}
-        ORDER BY event_time DESC
+        ORDER BY iot_device_events.event_time DESC
         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       [...params, limit, offset],
     );
@@ -103,6 +128,8 @@ export class VehicleUnknownService {
         utc: r.utc,
         plateColor: r.plate_color,
         vehicleType: r.vehicle_type,
+        isBlacklisted: r.is_blacklisted,
+        listType: r.list_type,
       })),
       meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };

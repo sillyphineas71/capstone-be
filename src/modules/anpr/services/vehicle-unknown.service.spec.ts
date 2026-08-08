@@ -11,6 +11,8 @@ const row = (over: any = {}) => ({
   utc: '2026-06-25T09:00:00.000Z',
   plate_color: 'white',
   vehicle_type: 'car',
+  is_blacklisted: false,
+  list_type: null,
   ...over,
 });
 
@@ -31,7 +33,7 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
 
   const countCall = () => captured.find((c) => c.sql.includes('COUNT(*)'));
   const rowsCall = () =>
-    captured.find((c) => c.sql.includes('ORDER BY event_time DESC'));
+    captured.find((c) => c.sql.includes('ORDER BY iot_device_events.event_time DESC'));
 
   const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
 
@@ -40,7 +42,7 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     service = new VehicleUnknownService(dsMock as DataSource);
   });
 
-  it('list: map đúng 8 field + meta (total=25 limit=20 → totalPages=2)', async () => {
+  it('list: map đúng 10 field + meta (total=25 limit=20 → totalPages=2)', async () => {
     wire([row()], 25);
     const r = await service.listUnknown(q());
     expect(r.items[0]).toEqual({
@@ -52,6 +54,8 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
       utc: '2026-06-25T09:00:00.000Z',
       plateColor: 'white',
       vehicleType: 'car',
+      isBlacklisted: false,
+      listType: null,
     });
     expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
   });
@@ -60,7 +64,7 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
   it('id: SELECT có cột id + output item.id khớp đúng iot_device_events.id', async () => {
     wire([row({ id: 'a1b2c3d4-1111-2222-3333-444455556666' })]);
     const r = await service.listUnknown(q());
-    expect(rowsCall()!.sql).toMatch(/SELECT id,/);
+    expect(rowsCall()!.sql).toMatch(/SELECT iot_device_events\.id,/);
     expect(r.items[0].id).toBe('a1b2c3d4-1111-2222-3333-444455556666');
   });
 
@@ -68,8 +72,10 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     wire();
     await service.listUnknown(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("event_type = 'ivss_vehicle_event'");
-    expect(sql).toContain("payload_json->>'matchState' = 'unmatched'");
+    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain(
+      "iot_device_events.payload_json->>'matchState' = 'unmatched'",
+    );
     expect(sql).not.toContain('face_verify');
     expect(sql).not.toContain('face_stranger');
   });
@@ -78,14 +84,51 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     wire();
     await service.listUnknown(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("payload_json->>'plateNumber'");
+    expect(sql).toContain("iot_device_events.payload_json->>'plateNumber'");
     expect(sql).not.toContain('extracted_fields');
   });
 
   it('channelId cast ::int', async () => {
     wire();
     await service.listUnknown(q());
-    expect(rowsCall()!.sql).toContain("(payload_json->>'channelId')::int");
+    expect(rowsCall()!.sql).toContain(
+      "(iot_device_events.payload_json->>'channelId')::int",
+    );
+  });
+
+  // ── isBlacklisted/listType (recon 2026-08-08, R1-R3): LEFT JOIN security_alerts
+  // qua FK source_event_id → iot_device_events.id (mirror VehicleHistoryService) ──
+  describe('isBlacklisted/listType (LEFT JOIN security_alerts qua source_event_id)', () => {
+    it('SQL: LEFT JOIN security_alerts sa ON sa.source_event_id = iot_device_events.id AND sa.alert_type = vehicle_control_match', async () => {
+      wire();
+      await service.listUnknown(q());
+      const sql = rowsCall()!.sql;
+      expect(sql).toContain('LEFT JOIN security_alerts sa');
+      expect(sql).toContain('sa.source_event_id = iot_device_events.id');
+      expect(sql).toContain("sa.alert_type = 'vehicle_control_match'");
+      expect(sql).toContain('sa.id IS NOT NULL');
+      expect(sql).toContain("sa.payload_json->>'listType'");
+    });
+
+    it('DONE: có alert vehicle_control_match gắn qua source_event_id → isBlacklisted=true, listType từ DB', async () => {
+      wire([row({ is_blacklisted: true, list_type: 'blocklist' })]);
+      const r = await service.listUnknown(q());
+      expect(r.items[0].isBlacklisted).toBe(true);
+      expect(r.items[0].listType).toBe('blocklist');
+    });
+
+    it('DONE: KHÔNG có alert (hoặc bị throttle trong cửa sổ 300s) → isBlacklisted=false, listType=null', async () => {
+      wire([row({ is_blacklisted: false, list_type: null })]);
+      const r = await service.listUnknown(q());
+      expect(r.items[0].isBlacklisted).toBe(false);
+      expect(r.items[0].listType).toBeNull();
+    });
+
+    it('COUNT query KHÔNG cần JOIN (isBlacklisted không phải filter, chỉ hiển thị)', async () => {
+      wire();
+      await service.listUnknown(q());
+      expect(countCall()!.sql).not.toContain('security_alerts');
+    });
   });
 
   describe('time-range build động + bind index đúng (4 tổ hợp)', () => {
@@ -103,7 +146,7 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
       wire();
       await service.listUnknown(q({ from: '2026-06-01T00:00:00.000Z' }));
       const c = rowsCall()!;
-      expect(c.sql).toContain('event_time >= $1');
+      expect(c.sql).toContain('iot_device_events.event_time >= $1');
       expect(c.sql).toContain('LIMIT $2 OFFSET $3');
       expect(c.params).toEqual(['2026-06-01T00:00:00.000Z', 20, 0]);
     });
@@ -112,7 +155,7 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
       wire();
       await service.listUnknown(q({ to: '2026-06-30T00:00:00.000Z' }));
       const c = rowsCall()!;
-      expect(c.sql).toContain('event_time <= $1');
+      expect(c.sql).toContain('iot_device_events.event_time <= $1');
       expect(c.sql).toContain('LIMIT $2 OFFSET $3');
       expect(c.params).toEqual(['2026-06-30T00:00:00.000Z', 20, 0]);
     });
@@ -123,8 +166,8 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
         q({ from: '2026-06-01T00:00:00.000Z', to: '2026-06-30T00:00:00.000Z' }),
       );
       const c = rowsCall()!;
-      expect(c.sql).toContain('event_time >= $1');
-      expect(c.sql).toContain('event_time <= $2');
+      expect(c.sql).toContain('iot_device_events.event_time >= $1');
+      expect(c.sql).toContain('iot_device_events.event_time <= $2');
       expect(c.sql).toContain('LIMIT $3 OFFSET $4');
       expect(c.params).toEqual([
         '2026-06-01T00:00:00.000Z',
