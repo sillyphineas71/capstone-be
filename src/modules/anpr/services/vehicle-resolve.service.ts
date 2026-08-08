@@ -14,6 +14,7 @@ import {
   IVSS_CHANNEL_DIRECTION_MAP_KEY,
   type GateLogSkippedReason,
 } from '../constants/gate-writer.constant.js';
+import { isSimilarPlate } from '../utils/plate-similarity.js';
 
 /** F-D: subfolder storage cho snapshot ảnh sự kiện ANPR. */
 const SNAPSHOT_FOLDER = 'anpr-snapshots';
@@ -260,13 +261,23 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
 
   /**
    * OCR-MERGE: tra row iot_device_events GẦN NHẤT cùng channelId + direction, trong
-   * vòng OCR_MERGE_WINDOW_SECONDS giây — nếu có, UPDATE (bump) thay vì để caller
-   * INSERT row mới. Trả true nếu đã gộp (caller phải return ngay, KHÔNG INSERT/
-   * evaluate/gate-log cho lần đọc này — event gốc đã evaluate/gate-log rồi).
+   * vòng OCR_MERGE_WINDOW_SECONDS giây — nếu có VÀ plateNumber đủ giống (isSimilarPlate,
+   * xem plate-similarity.ts), UPDATE (bump) thay vì để caller INSERT row mới. Trả true
+   * nếu đã gộp (caller phải return ngay, KHÔNG INSERT/evaluate/gate-log cho lần đọc
+   * này — event gốc đã evaluate/gate-log rồi).
    *
-   * Best-effort, KHÔNG throw: SELECT/UPDATE lỗi hoặc không thấy row → false (INSERT
-   * như bình thường). `rows?.[0]` tự vệ thay vì dựa vào catch để fallback (mirror
-   * getChannelZoneMap/getChannelDirectionMap — đọc lỗi = {}/không thấy, KHÔNG throw).
+   * Bug thật phát hiện qua test phần cứng 2026-08-08: camera ANPR thuần
+   * (handleTrafficJunction, bridge) luôn gửi eventAction="seen" cố định → direction
+   * KHÔNG BAO GIỜ phân biệt được 2 xe khác nhau đi qua cùng channel trong cửa sổ gộp
+   * (channelId+direction trùng 100% giữa MỌI xe). plateNumber similarity là lớp chặn
+   * BẮT BUỘC, không phải tuỳ chọn — direction giữ lại làm điều kiện lọc SQL (vẫn hữu
+   * ích khi handleVehicle có direction thật enter/leave sau này) nhưng không còn được
+   * tin tưởng ĐỦ để tự quyết định gộp một mình.
+   *
+   * Best-effort, KHÔNG throw: SELECT/UPDATE lỗi, không thấy row, hoặc plate không đủ
+   * giống → false (INSERT như bình thường, coi như "không tìm thấy để gộp"). `rows?.[0]`
+   * tự vệ thay vì dựa vào catch để fallback (mirror getChannelZoneMap/getChannelDirectionMap
+   * — đọc lỗi = {}/không thấy, KHÔNG throw).
    *
    * snapshot_file_id: ưu tiên ảnh đã có (COALESCE giữ ảnh cũ nếu đã có, chỉ nhận
    * ảnh mới khi row cũ CHƯA có).
@@ -278,19 +289,30 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
     snapshotFileId: string | null,
   ): Promise<boolean> {
     try {
-      const rows: Array<{ id: string }> | undefined =
-        await this.dataSource.manager.query(
-          `SELECT id FROM iot_device_events
-            WHERE event_type = 'ivss_vehicle_event'
-              AND payload_json->>'channelId' = $1
-              AND payload_json->>'direction' = $2
-              AND event_time > NOW() - ($3::int * INTERVAL '1 second')
-            ORDER BY event_time DESC
-            LIMIT 1`,
-          [String(channelId), direction, OCR_MERGE_WINDOW_SECONDS],
-        );
+      const rows:
+        | Array<{ id: string; plate_number: string | null }>
+        | undefined = await this.dataSource.manager.query(
+        `SELECT id, payload_json->>'plateNumber' AS plate_number
+           FROM iot_device_events
+          WHERE event_type = 'ivss_vehicle_event'
+            AND payload_json->>'channelId' = $1
+            AND payload_json->>'direction' = $2
+            AND event_time > NOW() - ($3::int * INTERVAL '1 second')
+          ORDER BY event_time DESC
+          LIMIT 1`,
+        [String(channelId), direction, OCR_MERGE_WINDOW_SECONDS],
+      );
       const recent = rows?.[0];
       if (!recent) return false;
+
+      // OCR-MERGE siết chặt (test phần cứng 2026-08-08): channel+direction trùng KHÔNG
+      // còn đủ — plateNumber phải đủ giống mới coi là "tìm thấy để gộp". Vượt ngưỡng →
+      // coi như KHÔNG thấy row, rơi về INSERT xe mới ở caller. KHÔNG dùng normalizePlate()
+      // ở đây — 2 chuỗi đã chuẩn hoá từ UC4, so similarity là heuristic RIÊNG cho quyết
+      // định gộp, không phải tra cứu.
+      if (!isSimilarPlate(plateNumber, recent.plate_number ?? '')) {
+        return false;
+      }
 
       await this.dataSource.manager.query(
         `UPDATE iot_device_events

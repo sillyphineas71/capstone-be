@@ -586,7 +586,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     const selectMerge = () =>
       captured.find(
         (c) =>
-          c.sql.includes('SELECT id FROM iot_device_events') &&
+          c.sql.includes('SELECT id,') &&
           c.sql.includes("payload_json->>'channelId'"),
       );
     const mergeUpdate = () =>
@@ -597,11 +597,18 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       );
 
     // wire() riêng: cho phép giả lập lookback SELECT "DB có/không thấy row gần nhất
-    // khớp channelId+direction+cửa sổ 15s" — việc lọc THẬT theo direction/thời gian
-    // là logic Postgres (WHERE/interval), không mock lại ở đây; unit test chỉ xác
-    // nhận (a) code bind đúng tham số để DB lọc đúng, (b) code nhánh đúng theo kết
-    // quả DB trả về.
-    const wireMerge = (recentEventId: string | null) => {
+    // khớp channelId+direction+cửa sổ 15s, VÀ plateNumber của row đó" — việc lọc THẬT
+    // theo direction/thời gian là logic Postgres (WHERE/interval), không mock lại ở
+    // đây; unit test chỉ xác nhận (a) code bind đúng tham số để DB lọc đúng, (b) code
+    // nhánh đúng theo kết quả DB trả về + kết quả isSimilarPlate.
+    // recentPlateNumber: plateNumber của row gần nhất giả lập — mặc định null (không
+    // trả row nào nếu recentEventId null; nếu recentEventId có nhưng recentPlateNumber
+    // không set, plate_number=null → isSimilarPlate luôn false, đúng hành vi "không đủ
+    // căn cứ để gộp").
+    const wireMerge = (
+      recentEventId: string | null,
+      recentPlateNumber: string | null = null,
+    ) => {
       captured = [];
       dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
         captured.push({ sql, params });
@@ -611,10 +618,14 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           return Promise.resolve([{ id: 'reg1', user_id: 'u1' }]);
         if (sql.includes('FROM system_configs')) return Promise.resolve([]);
         if (
-          sql.includes('SELECT id FROM iot_device_events') &&
+          sql.includes('SELECT id,') &&
           sql.includes("payload_json->>'channelId'")
         ) {
-          return Promise.resolve(recentEventId ? [{ id: recentEventId }] : []);
+          return Promise.resolve(
+            recentEventId
+              ? [{ id: recentEventId, plate_number: recentPlateNumber }]
+              : [],
+          );
         }
         if (sql.includes('INSERT INTO iot_device_events'))
           return Promise.resolve([{ id: 'evt-new' }]);
@@ -624,8 +635,8 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       });
     };
 
-    it('có row gần nhất cùng channel+direction trong cửa sổ → UPDATE (bump) + trả true', async () => {
-      wireMerge('evt-old');
+    it('có row gần nhất cùng channel+direction trong cửa sổ + plate đủ giống → UPDATE (bump) + trả true', async () => {
+      wireMerge('evt-old', '30A99998'); // OCR lệch 1 ký tự cuối — vẫn coi cùng xe
       const merged = await (service as any).mergeIntoRecentEvent(
         5,
         'enter',
@@ -660,7 +671,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     });
 
     it('UPDATE dùng COALESCE(snapshot_file_id, $2) — ưu tiên giữ ảnh cũ, chỉ nhận ảnh mới khi cũ NULL', async () => {
-      wireMerge('evt-old');
+      wireMerge('evt-old', '30A99998');
       await (service as any).mergeIntoRecentEvent(
         5,
         'enter',
@@ -677,7 +688,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     });
 
     it('UPDATE append biển mới vào payload_json->rawReads qua jsonb_set + || (KHÔNG ghi đè mảng cũ)', async () => {
-      wireMerge('evt-old');
+      wireMerge('evt-old', '30A99998');
       await (service as any).mergeIntoRecentEvent(5, 'enter', '30A99999', null);
       const upd = mergeUpdate();
       expect(upd!.sql).toContain("jsonb_set(");
@@ -698,8 +709,8 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(merged).toBe(false);
     });
 
-    it('DONE: 2 event cùng channel+direction cách nhau <15s (DB thấy row cũ) → gộp: KHÔNG INSERT mới, KHÔNG evaluate()/gate-log lại, rawReads chứa biển mới', async () => {
-      wireMerge('evt-old');
+    it('DONE: 2 event cùng channel+direction cách nhau <15s (DB thấy row cũ) + plate đủ giống → gộp: KHÔNG INSERT mới, KHÔNG evaluate()/gate-log lại, rawReads chứa biển mới', async () => {
+      wireMerge('evt-old', '30A11112'); // OCR lệch 1 ký tự cuối — cùng xe
       await service.onVehicleEvent(evt({ plateNumber: '30A11111' }));
       expect(insert()).toBeUndefined();
       const upd = mergeUpdate();
@@ -715,6 +726,53 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(insert()).toBeDefined();
       expect(payloadOf().rawReads).toEqual(['30A12345']);
       expect(alertMock.evaluate).toHaveBeenCalledTimes(1);
+    });
+
+    // ── Bug thật phát hiện qua test phần cứng 2026-08-08: handleTrafficJunction (bridge,
+    // camera ANPR thuần) luôn gửi eventAction="seen" cố định → direction KHÔNG BAO GIỜ
+    // phân biệt được 2 xe khác nhau cùng channel trong cửa sổ gộp 15s → mọi xe khác nhau
+    // bị gộp nhầm thành 1. Fix: thêm điều kiện plateNumber đủ giống (isSimilarPlate) —
+    // xem plate-similarity.ts cho test đơn vị đầy đủ của thuật toán so khớp.
+    describe('Fix bug thật 2026-08-08: direction="seen" cố định không còn đủ để gộp — cần plateNumber đủ giống', () => {
+      it('DONE: mergeIntoRecentEvent trực tiếp — "86886" vs row cũ "51L868" (2 xe khác nhau) → false, KHÔNG UPDATE dù cùng channel+direction+cửa sổ', async () => {
+        wireMerge('evt-old', '51L868');
+        const merged = await (service as any).mergeIntoRecentEvent(
+          5,
+          'seen',
+          '86886',
+          null,
+        );
+        expect(merged).toBe(false);
+        expect(mergeUpdate()).toBeUndefined();
+      });
+
+      it('DONE: onVehicleEvent full-flow — "51L868" rồi "86886", cùng channel, cùng direction=seen, <15s → KHÔNG gộp, INSERT row RIÊNG cho xe mới (không phải bump)', async () => {
+        wireMerge('evt-old', '51L868');
+        await service.onVehicleEvent(
+          evt({ plateNumber: '86886', eventAction: 'seen' }),
+        );
+        expect(insert()).toBeDefined(); // tạo row MỚI, KHÔNG bump row cũ
+        expect(mergeUpdate()).toBeUndefined();
+        expect(payloadOf().plateNumber).toBe('86886');
+        expect(payloadOf().direction).toBe('seen');
+        expect(alertMock.evaluate).toHaveBeenCalledTimes(1); // xe mới → evaluate() cho row mới
+      });
+
+      // Regression: fix KHÔNG được làm hỏng khả năng gộp lỗi OCR nhẹ đã hoạt động trước đó
+      // — case log thật đêm 2026-08-06/07: 3 lần đọc CÙNG 1 xe, đọc thiếu/thừa đầu-cuối.
+      // plateNumber gốc lưu trong row KHÔNG đổi khi gộp (chỉ rawReads được nối thêm) nên
+      // lần đọc thứ 3 vẫn so với lần đọc ĐẦU TIÊN "699", không phải lần đọc liền trước.
+      it('DONE: giữ nguyên khả năng gộp OCR nhẹ (log thật) — "G69946" vs row cũ "699" (đọc thiếu/thừa đầu-cuối) → true, VẪN gộp như cũ', async () => {
+        wireMerge('evt-old', '699');
+        await service.onVehicleEvent(
+          evt({ plateNumber: 'G69946', eventAction: 'seen' }),
+        );
+        expect(insert()).toBeUndefined(); // KHÔNG tạo row mới — vẫn gộp vào row cũ
+        const upd = mergeUpdate();
+        expect(upd).toBeDefined();
+        expect(upd!.params[0]).toBe(JSON.stringify(['G69946']));
+        expect(alertMock.evaluate).not.toHaveBeenCalled();
+      });
     });
 
     it('SELECT merge bind đúng direction hiện tại (enter/leave) — nền tảng để DB lọc đúng, tránh gộp nhầm 2 xe ngược chiều', async () => {
