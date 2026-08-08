@@ -1,3 +1,5 @@
+import { PendingRoomConflictDto } from './pending-room-conflict.dto.js';
+
 export class CapacityWarning {
   roomCapacity: number;
   attendeeCount: number;
@@ -14,4 +16,6 @@ export class AvailableRoomDto {
   availabilityStatus: string;
   isCurrentRoom: boolean;
   capacityWarning: CapacityWarning | null;
+  /** Nhóm D (2026-08-08) — cảnh báo mềm, không ảnh hưởng availabilityStatus. */
+  pendingConflicts: PendingRoomConflictDto[];
 }

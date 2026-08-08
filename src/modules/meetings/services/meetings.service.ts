@@ -18,6 +18,7 @@ import {
   Not,
   MoreThan,
   MoreThanOrEqual,
+  LessThan,
   LessThanOrEqual,
   QueryFailedError,
 } from 'typeorm';
@@ -100,6 +101,7 @@ import type {
   AvailableRoomDto,
   CapacityWarning,
 } from '../dto/available-room.dto.js';
+import type { PendingRoomConflictDto } from '../dto/pending-room-conflict.dto.js';
 import {
   BackgroundJobEntity,
   BackgroundJobType,
@@ -144,6 +146,7 @@ import { MeetingRequestQueryDto } from '../dto/meeting-request-query.dto.js';
 import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.js';
 import { UserSummaryDto } from '../dto/user-summary.dto.js';
 import { RoomSummaryDto } from '../dto/room-summary.dto.js';
+import { ConflictDetailDto } from '../dto/conflict-detail.dto.js';
 
 import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
@@ -235,23 +238,170 @@ export class MeetingsService {
     private readonly guestInviteService: GuestInviteService,
   ) {}
 
+  /**
+   * Đọc `system_configs.room_booking_buffer_minutes` (Nhóm B, mặc định 15 phút nếu thiếu
+   * config/giá trị không hợp lệ). ORDER BY updated_at DESC vì config_key không có unique
+   * constraint trên RDS thật (có thể tồn tại nhiều dòng trùng key).
+   */
+  private async getRoomBookingBufferMs(): Promise<number> {
+    const DEFAULT_MINUTES = 15;
+    try {
+      const config = await this.dataSource
+        .getRepository(SystemConfigEntity)
+        .findOne({
+          where: { configKey: 'room_booking_buffer_minutes' },
+          order: { updatedAt: 'DESC' },
+        });
+      if (!config) return DEFAULT_MINUTES * 60_000;
+      const parsed = parseInt(config.configValue ?? '', 10);
+      if (isNaN(parsed) || parsed < 0) {
+        this.logger.warn(
+          `[room_booking_buffer_minutes] Giá trị không hợp lệ: ${config.configValue}, dùng mặc định ${DEFAULT_MINUTES}`,
+        );
+        return DEFAULT_MINUTES * 60_000;
+      }
+      return parsed * 60_000;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `[room_booking_buffer_minutes] Lỗi đọc config: ${(error as Error).message}, dùng mặc định ${DEFAULT_MINUTES}`,
+      );
+      return DEFAULT_MINUTES * 60_000;
+    }
+  }
+
+  /**
+   * Nhóm D (2026-08-08) — với danh sách roomId cho trước, trả về map roomId →
+   * danh sách meeting request đang `pending` KHÁC xin cùng phòng/khung giờ.
+   * Chỉ mang tính cảnh báo thông tin cho người dùng — KHÔNG ảnh hưởng việc
+   * phòng có được coi là "available" hay không (chỉ approved/active mới chặn,
+   * xem getRoomAvailability/getAvailableRooms).
+   */
+  async getPendingRoomConflictsMap(
+    roomIds: string[],
+    startTime: Date,
+    endTime: Date,
+    excludeMeetingId?: string,
+  ): Promise<Map<string, PendingRoomConflictDto[]>> {
+    const map = new Map<string, PendingRoomConflictDto[]>();
+    if (roomIds.length === 0) return map;
+
+    const qb = this.dataSource
+      .getRepository(RoomBookingEntity)
+      .createQueryBuilder('rb')
+      .innerJoin('rb.meeting', 'meeting')
+      .innerJoin('rb.bookedByUser', 'requester')
+      .where('rb.roomId IN (:...roomIds)', { roomIds })
+      .andWhere('rb.status = :status', { status: RoomBookingStatus.PENDING })
+      .andWhere('rb.reservedStartTime < :endTime', { endTime })
+      .andWhere('rb.reservedEndTime > :startTime', { startTime })
+      .select([
+        'rb.roomId',
+        'rb.reservedStartTime',
+        'rb.reservedEndTime',
+        'meeting.title',
+        'requester.fullName',
+      ]);
+
+    if (excludeMeetingId) {
+      qb.andWhere('rb.meetingId IS DISTINCT FROM :excludeMeetingId', {
+        excludeMeetingId,
+      });
+    }
+
+    const rows = await qb.getMany();
+
+    for (const row of rows) {
+      const entry: PendingRoomConflictDto = {
+        meetingTitle: row.meeting.title,
+        requesterName: row.bookedByUser.fullName,
+        startTime: row.reservedStartTime,
+        endTime: row.reservedEndTime,
+      };
+      const existing = map.get(row.roomId) ?? [];
+      existing.push(entry);
+      map.set(row.roomId, existing);
+    }
+
+    return map;
+  }
+
+  /**
+   * Nhóm E (2026-08-08) — kiểm tra TƯƠI xem `roomId`/khung giờ cho trước có
+   * đang xung đột với booking `approved`/`active` khác không (cùng buffer
+   * policy Nhóm A/B), trả về đã enrich sẵn tên phòng/tên cuộc họp/tên host.
+   * KHÔNG đọc từ `meeting_requests.conflict_summary_json` — cột đó, với xung
+   * đột PHÒNG, chỉ được ghi trong lúc `approve()` phát hiện rồi throw NGAY
+   * trong cùng transaction nên luôn bị rollback, không bao giờ thực sự commit
+   * (khác với xung đột participant, ghi lúc create() nên có commit thật).
+   * Dùng chung bởi `findMeetingRequests` (danh sách cho MeetingApprovals.jsx)
+   * và `MeetingRequestReviewService.buildRejectionConflictPayload` (notification
+   * reject). `excludeMeetingId` để loại booking của chính request/meeting đang
+   * xét (quan trọng với UPDATE_TIME/UPDATE_ROOM — booking cũ có thể đang
+   * approved/active).
+   */
+  async findRoomConflictDetails(
+    roomId: string | null,
+    startTime: Date | null,
+    endTime: Date | null,
+    excludeMeetingId?: string,
+  ): Promise<ConflictDetailDto[]> {
+    if (!roomId || !startTime || !endTime) return [];
+
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStart = new Date(startTime.getTime() - bufferMs);
+    const bufferedEnd = new Date(endTime.getTime() + bufferMs);
+
+    const qb = this.dataSource
+      .getRepository(RoomBookingEntity)
+      .createQueryBuilder('rb')
+      .innerJoinAndSelect('rb.room', 'room')
+      .innerJoinAndSelect('rb.meeting', 'meeting')
+      .innerJoinAndSelect('rb.bookedByUser', 'requester')
+      .where('rb.roomId = :roomId', { roomId })
+      .andWhere('rb.status IN (:...statuses)', {
+        statuses: [RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE],
+      })
+      .andWhere('rb.reservedStartTime < :bufferedEnd', { bufferedEnd })
+      .andWhere('rb.reservedEndTime > :bufferedStart', { bufferedStart });
+
+    if (excludeMeetingId) {
+      qb.andWhere('rb.meetingId IS DISTINCT FROM :excludeMeetingId', {
+        excludeMeetingId,
+      });
+    }
+
+    const bookings = await qb.getMany();
+
+    return bookings.map((b) => ({
+      bookingId: b.id,
+      roomName: b.room?.roomName ?? null,
+      meetingTitle: b.meeting?.title ?? null,
+      startTime: b.reservedStartTime,
+      endTime: b.reservedEndTime,
+      hostName: b.bookedByUser?.fullName ?? null,
+    }));
+  }
+
   async getRoomAvailability(
     roomId: string,
     startTime: Date,
     endTime: Date,
   ): Promise<ConflictResult> {
+    // Chỉ approved/active mới chặn — pending của request khác không tính là
+    // xung đột (Manager là người quyết định duyệt request nào khi có 2 pending
+    // trùng phòng/giờ, xem feat-review-meeting-request FR-023/FR-032).
+    // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs giữa 2 booking approved/active.
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStart = new Date(startTime.getTime() - bufferMs);
+    const bufferedEnd = new Date(endTime.getTime() + bufferMs);
     const conflicting = await this.dataSource
       .getRepository(RoomBookingEntity)
       .findOne({
         where: {
           roomId,
-          status: In([
-            RoomBookingStatus.PENDING,
-            RoomBookingStatus.APPROVED,
-            RoomBookingStatus.ACTIVE,
-          ]),
-          reservedStartTime: LessThanOrEqual(endTime),
-          reservedEndTime: MoreThanOrEqual(startTime),
+          status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
+          reservedStartTime: LessThan(bufferedEnd),
+          reservedEndTime: MoreThan(bufferedStart),
         },
       });
 
@@ -507,19 +657,20 @@ export class MeetingsService {
 
     const allRooms = await queryBuilder.getMany();
 
+    // Chỉ approved/active chặn phòng khỏi danh sách gợi ý — pending không chặn.
+    // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs với booking approved/active.
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStart = new Date(startTime.getTime() - bufferMs);
+    const bufferedEnd = new Date(endTime.getTime() + bufferMs);
     const bookedRoomIds = await this.dataSource
       .getRepository(RoomBookingEntity)
       .createQueryBuilder('rb')
       .select('rb.roomId')
       .where('rb.status IN (:...statuses)', {
-        statuses: [
-          RoomBookingStatus.PENDING,
-          RoomBookingStatus.APPROVED,
-          RoomBookingStatus.ACTIVE,
-        ],
+        statuses: [RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE],
       })
-      .andWhere('rb.reservedStartTime < :endTime', { endTime })
-      .andWhere('rb.reservedEndTime > :startTime', { startTime })
+      .andWhere('rb.reservedStartTime < :bufferedEnd', { bufferedEnd })
+      .andWhere('rb.reservedEndTime > :bufferedStart', { bufferedStart })
       .getRawMany()
       .then((rows) => rows.map((r: { rb_room_id: string }) => r.rb_room_id));
 
@@ -1080,19 +1231,24 @@ export class MeetingsService {
         },
       });
 
+    // Chỉ approved/active chặn — pending của meeting/request khác không chặn.
+    // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs với booking approved/active.
+    const bufferMsForTimeUpdate = await this.getRoomBookingBufferMs();
+    const bufferedNewStart = new Date(
+      newStartTime.getTime() - bufferMsForTimeUpdate,
+    );
+    const bufferedNewEnd = new Date(
+      newEndTime.getTime() + bufferMsForTimeUpdate,
+    );
     const existingConflicts = await this.dataSource
       .getRepository(RoomBookingEntity)
       .find({
         where: {
           roomId: targetRoomId,
-          status: In([
-            RoomBookingStatus.PENDING,
-            RoomBookingStatus.APPROVED,
-            RoomBookingStatus.ACTIVE,
-          ]),
+          status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
           ...(activeBooking ? { id: Not(activeBooking.id) } : {}),
-          reservedStartTime: LessThanOrEqual(newEndTime),
-          reservedEndTime: MoreThanOrEqual(newStartTime),
+          reservedStartTime: LessThan(bufferedNewEnd),
+          reservedEndTime: MoreThan(bufferedNewStart),
         },
       });
 
@@ -1270,17 +1426,18 @@ export class MeetingsService {
               });
             }
 
+            // Tái dùng bufferedNewStart/bufferedNewEnd đã tính ở trên (Nhóm B) —
+            // cùng một bufferMs cho cả pre-check và re-check trong 1 request.
             const recheckConflict = await em.find(RoomBookingEntity, {
               where: {
                 roomId: targetRoomId,
                 status: In([
-                  RoomBookingStatus.PENDING,
                   RoomBookingStatus.APPROVED,
                   RoomBookingStatus.ACTIVE,
                 ]),
                 id: Not(booking.id),
-                reservedStartTime: LessThanOrEqual(newEndTime),
-                reservedEndTime: MoreThanOrEqual(newStartTime),
+                reservedStartTime: LessThan(bufferedNewEnd),
+                reservedEndTime: MoreThan(bufferedNewStart),
               },
             });
 
@@ -1746,25 +1903,44 @@ export class MeetingsService {
       })
       .getMany();
 
+    // Chỉ approved/active chặn phòng — pending không chặn (không còn tự động
+    // ẩn phòng hiện tại khỏi danh sách chỉ vì có request pending khác trùng giờ).
+    // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs với booking approved/active.
+    const bufferMsForMeetingRooms = await this.getRoomBookingBufferMs();
+    const bufferedStartForMeeting = new Date(
+      startTime.getTime() - bufferMsForMeetingRooms,
+    );
+    const bufferedEndForMeeting = new Date(
+      endTime.getTime() + bufferMsForMeetingRooms,
+    );
     const bookedRoomIds = await this.dataSource
       .getRepository(RoomBookingEntity)
       .createQueryBuilder('rb')
       .select('rb.roomId')
       .where('rb.status IN (:...statuses)', {
-        statuses: [
-          RoomBookingStatus.PENDING,
-          RoomBookingStatus.APPROVED,
-          RoomBookingStatus.ACTIVE,
-        ],
+        statuses: [RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE],
       })
-      .andWhere('rb.reservedStartTime < :endTime', { endTime })
-      .andWhere('rb.reservedEndTime > :startTime', { startTime })
+      .andWhere('rb.reservedStartTime < :bufferedEndForMeeting', {
+        bufferedEndForMeeting,
+      })
+      .andWhere('rb.reservedEndTime > :bufferedStartForMeeting', {
+        bufferedStartForMeeting,
+      })
       .andWhere('rb.meetingId IS DISTINCT FROM :meetingId', { meetingId })
       .getRawMany()
       .then((rows) => rows.map((r: { rb_room_id: string }) => r.rb_room_id));
 
     const allRooms = activeRooms.filter(
       (room) => !bookedRoomIds.includes(room.id),
+    );
+
+    // Nhóm D (2026-08-08) — cảnh báo mềm: request pending khác đang xin cùng
+    // phòng/giờ, không loại phòng khỏi allRooms ở trên.
+    const pendingConflictsMap = await this.getPendingRoomConflictsMap(
+      allRooms.map((room) => room.id),
+      startTime,
+      endTime,
+      meetingId,
     );
 
     let attendeeCount = 0;
@@ -1816,6 +1992,7 @@ export class MeetingsService {
         availabilityStatus: 'available',
         isCurrentRoom: room.id === currentRoomId,
         capacityWarning,
+        pendingConflicts: pendingConflictsMap.get(room.id) ?? [],
       });
     }
 
@@ -2028,19 +2205,24 @@ export class MeetingsService {
         },
       });
 
+    // Chỉ approved/active chặn — pending của request khác không chặn đổi phòng.
+    // Buffer (Nhóm B): cần cách nhau tối thiểu bufferMs với booking approved/active.
+    const bufferMsForRoomUpdate = await this.getRoomBookingBufferMs();
+    const bufferedMeetingStart = new Date(
+      meeting.startTime.getTime() - bufferMsForRoomUpdate,
+    );
+    const bufferedMeetingEnd = new Date(
+      meeting.endTime.getTime() + bufferMsForRoomUpdate,
+    );
     const conflict = await this.dataSource
       .getRepository(RoomBookingEntity)
       .findOne({
         where: {
           roomId: dto.newRoomId,
-          status: In([
-            RoomBookingStatus.PENDING,
-            RoomBookingStatus.APPROVED,
-            RoomBookingStatus.ACTIVE,
-          ]),
+          status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
           ...(oldBooking ? { id: Not(oldBooking.id) } : {}),
-          reservedStartTime: LessThanOrEqual(meeting.endTime),
-          reservedEndTime: MoreThanOrEqual(meeting.startTime),
+          reservedStartTime: LessThan(bufferedMeetingEnd),
+          reservedEndTime: MoreThan(bufferedMeetingStart),
         },
       });
 
@@ -6131,7 +6313,36 @@ export class MeetingsService {
 
       const [items, total] = await qb.getManyAndCount();
 
+      // Nhóm E (2026-08-08) — check TƯƠI xung đột phòng cho từng item đang
+      // pending (không đọc từ conflictSummaryJson — với xung đột PHÒNG, cột
+      // đó chỉ được ghi trong lúc approve() phát hiện rồi throw NGAY trong
+      // cùng transaction nên luôn bị rollback, không bao giờ thực sự commit
+      // xuống DB; khác với xung đột participant ghi lúc create() nên có commit
+      // thật). Chỉ check các item còn `pending` (đã approved/rejected thì
+      // không cần biết đang xung đột phòng nào nữa).
+      const conflictDetailsByRequestId = new Map<string, ConflictDetailDto[]>();
+      await Promise.all(
+        items
+          .filter((mr) => mr.approvalStatus === ApprovalStatus.PENDING)
+          .map(async (mr) => {
+            const roomId = mr.targetRoom?.id ?? mr.meeting?.roomId ?? null;
+            const startTime = mr.requestedStartTime ?? mr.meeting?.startTime ?? null;
+            const endTime = mr.requestedEndTime ?? mr.meeting?.endTime ?? null;
+            const details = await this.findRoomConflictDetails(
+              roomId,
+              startTime,
+              endTime,
+              mr.meeting?.id,
+            );
+            if (details.length > 0) {
+              conflictDetailsByRequestId.set(mr.id, details);
+            }
+          }),
+      );
+
       const listItems = items.map((mr) => {
+        const conflictDetails = conflictDetailsByRequestId.get(mr.id) ?? null;
+
         return new MeetingRequestListItemDto(
           mr.id,
           mr.requestCode,
@@ -6142,6 +6353,7 @@ export class MeetingsService {
           mr.requestedEndTime,
           mr.conflictCheckStatus,
           mr.conflictSummaryJson ?? null,
+          conflictDetails,
           mr.decisionAt,
           mr.rejectionReason,
           new UserSummaryDto(

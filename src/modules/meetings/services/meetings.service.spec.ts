@@ -908,9 +908,12 @@ describe('MeetingsService', () => {
       roomsQb.getMany.mockResolvedValue([]);
       const bookingsQb = mockQueryBuilder();
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
     });
 
     it('[T013-1] should return available rooms excluding current room', async () => {
@@ -935,10 +938,13 @@ describe('MeetingsService', () => {
       ]);
       const bookingsQb = mockQueryBuilder();
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReset()
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
 
       const rooms = await service.getAvailableRoomsForMeeting('meeting-uuid');
 
@@ -961,10 +967,13 @@ describe('MeetingsService', () => {
       ]);
       const bookingsQb = mockQueryBuilder();
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReset()
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
 
       const rooms = await service.getAvailableRoomsForMeeting('meeting-uuid', {
         includeCurrentRoom: true,
@@ -988,10 +997,13 @@ describe('MeetingsService', () => {
       ]);
       const bookingsQb = mockQueryBuilder();
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReset()
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
 
       mockRepo.count.mockResolvedValue(3);
 
@@ -1027,10 +1039,13 @@ describe('MeetingsService', () => {
       ]);
       const bookingsQb = mockQueryBuilder();
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReset()
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
 
       const overrideStart = new Date('2026-07-01T14:00:00Z');
       const overrideEnd = new Date('2026-07-01T15:00:00Z');
@@ -1086,10 +1101,13 @@ describe('MeetingsService', () => {
       // để mô phỏng đúng hành vi sau khi loại trừ đúng (booking của chính
       // meeting không được tính là "đang chiếm phòng").
       bookingsQb.getRawMany.mockResolvedValue([]);
+      const pendingConflictsQb = mockQueryBuilder();
+      pendingConflictsQb.getMany.mockResolvedValue([]);
       mockRepo.createQueryBuilder
         .mockReset()
         .mockReturnValueOnce(roomsQb)
-        .mockReturnValueOnce(bookingsQb);
+        .mockReturnValueOnce(bookingsQb)
+        .mockReturnValueOnce(pendingConflictsQb);
 
       const rooms = await service.getAvailableRoomsForMeeting('meeting-uuid', {
         includeCurrentRoom: true,
@@ -3440,11 +3458,18 @@ describe('MeetingsService', () => {
       const qb: any = {
         leftJoin: jest.fn().mockReturnThis(),
         select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
         getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+        // Nhóm E: findMeetingRequests giờ tự gọi findRoomConflictDetails cho
+        // từng item pending — dùng LẠI createQueryBuilder mock này (không phân
+        // biệt theo entity), nên cần thêm innerJoinAndSelect/getMany để không
+        // vỡ các test không liên quan tới tính năng đó.
+        innerJoinAndSelect: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
       };
       return qb;
     };

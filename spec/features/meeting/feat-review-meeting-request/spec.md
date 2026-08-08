@@ -18,6 +18,9 @@
 | :--- | :--- | :--- |
 | 2026-06-08 | Cập nhật spec sau khi clarify: xử lý room conflict không reject, cấm self-approval, validation, pessimistic lock | Toàn bộ các mục liên quan FR, AC, Model, Errors |
 | 2026-08-03 | Thay đổi quyết định nghiệp vụ theo yêu cầu team: reject chỉ thông báo cho **host** (không còn gửi thêm cho creator/requester nếu khác host). Đồng thời fix bug đã phát hiện: meeting_invite trước đây bị gửi ngay lúc tạo meeting (trước khi duyệt) — đã sửa để chỉ gửi sau khi approve, đúng như FR-007/FR-035 spec đã quy định. | FR-013, AC-002, mục 7.7 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm A] Đổi status filter của bước re-check lúc approve từ `pending`/`approved`/`active` → CHỈ `approved`/`active`. Bắt buộc phải đổi (không thể giữ nguyên): vì booking `pending` không còn chặn nhau lúc TẠO (xem `feat-create-meeting-manual` FR-012), nếu re-check lúc approve vẫn tính `pending` là chặn thì 2 request pending cùng phòng/giờ sẽ MÃI MÃI chặn lẫn nhau — Manager không approve được cái nào cả. Sau khi đổi: request được approve trước → booking chuyển `approved` → các request pending còn lại khi được duyệt sau đó sẽ tự động nhận ROOM_CONFLICT (đúng ý đồ "Manager quyết định duyệt phòng nào"). Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | FR-023, FR-032, AC-007 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm B] Re-check lúc approve (FR-023, FR-032) áp dụng buffer tối thiểu `bufferMinutes` phút (mặc định 15, `system_configs.room_booking_buffer_minutes`) giữa request đang duyệt và booking `approved`/`active` khác cùng phòng — không chỉ overlap trực tiếp mới bị chặn, cách nhau dưới buffer cũng bị chặn. | FR-023, FR-032 |
+| 2026-08-08 | [Xử lý xung đột phòng/giờ họp — Nhóm E] Khi reject 1 request, THE system giờ TỰ KIỂM TRA LẠI (tươi, tại thời điểm reject) xem phòng/giờ của request có đang xung đột với booking `approved`/`active` khác không, đính kèm chi tiết xung đột (tên phòng/tên cuộc họp/tên host đang giữ chỗ) + tối đa 5 phòng gợi ý còn trống vào `payloadJson` của notification `meeting_request_rejected` gửi cho host — thay vì chỉ có subject/content dạng text tĩnh như trước. **[Sửa thiết kế cùng ngày]** Bản đầu định đọc từ `meeting_requests.conflict_summary_json` nhưng phát hiện field đó, với xung đột PHÒNG, chỉ được ghi trong lúc `approve()` phát hiện ROOM_CONFLICT rồi `throw` NGAY trong cùng DB transaction — transaction rollback khiến save đó KHÔNG BAO GIỜ thực sự commit. Đã đổi sang query TƯƠI trực tiếp (`MeetingsService.findRoomConflictDetails`, cũng dùng lại ở FR-D-conflictDetails của `MeetingRequestListItemDto` cho màn `MeetingApprovals.jsx` — có cùng vấn đề). Xem `KE_HOACH_XU_LY_XUNG_DOT_PHONG_GIO_HOP_2026-08-08.md` ở root repo. | FR-036 (cập nhật), FR-038, FR-039 (mới, viết lại) |
 
 ## 1. Context & Goal
 
@@ -156,7 +159,7 @@ FR-022: IF `room_bookings.status` không phải `pending`, THEN THE system SHALL
 ### 3.6 Unwanted Behavior Requirements (Room Conflict)
 
 ```
-FR-023: IF phát hiện room booking conflict (booking khác có status `pending`, `approved`, hoặc `active` overlap với thời gian của request hiện tại), THEN THE system SHALL không approve, giữ `approval_status = pending`, cập nhật `conflict_check_status = blocked` và `conflict_checked_at`, và trả về lỗi 409 Conflict.
+FR-023: IF phát hiện room booking conflict (booking khác có status `approved` hoặc `active` overlap với thời gian của request hiện tại, HOẶC cách nhau ít hơn `bufferMinutes` phút — mặc định 15, `system_configs.room_booking_buffer_minutes`, Nhóm B), THEN THE system SHALL không approve, giữ `approval_status = pending`, cập nhật `conflict_check_status = blocked` và `conflict_checked_at`, và trả về lỗi 409 Conflict. Booking `pending` của request khác KHÔNG kích hoạt lỗi này và không áp dụng buffer — đây là điểm mà Manager thực sự "phân xử": nếu hai request pending cùng phòng/giờ, request nào được approve TRƯỚC sẽ thành công (không có booking approved/active nào cản); request pending còn lại khi đến lượt duyệt mới bị chặn bởi chính booking vừa được approved đó (kể cả khi chỉ cách nhau dưới buffer, không cần overlap trực tiếp).
 FR-024: IF phát hiện room booking conflict khi approve, THE system SHALL ghi nhận conflict vào `meeting_requests.conflict_summary_json`.
 FR-025: IF phát hiện participant conflict khi approve, THE system SHALL cho phép approve (không block), và có thể ghi participant conflict vào `conflict_summary_json` hoặc audit metadata.
 ```
@@ -181,8 +184,8 @@ FR-031: IF bất kỳ persistence operation nào trong transaction thất bại 
 ### 3.9 Conflict Re-check Requirements
 
 ```
-FR-032: WHEN approve meeting request, THE system SHALL kiểm tra room booking overlap với các booking khác (status IN ('pending','approved','active')), loại trừ booking hiện tại của request này.
-FR-033: IF có booking khác overlap, THEN THE system SHALL không approve và trả về 409 Conflict.
+FR-032: WHEN approve meeting request, THE system SHALL kiểm tra room booking overlap CÓ BUFFER với các booking khác (status IN ('approved','active')): `existing.start < (target.end + bufferMinutes) AND existing.end > (target.start - bufferMinutes)`, loại trừ booking hiện tại của request này. `bufferMinutes` mặc định 15, đọc từ `system_configs.room_booking_buffer_minutes` (Nhóm B). Booking `pending` của request khác KHÔNG nằm trong tập trạng thái được kiểm tra và không áp dụng buffer (bắt buộc, để tránh 2 request pending trùng phòng/giờ chặn lẫn nhau vĩnh viễn — xem Changelog 2026-08-08).
+FR-033: IF có booking khác overlap (có tính buffer), THEN THE system SHALL không approve và trả về 409 Conflict.
 FR-034: IF không có booking khác overlap, THEN THE system SHALL cho phép approve và tiến hành cập nhật trạng thái.
 ```
 
@@ -190,8 +193,16 @@ FR-034: IF không có booking khác overlap, THEN THE system SHALL cho phép app
 
 ```
 FR-035: WHEN approve thành công, THE system SHALL tạo notification records với `notification_type = meeting_invite`, `channel` bao gồm cả `email` và `in_app`, `delivery_status = queued`.
-FR-036: WHEN reject thành công, THE system SHALL tạo notification records với `notification_type = meeting_request_rejected`, `delivery_status = queued`.
+FR-036: WHEN reject thành công, THE system SHALL tạo notification records với `notification_type = meeting_request_rejected`, `delivery_status = queued`. [Cập nhật Nhóm E, viết lại] Ngay sau khi reject, THE system SHALL tự kiểm tra TƯƠI (không đọc `conflict_summary_json` — xem FR-038) xem `targetRoomId`/khung giờ của request vừa bị reject có đang overlap (có buffer, Nhóm B) với booking `approved`/`active` khác không. IF có, THEN đính kèm `payloadJson = {conflictDetails, suggestedAlternatives}` (xem FR-038, FR-039) vào notification này. IF không, `payloadJson` để trống — reject vì lý do khác (participant conflict, hoặc manager đơn giản không đồng ý) không đính kèm gì thêm.
 FR-037: WHEN approve hoặc reject thành công, THE system SHALL ghi audit_log với `user_id`, `action_type`, `entity_type`, `entity_id`, `new_value_json` và `metadata_json`.
+FR-038: [Nhóm E, mới — viết lại cùng ngày] WHEN xây dựng `payloadJson.conflictDetails` cho notification reject, THE system SHALL query TRỰC TIẾP `room_bookings` có cùng `roomId` với request, status `approved`/`active`, overlap khung giờ request (có buffer Nhóm B), loại trừ chính booking của request đang reject — KHÔNG đọc từ `meeting_requests.conflict_summary_json` (field đó với xung đột PHÒNG chỉ được ghi trong lúc `approve()` phát hiện rồi `throw` ngay trong cùng transaction nên luôn bị rollback, không bao giờ thực sự commit — khác xung đột participant ghi lúc `create()` nên có commit thật). Method dùng chung: `MeetingsService.findRoomConflictDetails()` (cũng dùng cho `conflictDetails` trong `MeetingRequestListItemDto`, xem section 3.9 mới "Conflict Details cho danh sách"). Trả về mảng `[{bookingId, roomName, meetingTitle, startTime, endTime, hostName}]`, join quan hệ `room`, `meeting`, `bookedByUser`; mảng rỗng nếu không có xung đột.
+FR-039: [Nhóm E, mới] WHEN xây dựng `payloadJson.suggestedAlternatives` cho notification reject, THE system SHALL gọi lại logic gợi ý phòng hiện có (`MeetingsService.getAvailableRooms`, cùng khung giờ `requestedStartTime`/`requestedEndTime` của request bị reject) và trả về tối đa 5 phòng, loại trừ phòng đang xin (`targetRoomId`). Nếu không có phòng trống nào, trả mảng rỗng `[]` — KHÔNG lỗi.
+```
+
+### 3.9 Conflict Details cho danh sách (Nhóm E, mới)
+
+```text
+FR-D-conflictDetails: WHEN trả danh sách meeting request (dùng bởi `MeetingApprovals.jsx`), THE system SHALL, với MỖI request đang `approval_status = pending`, tự kiểm tra TƯƠI (`MeetingsService.findRoomConflictDetails`, cùng logic FR-038) xem phòng/giờ đang xin có đang xung đột với booking `approved`/`active` khác không (loại trừ booking của chính meeting đang xét — quan trọng cho UPDATE_TIME/UPDATE_ROOM vì booking cũ có thể đang approved/active). Kết quả gắn vào field `conflictDetails` (mảng, hoặc `null` nếu không xung đột) trên mỗi item — độc lập với field `conflictSummary` cũ (vẫn giữ nguyên, chỉ phản ánh xung đột participant ghi lúc tạo).
 ```
 
 ### 3.11 Requirement Notes
@@ -485,9 +496,16 @@ Then hệ thống trả về 409 Conflict và không thay đổi dữ liệu.
 
 ```
 AC-007: Approve request bị room conflict mới phát sinh
-Given một meeting request đang pending, nhưng có booking khác (status pending/approved/active) đã chiếm phòng trong cùng khoảng thời gian,
+Given một meeting request đang pending, nhưng có booking khác (status `approved` hoặc `active`) đã chiếm phòng trong cùng khoảng thời gian,
 When approver gửi yêu cầu approve,
 Then hệ thống trả về 409 Conflict, không approve, và ghi nhận conflict vào conflict_summary_json.
+
+AC-007b: Hai request pending cùng phòng/giờ — Manager duyệt cái nào trước thì cái đó thắng
+Given hai meeting request A và B đều đang pending, cùng chọn phòng X và khung giờ trùng nhau, chưa có booking approved/active nào ở phòng X trong khung giờ đó,
+When approver approve request A trước,
+Then hệ thống approve A thành công (booking A chuyển `approved`),
+When approver sau đó approve request B,
+Then hệ thống trả về 409 Conflict cho B (vì booking A giờ đã `approved`), request B vẫn giữ `pending` và approver phải reject B hoặc yêu cầu đổi phòng/giờ khác (xem `feat-create-meeting-manual` AC-007b, `feat-update-meeting-time`/`feat-update-meeting-room`).
 ```
 
 ### 7.5 Authorization Cases
@@ -567,7 +585,8 @@ Then toàn bộ transaction rollback, không có thay đổi nào được persi
 | AC-004 | ERR-007 | Request not found |
 | AC-005 | FR-020, FR-021, FR-022, ERR-010 | Already approved |
 | AC-006 | FR-020, ERR-010 | Already approved, reject |
-| AC-007 | FR-023, FR-024, FR-032, FR-033, ERR-013 | Room conflict |
+| AC-007 | FR-023, FR-024, FR-032, FR-033, ERR-013 | Room conflict (chỉ approved/active) |
+| AC-007b | FR-023, FR-032 | Hai request pending cùng phòng/giờ — duyệt trước thắng |
 | AC-008 | FR-002, ERR-005 | No approve permission |
 | AC-009 | FR-002, ERR-006 | No reject permission |
 | AC-010 | ERR-002 | Missing rejectionReason |

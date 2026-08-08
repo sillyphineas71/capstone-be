@@ -240,6 +240,7 @@ export class NotificationsService {
         item.id,
         item.createdAt,
       ),
+      payloadJson: item.payloadJson ?? null,
     }));
 
     return {
@@ -293,6 +294,7 @@ export class NotificationsService {
         notification.id,
         notification.createdAt,
       ),
+      payloadJson: notification.payloadJson ?? null,
     };
   }
 

@@ -2,6 +2,7 @@ import { Expose, Type } from 'class-transformer';
 import { UserSummaryDto } from './user-summary.dto.js';
 import { RoomSummaryDto } from './room-summary.dto.js';
 import { MeetingRequestType } from '../entities/meeting-request.entity.js';
+import { ConflictDetailDto } from './conflict-detail.dto.js';
 
 const EDIT_REQUEST_TYPES: readonly MeetingRequestType[] = [
   MeetingRequestType.UPDATE_TIME,
@@ -35,6 +36,15 @@ export class MeetingRequestListItemDto {
 
   @Expose()
   conflictSummary: Record<string, unknown> | null;
+
+  /**
+   * Nhóm E (2026-08-08) — bản "làm giàu" của conflictSummary CHỈ khi đó là
+   * xung đột phòng (bookingId/roomId), enrich sang tên phòng/tên cuộc
+   * họp/tên host để Manager không phải tự tra id. null nếu không có xung đột
+   * phòng nào (kể cả khi conflictSummary có dữ liệu xung đột participant).
+   */
+  @Expose()
+  conflictDetails: ConflictDetailDto[] | null;
 
   @Expose()
   decisionAt: Date | null;
@@ -102,6 +112,7 @@ export class MeetingRequestListItemDto {
     requestedEndTime: Date | null,
     conflictCheckStatus: string,
     conflictSummary: Record<string, unknown> | null,
+    conflictDetails: ConflictDetailDto[] | null,
     decisionAt: Date | null,
     rejectionReason: string | null,
     requestedBy: UserSummaryDto,
@@ -128,6 +139,7 @@ export class MeetingRequestListItemDto {
     this.requestedEndTime = requestedEndTime;
     this.conflictCheckStatus = conflictCheckStatus;
     this.conflictSummary = conflictSummary;
+    this.conflictDetails = conflictDetails;
     this.decisionAt = decisionAt;
     this.rejectionReason = rejectionReason;
     this.requestedBy = requestedBy;

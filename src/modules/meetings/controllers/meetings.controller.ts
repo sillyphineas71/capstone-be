@@ -726,6 +726,15 @@ export class MeetingsController {
       capacity,
     );
 
+    // Nhóm D (2026-08-08) — cảnh báo mềm: request pending khác đang xin cùng
+    // phòng/giờ, không loại phòng khỏi danh sách trả về.
+    const pendingConflictsMap =
+      await this.meetingsService.getPendingRoomConflictsMap(
+        rooms.map((room) => room.id),
+        start,
+        end,
+      );
+
     return {
       success: true,
 
@@ -755,6 +764,8 @@ export class MeetingsController {
         hasDisplay: room.hasDisplay,
 
         allowRecording: room.allowRecording,
+
+        pendingConflicts: pendingConflictsMap.get(room.id) ?? [],
       })),
     };
   }

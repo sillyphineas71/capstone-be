@@ -40,6 +40,7 @@ import { ApproveMeetingRequestDto } from '../dto/approve-meeting-request.dto.js'
 import { RejectMeetingRequestDto } from '../dto/reject-meeting-request.dto.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
 import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
+import { MeetingsService } from '../services/meetings.service.js';
 
 describe('MeetingRequestReviewService', () => {
   let service: MeetingRequestReviewService;
@@ -47,6 +48,7 @@ describe('MeetingRequestReviewService', () => {
   let notificationsService: jest.Mocked<NotificationsService>;
   let guestInviteService: jest.Mocked<GuestInviteService>;
   let guestEmailService: jest.Mocked<GuestEmailService>;
+  let meetingsService: jest.Mocked<MeetingsService>;
   let em: jest.Mocked<EntityManager>;
 
   const authUser = { userId: 'approver-uuid' };
@@ -187,6 +189,12 @@ describe('MeetingRequestReviewService', () => {
       sendOtp: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<GuestEmailService>;
 
+    // Nhóm E (2026-08-08): MeetingRequestReviewService giờ inject MeetingsService
+    // để lấy suggestedAlternatives lúc reject() — chỉ cần mock getAvailableRooms.
+    meetingsService = {
+      getAvailableRooms: jest.fn().mockResolvedValue([]),
+    } as unknown as jest.Mocked<MeetingsService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MeetingRequestReviewService,
@@ -194,6 +202,7 @@ describe('MeetingRequestReviewService', () => {
         { provide: NotificationsService, useValue: notificationsService },
         { provide: GuestInviteService, useValue: guestInviteService },
         { provide: GuestEmailService, useValue: guestEmailService },
+        { provide: MeetingsService, useValue: meetingsService },
       ],
     }).compile();
 
