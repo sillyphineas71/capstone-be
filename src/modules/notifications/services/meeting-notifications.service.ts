@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
 import {
@@ -21,9 +21,24 @@ import {
   buildMeetingReminderEmail,
   buildMeetingCancelledEmail,
   buildMinutesPublishedEmail,
+  buildMinutesPublishedGuestEmail,
 } from '../../mail/templates/builders.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
+import { StorageService } from '../../storage/storage.service.js';
+import {
+  MediaFileEntity,
+  MediaFileType,
+  MediaVisibilityLevel,
+  StorageProvider,
+} from '../../recording/entities/media-file.entity.js';
+import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
+import { renderMeetingMinutesPdf } from '../../minutes/renderers/meeting-minutes-pdf-renderer.js';
+import {
+  MinutesExportData,
+  normalizeMinutesJsonList,
+} from '../../minutes/renderers/meeting-minutes-export-data.js';
+import { slugifyFileNamePart } from '../../../common/utils/filename.util.js';
 
 import {
   MeetingEntity,
@@ -71,10 +86,15 @@ export class MeetingNotificationsService {
     private readonly minutesRepo: Repository<MeetingMinutesEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
+    @InjectRepository(MediaFileEntity)
+    private readonly mediaFileRepo: Repository<MediaFileEntity>,
+    @InjectRepository(TranscriptEntity)
+    private readonly transcriptRepo: Repository<TranscriptEntity>,
     private readonly notificationsService: NotificationsService,
     private readonly authzReadRepo: AuthzReadRepository,
     private readonly auditLogsService: AuditLogsService,
     private readonly configService: ConfigService,
+    private readonly storageService: StorageService,
   ) {}
 
   // ──────────────────────────────────────────────
@@ -570,23 +590,26 @@ export class MeetingNotificationsService {
     }
 
     if (dto.channels.includes('email')) {
-      const emails: string[] = [];
+      const internalEmails: string[] = [];
+      const externalEmails: string[] = [];
       if (dto.recipientScope === 'participants') {
         for (const p of internalParticipants) {
           const user = await this.userRepo.findOne({ where: { id: p.userId } });
-          if (user?.email) emails.push(user.email);
+          if (user?.email) internalEmails.push(user.email);
         }
         for (const ep of externalParticipants) {
-          if (ep.email) emails.push(ep.email);
+          if (ep.email) externalEmails.push(ep.email);
         }
       } else {
         for (const uid of userIds) {
           const user = await this.userRepo.findOne({ where: { id: uid } });
-          if (user?.email) emails.push(user.email);
+          if (user?.email) internalEmails.push(user.email);
           else skipped++;
         }
       }
-      if (emails.length > 0) {
+
+      // Nội bộ: mời đăng nhập xem (đã có quyền qua canAccessMinutes) — không đính kèm.
+      if (internalEmails.length > 0) {
         const result = await this.notificationsService.enqueueEmailNotification(
           {
             notificationType: NotificationType.MINUTES_DISTRIBUTION,
@@ -600,14 +623,47 @@ export class MeetingNotificationsService {
             }),
             relatedEntityType: 'meeting_minutes',
             relatedEntityId: minutes.id,
-            toEmails: emails,
+            toEmails: internalEmails,
             createdBy: authUser.userId,
           },
         );
         if (!notificationId) {
           notificationId = result.notification.id;
         }
-        queued += emails.length;
+        queued += internalEmails.length;
+      }
+
+      // Khách ngoài công ty: không có tài khoản để đăng nhập xem sau này
+      // (guest-access magic link chỉ còn hiệu lực trong khung giờ họp) — đính
+      // kèm thẳng file PDF biên bản vào email.
+      if (externalEmails.length > 0) {
+        const attachment = await this.getOrCreateMinutesPdfAttachment(
+          minutes,
+          meeting,
+          authUser.userId,
+        );
+        const result = await this.notificationsService.enqueueEmailNotification(
+          {
+            notificationType: NotificationType.MINUTES_DISTRIBUTION,
+            channel: NotificationChannel.EMAIL,
+            subject: 'Biên bản họp đã được ban hành: ' + meeting.title,
+            content,
+            emailHtml: buildMinutesPublishedGuestEmail({
+              meetingTitle: meeting.title,
+              minutesTitle: minutes.title,
+              message: dto.message ?? null,
+            }),
+            relatedEntityType: 'meeting_minutes',
+            relatedEntityId: minutes.id,
+            toEmails: externalEmails,
+            createdBy: authUser.userId,
+            attachment,
+          },
+        );
+        if (!notificationId) {
+          notificationId = result.notification.id;
+        }
+        queued += externalEmails.length;
       }
     }
 
@@ -697,6 +753,100 @@ export class MeetingNotificationsService {
       message: 'You are not the minutes owner or an admin',
       error: { code: 'NOT_MINUTES_OWNER', details: {} },
     });
+  }
+
+  /**
+   * Lấy (hoặc tự render+lưu nếu chưa có) file PDF đầy đủ của biên bản, dùng để
+   * đính kèm email gửi khách ngoài (distributeMeetingMinutes). Ưu tiên tái sử
+   * dụng `minutes.fileId` nếu host đã từng export PDF mặc định (UC-147:
+   * MinutesExportWorkerProcessor set field này khi format=pdf +
+   * includeTranscript+includeActionItems=true) — tránh render trùng.
+   *
+   * KHÔNG gọi MinutesExportService (module `minutes`) để tránh import
+   * MinutesModule → MeetingsModule → NotificationsModule (circular — xem
+   * notifications.module.ts). Thay vào đó dùng lại renderer thuần
+   * (renderMeetingMinutesPdf) trực tiếp, cùng cách MinutesExportWorkerProcessor làm.
+   */
+  private async getOrCreateMinutesPdfAttachment(
+    minutes: MeetingMinutesEntity,
+    meeting: MeetingEntity,
+    requestedByUserId: string,
+  ): Promise<{ storageKey: string; fileName: string; mimeType: string }> {
+    if (minutes.fileId) {
+      const existing = await this.mediaFileRepo.findOne({
+        where: { id: minutes.fileId, deletedAt: IsNull() },
+      });
+      if (existing) {
+        return {
+          storageKey: existing.storageKey,
+          fileName: existing.fileName,
+          mimeType: existing.mimeType,
+        };
+      }
+    }
+
+    let transcriptText: string | null = null;
+    if (minutes.linkedTranscriptId) {
+      const transcript = await this.transcriptRepo.findOne({
+        where: { id: minutes.linkedTranscriptId },
+      });
+      transcriptText = transcript?.cleanedText || transcript?.rawText || null;
+    }
+
+    const exportData: MinutesExportData = {
+      title: minutes.title,
+      meetingTitle: meeting.title ?? null,
+      status: minutes.status,
+      issuedAt: minutes.issuedAt,
+      generatedAt: new Date(),
+      minutesContent: minutes.minutesContent,
+      decisions: normalizeMinutesJsonList(minutes.decisionsJson),
+      actionItems: normalizeMinutesJsonList(minutes.actionItemsJson),
+      includeActionItems: true,
+      transcriptText,
+    };
+
+    const fileBuffer = await renderMeetingMinutesPdf(exportData);
+    const saveResult = await this.storageService.saveFile({
+      buffer: fileBuffer,
+      originalName: `minutes-${minutes.id}.pdf`,
+      folder: 'exports',
+    });
+
+    const storageProv =
+      this.storageService.getDriver() === 's3'
+        ? StorageProvider.S3
+        : this.storageService.getDriver() === 'minio'
+          ? StorageProvider.MINIO
+          : StorageProvider.LOCAL;
+
+    const meetingSlug = slugifyFileNamePart(meeting.title || minutes.title);
+    const mediaFile = this.mediaFileRepo.create({
+      fileName: `Tom_tat_cuoc_hop_${meetingSlug}.pdf`,
+      fileType: MediaFileType.EXPORT,
+      mimeType: 'application/pdf',
+      storageProvider: storageProv,
+      storageKey: saveResult.storageKey,
+      fileSizeBytes: saveResult.sizeBytes.toString(),
+      relatedEntityType: 'meeting_minutes',
+      relatedEntityId: minutes.id,
+      meetingId: minutes.meetingId,
+      uploadedBy: requestedByUserId,
+      visibilityLevel: MediaVisibilityLevel.INTERNAL,
+      isActive: true,
+    });
+    const saved = await this.mediaFileRepo.save(mediaFile);
+
+    // Đây tương đương "export mặc định" (pdf + transcript + action items) —
+    // set làm fileId chính thức để lần sau (export tay hoặc distribute khác)
+    // tái dùng, giống hành vi MinutesExportWorkerProcessor bước isDefaultExport.
+    await this.minutesRepo.update(minutes.id, { fileId: saved.id });
+
+    return {
+      storageKey: saved.storageKey,
+      fileName: saved.fileName,
+      mimeType: saved.mimeType,
+    };
   }
 
   private ensureNotCancelled(meeting: MeetingEntity): void {

@@ -18,6 +18,13 @@ import {
   NotificationEntity,
   NotificationDeliveryStatus,
 } from './entities/notification.entity.js';
+import { StorageService } from '../storage/storage.service.js';
+
+interface SendEmailJobAttachment {
+  storageKey: string;
+  fileName: string;
+  mimeType: string;
+}
 
 interface SendEmailJobData {
   notificationId: string;
@@ -27,6 +34,8 @@ interface SendEmailJobData {
   content: string;
   emailHtml?: string;
   payloadJson?: Record<string, unknown>;
+  /** File đính kèm (VD: PDF biên bản gửi khách ngoài) — tải bytes từ storage ngay trước khi gửi. */
+  attachment?: SendEmailJobAttachment;
 }
 
 @Injectable()
@@ -37,6 +46,7 @@ export class NotificationWorkerService extends WorkerHost {
   constructor(
     private readonly mailService: MailService,
     private readonly backgroundJobsService: BackgroundJobsService,
+    private readonly storageService: StorageService,
     @InjectRepository(NotificationEntity)
     private readonly notificationRepo: Repository<NotificationEntity>,
     @InjectRepository(BackgroundJobEntity)
@@ -60,6 +70,7 @@ export class NotificationWorkerService extends WorkerHost {
       subject,
       content,
       emailHtml,
+      attachment,
     } = job.data;
 
     const notification = await this.notificationRepo.findOne({
@@ -94,11 +105,31 @@ export class NotificationWorkerService extends WorkerHost {
     }
 
     const recipients = Array.isArray(toEmails) ? toEmails : [toEmails];
+
+    // Đính kèm (VD: PDF biên bản gửi khách ngoài) — tải bytes ngay trước khi
+    // gửi thay vì mang buffer qua Redis job payload (payload chỉ mang storageKey).
+    let attachments:
+      | { filename: string; content: Buffer; contentType?: string }[]
+      | undefined;
+    if (attachment) {
+      const buffer = await this.storageService.downloadFile(
+        attachment.storageKey,
+      );
+      attachments = [
+        {
+          filename: attachment.fileName,
+          content: buffer,
+          contentType: attachment.mimeType,
+        },
+      ];
+    }
+
     const result = await this.mailService.sendMail({
       to: recipients,
       subject: subject || '(No subject)',
       html: emailHtml || this.wrapPlainTextAsHtml(content),
       text: this.stripHtmlTags(content),
+      attachments,
     });
 
     if (!result.success) {

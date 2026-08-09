@@ -45,6 +45,12 @@ export interface EnqueueEmailNotificationDto extends CreateNotificationDto {
    * KHÔNG được lưu vào `notifications.content` (giữ content DB là bản plain-text).
    */
   emailHtml?: string;
+  /** File đính kèm (VD: PDF biên bản gửi khách ngoài) — chỉ mang storageKey qua queue, worker tự tải bytes. */
+  attachment?: {
+    storageKey: string;
+    fileName: string;
+    mimeType: string;
+  };
 }
 
 /**
@@ -147,6 +153,7 @@ export class NotificationsService {
           content: dto.content,
           emailHtml: dto.emailHtml,
           payloadJson: dto.payloadJson,
+          attachment: dto.attachment,
         },
       );
     } catch (error) {

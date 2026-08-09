@@ -254,6 +254,32 @@ export function buildMinutesPublishedEmail(params: {
   });
 }
 
+/**
+ * Bản email gửi khách ngoài công ty (meeting_external_participants) — khác
+ * buildMinutesPublishedEmail ở chỗ KHÔNG mời "đăng nhập hệ thống" (khách không
+ * có tài khoản/không còn magic link hợp lệ sau khi họp kết thúc), thay vào đó
+ * báo rõ file PDF đã đính kèm trong email này.
+ */
+export function buildMinutesPublishedGuestEmail(params: {
+  meetingTitle: string;
+  minutesTitle: string;
+  message?: string | null;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Biên bản cuộc họp <strong>${escapeHtml(params.meetingTitle)}</strong> đã được ban hành chính thức.`,
+    ) +
+    renderInfoTable([
+      { label: 'Tiêu đề biên bản', value: escapeHtml(params.minutesTitle) },
+    ]) +
+    (params.message ? renderCallout(escapeHtml(params.message), 'info') : '') +
+    renderParagraph('Bản PDF của biên bản được đính kèm trong email này.');
+  return renderEmailLayout({
+    heading: 'Biên bản họp đã được ban hành',
+    bodyHtml,
+  });
+}
+
 // ── Rooms ─────────────────────────────────────────────────────────────────
 
 export function buildRoomRemovedEmail(params: {

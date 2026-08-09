@@ -31,6 +31,9 @@ import {
   MeetingMinutesStatus,
 } from '../../minutes/entities/meeting-minutes.entity.js';
 import { UserEntity } from '../../accounts/entities/user.entity.js';
+import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
+import { TranscriptEntity } from '../../transcription/entities/transcript.entity.js';
+import { StorageService } from '../../storage/storage.service.js';
 import { SendMeetingInvitationDto } from '../dto/send-meeting-invitation.dto.js';
 import { SendMeetingReminderDto } from '../dto/send-meeting-reminder.dto.js';
 import { ResendCancellationNotificationDto } from '../dto/resend-cancellation-notification.dto.js';
@@ -75,6 +78,9 @@ describe('MeetingNotificationsService', () => {
   let agendaRepo: jest.Mocked<any>;
   let minutesRepo: jest.Mocked<any>;
   let userRepo: jest.Mocked<any>;
+  let mediaFileRepo: jest.Mocked<any>;
+  let transcriptRepo: jest.Mocked<any>;
+  let storageService: jest.Mocked<any>;
 
   const authUser = { userId: 'organizer-uuid' };
   const adminUser = { userId: 'admin-uuid' };
@@ -118,10 +124,30 @@ describe('MeetingNotificationsService', () => {
 
     minutesRepo = {
       findOne: jest.fn(),
+      update: jest.fn(),
     };
 
     userRepo = {
       findOne: jest.fn(),
+    };
+
+    mediaFileRepo = {
+      findOne: jest.fn(),
+      create: jest.fn((v) => v),
+      save: jest.fn(async (v) => ({ id: 'media-file-uuid-1', ...v })),
+    };
+
+    transcriptRepo = {
+      findOne: jest.fn(),
+    };
+
+    storageService = {
+      saveFile: jest.fn().mockResolvedValue({
+        storageKey: 'exports/minutes-uuid-1.pdf',
+        publicUrl: 'http://localhost/exports/minutes-uuid-1.pdf',
+        sizeBytes: 1234,
+      }),
+      getDriver: jest.fn().mockReturnValue('local'),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -145,10 +171,19 @@ describe('MeetingNotificationsService', () => {
           useValue: minutesRepo,
         },
         { provide: getRepositoryToken(UserEntity), useValue: userRepo },
+        {
+          provide: getRepositoryToken(MediaFileEntity),
+          useValue: mediaFileRepo,
+        },
+        {
+          provide: getRepositoryToken(TranscriptEntity),
+          useValue: transcriptRepo,
+        },
         { provide: NotificationsService, useValue: notificationsService },
         { provide: AuthzReadRepository, useValue: authzReadRepo },
         { provide: AuditLogsService, useValue: auditLogsService },
         { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: StorageService, useValue: storageService },
       ],
     }).compile();
 
@@ -600,6 +635,76 @@ describe('MeetingNotificationsService', () => {
         channels: ['in_app'],
       });
       expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('[T307] should attach a freshly-rendered PDF when emailing external guests without an existing export', async () => {
+      const meeting = makeMockMeeting();
+      const minutes = makeMockMinutes({ fileId: null });
+      meetingRepo.findOne.mockResolvedValue(meeting);
+      minutesRepo.findOne.mockResolvedValue(minutes);
+      participantRepo.find.mockResolvedValue([]);
+      externalParticipantRepo.find.mockResolvedValue([
+        { email: 'guest@external.com' },
+      ]);
+
+      await service.distributeMeetingMinutes('meeting-uuid-1', authUser, {
+        minutesId: 'minutes-uuid-1',
+        recipientScope: 'participants',
+        channels: ['email'],
+      });
+
+      // Không có export sẵn (fileId null) → phải tự render + lưu media file mới.
+      expect(storageService.saveFile).toHaveBeenCalledTimes(1);
+      expect(mediaFileRepo.save).toHaveBeenCalledTimes(1);
+      expect(minutesRepo.update).toHaveBeenCalledWith('minutes-uuid-1', {
+        fileId: 'media-file-uuid-1',
+      });
+
+      const guestCall =
+        notificationsService.enqueueEmailNotification.mock.calls.find((call) =>
+          call[0].toEmails.includes('guest@external.com'),
+        );
+      expect(guestCall).toBeDefined();
+      expect(guestCall![0].attachment).toEqual({
+        storageKey: 'exports/minutes-uuid-1.pdf',
+        fileName: expect.any(String),
+        mimeType: 'application/pdf',
+      });
+    });
+
+    it('[T308] should reuse the existing exported PDF (fileId already set) instead of re-rendering', async () => {
+      const meeting = makeMockMeeting();
+      const minutes = makeMockMinutes({ fileId: 'existing-media-uuid' });
+      meetingRepo.findOne.mockResolvedValue(meeting);
+      minutesRepo.findOne.mockResolvedValue(minutes);
+      participantRepo.find.mockResolvedValue([]);
+      externalParticipantRepo.find.mockResolvedValue([
+        { email: 'guest@external.com' },
+      ]);
+      mediaFileRepo.findOne.mockResolvedValue({
+        id: 'existing-media-uuid',
+        storageKey: 'exports/already-exported.pdf',
+        fileName: 'Tom_tat_cuoc_hop_Test_Meeting.pdf',
+        mimeType: 'application/pdf',
+      });
+
+      await service.distributeMeetingMinutes('meeting-uuid-1', authUser, {
+        minutesId: 'minutes-uuid-1',
+        recipientScope: 'participants',
+        channels: ['email'],
+      });
+
+      expect(storageService.saveFile).not.toHaveBeenCalled();
+      expect(mediaFileRepo.save).not.toHaveBeenCalled();
+      const guestCall =
+        notificationsService.enqueueEmailNotification.mock.calls.find((call) =>
+          call[0].toEmails.includes('guest@external.com'),
+        );
+      expect(guestCall![0].attachment).toEqual({
+        storageKey: 'exports/already-exported.pdf',
+        fileName: 'Tom_tat_cuoc_hop_Test_Meeting.pdf',
+        mimeType: 'application/pdf',
+      });
     });
   });
 

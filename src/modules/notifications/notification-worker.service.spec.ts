@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
 import { NotificationWorkerService } from './notification-worker.service.js';
 import { MailService } from '../mail/mail.service.js';
+import { StorageService } from '../storage/storage.service.js';
 import { BackgroundJobsService } from '../administration/services/background-jobs.service.js';
 import {
   BackgroundJobEntity,
@@ -27,6 +28,7 @@ describe('NotificationWorkerService', () => {
   let service: NotificationWorkerService;
   let mailService: jest.Mocked<MailService>;
   let backgroundJobsService: jest.Mocked<BackgroundJobsService>;
+  let storageService: jest.Mocked<any>;
   let notificationRepo: jest.Mocked<any>;
   let bgJobRepo: jest.Mocked<any>;
 
@@ -58,11 +60,16 @@ describe('NotificationWorkerService', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    storageService = {
+      downloadFile: jest.fn().mockResolvedValue(Buffer.from('PDF_BYTES')),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationWorkerService,
         { provide: MailService, useValue: mailService },
         { provide: BackgroundJobsService, useValue: backgroundJobsService },
+        { provide: StorageService, useValue: storageService },
         {
           provide: getRepositoryToken(NotificationEntity),
           useValue: notificationRepo,
@@ -128,6 +135,45 @@ describe('NotificationWorkerService', () => {
     expect(backgroundJobsService.markCompleted).toHaveBeenCalledWith(
       testData.backgroundJobId,
       { bullJobId: 'bull-job-001' },
+    );
+  });
+
+  it('[T1b] should download attachment from storage and pass it to sendMail', async () => {
+    mailService.sendMail.mockResolvedValue({
+      success: true,
+      messageId: 'msg-002',
+    });
+    notificationRepo.findOne.mockResolvedValue({
+      id: testData.notificationId,
+      deliveryStatus: NotificationDeliveryStatus.QUEUED,
+    });
+
+    const job = makeMockJob({
+      data: {
+        ...testData,
+        attachment: {
+          storageKey: 'exports/minutes-1.pdf',
+          fileName: 'Bien_ban.pdf',
+          mimeType: 'application/pdf',
+        },
+      },
+      attemptsMade: 0,
+    });
+    await service.process(job);
+
+    expect(storageService.downloadFile).toHaveBeenCalledWith(
+      'exports/minutes-1.pdf',
+    );
+    expect(mailService.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          {
+            filename: 'Bien_ban.pdf',
+            content: Buffer.from('PDF_BYTES'),
+            contentType: 'application/pdf',
+          },
+        ],
+      }),
     );
   });
 

@@ -14,6 +14,8 @@ import { MeetingExternalParticipantEntity } from '../meetings/entities/meeting-e
 import { MeetingAgendaEntity } from '../meetings/entities/meeting-agenda.entity.js';
 import { MeetingMinutesEntity } from '../minutes/entities/meeting-minutes.entity.js';
 import { UserEntity } from '../accounts/entities/user.entity.js';
+import { MediaFileEntity } from '../recording/entities/media-file.entity.js';
+import { TranscriptEntity } from '../transcription/entities/transcript.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
 
 /**
@@ -32,8 +34,13 @@ import { AuthModule } from '../auth/auth.module.js';
  * như ghi chú cũ. Xem spec/features/notifications/feat-notification-inbox/spec.md.
  * RedisService là @Global() (RedisModule) nên không cần import RedisModule ở đây.
  *
- * KHÔNG import MeetingsModule/AccountsModule/MinutesModule (tránh circular).
- * TypeOrmModule.forFeature chỉ inject entity để đọc, không ghi.
+ * KHÔNG import MeetingsModule/AccountsModule/MinutesModule (tránh circular —
+ * MeetingsModule tự import NotificationsModule). Chỉ inject entity trực tiếp
+ * qua TypeOrmModule.forFeature, không bao giờ import cả module đó.
+ * Đa số entity ở đây chỉ đọc; ngoại lệ: MediaFileEntity/MeetingMinutesEntity
+ * được ghi bởi getOrCreateMinutesPdfAttachment() (MeetingNotificationsService)
+ * để tự render+lưu PDF biên bản khi gửi đính kèm cho khách ngoài (distributeMeetingMinutes),
+ * tránh phải import MinutesModule chỉ để tái dùng MinutesExportService.
  *
  * CÓ import AuthModule: NotificationsController dùng JwtAuthGuard/PermissionsGuard
  * (cần JwtService/AuthConfigService), và MeetingNotificationsService dùng
@@ -52,6 +59,8 @@ import { AuthModule } from '../auth/auth.module.js';
       MeetingAgendaEntity,
       MeetingMinutesEntity,
       UserEntity,
+      MediaFileEntity,
+      TranscriptEntity,
     ]),
     AuthModule,
   ],

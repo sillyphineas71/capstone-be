@@ -59,6 +59,14 @@ import { RoomUsageHistoryService } from './services/room-usage-history.service.j
 import { RoomUsageHistoryConfigService } from './services/room-usage-history-config.service.js';
 import { RoomUsageHistoryRepository } from './repositories/room-usage-history.repository.js';
 
+import { SecurityAlertsDailyTrendController } from './controllers/security-alerts-daily-trend.controller.js';
+import { SecurityAlertsDailyTrendService } from './services/security-alerts-daily-trend.service.js';
+import { SecurityAlertsDailyTrendRepository } from './repositories/security-alerts-daily-trend.repository.js';
+
+import { AuditActivityHourlyController } from './controllers/audit-activity-hourly.controller.js';
+import { AuditActivityHourlyService } from './services/audit-activity-hourly.service.js';
+import { AuditActivityHourlyRepository } from './repositories/audit-activity-hourly.repository.js';
+
 @Module({
   imports: [
     ConfigModule,
@@ -88,6 +96,8 @@ import { RoomUsageHistoryRepository } from './repositories/room-usage-history.re
     RoomUsageDashboardController,
     RoomUtilizationRateController,
     RoomUsageHistoryController,
+    SecurityAlertsDailyTrendController,
+    AuditActivityHourlyController,
   ],
   providers: [
     DashboardOverviewService,
@@ -113,6 +123,10 @@ import { RoomUsageHistoryRepository } from './repositories/room-usage-history.re
     RoomUsageHistoryService,
     RoomUsageHistoryConfigService,
     RoomUsageHistoryRepository,
+    SecurityAlertsDailyTrendService,
+    SecurityAlertsDailyTrendRepository,
+    AuditActivityHourlyService,
+    AuditActivityHourlyRepository,
   ],
   exports: [TypeOrmModule, DashboardOverviewConfigService],
 })

@@ -3,12 +3,19 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface SendMailOptions {
   to: string | string[];
   subject: string;
   text?: string;
   html?: string;
   replyTo?: string;
+  attachments?: MailAttachment[];
 }
 
 /**
@@ -109,6 +116,7 @@ export class MailService implements OnModuleInit {
         text: options.text,
         html: options.html,
         replyTo: options.replyTo,
+        attachments: options.attachments,
       });
 
       this.logger.log(
