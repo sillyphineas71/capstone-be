@@ -38,8 +38,14 @@ describe('UserJourneyService (UJN-001)', () => {
     });
   };
 
-  /** Face event thô ở A102 — helper cho các test gộp phiên. */
-  const face = (time: string, direction = 'seen', room = 'A102-ID') => ({
+  /** Face event thô ở A102 — helper cho các test gộp phiên. `id` mặc định theo timestamp để mỗi row phân biệt được. */
+  const face = (
+    time: string,
+    direction = 'seen',
+    room = 'A102-ID',
+    id?: string,
+  ) => ({
+    id: id ?? `evt-${time}`,
     event_time: time,
     direction,
     room_key: room,
@@ -484,6 +490,94 @@ describe('UserJourneyService (UJN-001)', () => {
         const r = await service.getUserJourney(USER_ID, '2026-07-29');
         expect(r.events[0].detail).toBe(expected);
       }
+    });
+  });
+
+  // ══ FIX 2026-08-09 — sourceEventId cho gate + meeting (FE hiện ảnh), zone giữ null ══
+  describe('sourceEventId (FE dùng để hiện ảnh) — gate + meeting, zone giữ null', () => {
+    it('gate: map source_event_id (cột g.event_id) vào sourceEventId', async () => {
+      wire({
+        gate: [
+          {
+            access_time: '2026-07-29T01:00:00.000Z',
+            direction: 'enter',
+            plate_number: '30G69946',
+            zone_name: 'Cổng Test',
+            source_event_id: 'ide-gate-1',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBe('ide-gate-1');
+    });
+
+    it('gate: source_event_id NULL (log cũ chưa từng truyền) → sourceEventId null, không crash', async () => {
+      wire({
+        gate: [
+          {
+            access_time: '2026-07-29T01:00:00.000Z',
+            direction: 'enter',
+            plate_number: '30G69946',
+            zone_name: 'Cổng Test',
+            source_event_id: null,
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBeNull();
+    });
+
+    it('meeting: phiên gộp nhiều event → sourceEventId = id của event ĐẦU TIÊN, KHÔNG đổi khi gộp thêm', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:39:00.000Z', 'enter', 'A102-ID', 'ide-first'),
+          face('2026-07-29T10:41:00.000Z', 'seen', 'A102-ID', 'ide-second'),
+          face('2026-07-29T10:43:00.000Z', 'leave', 'A102-ID', 'ide-last'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.meetingCount).toBe(1);
+      expect(r.events[0].sourceEventId).toBe('ide-first');
+    });
+
+    it('meeting: 2 phiên tách biệt → mỗi phiên lấy đúng sourceEventId của event đầu phiên đó', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:00:00.000Z', 'enter', 'A102-ID', 'ide-session1'),
+          face('2026-07-29T10:02:00.000Z', 'seen', 'A102-ID', 'ide-s1-2'),
+          // gap 11 phút > 600s ⇒ phiên mới
+          face('2026-07-29T10:13:00.000Z', 'enter', 'A102-ID', 'ide-session2'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.meetingCount).toBe(2);
+      expect(r.events.map((e) => e.sourceEventId)).toEqual([
+        'ide-session1',
+        'ide-session2',
+      ]);
+    });
+
+    it('zone: LUÔN null (ràng buộc — KHÔNG đụng nguồn zone lần này)', async () => {
+      wire({
+        zone: [
+          {
+            event_time: '2026-07-29T05:00:00.000Z',
+            event_type: 'appear',
+            zone_name: 'Hành lang A',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBeNull();
+    });
+
+    it('SQL: nguồn gate SELECT g.event_id AS source_event_id, nguồn meeting SELECT e.id', async () => {
+      wire();
+      await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(sqlOf('FROM gate_access_logs').sql).toContain(
+        'g.event_id AS source_event_id',
+      );
+      expect(sqlOf('FROM iot_device_events').sql).toContain('SELECT e.id');
     });
   });
 });

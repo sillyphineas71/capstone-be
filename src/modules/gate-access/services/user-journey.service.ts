@@ -10,9 +10,12 @@ interface GateRow {
   direction: string | null;
   plate_number: string | null;
   zone_name: string | null;
+  /** FK trực tiếp → iot_device_events.id (có thể NULL nếu caller ghi log không truyền). */
+  source_event_id: string | null;
 }
 
 interface MeetingRow {
+  id: string;
   event_time: Date | string;
   direction: string | null;
   /** roomId đã resolve (e.room_id ⊕ payload.roomId) — khoá gộp phiên. Query đã lọc NOT NULL. */
@@ -178,6 +181,8 @@ export class UserJourneyService {
       roomKey: string;
       roomName: string | null;
       meetingId: string | null;
+      /** id của event ĐẦU TIÊN trong phiên — đại diện ảnh (mirror cách occurrences chọn entry, KHÔNG đổi khi gộp thêm event). */
+      sourceEventId: string;
       startMs: number;
       endMs: number;
       count: number;
@@ -196,12 +201,14 @@ export class UserJourneyService {
         // lấy giá trị non-null ĐẦU TIÊN gặp được trong phiên.
         cur.roomName ??= r.room_name ?? null;
         cur.meetingId ??= r.meeting_id ?? null;
+        // sourceEventId KHÔNG đổi — giữ nguyên id của event đầu phiên.
         continue;
       }
       sessions.push({
         roomKey: r.room_key,
         roomName: r.room_name ?? null,
         meetingId: r.meeting_id ?? null,
+        sourceEventId: r.id,
         startMs: ms,
         endMs: ms,
         count: 1,
@@ -222,6 +229,7 @@ export class UserJourneyService {
         plateNumber: null,
         roomName: s.roomName,
         meetingId: s.meetingId,
+        sourceEventId: s.sourceEventId,
         durationMs,
         eventCount: s.count,
       };
@@ -242,8 +250,11 @@ export class UserJourneyService {
     );
 
     // ── Nguồn 1: xe qua cổng ──
+    // sourceEventId = g.event_id (FK trực tiếp → iot_device_events.id, có sẵn ở schema —
+    // xem recon 2026-08-09) — FE dùng để hiện ảnh, mirror ThumbnailImage/EventSnapshotModal.
     const gateRows: GateRow[] = await this.dataSource.manager.query(
-      `SELECT g.access_time, g.direction, g.plate_number, z.zone_name
+      `SELECT g.access_time, g.direction, g.plate_number, z.zone_name,
+              g.event_id AS source_event_id
          FROM gate_access_logs g
          LEFT JOIN zones z ON z.id = g.zone_id AND z.deleted_at IS NULL
         WHERE g.user_id = $1${vnDayBounds('g.access_time')}
@@ -259,7 +270,8 @@ export class UserJourneyService {
     // Event CÓ roomId nhưng direction='seen' thì GIỮ: người vẫn đang trong phòng, nó là
     // bằng chứng kéo dài phiên.
     const meetingRows: MeetingRow[] = await this.dataSource.manager.query(
-      `SELECT e.event_time,
+      `SELECT e.id,
+              e.event_time,
               e.payload_json->>'direction' AS direction,
               COALESCE(e.room_id, NULLIF(e.payload_json->>'roomId','')::uuid)::text AS room_key,
               r.room_name,
@@ -298,6 +310,7 @@ export class UserJourneyService {
         plateNumber: r.plate_number ?? null,
         roomName: null,
         meetingId: null,
+        sourceEventId: r.source_event_id ?? null,
       };
     });
 
@@ -318,6 +331,10 @@ export class UserJourneyService {
         plateNumber: null,
         roomName: null,
         meetingId: null,
+        // RÀNG BUỘC (fix 2026-08-09): KHÔNG đụng nguồn zone lần này — luôn null,
+        // không đổi schema/query. Đặt tường minh (không omit) để FE thấy field này
+        // luôn có mặt, nhất quán với gate/meeting.
+        sourceEventId: null,
       };
     });
 

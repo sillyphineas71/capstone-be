@@ -31,6 +31,13 @@ export interface UserJourneyEventDto {
   roomName: string | null;
   /** Chỉ type='meeting'. */
   meetingId: string | null;
+  /**
+   * [FIX 2026-08-09] FK → iot_device_events.id, dùng để FE hiện ảnh (mirror
+   * ThumbnailImage/EventSnapshotModal). Có ở `gate` (g.event_id) và `meeting`
+   * (id của event ĐẦU TIÊN trong phiên gộp). LUÔN null ở `zone` — cố ý,
+   * KHÔNG đổi schema/query nguồn zone trong fix này.
+   */
+  sourceEventId?: string | null;
 
   // ── V2, CHỈ có ở type='meeting' (phiên gộp); gate/zone không set field nào dưới đây ──
   /** UTC ISO của event cuối phiên (kết thúc có mặt). */
