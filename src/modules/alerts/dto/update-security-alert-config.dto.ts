@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -6,6 +7,11 @@ import { Type } from 'class-transformer';
  * whitelist. forbidNonWhitelisted ở ValidationPipe → key tùy ý bị 400.
  */
 export class UpdateSecurityAlertConfigDto {
+  @ApiPropertyOptional({
+    description: 'Thời gian (phút) trước khi tự động resolve cảnh báo không tái phát',
+    minimum: 1,
+    maximum: 1440,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

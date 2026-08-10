@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsUUID, IsString, MaxLength } from 'class-validator';
 import { Expose } from 'class-transformer';
 import { ListVehicleRegistrationsQueryDto } from './list-vehicle-registrations-query.dto.js';
@@ -16,12 +17,14 @@ import { ListVehicleRegistrationsQueryDto } from './list-vehicle-registrations-q
  */
 export class AdminListVehicleRegistrationsQueryDto extends ListVehicleRegistrationsQueryDto {
   // Lọc xe của đúng một user (exact). Dùng IDX_vehicle_registrations_user_id.
+  @ApiPropertyOptional({ description: 'Lọc xe của đúng 1 user (khớp chính xác userId)' })
   @Expose({ name: 'user_id' })
   @IsOptional()
   @IsUUID('4')
   userId?: string;
 
   // Tìm theo chủ xe: ILike trên full_name OR email (service join vr.user). KHÔNG normalize.
+  @ApiPropertyOptional({ description: 'Tìm theo tên/email chủ xe (khớp một phần)', maxLength: 255 })
   @IsOptional()
   @IsString()
   @MaxLength(255)

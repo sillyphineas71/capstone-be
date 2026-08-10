@@ -173,16 +173,80 @@ export class RestrictedZoneIntrusionService {
     return violated;
   }
 
+  /**
+   * SỬA 2026-08-09 (recon: FE chỉ đọc security_alerts.source_event_id — cột top-level FK
+   * → iot_device_events.id — để hiện ảnh qua ThumbnailImage, KHÔNG đọc
+   * payload_json.snapshotFileId như bản trước). Đổi sang đúng cơ chế FE dùng, mirror
+   * chính xác vehicle-control-alert.service.ts (`sourceEventId: eventId ?? null`).
+   *
+   * userId/isKnownPerson VẪN giữ trong payload — hữu ích cho phân biệt người quen/lạ,
+   * KHÔNG liên quan tới việc hiện ảnh nên không đụng.
+   *
+   * CHỈ áp dụng khi TẠO alert mới qua recordAlert() (INSERT nhánh mới — xem tryInsert());
+   * nếu recordAlert() bump alert đang mở (23505 → UPDATE occurrence_count), top-level
+   * source_event_id LẪN payload gốc của alert đó GIỮ NGUYÊN làm "đại diện" — KHÔNG đổi
+   * cơ chế dedupe/bump. `userId`/`sourceEventId` của lần vi phạm mới VẪN được giữ lại,
+   * append vào `payload_json.occurrences` bởi `AlertsService.bumpOccurrence()` (fix
+   * 2026-08-09, recon "nhiều người vi phạm cùng 1 alert") — KHÔNG mất dấu vết.
+   */
   private async recordIntrusion(
     rule: AlertRuleEntity,
     payloadJson: Record<string, unknown>,
   ): Promise<void> {
+    const userId = (payloadJson.userId as string | null | undefined) ?? null;
+    const sourceTable = payloadJson.sourceTable as string | undefined;
+    const sourceRowId = payloadJson.sourceRowId as string | undefined;
+
+    // CHỈ zone_presence_events có đường join tới iot_device_events (nhánh B qua
+    // metadata_json.sourceEventId — xem ZonePresenceWriterService). gate_access_logs có FK
+    // event_id trực tiếp nhưng NGOÀI phạm vi lần sửa này (đã xác nhận với user trước đó)
+    // → sourceEventId=null cho nhánh đó, giữ nguyên hành vi cũ (không có ảnh).
+    const sourceEventId =
+      sourceTable === 'zone_presence_events' && sourceRowId
+        ? await this.findSourceEventIdForPresence(sourceRowId)
+        : null;
+
     await this.alertsService.recordAlert({
       alertType: 'intrusion',
       zoneId: rule.zoneId,
       ruleId: rule.id,
-      payloadJson,
+      sourceEventId: sourceEventId ?? null,
+      payloadJson: {
+        ...payloadJson,
+        isKnownPerson: userId !== null,
+      },
     });
+  }
+
+  /**
+   * Lấy iot_device_events.id của raw event GÂY RA 1 dòng zone_presence_events — link qua
+   * metadata_json.sourceEventId (nhánh B, KHÔNG có cột FK trực tiếp trên bảng này — xem
+   * ivss-presence-ingestion.service.ts + ZonePresenceWriterService). JOIN xác nhận row THẬT
+   * tồn tại trong iot_device_events (không trả id "treo" nếu metadata trỏ tới hàng không
+   * còn). 1 query nhẹ, KHÔNG N+1 (đúng 1 lần/case vi phạm, KHÔNG loop). Best-effort, KHÔNG
+   * throw: presenceId không tồn tại/không có sourceEventId → null (mirror getChannelZoneMap()).
+   */
+  private async findSourceEventIdForPresence(
+    presenceId: string,
+  ): Promise<string | null> {
+    try {
+      const rows: Array<{ id: string }> = await this.dataSource.manager.query(
+        `SELECT ide.id
+           FROM zone_presence_events zpe
+           JOIN iot_device_events ide
+             ON ide.id = (zpe.metadata_json->>'sourceEventId')::uuid
+          WHERE zpe.id = $1`,
+        [presenceId],
+      );
+      return rows[0]?.id ?? null;
+    } catch (e) {
+      this.logger.warn(
+        `findSourceEventIdForPresence failed (presenceId=${presenceId}): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      return null;
+    }
   }
 
   /**

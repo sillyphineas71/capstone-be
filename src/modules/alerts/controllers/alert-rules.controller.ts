@@ -14,6 +14,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
@@ -33,6 +34,7 @@ const ALERT_RULE_PIPE = new ValidationPipe({
  * AlertRulesController (ARL-001 / UC-122) — CRUD `alert_rules`. Toàn bộ route
  * admin/security-gated (mirror `VehicleControlListController`), KHÔNG route self-service.
  */
+@ApiTags('Alerts - Alert Rules')
 @Controller('alert-rules')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class AlertRulesController {
@@ -42,6 +44,7 @@ export class AlertRulesController {
   @HttpCode(HttpStatus.CREATED)
   @RequirePermissions('alert_rules.create')
   @UsePipes(ALERT_RULE_PIPE)
+  @ApiOperation({ summary: 'Tạo mới 1 quy tắc cảnh báo (alert rule)' })
   async create(
     @CurrentUser() user: { userId: string },
     @Body() dto: CreateAlertRuleDto,
@@ -57,6 +60,7 @@ export class AlertRulesController {
   @Get()
   @RequirePermissions('alert_rules.read')
   @UsePipes(ALERT_RULE_PIPE)
+  @ApiOperation({ summary: 'Xem danh sách quy tắc cảnh báo, có phân trang + lọc' })
   async list(@Query() query: QueryAlertRulesDto) {
     const { items, meta } = await this.alertRulesService.list(query);
     return {
@@ -69,6 +73,7 @@ export class AlertRulesController {
 
   @Get(':id')
   @RequirePermissions('alert_rules.read')
+  @ApiOperation({ summary: 'Xem chi tiết 1 quy tắc cảnh báo theo ID' })
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const entity = await this.alertRulesService.findOne(id);
     return {
@@ -81,6 +86,7 @@ export class AlertRulesController {
   @Patch(':id')
   @RequirePermissions('alert_rules.update')
   @UsePipes(ALERT_RULE_PIPE)
+  @ApiOperation({ summary: 'Cập nhật 1 quy tắc cảnh báo đã có' })
   async update(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -96,6 +102,7 @@ export class AlertRulesController {
 
   @Delete(':id')
   @RequirePermissions('alert_rules.delete')
+  @ApiOperation({ summary: 'Xóa 1 quy tắc cảnh báo' })
   async remove(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,

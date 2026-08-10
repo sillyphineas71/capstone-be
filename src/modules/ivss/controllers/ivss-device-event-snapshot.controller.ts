@@ -6,6 +6,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { JwtQueryOrHeaderAuthGuard } from '../../auth/guards/jwt-query-or-header-auth.guard.js';
@@ -24,6 +25,7 @@ import { DeviceEventSnapshotService } from '../services/device-event-snapshot.se
  * `ivss.access_log.read` như bản gốc trong IvssRoomAccessController — FE KHÔNG cần
  * đổi URL, chỉ route bị dời sang controller khác.
  */
+@ApiTags('IVSS - Device Event Snapshot')
 @Controller('ivss/device-events')
 @UseGuards(JwtQueryOrHeaderAuthGuard, PermissionsGuard)
 @RequirePermissions('ivss.access_log.read')
@@ -33,6 +35,10 @@ export class IvssDeviceEventSnapshotController {
   ) {}
 
   @Get(':eventId/snapshot')
+  @ApiOperation({
+    summary:
+      'Lấy ảnh snapshot của 1 sự kiện thiết bị (khuôn mặt/xe) — yêu cầu quyền ivss.access_log.read, chấp nhận token qua query string (?token=) để dùng trực tiếp trong thẻ <img>',
+  })
   async snapshot(
     @Param('eventId', ParseUUIDPipe) eventId: string,
     @Res() res: Response,

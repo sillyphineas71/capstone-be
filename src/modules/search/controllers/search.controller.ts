@@ -7,6 +7,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { SearchService } from '../services/search.service.js';
@@ -22,6 +23,7 @@ const SEARCH_PIPE = new ValidationPipe({ whitelist: true, transform: true });
  * spec §1.1: CHỈ `JwtAuthGuard`, KHÔNG `PermissionsGuard`/`@RequirePermissions` — mỗi
  * `type` được lọc theo permission tương ứng ở tầng `SearchService`, không phải guard tĩnh.
  */
+@ApiTags('Search')
 @Controller('search')
 export class SearchController {
   constructor(private readonly service: SearchService) {}
@@ -29,6 +31,9 @@ export class SearchController {
   @Get()
   @UseGuards(JwtAuthGuard)
   @UsePipes(SEARCH_PIPE)
+  @ApiOperation({
+    summary: 'Tìm kiếm toàn cục theo từ khóa, lọc theo loại đối tượng (mỗi loại tự lọc theo permission của user)',
+  })
   async search(
     @CurrentUser() user: { userId: string },
     @Query() query: QuerySearchDto,

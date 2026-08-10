@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsString,
   IsNotEmpty,
@@ -18,16 +19,19 @@ export type ControlListType = (typeof CONTROL_LIST_TYPES)[number];
  * từ JWT (@CurrentUser), KHÔNG từ body — mirror SEC-01/02 của UC1.
  */
 export class CreateVehicleControlListDto {
+  @ApiProperty({ description: 'Biển số xe dạng thô (chưa chuẩn hoá)', maxLength: 20 })
   @Expose({ name: 'plate_raw' })
   @IsString()
   @IsNotEmpty()
   @MaxLength(20)
   plateRaw: string;
 
+  @ApiProperty({ description: 'Phân loại danh sách kiểm soát — bất biến sau khi tạo', enum: CONTROL_LIST_TYPES })
   @Expose({ name: 'list_type' })
   @IsIn(CONTROL_LIST_TYPES)
   listType: ControlListType;
 
+  @ApiPropertyOptional({ description: 'Lý do đưa vào danh sách kiểm soát', maxLength: 255 })
   @IsOptional()
   @IsString()
   @MaxLength(255)

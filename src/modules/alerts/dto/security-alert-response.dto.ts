@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SecurityAlertEntity } from '../entities/security-alert.entity.js';
 import { ZoneEntity } from '../../zones/entities/zone.entity.js';
 
@@ -5,23 +6,58 @@ import { ZoneEntity } from '../../zones/entities/zone.entity.js';
  * SecurityAlertResponseDto (ASC-001 / UC-123) — shape công khai cho list/detail.
  */
 export class SecurityAlertResponseDto {
+  @ApiProperty({ description: 'ID cảnh báo an ninh' })
   id: string;
+
+  @ApiProperty({ description: 'Loại sự kiện gây ra cảnh báo' })
   alert_type: string;
+
+  @ApiProperty({ description: 'Mức độ nghiêm trọng' })
   severity: string;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Khu vực xảy ra cảnh báo' })
   zone_id: string | null;
+
+  @ApiProperty({ description: 'Trạng thái xử lý (new/acknowledged/resolved)' })
   status: string;
+
+  @ApiProperty({ description: 'Thời điểm cảnh báo được kích hoạt lần đầu' })
   triggered_at: Date;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Thời điểm cảnh báo được ghi nhận gần nhất (bump)' })
   last_seen_at: Date | null;
+
+  @ApiProperty({ description: 'Số lần cảnh báo này lặp lại (đang tiếp diễn)' })
   occurrence_count: number;
+
+  @ApiPropertyOptional({ nullable: true, description: 'ID event thiết bị gốc làm bằng chứng' })
   source_event_id: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'ID quy tắc cảnh báo kích hoạt (null nếu đối chiếu control-list trực tiếp)' })
   rule_id: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Dữ liệu bằng chứng đi kèm cảnh báo (biển số, ảnh, số người đếm được...)' })
   payload_json: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'ID user đã xác nhận tiếp nhận' })
   acknowledged_by: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Thời điểm xác nhận tiếp nhận' })
   acknowledged_at: Date | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'ID user đã xử lý xong' })
   resolved_by: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Thời điểm xử lý xong' })
   resolved_at: Date | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Ghi chú xử lý khi đóng cảnh báo' })
   resolution_note: string | null;
+
+  @ApiProperty({ description: 'Thời điểm tạo' })
   created_at: Date;
+
+  @ApiProperty({ description: 'Thời điểm cập nhật gần nhất' })
   updated_at: Date;
 }
 

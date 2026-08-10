@@ -8,6 +8,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
@@ -29,6 +30,7 @@ import { QueryRoomAccessLogDto } from '../dto/query-room-access-log.dto.js';
  * phạm vi rộng hơn hẳn presence theo cuộc họp; migration chỉ grant SYSTEM_ADMIN.
  * READ-ONLY.
  */
+@ApiTags('IVSS - Room Access Log')
 @Controller('ivss')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @RequirePermissions('ivss.access_log.read')
@@ -39,6 +41,9 @@ export class IvssRoomAccessController {
   ) {}
 
   @Get('access-log')
+  @ApiOperation({
+    summary: 'Admin xem nhật ký ra/vào theo ngày cho TOÀN hệ thống (mọi phòng), có phân trang + tìm kiếm',
+  })
   async accessLogAll(@Query() query: QueryRoomAccessLogDto) {
     const data = await this.roomAccessLogService.getRoomAccessLog(null, {
       date: query.date,
@@ -51,6 +56,9 @@ export class IvssRoomAccessController {
   }
 
   @Get('rooms/:roomId/access-log')
+  @ApiOperation({
+    summary: 'Admin xem nhật ký ra/vào theo ngày cho MỘT phòng cụ thể (404 nếu phòng không tồn tại)',
+  })
   async accessLog(
     @Param('roomId', ParseUUIDPipe) roomId: string,
     @Query() query: QueryRoomAccessLogDto,

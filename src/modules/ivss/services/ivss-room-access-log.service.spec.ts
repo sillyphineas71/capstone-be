@@ -52,6 +52,9 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
     event_time: '2026-07-28T10:45:21.000Z',
     user_id: 'u1',
     full_name: 'Bui Van Long',
+    avatar_url: 'https://cdn.example.com/avatars/u1.png',
+    email: 'long.bui@example.com',
+    department_name: 'IT',
     room_id: ROOM_ID,
     room_name: 'Phòng A102',
     direction: 'enter',
@@ -92,6 +95,11 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       eventTime: '2026-07-28T10:45:21.000Z',
       userId: 'u1',
       fullName: 'Bui Van Long',
+      user: {
+        avatarUrl: 'https://cdn.example.com/avatars/u1.png',
+        email: 'long.bui@example.com',
+        department: 'IT',
+      },
       roomId: ROOM_ID,
       roomName: 'Phòng A102',
       direction: 'enter',
@@ -101,6 +109,36 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       isStranger: false,
       isUnmatched: false,
     });
+  });
+
+  // [FE-2026-08-09] user{avatarUrl,email,department} — KHÔNG có phone/role (xem DTO comment).
+  it('userId=null (chưa khớp danh tính) → user object=null, KHÔNG có avatarUrl/email/department rò rỉ', async () => {
+    wire({
+      events: [
+        evt({
+          user_id: null,
+          full_name: null,
+          avatar_url: null,
+          email: null,
+          department_name: null,
+          match_state: 'unmatched_identity',
+        }),
+      ],
+    });
+    const r = await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
+    expect(r.events[0].user).toBeNull();
+  });
+
+  it('SQL: LEFT JOIN departments d ON d.id = u.department_id + SELECT avatar_url/email/department_name', async () => {
+    wire();
+    await service.getRoomAccessLog(ROOM_ID, { date: '2026-07-28' });
+    const q = captured.find((c) => isEventQuery(c.sql))!;
+    expect(q.sql).toContain(
+      'LEFT JOIN departments d ON d.id = u.department_id',
+    );
+    expect(q.sql).toContain('u.avatar_url');
+    expect(q.sql).toContain('u.email');
+    expect(q.sql).toContain('d.department_name');
   });
 
   it('đếm matched/unmatched lấy từ COUNT query (toàn bộ kết quả lọc)', async () => {
@@ -172,7 +210,11 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
     it('unmatched_both + userId=null → CÓ trong kết quả, isStranger=true, isUnmatched=true', async () => {
       wire({
         events: [
-          evt({ match_state: 'unmatched_both', user_id: null, full_name: null }),
+          evt({
+            match_state: 'unmatched_both',
+            user_id: null,
+            full_name: null,
+          }),
         ],
       });
       const r = await service.getRoomAccessLog(ROOM_ID, {
@@ -294,7 +336,8 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       // Không có query kiểm phòng.
       expect(
         captured.some(
-          (c) => c.sql.includes('FROM rooms') && c.sql.includes('room_name FROM'),
+          (c) =>
+            c.sql.includes('FROM rooms') && c.sql.includes('room_name FROM'),
         ),
       ).toBe(false);
       const q = captured.find((c) => isEventQuery(c.sql))!;
@@ -335,7 +378,10 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
     });
 
     it('page=3 limit=10 → OFFSET 20, totalPages tính từ total của COUNT', async () => {
-      wire({ events: [evt()], counts: { total: '45', matched: '40', unmatched: '5' } });
+      wire({
+        events: [evt()],
+        counts: { total: '45', matched: '40', unmatched: '5' },
+      });
       const r = await service.getRoomAccessLog(ROOM_ID, {
         date: '2026-07-28',
         page: 3,
@@ -392,14 +438,17 @@ describe('IvssRoomAccessLogService (RAL-001 / Màn 2 + ALS-002)', () => {
       });
       const q = captured.find((c) => isEventQuery(c.sql))!;
       expect(q.sql).toContain(
-        "AND ($5::uuid IS NULL OR e.meeting_id = $5::uuid)",
+        'AND ($5::uuid IS NULL OR e.meeting_id = $5::uuid)',
       );
       expect(q.params[4]).toBe(MEETING_ID);
       expect(r.events[0].meetingId).toBe(MEETING_ID);
     });
 
     it('meetingId không tồn tại → mảng rỗng, không lỗi (mock giả lập COUNT/SELECT rỗng)', async () => {
-      wire({ events: [], counts: { total: '0', matched: '0', unmatched: '0' } });
+      wire({
+        events: [],
+        counts: { total: '0', matched: '0', unmatched: '0' },
+      });
       const r = await service.getRoomAccessLog(ROOM_ID, {
         date: '2026-07-28',
         meetingId: MEETING_ID,

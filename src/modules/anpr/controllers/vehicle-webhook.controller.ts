@@ -9,6 +9,7 @@ import {
   ValidationPipe,
   Logger,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { VEHICLE_EVENT_HANDLER } from '../../../common/ports/vehicle-event-hook.js';
 import type {
   VehicleEventHandlerPort,
@@ -25,6 +26,7 @@ import { normalizePlate } from '../utils/normalize-plate.js';
  * ARCH-01: LUÔN ack 200 (try/catch quanh onVehicleEvent). DATA-01: normalize plateNumber qua
  * normalizePlate (UC1, single-source). UC4 KHÔNG resolve user / KHÔNG persist (UC5). KHÔNG log imageBase64.
  */
+@ApiTags('ANPR - Webhook (internal, bridge)')
 @Controller()
 export class VehicleWebhookController {
   private readonly logger = new Logger(VehicleWebhookController.name);
@@ -38,6 +40,10 @@ export class VehicleWebhookController {
   @HttpCode(200)
   @UseGuards(AnprInternalTokenGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({
+    summary:
+      '[NỘI BỘ — chỉ IVSS bridge gọi tới, không phải endpoint public] Nhận event nhận diện biển số xe từ camera ANPR, xác thực bằng header X-Internal-Token, luôn ack 200 kể cả khi xử lý event lỗi',
+  })
   async receiveEvent(@Body() dto: VehicleEventDto) {
     // DATA-01: normalize single-source (UC1). Event mang cả plateRaw (gốc) + plateNumber (chuẩn).
     const event: VehicleEvent = {

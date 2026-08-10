@@ -38,7 +38,12 @@ describe('RestrictedZoneIntrusionService (ARZ-001 / UC-124)', () => {
       create: jest.fn((x: any) => x),
       save: jest.fn((x: any) => Promise.resolve(x)),
     };
-    dataSourceMock = { getRepository: jest.fn(() => configRepo) };
+    dataSourceMock = {
+      getRepository: jest.fn(() => configRepo),
+      // findSnapshotFileIdForPresence() — mặc định KHÔNG tìm thấy snapshot (rows rỗng).
+      // Test riêng override để mô phỏng có/không có ảnh.
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    };
   };
 
   const compile = async () => {
@@ -481,6 +486,151 @@ describe('RestrictedZoneIntrusionService (ARZ-001 / UC-124)', () => {
         2,
         expect.objectContaining({ alertType: 'intrusion', zoneId: 'zone-1' }),
       );
+    });
+  });
+
+  // ── SỬA 2026-08-09: FE chỉ đọc security_alerts.source_event_id (cột top-level FK →
+  // iot_device_events.id) để hiện ảnh — KHÔNG đọc payload_json.snapshotFileId (bản trước).
+  // Đổi sang sourceEventId khi gọi recordAlert(), mirror vehicle-control-alert.service.ts.
+  // userId/isKnownPerson VẪN giữ trong payload (không liên quan hiện ảnh). ──
+  describe('recordIntrusion — sourceEventId (FE đọc để hiện ảnh) + userId/isKnownPerson', () => {
+    it('DONE: sourceTable=zone_presence_events + có raw event → sourceEventId lấy đúng iot_device_events.id qua JOIN metadata_json.sourceEventId, isKnownPerson=true khi có userId', async () => {
+      dataSourceMock.manager.query.mockResolvedValue([{ id: 'ide-123' }]);
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })],
+      });
+      await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: 'user-bad',
+        eventTime: new Date('2026-07-23T22:00:00'),
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-1',
+      });
+      expect(dataSourceMock.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining("metadata_json->>'sourceEventId'"),
+        ['zpe-1'],
+      );
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceEventId: 'ide-123',
+          payloadJson: expect.objectContaining({
+            userId: 'user-bad',
+            isKnownPerson: true,
+          }),
+        }),
+      );
+      // payload_json KHÔNG còn snapshotFileId — FE không đọc field này nữa.
+      expect(
+        alertsMock.recordAlert.mock.calls[0][0].payloadJson,
+      ).not.toHaveProperty('snapshotFileId');
+    });
+
+    it('DONE: userId=null (người lạ) → isKnownPerson=false', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })],
+      });
+      await service.evaluateZoneEventNow({
+        zoneId: 'zone-1',
+        userId: null,
+        eventTime: new Date('2026-07-23T22:00:00'),
+        sourceTable: 'zone_presence_events',
+        sourceRowId: 'zpe-2',
+      });
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloadJson: expect.objectContaining({
+            userId: null,
+            isKnownPerson: false,
+          }),
+        }),
+      );
+    });
+
+    it('DONE: zone_presence_events nhưng KHÔNG tìm thấy dòng khớp (query trả rỗng) → sourceEventId=null, KHÔNG throw', async () => {
+      dataSourceMock.manager.query.mockResolvedValue([]);
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })],
+      });
+      await expect(
+        service.evaluateZoneEventNow({
+          zoneId: 'zone-1',
+          userId: 'user-bad',
+          eventTime: new Date('2026-07-23T22:00:00'),
+          sourceTable: 'zone_presence_events',
+          sourceRowId: 'zpe-3',
+        }),
+      ).resolves.toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: query lỗi (DB down) → sourceEventId=null, KHÔNG throw, KHÔNG chặn ghi alert', async () => {
+      dataSourceMock.manager.query.mockRejectedValue(new Error('db down'));
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })],
+      });
+      await expect(
+        service.evaluateZoneEventNow({
+          zoneId: 'zone-1',
+          userId: 'user-bad',
+          eventTime: new Date('2026-07-23T22:00:00'),
+          sourceTable: 'zone_presence_events',
+          sourceRowId: 'zpe-4',
+        }),
+      ).resolves.toBe(true);
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceEventId: null }),
+      );
+    });
+
+    it('DONE: sourceTable=gate_access_logs (ngoài phạm vi) → sourceEventId=null, KHÔNG query DB, giữ nguyên hành vi cũ (không có ảnh)', async () => {
+      alertRulesMock.list.mockResolvedValue({
+        items: [
+          rule({
+            restrictedHoursJson: { allowFrom: '07:00', allowTo: '18:00' },
+            allowedPersonIdsJson: ['user-ok'],
+          }),
+        ],
+      });
+      gateLogRepo.find.mockResolvedValue([
+        {
+          id: 'log1',
+          userId: 'user-bad',
+          accessTime: new Date('2026-07-23T22:00:00'),
+        },
+      ]);
+      await service.evaluateIntrusions();
+      expect(dataSourceMock.manager.query).not.toHaveBeenCalled();
+      expect(alertsMock.recordAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceEventId: null,
+          payloadJson: expect.objectContaining({
+            sourceTable: 'gate_access_logs',
+            isKnownPerson: true,
+          }),
+        }),
+      );
+    });
+
+    it('DONE: KHÔNG đổi cơ chế dedupe/bump — recordIntrusion() luôn xây sourceEventId/payload đầy đủ rồi giao cho recordAlert() tự quyết định insert-mới-hay-bump (sourceEventId/payload cũ giữ nguyên khi bump là trách nhiệm của AlertsService, đã test riêng ở alerts.service.spec.ts)', async () => {
+      dataSourceMock.manager.query.mockResolvedValue([{ id: 'ide-999' }]);
+      alertRulesMock.list.mockResolvedValue({
+        items: [rule({ restrictedHoursJson: null })],
+      });
+      const args = {
+        zoneId: 'zone-1',
+        userId: 'user-bad',
+        eventTime: new Date('2026-07-23T22:00:00'),
+        sourceTable: 'zone_presence_events' as const,
+        sourceRowId: 'zpe-5',
+      };
+      await service.evaluateZoneEventNow(args);
+      await service.evaluateZoneEventNow(args);
+      expect(alertsMock.recordAlert).toHaveBeenCalledTimes(2);
+      const [firstCall, secondCall] = alertsMock.recordAlert.mock.calls;
+      expect(firstCall[0].sourceEventId).toEqual(secondCall[0].sourceEventId);
+      expect(firstCall[0].payloadJson).toEqual(secondCall[0].payloadJson);
     });
   });
 });

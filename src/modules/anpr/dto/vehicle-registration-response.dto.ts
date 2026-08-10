@@ -1,3 +1,4 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { VehicleRegistrationEntity } from '../entities/vehicle-registration.entity.js';
 
 /**
@@ -5,14 +6,31 @@ import { VehicleRegistrationEntity } from '../entities/vehicle-registration.enti
  * Chỉ field cần cho client; KHÔNG lộ field nội bộ ngoài schema.
  */
 export class VehicleRegistrationResponseDto {
+  @ApiProperty({ description: 'ID bản ghi đăng ký xe' })
   id: string;
+
+  @ApiProperty({ description: 'ID user sở hữu biển số này' })
   user_id: string;
+
+  @ApiProperty({ description: 'Biển số dạng thô (chưa chuẩn hoá)' })
   plate_raw: string;
+
+  @ApiProperty({ description: 'Biển số đã chuẩn hoá' })
   plate_number: string;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Loại phương tiện' })
   vehicle_type: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Ghi chú' })
   note: string | null;
+
+  @ApiProperty({ description: 'Trạng thái biển số (active/disabled)' })
   status: string;
+
+  @ApiProperty({ description: 'Thời điểm tạo' })
   created_at: Date;
+
+  @ApiProperty({ description: 'Thời điểm cập nhật gần nhất' })
   updated_at: Date;
 }
 

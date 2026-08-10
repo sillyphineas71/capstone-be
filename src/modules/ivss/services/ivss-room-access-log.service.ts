@@ -10,6 +10,9 @@ interface AccessLogRow {
   event_time: Date | string;
   user_id: string | null;
   full_name: string | null;
+  avatar_url: string | null;
+  email: string | null;
+  department_name: string | null;
   room_id: string | null;
   room_name: string | null;
   direction: string | null;
@@ -147,10 +150,13 @@ export class IvssRoomAccessLogService {
           AND ($3::uuid IS NULL OR e.room_id = $3::uuid)
           AND ($4::text IS NULL OR u.full_name ILIKE '%' || $4::text || '%')
           AND ($5::uuid IS NULL OR e.meeting_id = $5::uuid)`;
+    // [FE-2026-08-09] LEFT JOIN departments cho department_name — dùng chung điều kiện
+    // JOIN users u đã có sẵn, KHÔNG thêm round-trip/N+1 (vẫn 1 query phẳng cho cả trang).
     const fromSql = `
          FROM iot_device_events e
          LEFT JOIN users u
                 ON u.id = NULLIF(e.payload_json->>'userId', '')::uuid
+         LEFT JOIN departments d ON d.id = u.department_id
          LEFT JOIN rooms r ON r.id = e.room_id`;
     const filterParams = [FACE_EVENT_TYPE, day, roomId, search, meetingId];
 
@@ -177,6 +183,9 @@ export class IvssRoomAccessLogService {
               e.event_time,
               e.payload_json->>'userId'     AS user_id,
               u.full_name                   AS full_name,
+              u.avatar_url                  AS avatar_url,
+              u.email                       AS email,
+              d.department_name             AS department_name,
               e.room_id                     AS room_id,
               r.room_name                   AS room_name,
               e.payload_json->>'direction'  AS direction,
@@ -197,6 +206,13 @@ export class IvssRoomAccessLogService {
         eventTime: new Date(r.event_time).toISOString(),
         userId: r.user_id ?? null,
         fullName: r.full_name ?? null,
+        user: r.user_id
+          ? {
+              avatarUrl: r.avatar_url ?? null,
+              email: r.email ?? null,
+              department: r.department_name ?? null,
+            }
+          : null,
         roomId: r.room_id ?? null,
         roomName: r.room_name ?? null,
         direction: r.direction ?? null,

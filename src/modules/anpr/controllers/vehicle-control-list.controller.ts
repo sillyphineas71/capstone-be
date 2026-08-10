@@ -14,6 +14,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
@@ -35,6 +36,7 @@ const CONTROL_LIST_PIPE = new ValidationPipe({
  * quản) — bảng này không có ownership, KHÔNG route self-service; toàn bộ 5 route đều
  * admin/security-gated bằng `PermissionsGuard`.
  */
+@ApiTags('ANPR - Vehicle Control List')
 @Controller('anpr/admin/control-list')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class VehicleControlListController {
@@ -46,6 +48,7 @@ export class VehicleControlListController {
   @HttpCode(HttpStatus.CREATED)
   @RequirePermissions('vehicle_control.create')
   @UsePipes(CONTROL_LIST_PIPE)
+  @ApiOperation({ summary: 'Thêm 1 biển số vào danh sách kiểm soát (blocklist/watchlist)' })
   async create(
     @CurrentUser() user: { userId: string },
     @Body() dto: CreateVehicleControlListDto,
@@ -64,6 +67,7 @@ export class VehicleControlListController {
   @Get()
   @RequirePermissions('vehicle_control.read')
   @UsePipes(CONTROL_LIST_PIPE)
+  @ApiOperation({ summary: 'Xem danh sách biển số kiểm soát, có phân trang + lọc' })
   async list(@Query() query: ListVehicleControlListQueryDto) {
     const { items, meta } = await this.vehicleControlListService.list(query);
     return {
@@ -76,6 +80,7 @@ export class VehicleControlListController {
 
   @Get(':id')
   @RequirePermissions('vehicle_control.read')
+  @ApiOperation({ summary: 'Xem chi tiết 1 mục trong danh sách kiểm soát biển số theo ID' })
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const entity = await this.vehicleControlListService.getDetail(id);
     return {
@@ -88,6 +93,7 @@ export class VehicleControlListController {
   @Patch(':id')
   @RequirePermissions('vehicle_control.update')
   @UsePipes(CONTROL_LIST_PIPE)
+  @ApiOperation({ summary: 'Cập nhật 1 mục trong danh sách kiểm soát biển số' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateVehicleControlListDto,
@@ -102,6 +108,7 @@ export class VehicleControlListController {
 
   @Delete(':id')
   @RequirePermissions('vehicle_control.delete')
+  @ApiOperation({ summary: 'Xóa mềm 1 mục khỏi danh sách kiểm soát biển số' })
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     await this.vehicleControlListService.softDelete(id);
     return {

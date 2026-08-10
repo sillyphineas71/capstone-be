@@ -8,6 +8,7 @@ import {
   ValidationPipe,
   Logger,
 } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { OccupancyEventDto } from '../dto/occupancy-event.dto.js';
 import { IvssInternalTokenGuard } from '../guards/ivss-internal-token.guard.js';
 import { IvssOccupancyIngestService } from '../services/ivss-occupancy-ingest.service.js';
@@ -19,6 +20,7 @@ import { IvssOccupancyIngestService } from '../services/ivss-occupancy-ingest.se
  * Ack-always (200): try/catch quanh ingest — lỗi nghiệp vụ (gồm BadRequest từ persist) bị nuốt +
  * log → vẫn ack, KHÔNG để bridge retry. Mirror IvssWebhookController.
  */
+@ApiTags('IVSS - Occupancy (internal, bridge)')
 @Controller()
 export class IvssOccupancyController {
   private readonly logger = new Logger(IvssOccupancyController.name);
@@ -31,6 +33,10 @@ export class IvssOccupancyController {
   @HttpCode(200)
   @UseGuards(IvssInternalTokenGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({
+    summary:
+      '[NỘI BỘ — chỉ IVSS bridge gọi tới, không phải endpoint public] Nhận sự kiện đếm người (People Counting) theo channel từ camera, xác thực bằng header X-Internal-Token, luôn ack 200 kể cả khi xử lý lỗi',
+  })
   async receiveEvent(@Body() dto: OccupancyEventDto) {
     // Ack-always — handler lỗi KHÔNG làm vỡ ack (bridge fire-and-forget).
     try {

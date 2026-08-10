@@ -5,11 +5,26 @@
  * KHÁC các module SAVP (zones/gate-access/anpr) vốn dùng snake_case.
  */
 
+/**
+ * [FE-2026-08-09] Chi tiết người dùng cho modal click-để-xem (mirror AdminVehicleOwner ở
+ * admin-vehicle-registration-response.dto.ts) — CHỈ avatarUrl/email/department. KHÔNG có
+ * phone (đợi xác nhận chính sách bảo mật, xem comment SEC-01 ở file đó — cùng lý do loại
+ * phone khỏi AdminVehicleOwner) và KHÔNG có role (cần quyết định sản phẩm riêng: user có
+ * nhiều role qua user_roles many-to-many thì hiển thị role nào).
+ */
+export interface RoomAccessLogUserDto {
+  avatarUrl: string | null;
+  email: string | null;
+  department: string | null;
+}
+
 export interface RoomAccessLogEventDto {
   id: string;
   eventTime: string;
   userId: string | null;
   fullName: string | null;
+  /** null khi userId null (event chưa khớp danh tính) — mirror owner:null ở AdminVehicleOwner. */
+  user: RoomAccessLogUserDto | null;
   /** Tên phòng nơi xảy ra event — cần cho route toàn hệ thống (nhiều phòng lẫn nhau). */
   roomId: string | null;
   roomName: string | null;

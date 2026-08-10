@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsOptional,
   IsInt,
@@ -26,12 +27,14 @@ import {
  * (Lớp con `AdminListVehicleRegistrationsQueryDto` mới thêm `user_id`/`owner` cho route admin.)
  */
 export class ListVehicleRegistrationsQueryDto {
+  @ApiPropertyOptional({ description: 'Số trang', default: 1 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
   @Min(1)
   page: number = 1;
 
+  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -39,17 +42,20 @@ export class ListVehicleRegistrationsQueryDto {
   @Max(100)
   limit: number = 20;
 
+  @ApiPropertyOptional({ description: 'Lọc theo trạng thái biển số', enum: VEHICLE_STATUSES })
   @IsOptional()
   @IsIn(VEHICLE_STATUSES)
   status?: VehicleStatus;
 
   // UC-101: tìm theo biển số (một phần). Service normalize qua normalizePlate rồi ILike.
+  @ApiPropertyOptional({ description: 'Tìm theo biển số (khớp một phần)', maxLength: 20 })
   @IsOptional()
   @IsString()
   @MaxLength(20)
   plate?: string;
 
   // UC-101: lọc loại xe (exact). Cột vehicle_type là varchar tự do ⇒ KHÔNG @IsIn (QĐ-5).
+  @ApiPropertyOptional({ description: 'Lọc theo loại phương tiện (khớp chính xác)', maxLength: 50 })
   @Expose({ name: 'vehicle_type' })
   @IsOptional()
   @IsString()
