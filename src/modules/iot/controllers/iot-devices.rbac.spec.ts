@@ -23,6 +23,7 @@ describe('IotDevicesController — RBAC metadata (PROMPT 1)', () => {
     ['assignRoom', 'iot_devices:assign_room'],
     ['update', 'iot.device.update'],
     ['configureRtsp', 'iot_devices:configure_rtsp'],
+    ['configureFaceServer', 'iot_devices:configure_face_server'],
     ['revokeFaceServerToken', 'iot_devices:configure_face_server'],
     ['rotateFaceServerToken', 'iot_devices:configure_face_server'],
     ['disable', 'iot.device.disable'],
