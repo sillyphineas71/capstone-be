@@ -41,6 +41,11 @@ describe('RoomUtilizationRateController', () => {
               comparison: 50.0,
               deltaPercent: 50.0,
             },
+            noShowRate: {
+              current: 10.0,
+              comparison: 5.0,
+              deltaPercent: 100.0,
+            },
             bookedHours: { current: 2.0, comparison: 1.0 },
             actualHours: { current: 1.5, comparison: 0.5 },
             availableHours: { current: 16.0, comparison: 16.0 },

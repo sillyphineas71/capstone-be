@@ -49,7 +49,7 @@ import {
   XLSX_MIME,
   MAX_IMPORT_ROWS,
 } from '../constants/import-accounts.constants.js';
-import { UploadedAccountPhoto } from '../services/account-import.service.js';
+import type { UploadedAccountPhoto } from '../services/account-import.service.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
 import { LockUserDto } from '../dto/lock-user.dto.js';
@@ -81,6 +81,8 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('accounts.user.create')
   @ApiBearerAuth()
+  @UseInterceptors(FileInterceptor('avatarFile'))
+  @ApiConsumes('multipart/form-data')
   @UsePipes(
     new ValidationPipe({
       whitelist: true,
@@ -109,6 +111,7 @@ export class UsersController {
     @Ip() ipAddress: string,
     @Headers('user-agent') userAgent?: string,
     @Headers('x-request-id') requestId?: string,
+    @UploadedFile() avatarFile?: UploadedAccountPhoto,
   ): Promise<{ success: boolean; message: string; data: UserResponseDto }> {
     const user = request['user'] as { userId: string } | undefined;
     const creatorId = user?.userId || 'system';
@@ -121,6 +124,7 @@ export class UsersController {
         userAgent,
         requestId,
       },
+      avatarFile,
     );
 
     return {

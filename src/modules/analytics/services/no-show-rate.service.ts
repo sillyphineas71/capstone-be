@@ -15,6 +15,7 @@ import { DashboardOverviewConfigService } from './dashboard-overview-config.serv
 import { QueryNoShowRateDto } from '../dto/query-no-show-rate.dto';
 import {
   NoShowRateResponseDto,
+  NoShowTrendItemDto,
   RankingDto,
   RankingItemDto,
 } from '../dto/no-show-rate-response.dto';
@@ -155,6 +156,18 @@ export class NoShowRateService {
       }
     }
 
+    // 11. Query daily trend (biểu đồ xu hướng no-show theo ngày)
+    const trendRows = await this.repo.getDailyTrend(params);
+    const trend: NoShowTrendItemDto[] = trendRows.map((t) => ({
+      date: t.date,
+      noShowCount: t.noShowCount,
+      totalBookings: t.totalBookings,
+      noShowRate:
+        t.totalBookings > 0
+          ? Math.round((t.noShowCount / t.totalBookings) * 1000) / 10
+          : 0,
+    }));
+
     const data = this.buildResponse(
       kpi,
       dbItems,
@@ -163,6 +176,7 @@ export class NoShowRateService {
       rankBy,
       page,
       limit,
+      trend,
     );
 
     await logAction(kpi.noShowCount);
@@ -351,12 +365,14 @@ export class NoShowRateService {
     rankBy: string,
     page: number,
     limit: number,
+    trend: NoShowTrendItemDto[] = [],
   ): NoShowRateResponseDto {
     return {
       period: { from, to },
       noShowCount: 0,
       totalBookings: 0,
       noShowRate: 0,
+      trend,
       ranking: {
         rankBy,
         items: [],
@@ -381,6 +397,7 @@ export class NoShowRateService {
     rankBy: string,
     page: number,
     limit: number,
+    trend: NoShowTrendItemDto[] = [],
   ): NoShowRateResponseDto {
     const noShowRate =
       kpi.totalBookings > 0
@@ -388,7 +405,7 @@ export class NoShowRateService {
         : 0;
 
     if (kpi.noShowCount === 0) {
-      const res = this.buildEmptyResponse(from, to, rankBy, page, limit);
+      const res = this.buildEmptyResponse(from, to, rankBy, page, limit, trend);
       res.totalBookings = kpi.totalBookings;
       res.noShowRate = noShowRate;
       return res;
@@ -419,6 +436,7 @@ export class NoShowRateService {
       noShowCount: kpi.noShowCount,
       totalBookings: kpi.totalBookings,
       noShowRate,
+      trend,
       ranking: {
         rankBy,
         items,

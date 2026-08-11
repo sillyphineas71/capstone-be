@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager } from 'typeorm';
 import {
@@ -801,5 +801,44 @@ describe('DepartmentsService', () => {
         ].sort(),
       );
     });
+  });
+
+  describe('PTA partner department protection', () => {
+  it('blocks update of the fixed partner department for any actor', async () => {
+    await expect(
+      service.updateDepartment(
+        '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f',
+        { departmentName: 'Renamed' },
+        'system-admin',
+        {},
+      ),
+    ).rejects.toMatchObject({
+      response: { error: { code: 'PARTNER_DEPARTMENT_PROTECTED' } },
+      status: 403,
+    });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows update of other departments', async () => {
+    const dept = {
+      id: 'other-dept',
+      departmentName: 'IT',
+      parentDepartmentId: null,
+      managerUserId: null,
+      description: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    em.findOne.mockResolvedValue(dept);
+
+    const result = await service.updateDepartment(
+      'other-dept',
+      { departmentName: 'Phong IT' },
+      'admin',
+      {},
+    );
+    expect(result.id).toBe('other-dept');
+  });
   });
 });

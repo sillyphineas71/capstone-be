@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+/* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/require-await */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource, EntityManager, Brackets } from 'typeorm';
 import {
@@ -15,6 +15,10 @@ import { PasswordGeneratorService } from './password-generator.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { RedisService } from '../../redis/redis.service.js';
 import { AuthConfigService } from '../../auth/services/auth-config.service.js';
+import * as bcrypt from 'bcryptjs';
+import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import {
   UserEntity,
@@ -50,6 +54,8 @@ describe('UsersService', () => {
   let notificationsService: jest.Mocked<NotificationsService>;
   let redisService: jest.Mocked<RedisService>;
   let authConfigService: jest.Mocked<AuthConfigService>;
+  let cloudinaryService: jest.Mocked<CloudinaryService>;
+  let authzReadRepository: jest.Mocked<AuthzReadRepository>;
   let em: jest.Mocked<EntityManager>;
 
   beforeEach(async () => {
@@ -63,6 +69,7 @@ describe('UsersService', () => {
       count: jest.fn(),
       softDelete: jest.fn(),
       createQueryBuilder: jest.fn(),
+      getRepository: jest.fn(),
     } as unknown as jest.Mocked<EntityManager>;
 
     // Mock DataSource
@@ -96,6 +103,18 @@ describe('UsersService', () => {
     authConfigService = {
       getRefreshTokenTtlSeconds: jest.fn().mockReturnValue(604800),
     } as unknown as jest.Mocked<AuthConfigService>;
+    cloudinaryService = {
+      uploadImage: jest.fn().mockResolvedValue({
+        publicId: 'pub',
+        secureUrl: 'https://cdn/pub',
+      }),
+      deleteImage: jest.fn().mockResolvedValue(undefined),
+    } as unknown as jest.Mocked<CloudinaryService>;
+    authzReadRepository = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
+    } as unknown as jest.Mocked<AuthzReadRepository>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -111,6 +130,8 @@ describe('UsersService', () => {
         },
         { provide: RedisService, useValue: redisService },
         { provide: AuthConfigService, useValue: authConfigService },
+        { provide: CloudinaryService, useValue: cloudinaryService },
+        { provide: AuthzReadRepository, useValue: authzReadRepository },
       ],
     }).compile();
 
@@ -1732,6 +1753,109 @@ describe('UsersService', () => {
         ),
       ).rejects.toThrow('DB write failed');
     });
+    it('[PTA-U1] actor without account.partner.manage is blocked', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        target: { ...baseTarget, departmentId: PARTNER_DEPARTMENT_ID },
+      });
+      authzReadRepository.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: [],
+        permissions: [],
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { accountExpiresAt: new Date(Date.now() + 86400000).toISOString() },
+          actorId,
+          {},
+        ),
+      ).rejects.toMatchObject({
+        response: { error: { code: 'FORBIDDEN' } },
+        status: 403,
+      });
+      expect(em.update).not.toHaveBeenCalled();
+    });
+
+    it('[PTA-U2] accountExpiresAt is rejected for non-partner users', async () => {
+      setup({ actorIsSystemAdmin: true, target: baseTarget });
+      authzReadRepository.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: [],
+        permissions: ['account.partner.manage'],
+      });
+
+      await expect(
+        service.updateUser(
+          targetUserId,
+          { accountExpiresAt: new Date(Date.now() + 86400000).toISOString() },
+          actorId,
+          {},
+        ),
+      ).rejects.toMatchObject({
+        response: { error: { code: 'ACCOUNT_EXPIRY_PARTNER_ONLY' } },
+        status: 403,
+      });
+    });
+
+    it('[PTA-U3] partner extension succeeds and writes account.partner.extend audit', async () => {
+      setup({
+        actorIsSystemAdmin: true,
+        target: {
+          ...baseTarget,
+          departmentId: PARTNER_DEPARTMENT_ID,
+          accountExpiresAt: null,
+        },
+      });
+      authzReadRepository.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: [],
+        permissions: ['account.partner.manage'],
+      });
+      const next = new Date(Date.now() + 86400000);
+
+      await service.updateUser(
+        targetUserId,
+        { accountExpiresAt: next.toISOString() },
+        actorId,
+        {},
+      );
+
+      expect(em.update).toHaveBeenCalledWith(UserEntity, targetUserId, {
+        accountExpiresAt: next,
+      });
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({ actionType: 'account.partner.extend' }),
+      );
+    });
+
+    it('[PTA-U4] shortening accountExpiresAt (still future) writes account.partner.lock_early, not extend', async () => {
+      const oldExpiry = new Date(Date.now() + 7 * 86400000);
+      setup({
+        actorIsSystemAdmin: true,
+        target: {
+          ...baseTarget,
+          departmentId: PARTNER_DEPARTMENT_ID,
+          accountExpiresAt: oldExpiry,
+        },
+      });
+      authzReadRepository.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: [],
+        permissions: ['account.partner.manage'],
+      });
+      const next = new Date(Date.now() + 3 * 86400000); // van o tuong lai, nhung som hon oldExpiry
+
+      await service.updateUser(
+        targetUserId,
+        { accountExpiresAt: next.toISOString() },
+        actorId,
+        {},
+      );
+
+      expect(em.create).toHaveBeenCalledWith(
+        AuditLogEntity,
+        expect.objectContaining({ actionType: 'account.partner.lock_early' }),
+      );
+    });
   });
 
   describe('deleteUser', () => {
@@ -2861,5 +2985,98 @@ describe('UsersService', () => {
       expect(rolesQb.getMany).not.toHaveBeenCalled();
       expect(res.data).toEqual([]);
     });
+  });
+
+  describe('PTA partner provisioning', () => {
+  const setupPersistMocks = () => {
+    const repoMock = { insert: jest.fn().mockResolvedValue(undefined) };
+    (em.getRepository as jest.Mock).mockReturnValue(repoMock);
+    em.create.mockImplementation((_entity: unknown, plain: unknown) => plain);
+    em.save.mockImplementation(async (_entity: unknown, plain: unknown) => plain);
+    return repoMock;
+  };
+
+  it('persistAccount creates partner user with email password and active face profile', async () => {
+    const repoMock = setupPersistMocks();
+    const expiresAt = new Date(Date.now() + 86400000);
+    const result = await service.persistAccount(
+      em,
+      {
+        fullName: 'Partner',
+        email: 'partner@x.com',
+        departmentId: PARTNER_DEPARTMENT_ID,
+        roleIds: ['role-1'],
+        employeeCode: null,
+        phoneNumber: null,
+        positionTitle: null,
+        directManagerId: null,
+        partner: {
+          accountExpiresAt: expiresAt,
+          mediaFileId: 'media-1',
+          faceProfileId: 'face-1',
+          detectedMime: 'image/jpeg',
+          storageKey: 's1',
+          fileUrl: 'https://cdn/x.jpg',
+          fileName: 'x.jpg',
+          uploadedBy: 'admin',
+        },
+      } as any,
+      'admin',
+      {},
+    );
+
+    const created = result.user as any;
+    expect(result.tempPassword).toBe('partner@x.com');
+    expect(await bcrypt.compare('partner@x.com', created.passwordHash)).toBe(true);
+    expect(created.mustChangePassword).toBe(false);
+    expect(created.accountExpiresAt).toEqual(expiresAt);
+    expect(created.departmentId).toBe(PARTNER_DEPARTMENT_ID);
+    expect(repoMock.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ status: FaceProfileStatus.ACTIVE }),
+    );
+    expect(repoMock.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ relatedEntityType: 'face_profile' }),
+    );
+  });
+
+  it('rejects partner creation without avatar before creating users', async () => {
+    const dto: CreateUserDto = {
+      fullName: 'Partner',
+      email: 'partner@x.com',
+      roleIds: ['role-1'],
+      accountType: 'partner',
+      accountExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+    };
+
+    await expect(service.createUser(dto, 'admin', {})).rejects.toMatchObject({
+      response: { error: { code: 'AVATAR_FILE_REQUIRED' } },
+    });
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+    expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('keeps employee persist behavior unchanged', async () => {
+    setupPersistMocks();
+    const result = await service.persistAccount(
+      em,
+      {
+        fullName: 'Employee',
+        email: 'emp@x.com',
+        departmentId: 'dept-1',
+        roleIds: ['role-1'],
+        employeeCode: null,
+        phoneNumber: null,
+        positionTitle: null,
+        directManagerId: null,
+      },
+      'admin',
+      {},
+    );
+
+    const created = result.user as any;
+    expect(result.tempPassword).toBe('tempPassword123!');
+    expect(created.mustChangePassword).toBe(true);
+    expect(created.accountExpiresAt).toBeNull();
+  });
   });
 });

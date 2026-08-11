@@ -269,4 +269,70 @@ describe('LoginService', () => {
     expect(result.user.biometricRequired).toBe(false);
     expect(result.user.shouldShowBiometricPopup).toBe(false);
   });
+
+  describe('PTA account expiry in LoginService', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (rateLimitService.checkOrThrow as jest.Mock).mockImplementation(
+      () => undefined,
+    );
+    (biometricStatusRawRepository.getFaceProfileRows as jest.Mock).mockResolvedValue([]);
+  });
+
+  const mockUser = (accountExpiresAt: Date | null) =>
+    (usersAuthRepository.findByNormalizedEmail as jest.Mock).mockResolvedValue({
+      id: 'partner-1',
+      email: 'partner@example.com',
+      passwordHash: 'hash',
+      fullName: 'Partner',
+      avatarUrl: null,
+      departmentId: null,
+      accountStatus: 'active',
+      accountExpiresAt,
+    });
+
+  it('allows login when account_expires_at is null', async () => {
+    mockUser(null);
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    (tokenService.generateAccessToken as jest.Mock).mockResolvedValue('access');
+    (tokenService.generateRefreshToken as jest.Mock).mockResolvedValue('refresh');
+    (authzReadRepository.getEffectiveRolesAndPermissions as jest.Mock).mockResolvedValue({ roles: ['EMPLOYEE'], permissions: [] });
+    (usersAuthRepository.updateLastLoginAt as jest.Mock).mockResolvedValue(undefined);
+    (authAuditRepository.logLoginSuccess as jest.Mock).mockResolvedValue(undefined);
+
+    const result = await service.login(
+      { email: 'partner@example.com', password: 'x' },
+      {},
+    );
+    expect(result.accessToken).toBe('access');
+  });
+
+  it('allows login before expiry', async () => {
+    mockUser(new Date(Date.now() + 86400000));
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    (tokenService.generateAccessToken as jest.Mock).mockResolvedValue('access');
+    (tokenService.generateRefreshToken as jest.Mock).mockResolvedValue('refresh');
+    (authzReadRepository.getEffectiveRolesAndPermissions as jest.Mock).mockResolvedValue({ roles: ['EMPLOYEE'], permissions: [] });
+    (usersAuthRepository.updateLastLoginAt as jest.Mock).mockResolvedValue(undefined);
+    (authAuditRepository.logLoginSuccess as jest.Mock).mockResolvedValue(undefined);
+
+    const result = await service.login(
+      { email: 'partner@example.com', password: 'x' },
+      {},
+    );
+    expect(result.accessToken).toBe('access');
+  });
+
+  it('blocks login after expiry with AUTH_ACCOUNT_EXPIRED', async () => {
+    mockUser(new Date(Date.now() - 1000));
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+    await expect(
+      service.login({ email: 'partner@example.com', password: 'x' }, {}),
+    ).rejects.toMatchObject({
+      response: { code: 'AUTH_ACCOUNT_EXPIRED' },
+      status: 403,
+    });
+  });
+  });
 });

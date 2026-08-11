@@ -17,11 +17,19 @@ export class RankingDto {
   totalPages: number;
 }
 
+export class NoShowTrendItemDto {
+  date: string;
+  noShowCount: number;
+  totalBookings: number;
+  noShowRate: number;
+}
+
 export class NoShowRateResponseDto {
   period: { from: string; to: string };
   noShowCount: number;
   totalBookings: number;
   noShowRate: number;
+  trend: NoShowTrendItemDto[];
   ranking: RankingDto;
   message?: string;
 }

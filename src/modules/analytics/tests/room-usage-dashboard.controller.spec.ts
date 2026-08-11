@@ -108,7 +108,13 @@ describe('RoomUsageDashboardController', () => {
     it('valid request -> 200 with room detail response', async () => {
       const mockResult = {
         data: {
-          room: { roomId: mockRoomId, roomName: 'Room A' },
+          room: {
+            roomId: mockRoomId,
+            roomName: 'Room A',
+            siteName: null,
+            areaName: null,
+            capacity: 10,
+          },
           period: { from: '2026-06-01', to: '2026-06-30' },
           bookedHours: 2.0,
           actualHours: 1.5,

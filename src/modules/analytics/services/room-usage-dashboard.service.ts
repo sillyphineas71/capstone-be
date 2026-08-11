@@ -390,7 +390,7 @@ export class RoomUsageDashboardService {
     activeRooms: Array<{ id: string; roomName: string }>,
     bookedMap: Map<string, number>,
     actualMap: Map<string, { actualMinutes: number; hasActualData: boolean }>,
-    trend: Array<{ date: string; meetingCount: number }>,
+    trend: Array<{ date: string; meetingCount: number; bookedMinutes: number }>,
     from: string,
     to: string,
     operatingHours: number,
@@ -477,11 +477,28 @@ export class RoomUsageDashboardService {
       actualUsedHours: actualRoomCount > 0 ? totalActualUsedHours : null,
     };
 
+    // Daily capacity = operating hours per room * số phòng đang trong scope,
+    // dùng chung cho mọi ngày trong trend (cùng 1 tập phòng suốt kỳ báo cáo).
+    const dailyCapacityHours = operatingHours * activeRooms.length;
+    const enrichedTrend = trend.map((t) => {
+      const bookedHours = Math.round((t.bookedMinutes / 60) * 10) / 10;
+      const utilizationRate =
+        dailyCapacityHours > 0
+          ? Math.round((bookedHours / dailyCapacityHours) * 1000) / 10
+          : 0;
+      return {
+        date: t.date,
+        meetingCount: t.meetingCount,
+        bookedHours,
+        utilizationRate,
+      };
+    });
+
     return {
       period: { from, to },
       summary,
       rooms,
-      trend,
+      trend: enrichedTrend,
     };
   }
 

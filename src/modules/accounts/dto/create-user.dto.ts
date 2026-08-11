@@ -6,6 +6,9 @@ import {
   IsArray,
   ArrayNotEmpty,
   IsOptional,
+  IsIn,
+  IsDateString,
+  ValidateIf,
   MaxLength,
   Matches,
 } from 'class-validator';
@@ -28,9 +31,13 @@ export class CreateUserDto {
   @MaxLength(255, { message: 'Email không được vượt quá 255 ký tự' })
   email: string;
 
+  // departmentId vẫn BẮT BUỘC cho tài khoản nhân viên thường (accountType mặc định/'employee').
+  // Chỉ bỏ qua khi tạo tài khoản đối tác (accountType='partner') — server luôn override
+  // bằng PARTNER_DEPARTMENT_ID bất kể client gửi gì (xem UsersService.createUser()).
+  @ValidateIf((o: CreateUserDto) => o.accountType !== 'partner')
   @IsNotEmpty({ message: 'ID phòng ban không được để trống' })
   @IsUUID('4', { message: 'ID phòng ban phải là định dạng UUID' })
-  departmentId: string;
+  departmentId?: string;
 
   @IsNotEmpty({ message: 'Danh sách vai trò không được để trống' })
   @IsArray({ message: 'Danh sách vai trò phải là mảng' })
@@ -69,4 +76,14 @@ export class CreateUserDto {
   @IsOptional()
   @IsUUID('4', { message: 'ID người quản lý phải là định dạng UUID' })
   directManagerId?: string;
+
+  @IsOptional()
+  @IsIn(['employee', 'partner'], {
+    message: 'Loại tài khoản phải là employee hoặc partner',
+  })
+  accountType?: 'employee' | 'partner';
+
+  @IsOptional()
+  @IsDateString({}, { message: 'accountExpiresAt phải là thời điểm hợp lệ (ISO 8601)' })
+  accountExpiresAt?: string;
 }

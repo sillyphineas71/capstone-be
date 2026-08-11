@@ -149,6 +149,28 @@ export class RoomUtilizationRateService {
 
     const comparisonHasNoData = compAgg.bookedMinutesSum === 0;
 
+    // 7b. No-show aggregate cho cả 2 kỳ (FE-requested: noShowRate trong summary)
+    const currentNoShowAgg = await this.repo.getNoShowAggregate(
+      scope.scopeRoomIds,
+      query.roomId,
+      currentPeriod.from,
+      currentPeriod.to,
+    );
+    const compNoShowAgg = await this.repo.getNoShowAggregate(
+      scope.scopeRoomIds,
+      query.roomId,
+      comparisonPeriod.from,
+      comparisonPeriod.to,
+    );
+    const currentNoShowRateValue =
+      currentNoShowAgg.totalBookings > 0
+        ? (currentNoShowAgg.noShowCount / currentNoShowAgg.totalBookings) * 100
+        : 0;
+    const compNoShowRateValue =
+      compNoShowAgg.totalBookings > 0
+        ? (compNoShowAgg.noShowCount / compNoShowAgg.totalBookings) * 100
+        : 0;
+
     // 8. Compute summary metrics
     const operatingHours = await this.configService.getOperatingHoursPerDay();
     const currentCapacityHours =
@@ -217,6 +239,15 @@ export class RoomUtilizationRateService {
       comparison: Math.round(compCapacityHours * 10) / 10,
     };
 
+    const noShowRate: MetricPairDto = {
+      current: Math.round(currentNoShowRateValue * 10) / 10,
+      comparison: Math.round(compNoShowRateValue * 10) / 10,
+      deltaPercent: this.calculateDelta(
+        currentNoShowRateValue,
+        compNoShowRateValue,
+      ),
+    };
+
     // 9. Compute daily/weekly trend
     const trend = await this.computeTrendBuckets(
       scope.scopeRoomIds,
@@ -246,6 +277,7 @@ export class RoomUtilizationRateService {
       summary: {
         reservationUtilizationRate,
         roomOccupancyRate,
+        noShowRate,
         bookedHours,
         actualHours,
         availableHours,
@@ -534,6 +566,7 @@ export class RoomUtilizationRateService {
           comparison: null,
           deltaPercent: null,
         },
+        noShowRate: emptyPair(),
         bookedHours: { current: 0, comparison: 0 },
         actualHours: { current: 0, comparison: 0 },
         availableHours: { current: 0, comparison: 0 },

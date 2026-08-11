@@ -1,5 +1,6 @@
-﻿import {
+import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   ConflictException,
@@ -9,6 +10,7 @@
 import { DataSource, IsNull, ILike, In } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
+import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
 import {
   UserEntity,
   AccountStatus,
@@ -252,6 +254,13 @@ export class DepartmentsService {
     updaterId: string,
     clientContext: ClientContext,
   ): Promise<DepartmentResponseDto> {
+    if (id === PARTNER_DEPARTMENT_ID) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'Không thể sửa department cố định đánh dấu tài khoản đối tác.',
+        error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
+      });
+    }
     if (
       dto.departmentName === undefined &&
       dto.parentDepartmentId === undefined &&

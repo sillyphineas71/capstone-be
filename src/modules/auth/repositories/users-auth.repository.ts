@@ -11,7 +11,7 @@ export class UsersAuthRepository {
   ): Promise<AuthenticatedUserRecord | null> {
     const row = await this.dataSource.query(
       `
-        SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status
+        SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status, account_expires_at
         FROM users
         WHERE email = $1 AND deleted_at IS NULL
         LIMIT 1
@@ -30,6 +30,7 @@ export class UsersAuthRepository {
       fullName: row[0].full_name,
       avatarUrl: row[0].avatar_url ?? null,
       departmentId: row[0].department_id ?? null,
+      accountExpiresAt: row[0].account_expires_at ? new Date(row[0].account_expires_at) : null,
       accountStatus: row[0].account_status,
     };
   }
@@ -37,7 +38,7 @@ export class UsersAuthRepository {
   async findById(userId: string): Promise<AuthenticatedUserRecord | null> {
     const row = await this.dataSource.query(
       `
-        SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status
+        SELECT id, email, password_hash, full_name, avatar_url, department_id, account_status, account_expires_at
         FROM users
         WHERE id = $1 AND deleted_at IS NULL
         LIMIT 1
@@ -56,6 +57,7 @@ export class UsersAuthRepository {
       fullName: row[0].full_name,
       avatarUrl: row[0].avatar_url ?? null,
       departmentId: row[0].department_id ?? null,
+      accountExpiresAt: row[0].account_expires_at ? new Date(row[0].account_expires_at) : null,
       accountStatus: row[0].account_status,
     };
   }

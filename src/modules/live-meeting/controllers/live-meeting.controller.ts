@@ -1,4 +1,4 @@
-﻿import {
+import {
   BadRequestException,
   Controller,
   Post,
@@ -28,6 +28,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { AllowPartnerAccount } from '../../../common/decorators/allow-partner-account.decorator.js';
 
 import { LiveMeetingService } from '../services/live-meeting.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
@@ -632,6 +633,7 @@ export class LiveMeetingController {
 
   @Get('meetings/:meetingId/notes')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('meeting.note.read')
   @ApiBearerAuth()
@@ -754,6 +756,7 @@ export class LiveMeetingController {
   // Route leaf tĩnh 'timeline' — khác 'notes'/'attendance', không collision.
   @Get('meetings/:meetingId/timeline')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('meeting.timeline.read')
   @ApiBearerAuth()

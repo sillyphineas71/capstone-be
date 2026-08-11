@@ -23,6 +23,7 @@ export class TrendBucketDto {
 export class RoomUtilizationRateSummaryDto {
   reservationUtilizationRate: MetricPairDto;
   roomOccupancyRate: MetricPairDto;
+  noShowRate: MetricPairDto;
   bookedHours: HoursPairDto;
   actualHours: HoursPairDto;
   availableHours: HoursPairDto;

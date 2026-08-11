@@ -157,6 +157,44 @@ export class NoShowRateRepository {
     };
   }
 
+  async getDailyTrend(
+    params: NoShowRateParams,
+  ): Promise<
+    Array<{ date: string; noShowCount: number; totalBookings: number }>
+  > {
+    const scope = this.buildScopeWhere(params, 'rb', 'm');
+    const pIdx = scope.values.length + 1;
+
+    const sql = `
+      SELECT
+        (rb.reserved_start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date::text AS date,
+        COUNT(DISTINCT rb.id)::int AS total_bookings,
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count
+      FROM room_bookings rb
+      INNER JOIN meetings m ON m.id = rb.meeting_id
+      LEFT JOIN no_show_cases nsc ON nsc.booking_id = rb.id
+      WHERE rb.status IN ('approved', 'active', 'completed', 'released')
+        AND m.deleted_at IS NULL
+        AND rb.reserved_start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND rb.reserved_start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
+        AND ${scope.clause}
+      GROUP BY (rb.reserved_start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+      ORDER BY date ASC
+    `;
+
+    const rows = await this.dataSource.query(sql, [
+      ...scope.values,
+      params.from,
+      params.to,
+    ]);
+
+    return rows.map((r: any) => ({
+      date: r.date,
+      noShowCount: r.no_show_count,
+      totalBookings: r.total_bookings,
+    }));
+  }
+
   async getRoomRanking(
     params: NoShowRateParams,
     page: number,

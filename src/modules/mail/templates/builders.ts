@@ -68,6 +68,35 @@ export function buildAccountWelcomeEmail(params: {
   });
 }
 
+
+export function buildPartnerAccountWelcomeEmail(params: {
+  fullName: string;
+  email: string;
+  expiresAt: Date | string;
+}): string {
+  const bodyHtml =
+    renderParagraph(
+      `Kính gửi <strong>${escapeHtml(params.fullName)}</strong>,`,
+    ) +
+    renderParagraph(
+      'Tài khoản Smart Meeting Management dành cho đối tác đã được tạo thành công.',
+    ) +
+    renderInfoTable([
+      { label: 'Email đăng nhập', value: escapeHtml(params.email) },
+      {
+        label: 'Hạn sử dụng tài khoản',
+        value: escapeHtml(formatDateTimeVN(params.expiresAt)),
+      },
+    ]) +
+    renderCallout(
+      'Mật khẩu đăng nhập chính là địa chỉ email này. Vui lòng không chia sẻ thông tin đăng nhập với người khác.',
+      'info',
+    );
+  return renderEmailLayout({
+    heading: 'Tài khoản đối tác đã được tạo',
+    bodyHtml,
+  });
+}
 // ── Meetings ──────────────────────────────────────────────────────────────
 
 export function buildMeetingInviteEmail(params: {

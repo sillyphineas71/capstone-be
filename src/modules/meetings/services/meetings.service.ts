@@ -994,11 +994,16 @@ export class MeetingsService {
     // Post-transaction: notify approvers (non-blocking, no rollback)
     if (approverIds.length > 0) {
       try {
+        const requester = await this.dataSource
+          .getRepository(UserEntity)
+          .findOne({ where: { id: authUser.userId } });
+        const requesterName =
+          requester?.fullName || 'Ng\u01b0\u1eddi d\u00f9ng';
         await this.notificationsService.createNotification({
           notificationType: NotificationType.MEETING_REQUEST_CREATED,
           channel: NotificationChannel.IN_APP,
           subject: `Y\u00eau c\u1ea7u h\u1ecdp m\u1edbi: ${dto.title}`,
-          content: `Ng\u01b0\u01a1\u0300i du\u0300ng ${authUser.userId} \u0111a\u0303 ta\u0323o y\u00eau c\u00e2\u0300u cu\u00f4\u0323c ho\u0323p "${dto.title}" ch\u01a1\u0300 ph\u00ea duy\u00ea\u0323t.`,
+          content: `<b>${requesterName}</b> \u0111\u00e3 t\u1ea1o y\u00eau c\u1ea7u cu\u1ed9c h\u1ecdp <b>"${dto.title}"</b> ch\u1edd ph\u00ea duy\u1ec7t.`,
           relatedEntityType: 'meeting_request',
           relatedEntityId: request!.id,
           recipientScope: 'user_list',
@@ -6345,7 +6350,8 @@ export class MeetingsService {
           .filter((mr) => mr.approvalStatus === ApprovalStatus.PENDING)
           .map(async (mr) => {
             const roomId = mr.targetRoom?.id ?? mr.meeting?.roomId ?? null;
-            const startTime = mr.requestedStartTime ?? mr.meeting?.startTime ?? null;
+            const startTime =
+              mr.requestedStartTime ?? mr.meeting?.startTime ?? null;
             const endTime = mr.requestedEndTime ?? mr.meeting?.endTime ?? null;
             const details = await this.findRoomConflictDetails(
               roomId,
