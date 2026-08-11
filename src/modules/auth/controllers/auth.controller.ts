@@ -39,6 +39,7 @@ import { PasswordResetService } from '../services/password-reset.service';
 import { ChangePasswordService } from '../services/change-password.service';
 import { GetMeService } from '../services/get-me.service';
 import { RefreshTokenService } from '../services/refresh-token.service';
+import { AllowPartnerAccount } from '../../../common/decorators/allow-partner-account.decorator';
 import { hasOnlyAllowedLoginFields } from '../utils/login-normalization.util';
 
 @ApiTags('Authentication')
@@ -97,6 +98,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   // KHONG gan @UseGuards(JwtAuthGuard): access token da het han la ly do goi
   // endpoint nay nen khong the doi hoi access token con hop le. Xac thuc o day
   // dua vao chinh chu ky cua refresh token (secret rieng) + doi chieu Redis
@@ -139,6 +141,7 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard)
   @SetMetadata('ignoreBlacklist', true)
   @ApiBearerAuth()
@@ -247,6 +250,7 @@ export class AuthController {
 
   @Patch('change-password')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
@@ -301,6 +305,7 @@ export class AuthController {
 
   @Get('me')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({

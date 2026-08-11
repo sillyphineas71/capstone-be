@@ -33,6 +33,9 @@ describe('RoomUtilizationRateService', () => {
       getRoom: jest.fn(),
       getActiveRoomCount: jest.fn(),
       getPeriodAggregate: jest.fn(),
+      getNoShowAggregate: jest
+        .fn()
+        .mockResolvedValue({ totalBookings: 0, noShowCount: 0 }),
     } as unknown as jest.Mocked<RoomUtilizationRateRepository>;
 
     mockConfigService = {

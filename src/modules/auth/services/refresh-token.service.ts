@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 import { RedisService } from '../../redis/redis.service';
@@ -67,8 +67,25 @@ export class RefreshTokenService {
     }
 
     const user = await this.usersAuthRepository.findById(payload.sub);
-    if (!user || user.accountStatus !== 'active') {
+    if (!user) {
       // Khong phan biet "user khong ton tai" vs "user bi khoa" ra ngoai API (SEC-02).
+      throw new UnauthorizedException({
+        code: AUTH_ERROR_CODES.REFRESH_TOKEN_INVALID,
+        message: 'Refresh token is invalid or expired.',
+      });
+    }
+
+    if (
+      user.accountExpiresAt &&
+      user.accountExpiresAt.getTime() <= Date.now()
+    ) {
+      throw new ForbiddenException({
+        code: AUTH_ERROR_CODES.AUTH_ACCOUNT_EXPIRED,
+        message: 'Account has expired.',
+      });
+    }
+
+    if (user.accountStatus !== 'active') {
       throw new UnauthorizedException({
         code: AUTH_ERROR_CODES.REFRESH_TOKEN_INVALID,
         message: 'Refresh token is invalid or expired.',

@@ -238,7 +238,13 @@ export class RoomUsageDashboardRepository {
         rb.reserved_end_time AS "reservedEndTime",
         rbu.actual_start_time AS "actualStartTime",
         rbu.actual_end_time AS "actualEndTime",
-        m.status AS status
+        m.status AS status,
+        (SELECT COUNT(*)::int FROM meeting_participants mp
+          WHERE mp.meeting_id = m.id
+            AND mp.attendance_status IN ('present', 'late', 'left_early')) AS "attendeeCount",
+        (SELECT COUNT(*)::int FROM meeting_participants mp
+          WHERE mp.meeting_id = m.id
+            AND mp.attendance_status = 'absent') AS "noShowCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       INNER JOIN users u ON u.id = m.organizer_id
@@ -257,7 +263,9 @@ export class RoomUsageDashboardRepository {
     from: string,
     to: string,
     scopeRoomIds: string[] | null,
-  ): Promise<Array<{ date: string; meetingCount: number }>> {
+  ): Promise<
+    Array<{ date: string; meetingCount: number; bookedMinutes: number }>
+  > {
     const conditions: string[] = [
       "rb.status IN ('approved', 'active', 'completed', 'released')",
       'm.deleted_at IS NULL',
@@ -287,7 +295,8 @@ export class RoomUsageDashboardRepository {
     const sql = `
       SELECT
         (rb.reserved_start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date::text AS date,
-        COUNT(DISTINCT m.id)::int AS meeting_count
+        COUNT(DISTINCT m.id)::int AS meeting_count,
+        SUM(EXTRACT(EPOCH FROM (rb.reserved_end_time - rb.reserved_start_time)) / 60)::double precision AS booked_minutes
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       WHERE ${conditions.join(' AND ')}
@@ -299,6 +308,7 @@ export class RoomUsageDashboardRepository {
     return rows.map((r: any) => ({
       date: r.date,
       meetingCount: r.meeting_count,
+      bookedMinutes: r.booked_minutes ?? 0,
     }));
   }
 

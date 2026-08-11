@@ -2,6 +2,7 @@ import {
   IsString,
   IsUUID,
   IsOptional,
+  IsDateString,
   MaxLength,
   Matches,
 } from 'class-validator';
@@ -57,4 +58,8 @@ export class UpdateUserDto {
   @IsOptional()
   @IsUUID('4', { message: 'ID phòng ban phải là định dạng UUID' })
   departmentId?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'accountExpiresAt phải là thời điểm hợp lệ (ISO 8601)' })
+  accountExpiresAt?: string;
 }

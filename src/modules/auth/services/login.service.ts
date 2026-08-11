@@ -88,6 +88,15 @@ export class LoginService {
       });
     }
 
+    if (
+      user.accountExpiresAt &&
+      user.accountExpiresAt.getTime() <= Date.now()
+    ) {
+      throw new ForbiddenException({
+        code: AUTH_ERROR_CODES.AUTH_ACCOUNT_EXPIRED,
+        message: 'Account has expired.',
+      });
+    }
     switch (user.accountStatus) {
       case 'active':
         break;

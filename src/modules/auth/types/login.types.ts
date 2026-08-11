@@ -38,6 +38,7 @@ export interface AuthenticatedUserRecord {
   avatarUrl: string | null;
   departmentId: string | null;
   accountStatus: string;
+  accountExpiresAt: Date | null;
 }
 
 export interface AuthSessionRecord {

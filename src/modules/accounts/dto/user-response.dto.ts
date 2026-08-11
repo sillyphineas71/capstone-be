@@ -9,8 +9,10 @@ export class UserResponseDto {
   employeeCode: string | null;
   email: string;
   fullName: string;
+  departmentId: string | null;
   accountStatus: string;
   mustChangePassword: boolean;
+  accountExpiresAt: Date | null;
   roles: UserRoleResponseDto[];
   createdAt: Date;
 }

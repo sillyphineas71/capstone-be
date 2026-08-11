@@ -181,4 +181,47 @@ describe('RefreshTokenService', () => {
       UnauthorizedException,
     );
   });
+
+  describe('PTA account expiry in RefreshTokenService', () => {
+  const validPayload = () => ({
+    sub: 'user-1',
+    jti: 'old-jti',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  });
+
+  it('allows refresh when account_expires_at is null', async () => {
+    jwtService.verifyAsync.mockResolvedValue(validPayload());
+    usersAuthRepository.findById.mockResolvedValue({
+      ...activeUser,
+      accountExpiresAt: null,
+    });
+
+    const result = await service.refresh('valid-refresh-token');
+    expect(result.accessToken).toBe('new-access-token');
+  });
+
+  it('allows refresh before expiry', async () => {
+    jwtService.verifyAsync.mockResolvedValue(validPayload());
+    usersAuthRepository.findById.mockResolvedValue({
+      ...activeUser,
+      accountExpiresAt: new Date(Date.now() + 86400000),
+    });
+
+    const result = await service.refresh('valid-refresh-token');
+    expect(result.accessToken).toBe('new-access-token');
+  });
+
+  it('blocks refresh after expiry with AUTH_ACCOUNT_EXPIRED', async () => {
+    jwtService.verifyAsync.mockResolvedValue(validPayload());
+    usersAuthRepository.findById.mockResolvedValue({
+      ...activeUser,
+      accountExpiresAt: new Date(Date.now() - 1000),
+    });
+
+    await expect(service.refresh('valid-refresh-token')).rejects.toMatchObject({
+      response: { code: 'AUTH_ACCOUNT_EXPIRED' },
+      status: 403,
+    });
+  });
+  });
 });

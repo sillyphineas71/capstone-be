@@ -116,13 +116,19 @@ describe('UsersController', () => {
         '127.0.0.1',
         'Mozilla/5.0',
         'req-id',
+        undefined,
       );
 
-      expect(service.createUser).toHaveBeenCalledWith(dto, 'admin-uuid', {
-        ipAddress: '127.0.0.1',
-        userAgent: 'Mozilla/5.0',
-        requestId: 'req-id',
-      });
+      expect(service.createUser).toHaveBeenCalledWith(
+        dto,
+        'admin-uuid',
+        {
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0',
+          requestId: 'req-id',
+        },
+        undefined,
+      );
 
       expect(result).toEqual({
         success: true,

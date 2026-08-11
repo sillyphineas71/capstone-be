@@ -157,4 +157,59 @@ export class RoomUtilizationRateRepository {
       activeRoomCount,
     };
   }
+
+  async getNoShowAggregate(
+    scopeRoomIds: string[] | null,
+    roomIdFilter: string | undefined,
+    from: string,
+    to: string,
+  ): Promise<{ totalBookings: number; noShowCount: number }> {
+    const conditions: string[] = [
+      "rb.status IN ('approved', 'active', 'completed', 'released')",
+      'm.deleted_at IS NULL',
+    ];
+    const values: unknown[] = [];
+    let idx = 1;
+
+    if (scopeRoomIds !== null) {
+      if (scopeRoomIds.length === 0) {
+        return { totalBookings: 0, noShowCount: 0 };
+      }
+      conditions.push(`rb.room_id = ANY($${idx}::uuid[])`);
+      values.push(scopeRoomIds);
+      idx++;
+    }
+
+    if (roomIdFilter) {
+      conditions.push(`rb.room_id = $${idx}`);
+      values.push(roomIdFilter);
+      idx++;
+    }
+
+    const fromIdx = idx;
+    const toIdx = idx + 1;
+    conditions.push(
+      `rb.reserved_start_time >= ($${fromIdx} || ' 00:00:00+07')::timestamptz`,
+    );
+    conditions.push(
+      `rb.reserved_start_time <= ($${toIdx} || ' 23:59:59.999+07')::timestamptz`,
+    );
+    values.push(from, to);
+
+    const sql = `
+      SELECT
+        COUNT(DISTINCT rb.id)::int AS total_bookings,
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count
+      FROM room_bookings rb
+      INNER JOIN meetings m ON m.id = rb.meeting_id
+      LEFT JOIN no_show_cases nsc ON nsc.booking_id = rb.id
+      WHERE ${conditions.join(' AND ')}
+    `;
+    const rows = await this.dataSource.query(sql, values);
+
+    return {
+      totalBookings: rows?.[0]?.total_bookings ?? 0,
+      noShowCount: rows?.[0]?.no_show_count ?? 0,
+    };
+  }
 }

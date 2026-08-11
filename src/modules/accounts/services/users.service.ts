@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   NotFoundException,
@@ -18,13 +19,14 @@ import {
   Brackets,
 } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 
 import {
   UserEntity,
   EmploymentStatus,
   AccountStatus,
 } from '../entities/user.entity.js';
-import { buildAccountWelcomeEmail } from '../../mail/templates/builders.js';
+import { buildAccountWelcomeEmail, buildPartnerAccountWelcomeEmail } from '../../mail/templates/builders.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
@@ -37,6 +39,7 @@ import {
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
 import { BIOMETRIC_EXEMPT_ROLE_CODES } from '../../../common/utils/biometric-exempt-roles.util.js';
+import { PARTNER_DEPARTMENT_ID, isPartnerAccount } from '../../../common/utils/partner-account.util.js';
 
 // UC-10 — READ-only cross-module entities (chỉ dùng để kiểm ràng buộc tham chiếu
 // và soft-delete quan hệ trong transaction xóa; KHÔNG gọi/sửa service module khác).
@@ -52,6 +55,15 @@ import {
 import { DeviceUserMappingEntity } from '../../iot/entities/device-user-mapping.entity.js';
 import { RedisService } from '../../redis/redis.service.js';
 import { AuthConfigService } from '../../auth/services/auth-config.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { CloudinaryService } from '../../storage/cloudinary.service.js';
+import { detectImageMimeType, AllowedImageMime } from '../utils/image-magic-bytes.util.js';
+import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
+import {
+  MediaFileEntity,
+  MediaFileType,
+  StorageProvider,
+} from '../../recording/entities/media-file.entity.js';
 
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import {
@@ -97,6 +109,18 @@ export interface ResolvedAccountData {
   phoneNumber: string | null;
   positionTitle: string | null;
   directManagerId: string | null;
+  partner?: PartnerProvisionData;
+}
+
+export interface PartnerProvisionData {
+  accountExpiresAt: Date;
+  mediaFileId: string;
+  faceProfileId: string;
+  detectedMime: AllowedImageMime;
+  storageKey: string;
+  fileUrl: string;
+  fileName: string;
+  uploadedBy: string;
 }
 
 @Injectable()
@@ -111,195 +135,258 @@ export class UsersService {
     private readonly notificationsService: NotificationsService,
     private readonly redisService: RedisService,
     private readonly authConfigService: AuthConfigService,
+    private readonly cloudinaryService: CloudinaryService,
+    private readonly authzReadRepository: AuthzReadRepository,
   ) {}
 
   async createUser(
     dto: CreateUserDto,
     creatorId: string,
     clientContext: UserClientContext,
+    avatarFile?: { buffer?: Buffer; size?: number; originalname?: string } | null,
   ): Promise<UserResponseDto> {
     const email = dto.email.trim().toLowerCase();
     const employeeCode = dto.employeeCode ? dto.employeeCode.trim() : null;
+    const isPartner = dto.accountType === 'partner';
+    const departmentId = isPartner ? PARTNER_DEPARTMENT_ID : dto.departmentId;
+
+    if (!departmentId) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Phòng ban không được để trống',
+        error: { code: 'DEPARTMENT_REQUIRED', details: {} },
+      });
+    }
+
+    let partnerUpload: PartnerProvisionData | null = null;
+    if (isPartner) {
+      const detectedMime = this.validatePartnerProvisionPayload(
+        dto,
+        avatarFile,
+      );
+      let upload: { publicId: string; secureUrl: string };
+      try {
+        upload = await this.cloudinaryService.uploadImage(avatarFile?.buffer!);
+      } catch (error) {
+        this.logger.error(
+          `Cloudinary upload failed for partner account ${email}: ${(error as Error).message}`,
+        );
+        throw new BadGatewayException({
+          success: false,
+          message: 'Không thể lưu ảnh lên kho lưu trữ. Vui lòng thử lại.',
+          error: { code: 'PARTNER_AVATAR_STORAGE_FAILED', details: {} },
+        });
+      }
+      partnerUpload = {
+        accountExpiresAt: new Date(dto.accountExpiresAt!),
+        mediaFileId: randomUUID(),
+        faceProfileId: randomUUID(),
+        detectedMime,
+        storageKey: upload.publicId,
+        fileUrl: upload.secureUrl,
+        fileName: upload.publicId.split('/').pop() ?? upload.publicId,
+        uploadedBy: creatorId,
+      };
+    }
 
     let createdUser: UserEntity;
     let roles: RoleEntity[] = [];
-    let tempPassword: string;
+    let tempPassword = '';
 
-    // Run transaction
-    await this.dataSource.transaction(async (em) => {
-      // 1. Check duplicate email
-      const existingEmail = await em.findOne(UserEntity, {
-        where: { email, deletedAt: IsNull() },
-      });
-      if (existingEmail) {
-        throw new ConflictException({
-          success: false,
-          message: 'Địa chỉ email này đã được sử dụng cho một tài khoản khác.',
-          error: { code: 'ACCOUNT_EMAIL_ALREADY_EXISTS', details: { email } },
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const existingEmail = await em.findOne(UserEntity, {
+          where: { email, deletedAt: IsNull() },
         });
-      }
-
-      // 2. Check duplicate username (since username = lower(email))
-      const existingUsername = await em.findOne(UserEntity, {
-        where: { username: email, deletedAt: IsNull() },
-      });
-      if (existingUsername) {
-        throw new ConflictException({
-          success: false,
-          message: 'Tên người dùng này đã tồn tại trong hệ thống.',
-          error: {
-            code: 'ACCOUNT_USERNAME_ALREADY_EXISTS',
-            details: { username: email },
-          },
-        });
-      }
-
-      // 3. Check active department
-      const department = await em.findOne(DepartmentEntity, {
-        where: { id: dto.departmentId, deletedAt: IsNull() },
-      });
-      if (!department) {
-        throw new NotFoundException({
-          success: false,
-          message: 'Phòng ban được chỉ định không tồn tại.',
-          error: {
-            code: 'DEPARTMENT_NOT_FOUND',
-            details: { departmentId: dto.departmentId },
-          },
-        });
-      }
-      if (!department.isActive) {
-        throw new UnprocessableEntityException({
-          success: false,
-          message: 'Phòng ban được chỉ định không hoạt động hoặc đã bị xóa.',
-          error: {
-            code: 'DEPARTMENT_INACTIVE_OR_DELETED',
-            details: { departmentId: dto.departmentId },
-          },
-        });
-      }
-
-      // 4. Check active roles
-      roles = [];
-      for (const roleId of dto.roleIds) {
-        const role = await em.findOne(RoleEntity, {
-          where: { id: roleId },
-        });
-        if (!role) {
-          throw new NotFoundException({
-            success: false,
-            message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
-            error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
-          });
-        }
-        if (!role.isActive) {
-          throw new UnprocessableEntityException({
-            success: false,
-            message:
-              'Một hoặc nhiều vai trò được chọn đang ở trạng thái không hoạt động.',
-            error: { code: 'ROLE_INACTIVE', details: { roleId } },
-          });
-        }
-        roles.push(role);
-      }
-
-      // 5. Check duplicate employeeCode (if provided)
-      if (employeeCode) {
-        const existingCode = await em.findOne(UserEntity, {
-          where: { employeeCode, deletedAt: IsNull() },
-        });
-        if (existingCode) {
+        if (existingEmail) {
           throw new ConflictException({
             success: false,
-            message: 'Mã nhân viên này đã được đăng ký bởi tài khoản khác.',
+            message: 'Địa chỉ email này đã được sử dụng cho một tài khoản khác.',
+            error: { code: 'ACCOUNT_EMAIL_ALREADY_EXISTS', details: { email } },
+          });
+        }
+
+        const existingUsername = await em.findOne(UserEntity, {
+          where: { username: email, deletedAt: IsNull() },
+        });
+        if (existingUsername) {
+          throw new ConflictException({
+            success: false,
+            message: 'Tên người dùng này đã tồn tại trong hệ thống.',
             error: {
-              code: 'ACCOUNT_EMPLOYEE_CODE_ALREADY_EXISTS',
-              details: { employeeCode },
+              code: 'ACCOUNT_USERNAME_ALREADY_EXISTS',
+              details: { username: email },
             },
           });
         }
-      }
 
-      // 6. Check active manager (if provided)
-      if (dto.directManagerId) {
-        const manager = await em.findOne(UserEntity, {
-          where: { id: dto.directManagerId, deletedAt: IsNull() },
+        const department = await em.findOne(DepartmentEntity, {
+          where: { id: departmentId, deletedAt: IsNull() },
         });
-        if (!manager) {
+        if (!department) {
           throw new NotFoundException({
             success: false,
-            message: 'Người quản lý trực tiếp không tồn tại trong hệ thống.',
+            message: 'Phòng ban được chỉ định không tồn tại.',
             error: {
-              code: 'MANAGER_NOT_FOUND',
-              details: { directManagerId: dto.directManagerId },
+              code: 'DEPARTMENT_NOT_FOUND',
+              details: { departmentId },
             },
           });
         }
-        if (
-          manager.accountStatus !== AccountStatus.ACTIVE ||
-          manager.employmentStatus === EmploymentStatus.RESIGNED
-        ) {
+        if (!department.isActive) {
           throw new UnprocessableEntityException({
             success: false,
-            message:
-              'Người quản lý trực tiếp đang bị khóa, chưa kích hoạt hoặc đã nghỉ việc.',
+            message: 'Phòng ban được chỉ định không hoạt động hoặc đã bị xóa.',
             error: {
-              code: 'MANAGER_INACTIVE_OR_UNAVAILABLE',
-              details: { directManagerId: dto.directManagerId },
+              code: 'DEPARTMENT_INACTIVE_OR_DELETED',
+              details: { departmentId },
             },
           });
         }
+
+        roles = [];
+        for (const roleId of dto.roleIds) {
+          const role = await em.findOne(RoleEntity, { where: { id: roleId } });
+          if (!role) {
+            throw new NotFoundException({
+              success: false,
+              message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
+              error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
+            });
+          }
+          if (!role.isActive) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Một hoặc nhiều vai trò được chọn đang không hoạt động.',
+              error: { code: 'ROLE_INACTIVE', details: { roleId } },
+            });
+          }
+          roles.push(role);
+        }
+
+        if (employeeCode) {
+          const existingCode = await em.findOne(UserEntity, {
+            where: { employeeCode, deletedAt: IsNull() },
+          });
+          if (existingCode) {
+            throw new ConflictException({
+              success: false,
+              message: 'Mã nhân viên này đã được đăng ký bởi tài khoản khác.',
+              error: {
+                code: 'ACCOUNT_EMPLOYEE_CODE_ALREADY_EXISTS',
+                details: { employeeCode },
+              },
+            });
+          }
+        }
+
+        if (dto.directManagerId) {
+          const manager = await em.findOne(UserEntity, {
+            where: { id: dto.directManagerId, deletedAt: IsNull() },
+          });
+          if (!manager) {
+            throw new NotFoundException({
+              success: false,
+              message: 'Người quản lý trực tiếp không tồn tại trong hệ thống.',
+              error: {
+                code: 'MANAGER_NOT_FOUND',
+                details: { directManagerId: dto.directManagerId },
+              },
+            });
+          }
+          if (
+            manager.accountStatus !== AccountStatus.ACTIVE ||
+            manager.employmentStatus === EmploymentStatus.RESIGNED
+          ) {
+            throw new UnprocessableEntityException({
+              success: false,
+              message: 'Người quản lý trực tiếp đang bị khóa hoặc đã nghỉ việc.',
+              error: {
+                code: 'MANAGER_INACTIVE_OR_UNAVAILABLE',
+                details: { directManagerId: dto.directManagerId },
+              },
+            });
+          }
+        }
+
+        const persisted = await this.persistAccount(
+          em,
+          {
+            fullName: dto.fullName.trim(),
+            email,
+            departmentId,
+            roleIds: dto.roleIds,
+            employeeCode,
+            phoneNumber: dto.phoneNumber ? dto.phoneNumber.trim() : null,
+            positionTitle: dto.positionTitle ? dto.positionTitle.trim() : null,
+            directManagerId: dto.directManagerId || null,
+            partner: partnerUpload ?? undefined,
+          },
+          creatorId,
+          clientContext,
+        );
+        createdUser = persisted.user;
+        tempPassword = persisted.tempPassword;
+      });
+    } catch (error) {
+      if (partnerUpload) {
+        await this.cleanupCloudinary(partnerUpload.storageKey);
       }
+      throw error;
+    }
 
-      // 7-10. Persist account (password + user + roles + audit) — reuse core
-      const persisted = await this.persistAccount(
-        em,
-        {
-          fullName: dto.fullName.trim(),
-          email,
-          departmentId: dto.departmentId,
-          roleIds: dto.roleIds,
-          employeeCode,
-          phoneNumber: dto.phoneNumber ? dto.phoneNumber.trim() : null,
-          positionTitle: dto.positionTitle ? dto.positionTitle.trim() : null,
-          directManagerId: dto.directManagerId || null,
-        },
-        creatorId,
-        clientContext,
-      );
-      createdUser = persisted.user;
-      tempPassword = persisted.tempPassword;
-    });
-
-    // ── After transaction: enqueue credential email via NotificationsService ──
-    // NotificationsService tạo notification row + background_job + BullMQ job;
-    // NotificationWorkerService xử lý job 'send-email' để gửi mail thực tế.
-    const credentialContent = [
-      'Kính gửi ' + createdUser!.fullName + ',',
-      '',
-      'Tài khoản Smart Meeting của bạn đã được tạo thành công.',
-      '',
-      'Thông tin đăng nhập:',
-      '- Email: ' + email,
-      '- Mật khẩu tạm thời: ' + tempPassword!,
-      '',
-      'Vui lòng đăng nhập và đổi mật khẩu ngay sau lần đầu tiên.',
-      '',
-      'Trân trọng,',
-      'Hệ thống Smart Meeting Management',
-    ].join('\n');
+    const expiresAtText = partnerUpload
+      ? partnerUpload.accountExpiresAt.toISOString()
+      : '';
+    const notificationSubject = isPartner
+      ? 'Thông tin tài khoản đối tác Smart Meeting'
+      : 'Thông tin tài khoản Smart Meeting mới của bạn';
+    const content = isPartner
+      ? [
+          'Kính gửi ' + createdUser!.fullName + ',',
+          '',
+          'Tài khoản Smart Meeting dành cho đối tác của bạn đã được tạo thành công.',
+          '',
+          'Thông tin đăng nhập:',
+          '- Email: ' + email,
+          '- Mật khẩu: chính là địa chỉ email trên',
+          '- Hạn sử dụng: ' + expiresAtText,
+          '',
+          'Trân trọng,',
+          'Hệ thống Smart Meeting Management',
+        ].join('\n')
+      : [
+          'Kính gửi ' + createdUser!.fullName + ',',
+          '',
+          'Tài khoản Smart Meeting của bạn đã được tạo thành công.',
+          '',
+          'Thông tin đăng nhập:',
+          '- Email: ' + email,
+          '- Mật khẩu tạm thời: ' + tempPassword,
+          '',
+          'Vui lòng đăng nhập và đổi mật khẩu ngay sau lần đầu tiên.',
+          '',
+          'Trân trọng,',
+          'Hệ thống Smart Meeting Management',
+        ].join('\n');
 
     try {
       await this.notificationsService.enqueueEmailNotification({
         notificationType: NotificationType.ACCOUNT_WELCOME,
         channel: NotificationChannel.EMAIL,
-        subject: 'Thông tin tài khoản Smart Meeting mới của bạn',
-        content: credentialContent,
-        emailHtml: buildAccountWelcomeEmail({
-          fullName: createdUser!.fullName,
-          email,
-          tempPassword: tempPassword!,
-        }),
+        subject: notificationSubject,
+        content,
+        emailHtml: isPartner
+          ? buildPartnerAccountWelcomeEmail({
+              fullName: createdUser!.fullName,
+              email,
+              expiresAt: partnerUpload!.accountExpiresAt,
+            })
+          : buildAccountWelcomeEmail({
+              fullName: createdUser!.fullName,
+              email,
+              tempPassword,
+            }),
         toEmails: [email],
         relatedEntityType: 'users',
         relatedEntityId: createdUser!.id,
@@ -308,14 +395,14 @@ export class UsersService {
         payloadJson: {
           fullName: createdUser!.fullName,
           username: email,
-          mustChangePassword: true,
+          mustChangePassword: isPartner ? false : true,
+          accountType: isPartner ? 'partner' : 'employee',
         },
       });
     } catch (enqueueError) {
       this.logger.error(
         `Failed to enqueue welcome email for user ${createdUser!.id}: ${(enqueueError as Error).message}`,
       );
-      // Non-blocking: ghi warning audit log, KHÔNG rollback tạo user
       try {
         await this.dataSource.manager.save(AuditLogEntity, {
           userId: creatorId,
@@ -338,7 +425,6 @@ export class UsersService {
       }
     }
 
-    // Map roles to DTO structure
     const rolesDto: UserRoleResponseDto[] = roles.map((role) => ({
       id: role.id,
       roleCode: role.roleCode,
@@ -350,13 +436,68 @@ export class UsersService {
       employeeCode: createdUser!.employeeCode,
       email: createdUser!.email,
       fullName: createdUser!.fullName,
+      departmentId: createdUser!.departmentId,
       accountStatus: createdUser!.accountStatus,
       mustChangePassword: createdUser!.mustChangePassword,
+      accountExpiresAt: createdUser!.accountExpiresAt,
       roles: rolesDto,
       createdAt: createdUser!.createdAt,
     };
   }
 
+  private validatePartnerProvisionPayload(
+    dto: CreateUserDto,
+    file?: { buffer?: Buffer; size?: number; originalname?: string } | null,
+  ): AllowedImageMime {
+    if (!dto.accountExpiresAt) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Tài khoản đối tác bắt buộc có accountExpiresAt',
+        error: { code: 'ACCOUNT_EXPIRES_AT_REQUIRED', details: {} },
+      });
+    }
+    const expiresAt = new Date(dto.accountExpiresAt);
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException({
+        success: false,
+        message: 'accountExpiresAt phải là thời điểm tương lai',
+        error: { code: 'ACCOUNT_EXPIRES_AT_MUST_BE_FUTURE', details: {} },
+      });
+    }
+    if (!file?.buffer || file.buffer.length === 0) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Tài khoản đối tác bắt buộc đính kèm ảnh sinh trắc học',
+        error: { code: 'AVATAR_FILE_REQUIRED', details: {} },
+      });
+    }
+    if (file.size && file.size > 5 * 1024 * 1024) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Ảnh vượt quá giới hạn 5MB',
+        error: { code: 'AVATAR_FILE_TOO_LARGE', details: {} },
+      });
+    }
+    const detectedMime = detectImageMimeType(file.buffer);
+    if (!detectedMime) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Ảnh phải có định dạng JPEG, PNG hoặc WEBP',
+        error: { code: 'AVATAR_FILE_TYPE_INVALID', details: {} },
+      });
+    }
+    return detectedMime;
+  }
+
+  private async cleanupCloudinary(publicId: string): Promise<void> {
+    try {
+      await this.cloudinaryService.deleteImage(publicId);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to clean up orphan Cloudinary object ${publicId}: ${(error as Error).message}`,
+      );
+    }
+  }
   /**
    * Core persist tài khoản (sinh mật khẩu + hash + insert user + user_roles + audit).
    * KHÔNG gửi email. Dùng chung cho tạo đơn lẻ và import Excel.
@@ -369,8 +510,9 @@ export class UsersService {
     clientContext: UserClientContext,
   ): Promise<{ user: UserEntity; tempPassword: string }> {
     // Sinh mật khẩu tạm + hash (BR1)
-    const tempPassword =
-      this.passwordGeneratorService.generateTemporaryPassword(12);
+    const tempPassword = data.partner
+      ? data.email
+      : this.passwordGeneratorService.generateTemporaryPassword(12);
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(tempPassword, salt);
 
@@ -386,7 +528,8 @@ export class UsersService {
       directManagerId: data.directManagerId,
       employmentStatus: EmploymentStatus.ACTIVE,
       accountStatus: AccountStatus.ACTIVE,
-      mustChangePassword: true, // BR3
+      accountExpiresAt: data.partner?.accountExpiresAt ?? null,
+      mustChangePassword: !data.partner, // BR3; partner=false
     });
     const createdUser = await em.save(UserEntity, user);
 
@@ -400,10 +543,43 @@ export class UsersService {
       await em.save(UserRoleEntity, userRole);
     }
 
+    if (data.partner) {
+      const now = new Date();
+      await em.getRepository(MediaFileEntity).insert({
+        id: data.partner.mediaFileId,
+        fileName: data.partner.fileName,
+        fileType: MediaFileType.IMAGE,
+        mimeType: data.partner.detectedMime,
+        storageProvider: StorageProvider.CLOUD_PROVIDER,
+        storageKey: data.partner.storageKey,
+        fileUrl: data.partner.fileUrl,
+        relatedEntityType: 'face_profile',
+        relatedEntityId: data.partner.faceProfileId,
+        uploadedBy: data.partner.uploadedBy,
+        isActive: true,
+      });
+
+      await em.getRepository(FaceProfileEntity).insert({
+        id: data.partner.faceProfileId,
+        userId: createdUser.id,
+        profileCode: generateFaceProfileCode(),
+        status: FaceProfileStatus.ACTIVE,
+        primaryImageFileId: data.partner.mediaFileId,
+        consentAt: null,
+        enrolledBy: data.partner.uploadedBy,
+        enrolledAt: now,
+        lastUpdatedAt: now,
+        sampleCount: 1,
+        metadataJson: {
+          importedBy: 'admin',
+          importSource: 'partner-account-provisioning',
+        },
+      });
+    }
     try {
       const auditLog = em.create(AuditLogEntity, {
         userId: creatorId,
-        actionType: 'ACCOUNT_CREATE',
+        actionType: data.partner ? 'account.partner.create' : 'ACCOUNT_CREATE',
         entityType: 'users',
         entityId: createdUser.id,
         severity: AuditLogSeverity.INFO,
@@ -468,7 +644,7 @@ export class UsersService {
       });
     }
 
-    // A.3 BR-08 — tài khoản phải đang active
+// A.3 BR-08 — tài khoản phải đang active
     if (targetUser.accountStatus !== AccountStatus.ACTIVE) {
       throw new UnprocessableEntityException({
         success: false,
@@ -481,7 +657,7 @@ export class UsersService {
       });
     }
 
-    // A.4 Validate từng role trong tập mong muốn (mirror createUser)
+// A.4 Validate từng role trong tập mong muốn (mirror createUser)
     for (const roleId of desired) {
       const role = await em.findOne(RoleEntity, { where: { id: roleId } });
       if (!role) {
@@ -1298,7 +1474,7 @@ export class UsersService {
     actorId: string,
     clientContext: UserClientContext,
   ): Promise<UserDetailResponseDto> {
-    const ACTION_TYPE = 'ACCOUNT_UPDATE';
+    let ACTION_TYPE = 'ACCOUNT_UPDATE';
     const em = this.dataSource.manager;
 
     // ── Phase A — Validate (ngoài transaction) ──
@@ -1309,7 +1485,8 @@ export class UsersService {
       dto.employeeCode !== undefined ||
       dto.phoneNumber !== undefined ||
       dto.positionTitle !== undefined ||
-      dto.departmentId !== undefined;
+      dto.departmentId !== undefined ||
+      dto.accountExpiresAt !== undefined;
     if (!hasAnyField) {
       throw new BadRequestException({
         success: false,
@@ -1330,7 +1507,27 @@ export class UsersService {
       });
     }
 
-    // A.3 Xác định System Admin & department scope của target
+        // PTA-001: accountExpiresAt chi admin co account.partner.manage moi duoc chinh,
+    // và chỉ áp dụng cho tài khoản thuộc department "Đối tác".
+    if (dto.accountExpiresAt !== undefined) {
+      const { permissions } =
+        await this.authzReadRepository.getEffectiveRolesAndPermissions(actorId);
+      if (!permissions.includes('account.partner.manage')) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Bạn không có quyền quản lý tài khoản đối tác.',
+          error: { code: 'FORBIDDEN', details: {} },
+        });
+      }
+      if (!isPartnerAccount(targetUser.departmentId)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'accountExpiresAt chỉ áp dụng cho tài khoản đối tác.',
+          error: { code: 'ACCOUNT_EXPIRY_PARTNER_ONLY', details: {} },
+        });
+      }
+    }
+// A.3 Xác định System Admin & department scope của target
     const actorRoles = await em.find(UserRoleEntity, {
       where: { userId: actorId, isActive: true },
       relations: { role: true },
@@ -1360,6 +1557,7 @@ export class UsersService {
         | 'phoneNumber'
         | 'positionTitle'
         | 'departmentId'
+        | 'accountExpiresAt'
       >
     > = {};
     const oldValues: Record<string, unknown> = {};
@@ -1406,6 +1604,35 @@ export class UsersService {
       }
     }
 
+    // PTA-001: gia hạn / khoá sớm tài khoản đối tác.
+    if (dto.accountExpiresAt !== undefined) {
+      const next = new Date(dto.accountExpiresAt);
+      if (Number.isNaN(next.getTime())) {
+        throw new BadRequestException({
+          success: false,
+          message: 'accountExpiresAt không hợp lệ',
+          error: { code: 'INVALID_ACCOUNT_EXPIRES_AT', details: {} },
+        });
+      }
+      const current = targetUser.accountExpiresAt
+        ? targetUser.accountExpiresAt.getTime()
+        : null;
+      if (current !== next.getTime()) {
+        changed.accountExpiresAt = next;
+        oldValues.accountExpiresAt = targetUser.accountExpiresAt
+          ? targetUser.accountExpiresAt.toISOString()
+          : null;
+        newValues.accountExpiresAt = next.toISOString();
+        // "Khoá sớm" = hạn mới đã ở quá khứ/hiện tại, HOẶC hạn mới sớm hơn hạn cũ
+        // (dù vẫn còn ở tương lai) — so với giá trị CŨ, không chỉ so với now().
+        const isAlreadyExpired = next.getTime() <= Date.now();
+        const isEarlierThanBefore = current !== null && next.getTime() < current;
+        ACTION_TYPE =
+          isAlreadyExpired || isEarlierThanBefore
+            ? 'account.partner.lock_early'
+            : 'account.partner.extend';
+      }
+    }
     // A.4 Validate các trường đã đổi
     // employee_code UNIQUE loại self
     if (changed.employeeCode) {

@@ -15,11 +15,18 @@ export class RoomUsageSummaryDto {
   actualUsedHours: number | null;
 }
 
+export class RoomTrendItemDto {
+  date: string;
+  meetingCount: number;
+  bookedHours: number;
+  utilizationRate: number;
+}
+
 export class RoomUsageDashboardResponseDto {
   period: { from: string; to: string };
   summary: RoomUsageSummaryDto;
   rooms: RoomComparisonItemDto[];
-  trend: { date: string; meetingCount: number }[];
+  trend: RoomTrendItemDto[];
 }
 
 export class HeatmapBucketDto {
@@ -36,6 +43,8 @@ export class RoomDetailMeetingDto {
   actualStartTime: Date | null;
   actualEndTime: Date | null;
   status: string;
+  attendeeCount: number;
+  noShowCount: number;
 }
 
 export class RoomDetailResponseDto {

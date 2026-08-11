@@ -106,6 +106,9 @@ export class UserEntity {
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil: Date | null;
 
+  @Column({ name: 'account_expires_at', type: 'timestamptz', nullable: true })
+  accountExpiresAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

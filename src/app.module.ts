@@ -1,4 +1,4 @@
-﻿import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
@@ -23,6 +23,7 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MustChangePasswordGuard } from './modules/auth/guards/must-change-password.guard';
 import { BiometricEnforcementGuard } from './modules/auth/guards/biometric-enforcement.guard';
+import { PartnerAccountRestrictionGuard } from './modules/auth/guards/partner-account-restriction.guard';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
 import { IotModule } from './modules/iot/iot.module';
@@ -158,6 +159,10 @@ void loadDevModule; // suppress unused warning
     {
       provide: APP_GUARD,
       useClass: BiometricEnforcementGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: PartnerAccountRestrictionGuard,
     },
   ],
 })

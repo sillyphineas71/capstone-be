@@ -29,6 +29,7 @@ describe('NoShowRateService', () => {
       getRoomRanking: jest.fn(),
       getDepartmentRanking: jest.fn(),
       getOrganizerRanking: jest.fn(),
+      getDailyTrend: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<NoShowRateRepository>;
 
     mockConfigService = {

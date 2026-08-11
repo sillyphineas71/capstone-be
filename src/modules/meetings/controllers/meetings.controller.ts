@@ -42,6 +42,7 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
 
 import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
+import { AllowPartnerAccount } from '../../../common/decorators/allow-partner-account.decorator.js';
 
 import { MeetingsService } from '../services/meetings.service.js';
 
@@ -282,6 +283,7 @@ export class MeetingsController {
 
   @Get('meetings/:meetingId')
   @HttpCode(HttpStatus.OK)
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Xem chi tiết cuộc họp' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
@@ -1050,6 +1052,7 @@ export class MeetingsController {
   // ------------------------------------------------------------
 
   @Get('meetings/:meetingId/agendas')
+  @AllowPartnerAccount()
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Xem danh sach agenda cua cuoc hop' })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
