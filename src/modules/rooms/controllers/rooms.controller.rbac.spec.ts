@@ -21,6 +21,7 @@ describe('RoomsController — RBAC metadata', () => {
     ['deleteRoom', 'room.delete'],
     ['realtimeStatus', 'room.utilization.read'],
     ['roomStatus', 'room.utilization.read'],
+    ['getDetail', 'room.detail.read'],
   ];
 
   it('class-level gắn JwtAuthGuard', () => {

@@ -1,4 +1,4 @@
-﻿import { Test, TestingModule } from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { ConflictException, NotFoundException } from '@nestjs/common';
@@ -7,6 +7,7 @@ import { MeetingStatus } from '../../meetings/entities/meeting.entity.js';
 import { RoomBookingStatus } from '../entities/room-booking.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { RoomsService } from '../services/rooms.service.js';
+import { RoomStatusService } from '../services/room-status.service.js';
 import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
@@ -40,6 +41,7 @@ describe('RoomsService', () => {
   let roomDeleteNotificationProcessor: jest.Mocked<
     Partial<RoomDeleteNotificationProcessor>
   >;
+  let roomStatusService: jest.Mocked<Partial<RoomStatusService>>;
   let managerCreateQueryBuilder: jest.Mock;
 
   const mockUserId = '550e8400-e29b-41d4-a716-446655440000';
@@ -86,6 +88,7 @@ describe('RoomsService', () => {
       transaction: jest.fn(),
       manager: {
         createQueryBuilder: managerCreateQueryBuilder,
+        query: jest.fn().mockResolvedValue([]),
       } as any,
     };
 
@@ -101,6 +104,10 @@ describe('RoomsService', () => {
       process: jest.fn().mockResolvedValue(undefined),
     };
 
+    roomStatusService = {
+      getRoomStatus: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RoomsService,
@@ -112,6 +119,7 @@ describe('RoomsService', () => {
           provide: RoomDeleteNotificationProcessor,
           useValue: roomDeleteNotificationProcessor,
         },
+        { provide: RoomStatusService, useValue: roomStatusService },
       ],
     }).compile();
 
@@ -616,6 +624,223 @@ describe('RoomsService', () => {
 
       expect(result).toBeInstanceOf(DeleteRoomResponseDto);
       expect(websocketService.broadcast).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // ROOM-VIEW-DETAIL-001: getRoomDetail
+  // ---------------------------------------------------------------------------
+  describe('getRoomDetail', () => {
+    const mockCreatedByUser = {
+      id: 'user-created-id',
+      fullName: 'Nguyen Van A',
+    };
+    const mockUpdatedByUser = {
+      id: 'user-updated-id',
+      fullName: 'Tran Thi B',
+    };
+
+    const mockRoomWithRelations = {
+      ...mockRoom,
+      createdByUser: mockCreatedByUser,
+      updatedByUser: mockUpdatedByUser,
+      layoutJson: { seats: 12, shape: 'u-shape' },
+    } as any;
+
+    const mockOccupancyStatus = {
+      roomId: mockRoomId,
+      roomCode: 'R301',
+      currentStatus: 'available',
+      currentBooking: {
+        bookingId: 'booking-uuid-1',
+        meetingId: 'meeting-uuid-1',
+        title: 'Hop Sprint',
+        hostName: 'Nguyen Van A',
+        reservedStartTime: new Date('2026-08-11T09:00:00Z'),
+        reservedEndTime: new Date('2026-08-11T10:30:00Z'),
+      },
+      noShowCase: null,
+      noShowStatus: null,
+      releaseHistory: [],
+      lastPresenceAt: new Date('2026-08-11T09:10:00Z'),
+      occupancyCount: 5,
+    };
+
+    const mockUpcomingRows = [
+      {
+        booking_id: 'upcoming-booking-1',
+        meeting_id: 'upcoming-meeting-1',
+        title: 'Hop review Q3',
+        host_name: 'Le Van C',
+        reserved_start_time: new Date('2026-08-11T14:00:00Z'),
+        reserved_end_time: new Date('2026-08-11T15:00:00Z'),
+      },
+    ];
+
+    it('should return full room detail with correct field mapping (found)', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoomWithRelations);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue(
+        mockUpcomingRows,
+      );
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      // Info tinh
+      expect(result.roomId).toBe(mockRoomId);
+      expect(result.roomCode).toBe('R301');
+      expect(result.roomName).toBe('Phong hop 301');
+      expect(result.capacity).toBe(12);
+      expect(result.isActive).toBe(true);
+
+      // BR-3: administrativeStatus = rooms.current_status, KHONG merge vao occupancyStatus
+      expect(result.administrativeStatus).toBe(RoomStatus.AVAILABLE);
+      expect(result.occupancyStatus).not.toHaveProperty('administrativeStatus');
+
+      // occupancyStatus tu RoomStatusService
+      expect(result.occupancyStatus.currentBooking).not.toBeNull();
+      expect(result.occupancyStatus.currentBooking?.bookingId).toBe(
+        'booking-uuid-1',
+      );
+      expect(result.occupancyStatus.occupancyCount).toBe(5);
+      expect(result.occupancyStatus.noShowStatus).toBeNull();
+
+      // upcomingBookings map dung
+      expect(result.upcomingBookings).toHaveLength(1);
+      expect(result.upcomingBookings[0].bookingId).toBe('upcoming-booking-1');
+      expect(result.upcomingBookings[0].title).toBe('Hop review Q3');
+
+      // BR-6: createdBy/updatedBy dung
+      expect(result.createdBy).toEqual({
+        userId: 'user-created-id',
+        fullName: 'Nguyen Van A',
+      });
+      expect(result.updatedBy).toEqual({
+        userId: 'user-updated-id',
+        fullName: 'Tran Thi B',
+      });
+    });
+
+    it('should throw NotFoundException EARLY when room not found — roomStatusService MUST NOT be called (BR-2)', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.getRoomDetail(mockRoomId)).rejects.toThrow(
+        NotFoundException,
+      );
+
+      // KHONG goi roomStatusService khi da biet room khong ton tai
+      expect(roomStatusService.getRoomStatus).not.toHaveBeenCalled();
+      expect(roomStatusService.getRoomStatus).toHaveBeenCalledTimes(0);
+    });
+
+    it('should return createdBy=null when entity.createdByUser is null (BR-6 null-safe)', async () => {
+      const roomNullCreatedBy = {
+        ...mockRoomWithRelations,
+        createdByUser: null,
+        updatedByUser: null,
+      };
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(roomNullCreatedBy);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue({
+        ...mockOccupancyStatus,
+        currentBooking: null,
+      });
+      (dataSource.manager.query as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      expect(result.createdBy).toBeNull();
+      expect(result.updatedBy).toBeNull();
+    });
+
+    it('should return createdBy object when entity.createdByUser is present (BR-6)', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoomWithRelations);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      expect(result.createdBy).toEqual({
+        userId: 'user-created-id',
+        fullName: 'Nguyen Van A',
+      });
+    });
+
+    it('should return upcomingBookings=[] when no future bookings (BR-4 empty)', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoomWithRelations);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      expect(result.upcomingBookings).toEqual([]);
+    });
+
+    it('should pass correct roomId param to SQL query (SEC-03 parameterized)', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoomWithRelations);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue([]);
+
+      await service.getRoomDetail(mockRoomId);
+
+      // Assert SQL chứa 'LIMIT 5' và 'reserved_start_time > now()'
+      const [sqlArg, paramsArg] = (dataSource.manager.query as jest.Mock).mock
+        .calls[0];
+      expect(sqlArg).toContain('LIMIT 5');
+      expect(sqlArg).toContain('reserved_start_time > now()');
+      expect(paramsArg).toEqual([mockRoomId]);
+    });
+
+    it('should map up to 5 upcoming bookings (BR-4 limit)', async () => {
+      const fiveBookings = Array.from({ length: 5 }, (_, i) => ({
+        booking_id: `booking-${i}`,
+        meeting_id: `meeting-${i}`,
+        title: `Meeting ${i}`,
+        host_name: 'Host',
+        reserved_start_time: new Date(`2026-08-12T0${i}:00:00Z`),
+        reserved_end_time: new Date(`2026-08-12T0${i}:30:00Z`),
+      }));
+
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(mockRoomWithRelations);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue(fiveBookings);
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      expect(result.upcomingBookings).toHaveLength(5);
+      expect(result.upcomingBookings[0].bookingId).toBe('booking-0');
+    });
+
+    it('should separate administrativeStatus from occupancyStatus (D-5, BR-3)', async () => {
+      // Edge case: currentStatus = maintenance nhung van co booking active trong DB
+      const roomMaintenance = {
+        ...mockRoomWithRelations,
+        currentStatus: RoomStatus.MAINTENANCE,
+      };
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(roomMaintenance);
+      (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(
+        mockOccupancyStatus,
+      );
+      (dataSource.manager.query as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.getRoomDetail(mockRoomId);
+
+      // administrativeStatus phai la maintenance (field thu cong cua admin)
+      expect(result.administrativeStatus).toBe(RoomStatus.MAINTENANCE);
+      // occupancyStatus van co currentBooking (doc lap voi administrativeStatus)
+      expect(result.occupancyStatus.currentBooking).not.toBeNull();
+      expect(result.occupancyStatus.currentBooking?.bookingId).toBe(
+        'booking-uuid-1',
+      );
     });
   });
 });

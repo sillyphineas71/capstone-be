@@ -1,11 +1,11 @@
-﻿import {
+import {
   Injectable,
   Logger,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, EntityManager } from 'typeorm';
+import { DataSource, IsNull, Repository, EntityManager } from 'typeorm';
 import { RoomEntity, RoomStatus } from '../entities/room.entity.js';
 import {
   AuditLogEntity,
@@ -35,6 +35,13 @@ import { RoomEventEntity } from '../entities/room-event.entity.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { BackgroundJobType } from '../../administration/entities/background-job.entity.js';
 import { RoomDeleteNotificationProcessor } from './room-delete-notification.processor.js';
+import { RoomStatusService } from './room-status.service.js';
+import {
+  RoomDetailResponseDto,
+  RoomDetailBookingRefDto,
+  RoomDetailUserRefDto,
+  RoomDetailOccupancyStatusDto,
+} from '../dto/room-detail-response.dto.js';
 
 const ACTIVE_ROOM_BOOKING_STATUSES = [
   RoomBookingStatus.PENDING,
@@ -53,6 +60,7 @@ export class RoomsService {
     private readonly websocketService: WebsocketService,
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly roomDeleteNotificationProcessor: RoomDeleteNotificationProcessor,
+    private readonly roomStatusService: RoomStatusService,
   ) {}
 
   /**
@@ -209,8 +217,10 @@ export class RoomsService {
       });
     }
 
-    const roomName = dto.roomName !== undefined ? dto.roomName.trim() : room.roomName;
-    const areaName = dto.areaName !== undefined ? dto.areaName.trim() : room.areaName;
+    const roomName =
+      dto.roomName !== undefined ? dto.roomName.trim() : room.roomName;
+    const areaName =
+      dto.areaName !== undefined ? dto.areaName.trim() : room.areaName;
 
     // BR1: ten phong phai duy nhat, loai tru chinh ban ghi dang sua
     // Chi kiem tra khi client thuc su doi roomName (partial update - BUG-007)
@@ -531,5 +541,136 @@ export class RoomsService {
       affectedMeetingCount: affectedMeetingIds.length,
       notificationJobId,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // ROOM-VIEW-DETAIL-001: Xem chi tiet 1 phong hop (admin only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Tra ve chi tiet day du 1 phong hop: info tinh + occupancyStatus (tai su dung
+   * RoomStatusService, KHONG viet lai SQL) + toi da 5 booking sap toi.
+   *
+   * BR-2: phong soft-deleted (deletedAt IS NOT NULL) → 404 ROOM_NOT_FOUND.
+   * BR-1: goi lai RoomStatusService.getRoomStatus() noi bo — KHONG viet lai LATERAL SQL.
+   * BR-3: administrativeStatus = room.currentStatus nguyen trang.
+   * BR-4: upcomingBookings: status IN ('approved','active'), reserved_start_time > now(), LIMIT 5, ASC.
+   * BR-6: createdBy/updatedBy null-safe.
+   * SEC-03: upcomingBookings dung parameterized query ($1).
+   */
+  async getRoomDetail(roomId: string): Promise<RoomDetailResponseDto> {
+    // --- Buoc 1: Info tinh (TypeORM findOne, load relation createdByUser/updatedByUser) ---
+    const room = await this.roomRepo.findOne({
+      where: { id: roomId, deletedAt: IsNull() },
+      relations: { createdByUser: true, updatedByUser: true },
+    });
+    if (!room) {
+      // BR-2: nem NGAY, KHONG goi RoomStatusService neu da biet room khong ton tai
+      throw new NotFoundException({
+        code: 'ROOM_NOT_FOUND',
+        message: 'Room not found.',
+      });
+    }
+
+    // --- Buoc 2: Realtime — TAI SU DUNG nguyen ham (BR-1), khong viet lai SQL ---
+    const occupancyStatus = await this.roomStatusService.getRoomStatus(roomId);
+
+    // --- Buoc 3: upcomingBookings — parameterized raw SQL (SEC-03, BR-4) ---
+    const upcomingRows = await this.dataSource.manager.query(
+      `SELECT b.id AS booking_id, b.meeting_id, m.title,
+              u.full_name AS host_name, b.reserved_start_time, b.reserved_end_time
+       FROM room_bookings b
+       JOIN meetings m ON m.id = b.meeting_id
+       LEFT JOIN users u ON u.id = COALESCE(m.host_id, m.organizer_id)
+       WHERE b.room_id = $1
+         AND b.reserved_start_time > now()
+         AND b.status IN ('approved','active')
+       ORDER BY b.reserved_start_time ASC
+       LIMIT 5`,
+      [roomId],
+    );
+
+    return this.toRoomDetailDto(room, occupancyStatus, upcomingRows);
+  }
+
+  /**
+   * Map room entity + occupancyStatus + upcomingRows → RoomDetailResponseDto.
+   * Private — chi dung boi getRoomDetail().
+   */
+  private toRoomDetailDto(
+    room: RoomEntity & {
+      createdByUser?: { id: string; fullName: string } | null;
+      updatedByUser?: { id: string; fullName: string } | null;
+    },
+    occupancyStatus: Awaited<ReturnType<RoomStatusService['getRoomStatus']>>,
+    upcomingRows: Array<{
+      booking_id: string;
+      meeting_id: string;
+      title: string | null;
+      host_name: string | null;
+      reserved_start_time: Date | string;
+      reserved_end_time: Date | string;
+    }>,
+  ): RoomDetailResponseDto {
+    // BR-6: null-safe createdBy/updatedBy
+    const createdBy: RoomDetailUserRefDto | null = room.createdByUser
+      ? { userId: room.createdByUser.id, fullName: room.createdByUser.fullName }
+      : null;
+    const updatedBy: RoomDetailUserRefDto | null = room.updatedByUser
+      ? { userId: room.updatedByUser.id, fullName: room.updatedByUser.fullName }
+      : null;
+
+    // occupancyStatus: chi lay 4 field can thiet (spec §4.1, BR-5)
+    const occupancyStatusDto: RoomDetailOccupancyStatusDto = {
+      currentBooking: occupancyStatus.currentBooking
+        ? {
+            bookingId: occupancyStatus.currentBooking.bookingId,
+            meetingId: occupancyStatus.currentBooking.meetingId,
+            title: occupancyStatus.currentBooking.title,
+            hostName: occupancyStatus.currentBooking.hostName,
+            reservedStartTime: occupancyStatus.currentBooking.reservedStartTime,
+            reservedEndTime: occupancyStatus.currentBooking.reservedEndTime,
+          }
+        : null,
+      occupancyCount: occupancyStatus.occupancyCount,
+      lastPresenceAt: occupancyStatus.lastPresenceAt,
+      noShowStatus: occupancyStatus.noShowStatus, // BR-5: chi string rut gon
+    };
+
+    // BR-4: upcomingBookings map
+    const upcomingBookings: RoomDetailBookingRefDto[] = upcomingRows.map(
+      (r) => ({
+        bookingId: r.booking_id,
+        meetingId: r.meeting_id,
+        title: r.title,
+        hostName: r.host_name,
+        reservedStartTime: r.reserved_start_time,
+        reservedEndTime: r.reserved_end_time,
+      }),
+    );
+
+    return {
+      roomId: room.id,
+      roomCode: room.roomCode,
+      roomName: room.roomName,
+      siteName: room.siteName ?? null,
+      areaName: room.areaName ?? null,
+      locationDescription: room.locationDescription ?? null,
+      capacity: room.capacity,
+      roomType: room.roomType,
+      administrativeStatus: room.currentStatus, // BR-3: KHONG doi ten trung occupancyStatus
+      hasCamera: room.hasCamera,
+      hasMicrophone: room.hasMicrophone,
+      hasDisplay: room.hasDisplay,
+      allowRecording: room.allowRecording,
+      layoutJson: room.layoutJson ?? null,
+      isActive: room.isActive,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt,
+      createdBy,
+      updatedBy,
+      occupancyStatus: occupancyStatusDto,
+      upcomingBookings,
+    };
   }
 }

@@ -1,4 +1,5 @@
-﻿import { Test, TestingModule } from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException } from '@nestjs/common';
 import { RoomsController } from '../controllers/rooms.controller.js';
 import { RoomsService } from '../services/rooms.service.js';
 import { RoomStatusService } from '../services/room-status.service.js';
@@ -35,6 +36,7 @@ describe('RoomsController', () => {
       update: jest.fn().mockResolvedValue(mockResponse),
       getDeletionImpact: jest.fn(),
       deleteRoom: jest.fn(),
+      getRoomDetail: jest.fn(),
     } as any;
 
     roomStatusService = {
@@ -257,6 +259,70 @@ describe('RoomsController', () => {
         'Không có phòng họp nào khớp với các tiêu chí hiện tại. Vui lòng điều chỉnh bộ lọc của bạn.',
       );
       expect(result.data).toEqual([]);
+    });
+  });
+
+  describe('getDetail (ROOM-VIEW-DETAIL-001)', () => {
+    const mockDetailResponse = {
+      roomId: mockRoomId,
+      roomCode: 'R301',
+      roomName: 'Phong hop 301',
+      siteName: 'Toa A',
+      areaName: 'Tang 3',
+      locationDescription: null,
+      capacity: 12,
+      roomType: 'meeting_room',
+      administrativeStatus: 'available',
+      hasCamera: false,
+      hasMicrophone: false,
+      hasDisplay: false,
+      allowRecording: false,
+      layoutJson: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      createdBy: { userId: mockUserId, fullName: 'Nguyen Van A' },
+      updatedBy: null,
+      occupancyStatus: {
+        currentBooking: null,
+        occupancyCount: 0,
+        lastPresenceAt: null,
+        noShowStatus: null,
+      },
+      upcomingBookings: [],
+    };
+
+    it('should return envelope {success, message, data} on success', async () => {
+      roomsService.getRoomDetail.mockResolvedValue(mockDetailResponse);
+
+      const result = await controller.getDetail(mockRoomId);
+
+      expect(roomsService.getRoomDetail).toHaveBeenCalledWith(mockRoomId);
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('Room detail retrieved');
+      expect(result.data).toEqual(mockDetailResponse);
+    });
+
+    it('should propagate 404 NotFoundException from service (AC-RVD-001-002)', async () => {
+      roomsService.getRoomDetail.mockRejectedValue(
+        new NotFoundException({
+          code: 'ROOM_NOT_FOUND',
+          message: 'Room not found.',
+        }),
+      );
+
+      await expect(controller.getDetail(mockRoomId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should call getRoomDetail with the correct roomId param', async () => {
+      roomsService.getRoomDetail.mockResolvedValue(mockDetailResponse);
+
+      await controller.getDetail(mockRoomId);
+
+      expect(roomsService.getRoomDetail).toHaveBeenCalledTimes(1);
+      expect(roomsService.getRoomDetail).toHaveBeenCalledWith(mockRoomId);
     });
   });
 });
