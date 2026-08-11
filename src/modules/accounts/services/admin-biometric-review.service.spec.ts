@@ -250,6 +250,7 @@ describe('AdminBiometricReviewService', () => {
             fullName: 'Nguyen Van A',
             email: 'a.nguyen@example.com',
             employeeCode: 'EMP001',
+            avatarUrl: 'https://cdn.example.com/avatars/user-1.png',
             department: {
               id: 'dept-1',
               departmentName: 'Software Engineering',
@@ -278,6 +279,7 @@ describe('AdminBiometricReviewService', () => {
         fullName: 'Nguyen Van A',
         email: 'a.nguyen@example.com',
         employeeCode: 'EMP001',
+        avatarUrl: 'https://cdn.example.com/avatars/user-1.png',
         departmentName: 'Software Engineering',
         status: FaceProfileStatus.PENDING_REVIEW,
         submittedAt: mockItems[0].enrolledAt,
@@ -290,6 +292,135 @@ describe('AdminBiometricReviewService', () => {
         total: 1,
         totalPages: 1,
       });
+    });
+
+    // [FIX 2026-08-11] avatarUrl — CHỈ nhận diện "đây là ai", KHÔNG liên quan
+    // primaryImageFileId (D2 vẫn giữ nguyên tách biệt).
+    describe('avatarUrl (nhận diện người, tách biệt primaryImageFileId — D2)', () => {
+      const baseItem = (overUser: Record<string, unknown> = {}) => [
+        {
+          id: 'fp-1',
+          userId: 'user-1',
+          status: FaceProfileStatus.PENDING_REVIEW,
+          enrolledAt: new Date('2026-06-24T12:00:00Z'),
+          primaryImageFileId: 'media-1',
+          qualityScore: 95.5,
+          user: {
+            id: 'user-1',
+            fullName: 'Nguyen Van A',
+            email: 'a.nguyen@example.com',
+            employeeCode: 'EMP001',
+            avatarUrl: 'https://cdn.example.com/avatars/user-1.png',
+            department: { id: 'dept-1', departmentName: 'Software Engineering' },
+            ...overUser,
+          },
+        },
+      ];
+
+      it('user có avatarUrl → trả đúng giá trị', async () => {
+        mockQueryBuilder.getManyAndCount.mockResolvedValue([baseItem(), 1]);
+        const result = await service.listBiometricSubmissions({
+          page: 1,
+          limit: 10,
+        } as any);
+        expect(result.data[0].avatarUrl).toBe(
+          'https://cdn.example.com/avatars/user-1.png',
+        );
+      });
+
+      it('user chưa từng có avatarUrl (null) → trả null, không lỗi', async () => {
+        mockQueryBuilder.getManyAndCount.mockResolvedValue([
+          baseItem({ avatarUrl: null }),
+          1,
+        ]);
+        const result = await service.listBiometricSubmissions({
+          page: 1,
+          limit: 10,
+        } as any);
+        expect(result.data[0].avatarUrl).toBeNull();
+      });
+
+      it("SELECT thêm 'u.avatarUrl' — u đã JOIN sẵn, KHÔNG JOIN mới", async () => {
+        mockQueryBuilder.getManyAndCount.mockResolvedValue([baseItem(), 1]);
+        await service.listBiometricSubmissions({ page: 1, limit: 10 } as any);
+        expect(mockQueryBuilder.select).toHaveBeenCalledWith(
+          expect.arrayContaining(['u.avatarUrl']),
+        );
+        // Chỉ 1 innerJoin (fp.user→u) + 1 leftJoin (u.department→d) như trước — không JOIN mới.
+        expect(mockQueryBuilder.innerJoin).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  // [FIX 2026-08-11] avatarUrl ở detail — mirror cách lấy ở list(), cùng nguồn dữ liệu
+  // (users.avatar_url), KHÔNG đụng logic approve()/reject() (D2).
+  describe('getBiometricSubmissionDetail — avatarUrl', () => {
+    const FP_ID = 'fp-1';
+
+    const wireFindOne = (userOver: Record<string, unknown> = {}) => {
+      (mockRepository.findOne as jest.Mock).mockResolvedValue({
+        id: FP_ID,
+        userId: 'user-1',
+        status: FaceProfileStatus.PENDING_REVIEW,
+        primaryImageFileId: null,
+        enrolledAt: new Date('2026-06-24T12:00:00Z'),
+        consentAt: new Date('2026-06-24T11:00:00Z'),
+        metadataJson: null,
+        user: {
+          id: 'user-1',
+          fullName: 'Nguyen Van A',
+          email: 'a.nguyen@example.com',
+          avatarUrl: 'https://cdn.example.com/avatars/user-1.png',
+          ...userOver,
+        },
+      });
+    };
+
+    it('user có avatarUrl → trả đúng giá trị', async () => {
+      wireFindOne();
+      const r = await service.getBiometricSubmissionDetail(FP_ID);
+      expect(r.avatarUrl).toBe('https://cdn.example.com/avatars/user-1.png');
+    });
+
+    it('user chưa từng có avatarUrl (null) → trả null, không lỗi', async () => {
+      wireFindOne({ avatarUrl: null });
+      const r = await service.getBiometricSubmissionDetail(FP_ID);
+      expect(r.avatarUrl).toBeNull();
+    });
+
+    it('list và detail cùng nguồn dữ liệu (users.avatar_url) → cùng giá trị cho cùng user', async () => {
+      const AVATAR = 'https://cdn.example.com/avatars/user-1.png';
+      wireFindOne({ avatarUrl: AVATAR });
+      const detail = await service.getBiometricSubmissionDetail(FP_ID);
+
+      mockQueryBuilder.getManyAndCount.mockResolvedValue([
+        [
+          {
+            id: FP_ID,
+            userId: 'user-1',
+            status: FaceProfileStatus.PENDING_REVIEW,
+            enrolledAt: new Date('2026-06-24T12:00:00Z'),
+            primaryImageFileId: null,
+            qualityScore: null,
+            user: {
+              id: 'user-1',
+              fullName: 'Nguyen Van A',
+              email: 'a.nguyen@example.com',
+              employeeCode: 'EMP001',
+              avatarUrl: AVATAR,
+              department: null,
+            },
+          },
+        ],
+        1,
+      ]);
+      const list = await service.listBiometricSubmissions({
+        page: 1,
+        limit: 10,
+      } as any);
+
+      expect(detail.avatarUrl).toBe(AVATAR);
+      expect(list.data[0].avatarUrl).toBe(AVATAR);
     });
   });
 });

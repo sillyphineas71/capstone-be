@@ -122,6 +122,9 @@ export class AdminBiometricReviewService {
       'u.fullName',
       'u.email',
       'u.employeeCode',
+      // [FIX 2026-08-11] avatarUrl HIỆN TẠI — CHỈ nhận diện "đây là ai", KHÔNG liên quan
+      // primaryImageFileId (giữ nguyên tách biệt D2). u đã JOIN sẵn, chỉ thêm cột SELECT.
+      'u.avatarUrl',
       'd.id',
       'd.departmentName',
     ]);
@@ -135,6 +138,7 @@ export class AdminBiometricReviewService {
         fullName: fp.user?.fullName ?? null,
         email: fp.user?.email ?? null,
         employeeCode: fp.user?.employeeCode ?? null,
+        avatarUrl: fp.user?.avatarUrl ?? null,
         departmentName: fp.user?.department?.departmentName ?? null,
         status: fp.status,
         submittedAt: fp.enrolledAt,
@@ -202,6 +206,9 @@ export class AdminBiometricReviewService {
       userId: fp.userId,
       userFullName: user.fullName,
       userEmail: user.email,
+      // [FIX 2026-08-11] avatarUrl HIỆN TẠI — mirror cách lấy ở list(), user đã load đủ
+      // qua relations:{user:true} (không select riêng) nên không cần query thêm.
+      avatarUrl: user.avatarUrl,
       status: fp.status,
       primaryImageFileId: fp.primaryImageFileId,
       imageFile,
