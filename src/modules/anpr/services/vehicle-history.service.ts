@@ -213,7 +213,14 @@ export class VehicleHistoryService {
       `SELECT iot_device_events.id,
               iot_device_events.payload_json->>'plateNumber'        AS plate_number,
               (iot_device_events.payload_json->>'channelId')::int   AS channel_id,
-              iot_device_events.payload_json->>'direction'          AS direction,
+              -- [FIX 2026-08-11, B4] Ưu tiên gateDirection (channel_direction_map, giá trị
+              -- ĐÚNG dùng ghi gate_access_logs) — fallback direction (raw, eventAction) cho
+              -- dữ liệu CŨ ghi trước fix này (chưa có key gateDirection → ->>'gateDirection'
+              -- trả NULL → COALESCE rơi xuống direction, KHÔNG lỗi/KHÔNG trống).
+              COALESCE(
+                iot_device_events.payload_json->>'gateDirection',
+                iot_device_events.payload_json->>'direction'
+              )                                                     AS direction,
               iot_device_events.payload_json->>'matchState'         AS match_state,
               iot_device_events.event_time,
               iot_device_events.payload_json->>'utc'                AS utc,

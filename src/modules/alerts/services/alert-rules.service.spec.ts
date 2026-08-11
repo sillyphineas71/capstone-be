@@ -104,7 +104,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       repo.save.mockRejectedValue({ driverError: { code: '23505' } });
       await expect(
         service.create(
-          { alertType: 'crowd', channels: ['in_app'] } as any,
+          {
+            alertType: 'crowd',
+            zoneId: 'zone-1', // [FIX 2026-08-11] crowd bắt buộc zoneId — xem assertZoneRequired
+            channels: ['in_app'],
+          } as any,
           'admin1',
         ),
       ).rejects.toMatchObject({
@@ -117,7 +121,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       repo.save.mockRejectedValue(boom);
       await expect(
         service.create(
-          { alertType: 'crowd', channels: ['in_app'] } as any,
+          {
+            alertType: 'crowd',
+            zoneId: 'zone-1', // [FIX 2026-08-11] crowd bắt buộc zoneId — xem assertZoneRequired
+            channels: ['in_app'],
+          } as any,
           'admin1',
         ),
       ).rejects.toBe(boom);
@@ -160,17 +168,23 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         expect(repo.save).not.toHaveBeenCalled();
       });
 
-      it('intrusion + zoneId=null (rule toàn khuôn viên) → thành công, KHÔNG query zones', async () => {
-        const r = await service.create(
-          { alertType: 'intrusion', channels: ['in_app'] } as any,
-          'admin1',
-        );
+      // [FIX 2026-08-11] intrusion + zoneId=null giờ bị assertZoneRequired() chặn TRƯỚC —
+      // xem describe 'assertZoneRequired' bên dưới cho hành vi ĐẦY ĐỦ (400
+      // ALERT_RULE_ZONE_REQUIRED, KHÔNG còn thành công như bản cũ).
+      it('intrusion + zoneId=null → 400 ALERT_RULE_ZONE_REQUIRED (assertZoneRequired chặn TRƯỚC assertValidIntrusionZone), KHÔNG query zones', async () => {
+        await expect(
+          service.create(
+            { alertType: 'intrusion', channels: ['in_app'] } as any,
+            'admin1',
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_REQUIRED' },
+        });
         expect(zoneRepo.findOne).not.toHaveBeenCalled();
-        expect(repo.save).toHaveBeenCalledTimes(1);
-        expect(r.id).toBe('r1');
+        expect(repo.save).not.toHaveBeenCalled();
       });
 
-      it('loại KHÁC (crowd) + zone loại room → thành công, KHÔNG bị chặn, KHÔNG query zones (regression: chỉ áp cho intrusion)', async () => {
+      it('loại KHÁC (crowd, CÓ zoneId) + zone loại room → thành công, KHÔNG bị chặn bởi assertValidIntrusionZone, KHÔNG query zones (regression: kiểm zone-type chỉ áp cho intrusion)', async () => {
         const r = await service.create(
           { alertType: 'crowd', zoneId: 'zone-1', channels: ['in_app'] } as any,
           'admin1',
@@ -187,6 +201,68 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         );
         expect(zoneRepo.findOne).not.toHaveBeenCalled();
       });
+    });
+
+    describe('assertZoneRequired (fix 2026-08-11, chặn intrusion/crowd không gắn zoneId — bẫy cấu hình im lặng UC-122 residual)', () => {
+      it('intrusion + zoneId=null → 400 ALERT_RULE_ZONE_REQUIRED, KHÔNG save', async () => {
+        await expect(
+          service.create(
+            { alertType: 'intrusion', channels: ['in_app'] } as any,
+            'admin1',
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_REQUIRED' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('crowd + zoneId=null → 400 ALERT_RULE_ZONE_REQUIRED, KHÔNG save', async () => {
+        await expect(
+          service.create(
+            { alertType: 'crowd', channels: ['in_app'] } as any,
+            'admin1',
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_REQUIRED' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('intrusion + zoneId hợp lệ (zone loại lobby) → thành công như cũ (regression)', async () => {
+        zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'lobby' });
+        const r = await service.create(
+          { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r.id).toBe('r1');
+      });
+
+      it('person_watchlist_match + zoneId=null → thành công, KHÔNG bị chặn (regression — tính năng phụ thuộc SỐNG CÒN vào zoneId=null, xem PersonWatchlistCheckService)', async () => {
+        const r = await service.create(
+          { alertType: 'person_watchlist_match', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r.id).toBe('r1');
+      });
+
+      it.each([
+        'stranger',
+        'vehicle_control_match',
+        'unknown_vehicle',
+        'vehicle_unauthorized',
+      ])(
+        '%s + zoneId=null → thành công, KHÔNG bị chặn (regression, dùng findEffectiveRule() có fallback đúng)',
+        async (alertType) => {
+          const r = await service.create(
+            { alertType, channels: ['in_app'] } as any,
+            'admin1',
+          );
+          expect(repo.save).toHaveBeenCalledTimes(1);
+          expect(r.id).toBe('r1');
+        },
+      );
     });
   });
 
@@ -313,6 +389,65 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         await service.update('r1', { threshold: 30 }, 'admin1');
         expect(zoneRepo.findOne).not.toHaveBeenCalled();
         expect(repo.save).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('assertZoneRequired (fix 2026-08-11, chặn intrusion/crowd không gắn zoneId)', () => {
+      it('rule intrusion đã có zone, đổi zoneId thành null → 400 ALERT_RULE_ZONE_REQUIRED, KHÔNG save', async () => {
+        repo.findOne.mockResolvedValueOnce({
+          ...owned(),
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+        }); // load entity — CHỈ 1 lần, assertZoneRequired chặn TRƯỚC assertNoConflict
+        await expect(
+          service.update('r1', { zoneId: null }, 'admin1'),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_REQUIRED' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+        expect(repo.findOne).toHaveBeenCalledTimes(1); // KHÔNG tới assertNoConflict (query lần 2)
+      });
+
+      it('rule crowd đã có zone, đổi zoneId thành null → 400 ALERT_RULE_ZONE_REQUIRED, KHÔNG save', async () => {
+        repo.findOne.mockResolvedValueOnce({
+          ...owned(),
+          alertType: 'crowd',
+          zoneId: 'zone-1',
+        });
+        await expect(
+          service.update('r1', { zoneId: null }, 'admin1'),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_REQUIRED' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('đổi field KHÁC (threshold, không đụng zoneId/alertType) → zoneOrTypeChanged=false, KHÔNG bị assertZoneRequired chặn dù rule là intrusion', async () => {
+        repo.findOne.mockResolvedValueOnce({
+          ...owned(),
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+        });
+        const r = await service.update('r1', { threshold: 30 }, 'admin1');
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r).toBeDefined();
+      });
+
+      it('đổi alertType sang person_watchlist_match VÀ zoneId thành null trong cùng lúc → thành công (regression, KHÔNG bị chặn nhầm)', async () => {
+        repo.findOne
+          .mockResolvedValueOnce({
+            ...owned(),
+            alertType: 'crowd',
+            zoneId: 'zone-1',
+          }) // load entity
+          .mockResolvedValueOnce(null); // assertNoConflict: không trùng
+        const r = await service.update(
+          'r1',
+          { alertType: 'person_watchlist_match', zoneId: null },
+          'admin1',
+        );
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r).toBeDefined();
       });
     });
   });

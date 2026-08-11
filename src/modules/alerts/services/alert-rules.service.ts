@@ -51,6 +51,7 @@ export class AlertRulesService {
     actorUserId: string,
   ): Promise<AlertRuleEntity> {
     const zoneId = dto.zoneId ?? null;
+    this.assertZoneRequired(dto.alertType, zoneId);
     await this.assertNoConflict(dto.alertType, zoneId);
     if (dto.alertType === 'intrusion' && zoneId) {
       await this.assertValidIntrusionZone(zoneId);
@@ -142,6 +143,7 @@ export class AlertRulesService {
       nextAlertType !== entity.alertType || nextZoneId !== entity.zoneId;
 
     if (zoneOrTypeChanged) {
+      this.assertZoneRequired(nextAlertType, nextZoneId);
       await this.assertNoConflict(nextAlertType, nextZoneId, id);
       if (nextAlertType === 'intrusion' && nextZoneId) {
         await this.assertValidIntrusionZone(nextZoneId);
@@ -232,6 +234,32 @@ export class AlertRulesService {
     if (globalDisabled) return { rule: null, suppressed: true };
 
     return { rule: null, suppressed: false }; // chưa từng cấu hình — fail-open (§2.8).
+  }
+
+  /**
+   * [FIX 2026-08-11] Chặn tạo/sửa rule `intrusion`/`crowd` KHÔNG gắn `zoneId` cụ thể — 2
+   * loại này đọc rule qua `loadZoneScoped*Rules()` (`RestrictedZoneIntrusionService`/
+   * `CrowdAlertService`) — cơ chế CHỦ Ý lọc bỏ rule `zoneId=NULL` khỏi tập quét (spec
+   * UC-124/UC-121 §2.1, residual UC-122 đã ghi nhận từ đầu, chưa từng vá tới nay) — rule
+   * `zoneId=NULL` tạo được nhưng KHÔNG BAO GIỜ kích hoạt, bẫy cấu hình im lặng.
+   *
+   * KHÁC 5 alertType còn lại (`stranger`/`vehicle_control_match`/`unknown_vehicle`/
+   * `vehicle_unauthorized`/`person_watchlist_match`) — dùng `findEffectiveRule()`, CÓ
+   * fallback đúng cho `zoneId=NULL` (rule mặc định toàn khuôn viên hoạt động thật).
+   * `person_watchlist_match` LUÔN gọi `findEffectiveRule(..., null)` — TUYỆT ĐỐI KHÔNG
+   * được đụng, nên chỉ gate đúng 2 chuỗi `'intrusion'`/`'crowd'`, không suy rộng ra.
+   *
+   * Đặt TRƯỚC `assertValidIntrusionZone()`/`assertNoConflict()` (không cần query DB) — fail
+   * nhanh khi thiếu zoneId trước khi tốn round-trip kiểm tồn tại/trùng lặp.
+   */
+  private assertZoneRequired(alertType: string, zoneId: string | null): void {
+    if ((alertType === 'intrusion' || alertType === 'crowd') && !zoneId) {
+      throw new BadRequestException({
+        code: 'ALERT_RULE_ZONE_REQUIRED',
+        message:
+          'Loại cảnh báo này yêu cầu chọn khu vực cụ thể — không hỗ trợ áp dụng cho toàn khuôn viên.',
+      });
+    }
   }
 
   /**
