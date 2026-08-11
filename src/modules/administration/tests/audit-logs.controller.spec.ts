@@ -7,7 +7,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { AuditLogsController } from '../controllers/audit-logs.controller.js';
 import { AuditLogQueryService } from '../services/audit-log-query.service.js';
+import { AuditLogExportService } from '../services/audit-log-export.service.js';
 import { QueryAuditLogsDto } from '../dto/query-audit-logs.dto.js';
+import { ExportAuditLogsDto } from '../dto/export-audit-logs.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 
@@ -23,6 +25,7 @@ import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 describe('AuditLogsController', () => {
   let controller: AuditLogsController;
   let serviceMock: jest.Mocked<AuditLogQueryService>;
+  let exportServiceMock: jest.Mocked<AuditLogExportService>;
 
   const mockServiceResult = {
     data: [
@@ -44,11 +47,15 @@ describe('AuditLogsController', () => {
     const mockService = {
       listAuditLogs: jest.fn(),
     };
+    const mockExportService = {
+      exportAuditLogsXlsx: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuditLogsController],
       providers: [
         { provide: AuditLogQueryService, useValue: mockService },
+        { provide: AuditLogExportService, useValue: mockExportService },
         Reflector,
       ],
     })
@@ -60,6 +67,7 @@ describe('AuditLogsController', () => {
 
     controller = module.get<AuditLogsController>(AuditLogsController);
     serviceMock = module.get(AuditLogQueryService);
+    exportServiceMock = module.get(AuditLogExportService);
   });
 
   // ---------------------------------------------------------------------------
@@ -101,6 +109,97 @@ describe('AuditLogsController', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // GET /audit-logs/export (2026-08-11, ngoài phạm vi UC-AA-11 gốc)
+  // ---------------------------------------------------------------------------
+  describe('GET /audit-logs/export', () => {
+    it('should call exportService with userId/email từ token + query, set 2 header rồi res.send(buffer)', async () => {
+      const buffer = Buffer.from('XLSX_CONTENT');
+      exportServiceMock.exportAuditLogsXlsx.mockResolvedValue({
+        buffer,
+        fileName: 'nhat-ky-he-thong-20260811-090000.xlsx',
+      });
+
+      const request = {
+        user: { userId: 'admin-uuid', email: 'admin@test.com' },
+      } as unknown as Parameters<typeof controller.exportAuditLogs>[1];
+      const res = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+      } as unknown as Parameters<typeof controller.exportAuditLogs>[2];
+
+      const query: ExportAuditLogsDto = {
+        from: '2026-01-01T00:00:00Z',
+        to: '2026-07-01T00:00:00Z',
+      };
+
+      await controller.exportAuditLogs(query, request, res);
+
+      expect(exportServiceMock.exportAuditLogsXlsx).toHaveBeenCalledWith(
+        { userId: 'admin-uuid', email: 'admin@test.com' },
+        query,
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="nhat-ky-he-thong-20260811-090000.xlsx"',
+      );
+      expect(res.send).toHaveBeenCalledWith(buffer);
+    });
+
+    it('should fallback to userId="system" and email="" when request has no user', async () => {
+      const buffer = Buffer.from('XLSX_CONTENT');
+      exportServiceMock.exportAuditLogsXlsx.mockResolvedValue({
+        buffer,
+        fileName: 'nhat-ky-he-thong-20260811-090000.xlsx',
+      });
+
+      const request = {} as unknown as Parameters<
+        typeof controller.exportAuditLogs
+      >[1];
+      const res = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+      } as unknown as Parameters<typeof controller.exportAuditLogs>[2];
+
+      const query: ExportAuditLogsDto = {
+        from: '2026-01-01T00:00:00Z',
+        to: '2026-07-01T00:00:00Z',
+      };
+
+      await controller.exportAuditLogs(query, request, res);
+
+      expect(exportServiceMock.exportAuditLogsXlsx).toHaveBeenCalledWith(
+        { userId: 'system', email: '' },
+        query,
+      );
+    });
+
+    it('should propagate service errors without wrapping', async () => {
+      const error = new Error('Unexpected export failure');
+      exportServiceMock.exportAuditLogsXlsx.mockRejectedValue(error);
+
+      const request = {
+        user: { userId: 'admin-uuid', email: 'admin@test.com' },
+      } as unknown as Parameters<typeof controller.exportAuditLogs>[1];
+      const res = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+      } as unknown as Parameters<typeof controller.exportAuditLogs>[2];
+
+      await expect(
+        controller.exportAuditLogs(
+          { from: '2026-01-01T00:00:00Z', to: '2026-07-01T00:00:00Z' },
+          request,
+          res,
+        ),
+      ).rejects.toThrow('Unexpected export failure');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // T028: Guard configuration verification
   // ---------------------------------------------------------------------------
   describe('Guard configuration', () => {
@@ -131,6 +230,7 @@ describe('AuditLogsController', () => {
         controllers: [AuditLogsController],
         providers: [
           { provide: AuditLogQueryService, useValue: serviceMock },
+          { provide: AuditLogExportService, useValue: exportServiceMock },
           Reflector,
         ],
       })
@@ -161,6 +261,7 @@ describe('AuditLogsController', () => {
         controllers: [AuditLogsController],
         providers: [
           { provide: AuditLogQueryService, useValue: serviceMock },
+          { provide: AuditLogExportService, useValue: exportServiceMock },
           Reflector,
         ],
       })

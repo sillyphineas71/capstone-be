@@ -8,6 +8,7 @@ import { UserEntity } from '../accounts/entities/user.entity.js';
 import { BackgroundJobsService } from './services/background-jobs.service.js';
 import { AuditLogsService } from './services/audit-logs.service.js';
 import { AuditLogQueryService } from './services/audit-log-query.service.js';
+import { AuditLogExportService } from './services/audit-log-export.service.js';
 import { AuditLogQueryRepository } from './repositories/audit-log-query.repository.js';
 import { BackgroundJobsController } from './controllers/background-jobs.controller.js';
 import { AuditLogsController } from './controllers/audit-logs.controller.js';
@@ -26,9 +27,11 @@ import { AuthModule } from '../auth/auth.module.js';
  * - BackgroundJobsService — lifecycle tracking cho background jobs
  * - AuditLogsService — ghi audit log dùng chung cho toàn hệ thống
  * - AuditLogQueryService — orchestrator ĐỌC cho UC-AA-11 (tách biệt hoàn toàn)
+ * - AuditLogExportService — GET /audit-logs/export (2026-08-11, ngoài phạm vi UC-AA-11
+ *   gốc — xem docblock service). Render đồng bộ XLSX, KHÔNG dùng background_jobs.
  * - AuditLogQueryRepository — raw SQL query ĐỌC, LEFT JOIN audit_logs + users
  * - BackgroundJobsController — GET /api/v1/background-jobs/:id (T007, poll status)
- * - AuditLogsController — GET /api/v1/audit-logs (UC-AA-11, chỉ SYSTEM_ADMIN)
+ * - AuditLogsController — GET /api/v1/audit-logs + GET /audit-logs/export (chỉ SYSTEM_ADMIN)
  * - SystemConfigController — GET/PATCH /api/v1/system-configurations (BE-09, 2026-07-27)
  * - SystemConfigService — allowlist 9 key phẳng FE quản trị, xem
  *   constants/system-config-allowlist.ts
@@ -71,6 +74,7 @@ import { AuthModule } from '../auth/auth.module.js';
     BackgroundJobsService,
     AuditLogsService,
     AuditLogQueryService,
+    AuditLogExportService,
     AuditLogQueryRepository,
     SystemConfigService,
     ChannelMapConfigService,

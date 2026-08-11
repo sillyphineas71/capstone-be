@@ -72,6 +72,41 @@ export class AuditLogQueryRepository {
   }
 
   /**
+   * findAllForExport — dùng cho GET /audit-logs/export (audit-log-export.service.ts).
+   *
+   * KHÔNG phân trang (không OFFSET) — luôn lấy từ bản ghi mới nhất, cắt ở
+   * LIMIT an toàn do caller truyền vào (MAX_EXPORT_ROWS). `filters.from`/
+   * `filters.to` là bắt buộc ở tầng DTO (ExportAuditLogsDto) nên caller phải
+   * truyền khoảng thời gian, nhưng hàm này không tự ép buộc — chỉ build WHERE
+   * y hệt findPaginated/countMatching.
+   */
+  async findAllForExport(
+    filters: AuditLogFilters,
+    limit: number,
+  ): Promise<AuditLogRow[]> {
+    const { sql, params } = this.buildWhereClause(filters);
+
+    const query = `
+      SELECT
+        al.id,
+        al.created_at,
+        al.user_id,
+        al.action_type,
+        al.entity_type,
+        al.entity_id,
+        al.severity,
+        u.full_name AS user_full_name
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      ${sql}
+      ORDER BY al.created_at DESC
+      LIMIT $${params.length + 1}
+    `;
+
+    return this.dataSource.query(query, [...params, limit]);
+  }
+
+  /**
    * T016: Đếm tổng bản ghi khớp filter — KHÔNG JOIN/ORDER BY/LIMIT.
    *
    * @param filters - cùng object điều kiện AND với findPaginated

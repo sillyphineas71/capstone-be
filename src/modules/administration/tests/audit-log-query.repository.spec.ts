@@ -129,6 +129,71 @@ describe('AuditLogQueryRepository', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // findAllForExport — dùng cho GET /audit-logs/export (2026-08-11)
+  // ---------------------------------------------------------------------------
+  describe('findAllForExport()', () => {
+    it('should call query with no WHERE when filters is empty, LIMIT only (no OFFSET)', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+
+      await repository.findAllForExport({}, 50000);
+
+      const [sql, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
+      expect(sql).not.toMatch(/WHERE/i);
+      expect(sql).not.toMatch(/OFFSET/i);
+      expect(sql).toMatch(/LIMIT \$1/);
+      expect(params).toEqual([50000]);
+    });
+
+    it('should include WHERE clause when filters provided', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+
+      const filters: AuditLogFilters = {
+        from: '2026-01-01T00:00:00Z',
+        to: '2026-12-31T23:59:59Z',
+      };
+      await repository.findAllForExport(filters, 50000);
+
+      const [sql, params] = mockDataSource.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
+      expect(sql).toMatch(/WHERE/i);
+      expect(sql).toMatch(/al\.created_at >= \$1/);
+      expect(sql).toMatch(/al\.created_at <= \$2/);
+      expect(params).toEqual([
+        '2026-01-01T00:00:00Z',
+        '2026-12-31T23:59:59Z',
+        50000,
+      ]);
+    });
+
+    it('should ORDER BY al.created_at DESC and LEFT JOIN users', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+      await repository.findAllForExport({}, 50000);
+
+      const [sql] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/ORDER BY al\.created_at DESC/i);
+      expect(sql).toMatch(/LEFT JOIN users/i);
+    });
+
+    it('should use parameterized query — no string concatenation', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+
+      const filters: AuditLogFilters = {
+        actionType: "'; DROP TABLE audit_logs; --",
+      };
+      await repository.findAllForExport(filters, 50000);
+
+      const [sql] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).not.toContain("'; DROP TABLE");
+      expect(sql).toMatch(/\$\d+/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // T023: countMatching — COUNT(*), no JOIN, no ORDER BY, no LIMIT
   // ---------------------------------------------------------------------------
   describe('T023 — countMatching()', () => {
