@@ -85,12 +85,15 @@ export class RecordingSessionController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('recording.video.stop')
   async pauseVideo(
+    @Req() req: any,
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Param('sessionId', ParseUUIDPipe) sessionId: string,
   ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
     const data = await this.recordingSessionService.pauseVideo(
       meetingId,
       sessionId,
+      userId,
     );
     return {
       success: true,
@@ -105,12 +108,15 @@ export class RecordingSessionController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('recording.video.stop')
   async resumeVideo(
+    @Req() req: any,
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Param('sessionId', ParseUUIDPipe) sessionId: string,
   ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
     const data = await this.recordingSessionService.resumeVideo(
       meetingId,
       sessionId,
+      userId,
     );
     return {
       success: true,

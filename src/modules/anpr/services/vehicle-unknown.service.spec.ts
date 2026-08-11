@@ -60,6 +60,33 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
   });
 
+  // ── B4 (FIX 2026-08-11): UI đọc gateDirection (ưu tiên) thay vì direction thô ──
+  describe('B4: direction ưu tiên gateDirection, fallback direction (COALESCE)', () => {
+    it("channel CÓ channel_direction_map ghi đè → SQL ưu tiên payload_json->>'gateDirection' TRƯỚC payload_json->>'direction' trong COALESCE", async () => {
+      wire();
+      await service.listUnknown(q());
+      const sql = rowsCall()!.sql;
+      expect(sql).toContain('COALESCE(');
+      const gateIdx = sql.indexOf("payload_json->>'gateDirection'");
+      const dirIdx = sql.indexOf("payload_json->>'direction'");
+      expect(gateIdx).toBeGreaterThan(-1);
+      expect(dirIdx).toBeGreaterThan(-1);
+      expect(gateIdx).toBeLessThan(dirIdx); // gateDirection đứng TRƯỚC trong COALESCE → ưu tiên
+    });
+
+    it('channel KHÔNG có channel_direction_map → hiện đúng như cũ, không đổi', async () => {
+      wire([row({ direction: 'enter' })]);
+      const r = await service.listUnknown(q());
+      expect(r.items[0].direction).toBe('enter');
+    });
+
+    it('dữ liệu CŨ (event ghi TRƯỚC fix này, payload KHÔNG có key gateDirection) → COALESCE fallback về direction gốc, không lỗi/không hiện trống', async () => {
+      wire([row({ direction: 'leave' })]);
+      const r = await service.listUnknown(q());
+      expect(r.items[0].direction).toBe('leave');
+    });
+  });
+
   // ── id (F-F fix): FE dùng để gọi GET ivss/device-events/:id/snapshot ──
   it('id: SELECT có cột id + output item.id khớp đúng iot_device_events.id', async () => {
     wire([row({ id: 'a1b2c3d4-1111-2222-3333-444455556666' })]);

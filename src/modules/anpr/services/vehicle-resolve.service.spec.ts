@@ -561,6 +561,29 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(gateMock.writeGateLog.mock.calls[0][0].direction).toBe('leave');
       // payload.direction (raw) GIỮ eventAction-based = enter (AC-BACKCOMPAT).
       expect(payloadOf().direction).toBe('enter');
+      // [FIX 2026-08-11, B4] payload.gateDirection PHẢI mang giá trị ĐÃ GHI ĐÈ (leave) —
+      // khác payload.direction (enter) — đây chính là field UI cần đọc để hiện đúng chiều.
+      expect(payloadOf().gateDirection).toBe('leave');
+    });
+
+    // [FIX 2026-08-11, B4] payload.gateDirection — field mới cho UI đọc đúng nguồn.
+    describe('B4: payload.gateDirection (field mới, KHÔNG đổi payload.direction)', () => {
+      it('channel KHÔNG có channel_direction_map (dùng thẳng eventAction) → gateDirection = direction (giống nhau), không có gì thay đổi', async () => {
+        wire({ zoneMap: GATE.zoneMap }); // KHÔNG dirMap
+        await service.onVehicleEvent(evt({ eventAction: 'in', utc: nowIso() }));
+        const p = payloadOf();
+        expect(p.direction).toBe('enter');
+        expect(p.gateDirection).toBe('enter');
+        expect(p.gateDirection).toBe(p.direction);
+      });
+
+      it('channel KHÔNG map zone (zone_unmapped) → gateDirection vẫn = direction thô (mirror giá trị mặc định, KHÔNG lỗi)', async () => {
+        wire(); // KHÔNG zoneMap → zoneId null → dirMap KHÔNG được đọc (theo logic dòng ~123-126)
+        await service.onVehicleEvent(evt({ eventAction: 'out' }));
+        const p = payloadOf();
+        expect(p.direction).toBe('leave');
+        expect(p.gateDirection).toBe('leave');
+      });
     });
 
     // ⭐ CRUX camera ANPR IPC thật: TRAFFICJUNCTION 0x17 → bridge hard-code eventAction='seen'.
@@ -666,7 +689,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(mergeUpdate()).toBeUndefined();
     });
 
-    it('SQL SELECT bind đúng channelId(string)/direction/cửa sổ 15s để DB tự lọc theo channel+direction+thời gian', async () => {
+    it('SQL SELECT bind đúng channelId(string)/direction/cửa sổ 15s + trần tổng 90s để DB tự lọc theo channel+direction+thời gian', async () => {
       wireMerge(null);
       await (service as any).mergeIntoRecentEvent(
         dsMock.manager,
@@ -680,7 +703,61 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(sel!.sql).toContain("payload_json->>'channelId' = $1");
       expect(sel!.sql).toContain("payload_json->>'direction' = $2");
       expect(sel!.sql).toContain("INTERVAL '1 second'");
-      expect(sel!.params).toEqual(['5', 'enter', 15]);
+      // [FIX 2026-08-11, A1] điều kiện created_at SONG SONG (AND) event_time — KHÔNG thay thế.
+      expect(sel!.sql).toContain(
+        "created_at > NOW() - ($4::int * INTERVAL '1 second')",
+      );
+      expect(sel!.params).toEqual(['5', 'enter', 15, 90]);
+    });
+
+    // [FIX 2026-08-11, A1] Trần TỔNG thời gian gộp — chống "cửa sổ tự làm mới vô hạn".
+    describe('A1: trần tổng thời gian gộp (MAX_MERGE_DURATION_SECONDS=90, dựa trên created_at)', () => {
+      it('chuỗi merge liên tục mỗi lần <15s, TỔNG thời gian <90s → vẫn gộp bình thường (regression)', async () => {
+        // DB (giả lập) vẫn thấy row cũ vì CẢ 2 điều kiện event_time VÀ created_at đều
+        // còn trong ngưỡng — mirror đúng convention file này: unit test xác nhận code bind
+        // đúng $3/$4 để Postgres tự lọc, KHÔNG re-implement logic thời gian ở tầng JS.
+        wireMerge('evt-old', '30A99998');
+        const merged = await (service as any).mergeIntoRecentEvent(
+          dsMock.manager,
+          5,
+          'enter',
+          '30A99999',
+          null,
+        );
+        expect(merged).toBe(true);
+        expect(mergeUpdate()).toBeDefined();
+        const sel = selectMerge();
+        expect(sel!.params[3]).toBe(90); // MAX_MERGE_DURATION_SECONDS truyền đúng
+      });
+
+      it('TỔNG thời gian VƯỢT 90s (dù mỗi lần đọc vẫn <15s) → lần đọc tiếp theo KHÔNG gộp nữa, tạo dòng MỚI', async () => {
+        // created_at của row cũ đã quá 90s → điều kiện created_at loại row đó khỏi kết
+        // quả SELECT (hành vi Postgres thật) — mock DB trả RỖNG để mô phỏng đúng kết quả
+        // đó, y hệt cách file này mô phỏng "SELECT không thấy row" ở các test khác.
+        wireMerge(null);
+        await service.onVehicleEvent(evt({ plateNumber: '30A11111' }));
+        expect(insert()).toBeDefined(); // KHÔNG gộp — tạo row MỚI
+        expect(mergeUpdate()).toBeUndefined();
+        expect(payloadOf().plateNumber).toBe('30A11111');
+        expect(payloadOf().rawReads).toEqual(['30A11111']);
+        expect(alertMock.evaluate).toHaveBeenCalledTimes(1); // xe/row mới → evaluate() riêng
+        const sel = selectMerge();
+        expect(sel!.params[3]).toBe(90);
+      });
+
+      it('created_at của dòng MỚI (sau khi bị chặn gộp) do DB default quyết định — INSERT KHÔNG tự set/kế thừa created_at từ dòng cũ', async () => {
+        wireMerge(null);
+        await service.onVehicleEvent(evt());
+        // Cột created_at KHÔNG nằm trong danh sách cột INSERT ⇒ Postgres tự áp DEFAULT
+        // now() lúc INSERT THẬT — code tầng application không truyền/kế thừa giá trị nào.
+        expect(insert()!.sql).toMatch(
+          /INSERT INTO iot_device_events\s*\([^)]*\)/,
+        );
+        const columnsList = insert()!.sql.match(
+          /INSERT INTO iot_device_events\s*\(([^)]*)\)/,
+        )![1];
+        expect(columnsList).not.toContain('created_at');
+      });
     });
 
     it('UPDATE dùng COALESCE(snapshot_file_id, $2) — ưu tiên giữ ảnh cũ, chỉ nhận ảnh mới khi cũ NULL', async () => {
@@ -698,6 +775,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         JSON.stringify(['30A99999']),
         'media-new',
         'evt-old',
+        12, // [FIX 2026-08-11, A2] MAX_RAW_READS
       ]);
     });
 
@@ -716,6 +794,96 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(upd!.sql).toContain(
         "COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb",
       );
+    });
+
+    // [FIX 2026-08-11, A2] Cap rawReads atomic (MAX_RAW_READS=12), mirror kỹ thuật
+    // AlertsService.bumpOccurrence() (occurrences) — TRONG câu UPDATE, KHÔNG SELECT-rồi-
+    // UPDATE riêng. Dùng mock "stateful" tự mô phỏng đúng thuật toán append+cap mà SQL
+    // thật thực hiện — mirror ĐÚNG convention đã dùng ở alerts.service.spec.ts
+    // (makeStatefulQueryMock) để xác nhận hành vi tích luỹ qua nhiều lần gọi liên tiếp.
+    describe('A2: cap rawReads (MAX_RAW_READS=12, atomic slice trong UPDATE)', () => {
+      const makeStatefulRawReadsMock = (row: {
+        id: string;
+        rawReads: string[];
+      }) =>
+        jest.fn((sql: string, params: any[]) => {
+          if (
+            sql.includes('SELECT id,') &&
+            sql.includes("payload_json->>'channelId'")
+          ) {
+            return Promise.resolve([
+              {
+                id: row.id,
+                plate_number: row.rawReads[row.rawReads.length - 1] ?? null,
+              },
+            ]);
+          }
+          if (
+            sql.includes('UPDATE iot_device_events') &&
+            sql.includes('rawReads')
+          ) {
+            const [plateJson, , , max] = params as [
+              string,
+              string | null,
+              string,
+              number,
+            ];
+            const newPlates = JSON.parse(plateJson) as string[];
+            row.rawReads = [...row.rawReads, ...newPlates].slice(-max);
+          }
+          return Promise.resolve(undefined);
+        });
+
+      it('rawReads dưới ngưỡng (5 phần tử) → append bình thường', async () => {
+        const row = { id: 'evt-old', rawReads: ['a', 'b', 'c', 'd', 'e'] };
+        dsMock.manager.query = makeStatefulRawReadsMock(row);
+        const merged = await (service as any).mergeIntoRecentEvent(
+          dsMock.manager,
+          5,
+          'enter',
+          'e', // trùng entry cuối → isSimilarPlate('e','e')=true qua nhánh a===b
+          null,
+        );
+        expect(merged).toBe(true);
+        expect(row.rawReads).toEqual(['a', 'b', 'c', 'd', 'e', 'e']);
+      });
+
+      it('rawReads đã đạt đúng MAX_RAW_READS(12) → append thêm 1 vẫn giữ đúng 12 phần tử, CẮT BỚT phần tử CŨ NHẤT', async () => {
+        const seeded = Array.from({ length: 12 }, (_, i) => `p${i}`);
+        const row = { id: 'evt-old', rawReads: seeded };
+        dsMock.manager.query = makeStatefulRawReadsMock(row);
+        const merged = await (service as any).mergeIntoRecentEvent(
+          dsMock.manager,
+          5,
+          'enter',
+          'p11', // trùng entry cuối cùng đã seed
+          null,
+        );
+        expect(merged).toBe(true);
+        expect(row.rawReads).toHaveLength(12);
+        expect(row.rawReads[0]).toBe('p1'); // p0 (cũ nhất) bị cắt, KHÔNG phải phần tử mới nhất
+        expect(row.rawReads).not.toContain('p0');
+      });
+
+      it('rawReads thiếu/null trong payload_json → COALESCE fallback [] được dùng ở CẢ 2 chỗ trong khối cap mới, KHÔNG lỗi', async () => {
+        wireMerge('evt-old', '30A99998');
+        await (service as any).mergeIntoRecentEvent(
+          dsMock.manager,
+          5,
+          'enter',
+          '30A99999',
+          null,
+        );
+        const upd = mergeUpdate();
+        const coalesceCount = (
+          upd!.sql.match(
+            /COALESCE\(payload_json->'rawReads', '\[\]'::jsonb\)/g,
+          ) ?? []
+        ).length;
+        // 1 lần trong jsonb_array_elements(...), 1 lần trong jsonb_array_length(...) —
+        // cả 2 đều fallback [] nếu rawReads thiếu/null, KHÔNG có nhánh nào thiếu COALESCE.
+        expect(coalesceCount).toBe(2);
+      });
     });
 
     it('SELECT lỗi → false (NotThrow, fallback INSERT)', async () => {

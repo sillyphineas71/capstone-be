@@ -32,7 +32,14 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
 
   function makeService() {
     const query = jest.fn().mockResolvedValue([]);
-    const dataSource = { manager: { query } };
+    const manager = { query };
+    // [FIX 2026-08-11, R8] stopVideo() giờ bọc thân hàm trong dataSource.transaction()
+    // (khoá theo sessionId) — mock gọi callback với CHÍNH `manager` để mọi test hiện có
+    // (mock query trực tiếp) chạy đúng KHÔNG đổi.
+    const dataSource = {
+      manager,
+      transaction: jest.fn((cb: (m: any) => unknown) => cb(manager)),
+    };
     const configService = { get: jest.fn(() => tmpDir) };
     const processManager = {
       has: jest.fn().mockReturnValue(true),
@@ -76,10 +83,19 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
     };
   }
 
+  // [FIX 2026-08-11, R10] stopVideo() giờ check ownership (assertHostOrAdmin) TRƯỚC lock —
+  // 2 query (meeting_participants host check + user_roles) — prepend host=[{id:'u1'}] để
+  // bypass ngay ở host check (KHÔNG cần role check), giữ nguyên hành vi các test hiện có
+  // (userId='u1' trong file này coi như host/organizer).
+  const hostOk = () => [{ id: 'u1' }];
+
   it('[S1] (BR-06) 0-pause (segments rỗng) → finalize(storage_path cũ), KHÔNG concat', async () => {
     const { service, query, finalizeSpy, concatSpy } = makeService();
     const main = writeFile('s1.mp4', 100);
-    query.mockResolvedValueOnce([sessionRow({ storage_path: main })]);
+    query
+      .mockResolvedValueOnce(hostOk()) // assertHostOrAdmin: host check
+      .mockResolvedValueOnce([]) // pg_advisory_xact_lock
+      .mockResolvedValueOnce([sessionRow({ storage_path: main })]);
 
     await service.stopVideo('m1', 's1', 'u1');
 
@@ -91,9 +107,12 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
   it('[S2] 1 segment → finalize(segment), KHÔNG concat', async () => {
     const { service, query, finalizeSpy, concatSpy } = makeService();
     const seg0 = writeFile('s1.mp4', 100);
-    query.mockResolvedValueOnce([
-      sessionRow({ storage_path: seg0, metadata_json: { segments: [seg0] } }),
-    ]);
+    query
+      .mockResolvedValueOnce(hostOk())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        sessionRow({ storage_path: seg0, metadata_json: { segments: [seg0] } }),
+      ]);
 
     await service.stopVideo('m1', 's1', 'u1');
 
@@ -106,12 +125,15 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
     const { service, query, finalizeSpy, concatSpy } = makeService();
     const seg0 = writeFile('s1.mp4', 100);
     const seg1 = writeFile('s1_seg1.mp4', 100);
-    query.mockResolvedValueOnce([
-      sessionRow({
-        storage_path: seg1,
-        metadata_json: { segments: [seg0, seg1] },
-      }),
-    ]);
+    query
+      .mockResolvedValueOnce(hostOk())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        sessionRow({
+          storage_path: seg1,
+          metadata_json: { segments: [seg0, seg1] },
+        }),
+      ]);
 
     await service.stopVideo('m1', 's1', 'u1');
 
@@ -128,12 +150,15 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
     concatSpy.mockResolvedValue(1 as never); // lỗi, không tạo out
     const seg0 = writeFile('s1.mp4', 100);
     const seg1 = writeFile('s1_seg1.mp4', 100);
-    query.mockResolvedValueOnce([
-      sessionRow({
-        storage_path: seg1,
-        metadata_json: { segments: [seg0, seg1] },
-      }),
-    ]);
+    query
+      .mockResolvedValueOnce(hostOk())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        sessionRow({
+          storage_path: seg1,
+          metadata_json: { segments: [seg0, seg1] },
+        }),
+      ]);
 
     await expect(service.stopVideo('m1', 's1', 'u1')).rejects.toThrow(
       InternalServerErrorException,
@@ -147,12 +172,15 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
     const { service, query, concatSpy, finalizeSpy } = makeService();
     const seg0 = writeFile('s1.mp4', 100);
     const seg1 = writeFile('s1_seg1.mp4', 0); // 0-byte → bị lọc
-    query.mockResolvedValueOnce([
-      sessionRow({
-        storage_path: seg1,
-        metadata_json: { segments: [seg0, seg1] },
-      }),
-    ]);
+    query
+      .mockResolvedValueOnce(hostOk())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        sessionRow({
+          storage_path: seg1,
+          metadata_json: { segments: [seg0, seg1] },
+        }),
+      ]);
 
     await service.stopVideo('m1', 's1', 'u1');
     expect(concatSpy).not.toHaveBeenCalled();
@@ -164,13 +192,16 @@ describe('RecordingSessionService stopVideo concat (UC-114/115)', () => {
     const { service, query, processManager, concatSpy } = makeService();
     const seg0 = writeFile('s1.mp4', 100);
     const seg1 = writeFile('s1_seg1.mp4', 100);
-    query.mockResolvedValueOnce([
-      sessionRow({
-        status: 'paused',
-        storage_path: seg1,
-        metadata_json: { segments: [seg0, seg1] },
-      }),
-    ]);
+    query
+      .mockResolvedValueOnce(hostOk())
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        sessionRow({
+          status: 'paused',
+          storage_path: seg1,
+          metadata_json: { segments: [seg0, seg1] },
+        }),
+      ]);
 
     await service.stopVideo('m1', 's1', 'u1');
     expect(processManager.stop).not.toHaveBeenCalled(); // paused: không stop lại
