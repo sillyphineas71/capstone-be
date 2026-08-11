@@ -1,4 +1,4 @@
-﻿import {
+import {
   Body,
   Controller,
   Delete,
@@ -41,6 +41,7 @@ import { UpdateRoomResponseDto } from '../dto/update-room-response.dto.js';
 import { SearchRoomsQueryDto } from '../dto/search-rooms-query.dto.js';
 import { DeletionImpactResponseDto } from '../dto/deletion-impact-response.dto.js';
 import { DeleteRoomResponseDto } from '../dto/delete-room-response.dto.js';
+import { RoomDetailResponseDto } from '../dto/room-detail-response.dto.js';
 
 @ApiTags('Rooms')
 @Controller('rooms')
@@ -261,5 +262,30 @@ export class RoomsController {
       message: 'Room status retrieved',
       data,
     };
+  }
+
+  // ROOM-VIEW-DETAIL-001 (UC-ROOM-VIEW-DETAIL): Xem chi tiet 1 phong hop (admin only).
+  // FR-009: khai SAU 'search' va 'realtime-status' (2 route literal 1-segment) de tranh
+  // route param ':roomId' nuot mat chung. An toan voi ':roomId/status' va ':roomId/deletion-impact'
+  // vi khac so segment.
+  @Get(':roomId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.detail.read')
+  @ApiOperation({ summary: 'Xem chi tiet 1 phong hop (admin)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Chi tiet phong duoc truy xuat thanh cong',
+  })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen room.detail.read' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay phong' })
+  async getDetail(@Param('roomId', ParseUUIDPipe) roomId: string): Promise<{
+    success: boolean;
+    message: string;
+    data: RoomDetailResponseDto;
+  }> {
+    const data = await this.roomsService.getRoomDetail(roomId);
+    return { success: true, message: 'Room detail retrieved', data };
   }
 }
