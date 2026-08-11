@@ -3,9 +3,16 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+
+interface MeetingPartyRow {
+  organizer_id: string | null;
+  host_id: string | null;
+}
 
 export interface CreateNoShowInput {
   bookingId: string;
@@ -50,6 +57,7 @@ export class NoShowService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly websocketService: WebsocketService,
+    private readonly authzRepo: AuthzReadRepository,
   ) {}
 
   /**
@@ -191,7 +199,15 @@ export class NoShowService {
     };
   }
 
-  /** UC-42: cập nhật case (transition hợp lệ, không re-open terminal). */
+  /**
+   * UC-42: cập nhật case (transition hợp lệ, không re-open terminal).
+   *
+   * [FIX 2026-08-09, Phần 5] Authorization CHUYỂN vào đây (route đã bỏ
+   * PermissionsGuard/@RequirePermissions — xem no-show.controller.ts). Thứ tự BẮT BUỘC:
+   * NOT_FOUND → TERMINAL (business rule, ĐỘC LẬP với authorization — case đã chốt thì
+   * BẤT KỲ ai, kể cả organizer/host hợp lệ, đều bị chặn 400 y hệt nhau) → AUTHORIZATION
+   * (permission cũ HOẶC dismiss+ownership mới) → validate detectionStatus → UPDATE.
+   */
   async update(
     id: string,
     dto: {
@@ -213,13 +229,16 @@ export class NoShowService {
       });
     }
 
-    // Không re-open case đã terminal (#31 không cho mở lại).
+    // Không re-open case đã terminal (#31 không cho mở lại) — CHẠY TRƯỚC authorization,
+    // KHÔNG bị nhánh dismiss-owner mới nhảy qua (R5.1 test case 6).
     if (TERMINAL_STATUSES.includes(current.detection_status)) {
       throw new BadRequestException({
         code: 'INVALID_NO_SHOW_TRANSITION',
         message: 'No-show case is already finalized.',
       });
     }
+
+    await this.assertAuthorized(current, dto, userId);
 
     if (dto.detectionStatus !== undefined) {
       if (SYSTEM_OWNED_STATUSES.includes(dto.detectionStatus)) {
@@ -260,6 +279,50 @@ export class NoShowService {
     );
 
     return this.toResponse(this.firstRow(updated));
+  }
+
+  /**
+   * [FIX 2026-08-09, Phần 5] Authorization cho update() — mirror ĐÚNG check
+   * PermissionsGuard từng làm (cùng repo `AuthzReadRepository.getEffectiveRolesAndPermissions`,
+   * cùng shape ForbiddenException) cho MỌI transition — hành vi cũ giữ nguyên 100% khi user
+   * CÓ `room.noshow.update`.
+   *
+   * CHỈ khi KHÔNG có permission đó, mở thêm 1 lối thoát HẸP: `dto.detectionStatus ===
+   * 'dismissed'` (KHÔNG áp dụng cho 'confirmed'/'resolved') VÀ userId khớp organizer_id
+   * HOẶC host_id của meeting liên quan (join qua current.meeting_id → meetings, mirror
+   * ĐÚNG pattern notifyNoShow() ở no-show-lifecycle.service.ts:352-354).
+   */
+  private async assertAuthorized(
+    current: NoShowRow,
+    dto: { detectionStatus?: string },
+    userId: string | null,
+  ): Promise<void> {
+    const forbidden = (): ForbiddenException =>
+      new ForbiddenException({
+        success: false,
+        message: 'Bạn không có quyền thực hiện hành động này.',
+        error: { code: 'FORBIDDEN', details: {} },
+      });
+
+    if (!userId) throw forbidden();
+
+    const { permissions } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(userId);
+    if (permissions.includes('room.noshow.update')) return;
+
+    if (dto.detectionStatus === 'dismissed') {
+      const meetingRows: MeetingPartyRow[] =
+        await this.dataSource.manager.query(
+          `SELECT organizer_id, host_id FROM meetings WHERE id = $1 LIMIT 1`,
+          [current.meeting_id],
+        );
+      const m = meetingRows?.[0];
+      if (m && (m.organizer_id === userId || m.host_id === userId)) {
+        return;
+      }
+    }
+
+    throw forbidden();
   }
 
   /**

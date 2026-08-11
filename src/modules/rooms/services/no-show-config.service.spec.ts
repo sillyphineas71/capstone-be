@@ -110,16 +110,69 @@ describe('NoShowConfigService (NSL-001 #35)', () => {
     );
   });
 
-  it('getAll trả 4 key (3 số + 1 bool) + source', async () => {
+  it('getAll trả 6 key (5 số + 1 bool) + source [FIX Phần 2: thêm presenceConfirmSeconds/presenceNoiseToleranceSeconds]', async () => {
     repoMock.findOne.mockResolvedValue(null);
     const all = await service.getAll();
     expect(Object.keys(all)).toEqual([
       'thresholdMinutes',
       'warningGraceMinutes',
       'autoReleaseGraceMinutes',
+      'presenceConfirmSeconds',
+      'presenceNoiseToleranceSeconds',
       'autoReleaseEnabled',
     ]);
     expect(all.warningGraceMinutes).toEqual({ value: 0, source: 'default' });
+  });
+
+  // ── Phần 2: presenceConfirmSeconds/presenceNoiseToleranceSeconds (đơn vị GIÂY) ──
+  it('presenceConfirmSeconds: default=30s khi không row + không env', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    const r = await service.getEffectiveValue('presenceConfirmSeconds');
+    expect(r).toEqual({ value: 30, source: 'default' });
+  });
+
+  it('presenceNoiseToleranceSeconds: default=3s khi không row + không env', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    const r = await service.getEffectiveValue('presenceNoiseToleranceSeconds');
+    expect(r).toEqual({ value: 3, source: 'default' });
+  });
+
+  it('presenceNoiseToleranceSeconds: min=0 hợp lệ (khác 3 field cũ min=1)', async () => {
+    repoMock.findOne.mockResolvedValue({ configValue: '0' });
+    const r = await service.getEffectiveValue('presenceNoiseToleranceSeconds');
+    expect(r).toEqual({ value: 0, source: 'system_configs' });
+  });
+
+  it('update: presenceConfirmSeconds → upsert key no_show.presence_confirm_seconds', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    await service.update({ presenceConfirmSeconds: 45 }, 'admin1');
+    expect(repoMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configKey: 'no_show.presence_confirm_seconds',
+        configValue: '45',
+        valueType: 'number',
+        configGroup: 'no_show',
+      }),
+    );
+  });
+
+  it('update: presenceNoiseToleranceSeconds → upsert key no_show.presence_noise_tolerance_seconds', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    await service.update({ presenceNoiseToleranceSeconds: 5 }, 'admin1');
+    expect(repoMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configKey: 'no_show.presence_noise_tolerance_seconds',
+        configValue: '5',
+        valueType: 'number',
+        configGroup: 'no_show',
+      }),
+    );
+  });
+
+  it('update: presenceConfirmSeconds < min(1) → BadRequestException', async () => {
+    await expect(
+      service.update({ presenceConfirmSeconds: 0 }, 'admin1'),
+    ).rejects.toThrow(BadRequestException);
   });
 
   // ── autoReleaseEnabled (F1) ──

@@ -12,11 +12,13 @@ describe('NoShowConfigController (NSL-001 #35)', () => {
     controller = new NoShowConfigController(svcMock);
   });
 
-  it('GET: trả 3 key + source trong envelope', async () => {
+  it('GET: trả đủ key (kể cả 2 field mới Phần 2) + source trong envelope', async () => {
     svcMock.getAll.mockResolvedValue({
       thresholdMinutes: { value: 15, source: 'default' },
       warningGraceMinutes: { value: 0, source: 'default' },
       autoReleaseGraceMinutes: { value: 5, source: 'env' },
+      presenceConfirmSeconds: { value: 30, source: 'default' },
+      presenceNoiseToleranceSeconds: { value: 3, source: 'default' },
     });
     const r = await controller.get();
     expect(r.success).toBe(true);
@@ -24,6 +26,8 @@ describe('NoShowConfigController (NSL-001 #35)', () => {
       'thresholdMinutes',
       'warningGraceMinutes',
       'autoReleaseGraceMinutes',
+      'presenceConfirmSeconds',
+      'presenceNoiseToleranceSeconds',
     ]);
     expect(r.data.autoReleaseGraceMinutes.source).toBe('env');
   });

@@ -83,6 +83,9 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     NoShowDetectionService,
     NoShowLifecycleService,
     EarlyVacancyService,
+    // [FIX 2026-08-09, Phần 3] PresenceModule/OccupancyPersistenceService cần đọc
+    // presenceConfirmSeconds/presenceNoiseToleranceSeconds cho streak-confirm.
+    NoShowConfigService,
   ],
 })
 export class RoomsModule {}

@@ -12,6 +12,10 @@ export interface UpdateNoShowConfigInput {
   thresholdMinutes?: number;
   warningGraceMinutes?: number;
   autoReleaseGraceMinutes?: number;
+  /** [FIX 2026-08-09, Phần 2] ĐƠN VỊ GIÂY — khác 3 field trên (phút). */
+  presenceConfirmSeconds?: number;
+  /** [FIX 2026-08-09, Phần 2] ĐƠN VỊ GIÂY — khác 3 field trên (phút). */
+  presenceNoiseToleranceSeconds?: number;
   autoReleaseEnabled?: boolean;
 }
 
@@ -31,8 +35,13 @@ const AUTO_RELEASE_ENABLED_DEFAULT = true;
 /**
  * NoShowConfigService (NSL-001 #35) — đọc/ghi ngưỡng no-show vào system_configs.
  *
- * SEC-03: whitelist đúng 3 key (không cho ghi key tùy ý). Precedence đọc:
+ * SEC-03: whitelist đúng 5 key số (không cho ghi key tùy ý) + 1 flag bool. Precedence đọc:
  * system_configs → env → default. Upsert tăng version_no. DATA-01 no-migration.
+ *
+ * [FIX 2026-08-09, Phần 2] `presenceConfirmSeconds`/`presenceNoiseToleranceSeconds` —
+ * ĐƠN VỊ GIÂY, KHÁC 3 key gốc (`thresholdMinutes`/`warningGraceMinutes`/
+ * `autoReleaseGraceMinutes` — đơn vị PHÚT). Phục vụ streak-based presence confirmation
+ * (occupancy-persistence.service.ts) — KHÔNG liên quan tới ngưỡng no-show gốc.
  */
 @Injectable()
 export class NoShowConfigService {
@@ -56,6 +65,26 @@ export class NoShowConfigService {
       env: 'NO_SHOW_AUTO_RELEASE_GRACE_MINUTES',
       def: 5,
       min: 1,
+    },
+    /**
+     * Số giây có mặt liên tục tối thiểu để xác nhận đã tham dự thật (chống việc vào
+     * 1 giây rồi ra để né no-show). ĐƠN VỊ GIÂY.
+     */
+    presenceConfirmSeconds: {
+      key: 'no_show.presence_confirm_seconds',
+      env: 'NO_SHOW_PRESENCE_CONFIRM_SECONDS',
+      def: 30,
+      min: 1,
+    },
+    /**
+     * Khoảng gián đoạn (count=0) tối đa được coi là nhiễu cảm biến, không làm gãy
+     * chuỗi hiện diện liên tục. ĐƠN VỊ GIÂY.
+     */
+    presenceNoiseToleranceSeconds: {
+      key: 'no_show.presence_noise_tolerance_seconds',
+      env: 'NO_SHOW_PRESENCE_NOISE_TOLERANCE_SECONDS',
+      def: 3,
+      min: 0,
     },
   };
 
@@ -108,7 +137,7 @@ export class NoShowConfigService {
     return { value: AUTO_RELEASE_ENABLED_DEFAULT, source: 'default' };
   }
 
-  /** GET API: cả 3 key số + flag bool + source. */
+  /** GET API: cả 5 key số + flag bool + source. */
   async getAll(): Promise<
     Record<ConfigField, { value: number; source: string }> & {
       autoReleaseEnabled: { value: boolean; source: string };
@@ -118,26 +147,34 @@ export class NoShowConfigService {
       thresholdMinutes,
       warningGraceMinutes,
       autoReleaseGraceMinutes,
+      presenceConfirmSeconds,
+      presenceNoiseToleranceSeconds,
       autoReleaseEnabled,
     ] = await Promise.all([
       this.getEffectiveValue('thresholdMinutes'),
       this.getEffectiveValue('warningGraceMinutes'),
       this.getEffectiveValue('autoReleaseGraceMinutes'),
+      this.getEffectiveValue('presenceConfirmSeconds'),
+      this.getEffectiveValue('presenceNoiseToleranceSeconds'),
       this.getEffectiveBoolValue(),
     ]);
     return {
       thresholdMinutes,
       warningGraceMinutes,
       autoReleaseGraceMinutes,
+      presenceConfirmSeconds,
+      presenceNoiseToleranceSeconds,
       autoReleaseEnabled,
     };
   }
 
-  /** Đọc gọn dạng number/boolean (lifecycle dùng). */
+  /** Đọc gọn dạng number/boolean (lifecycle + occupancy-persistence dùng). */
   async getValues(): Promise<{
     thresholdMinutes: number;
     warningGraceMinutes: number;
     autoReleaseGraceMinutes: number;
+    presenceConfirmSeconds: number;
+    presenceNoiseToleranceSeconds: number;
     autoReleaseEnabled: boolean;
   }> {
     const all = await this.getAll();
@@ -145,6 +182,8 @@ export class NoShowConfigService {
       thresholdMinutes: all.thresholdMinutes.value,
       warningGraceMinutes: all.warningGraceMinutes.value,
       autoReleaseGraceMinutes: all.autoReleaseGraceMinutes.value,
+      presenceConfirmSeconds: all.presenceConfirmSeconds.value,
+      presenceNoiseToleranceSeconds: all.presenceNoiseToleranceSeconds.value,
       autoReleaseEnabled: all.autoReleaseEnabled.value,
     };
   }

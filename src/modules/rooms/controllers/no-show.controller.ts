@@ -66,7 +66,10 @@ export class NoShowController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  @ApiOperation({ summary: 'Xem danh sách case no-show (bảng giám sát phòng), có phân trang + lọc theo trạng thái/phòng' })
+  @ApiOperation({
+    summary:
+      'Xem danh sách case no-show (bảng giám sát phòng), có phân trang + lọc theo trạng thái/phòng',
+  })
   async list(@Query() query: ListNoShowCasesQueryDto) {
     const { items, meta } = await this.noShowService.list(query);
     return {
@@ -78,12 +81,19 @@ export class NoShowController {
   }
 
   // UC-42: cập nhật no-show case (user).
+  // [FIX 2026-08-09, Phần 5 — R5.1] KHÔNG dùng PermissionsGuard/@RequirePermissions ở
+  // route này (khác mọi route khác trong controller) — authorization đã chuyển vào
+  // NoShowService.update() để có đủ context (dto.detectionStatus + meeting ownership)
+  // cho host/organizer tự dismiss case CỦA CHÍNH MÌNH mà không cần quyền admin rộng.
+  // Guard dùng chung KHÔNG bị đụng, mọi route khác vẫn y hệt trước.
   @Patch('no-show-cases/:id')
   @HttpCode(200)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('room.noshow.update')
+  @UseGuards(JwtAuthGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  @ApiOperation({ summary: 'Cập nhật 1 case no-show (user xử lý)' })
+  @ApiOperation({
+    summary:
+      'Cập nhật 1 case no-show (user xử lý) — host/organizer được tự dismiss case của cuộc họp mình, còn lại cần quyền room.noshow.update',
+  })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateNoShowDto,
@@ -105,7 +115,9 @@ export class NoShowController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.release')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  @ApiOperation({ summary: 'Admin giải phóng phòng thủ công cho 1 case no-show' })
+  @ApiOperation({
+    summary: 'Admin giải phóng phòng thủ công cho 1 case no-show',
+  })
   async release(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReleaseNoShowDto,

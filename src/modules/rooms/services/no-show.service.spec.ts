@@ -1,18 +1,26 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { NoShowService } from './no-show.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 
 describe('NoShowService (NSC-001 / UC-41+42)', () => {
   let service: NoShowService;
   let dsMock: any;
   let wsMock: any;
+  let authzMock: any;
   let insertRows: any[];
   let existingRows: any[];
   let currentRows: any[];
   let updatedRows: any[];
+  let meetingRows: any[];
+  let permissions: string[];
 
   const row = (over: any = {}) => ({
     id: 'nsc-1',
@@ -35,6 +43,11 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     existingRows = [row()];
     currentRows = [row()];
     updatedRows = [row({ detection_status: 'dismissed' })];
+    // [FIX 2026-08-09, Phần 5] Mặc định: user CÓ quyền room.noshow.update (mirror hành
+    // vi cũ PermissionsGuard từng cho qua) — mọi test update() KHÔNG khai báo riêng đều
+    // đi qua nhánh permission-cũ, KHÔNG âm thầm rơi vào nhánh ownership mới.
+    permissions = ['room.noshow.update'];
+    meetingRows = [{ organizer_id: 'organizer-1', host_id: 'host-1' }];
     dsMock = {
       manager: {
         query: jest.fn().mockImplementation((sql: string) => {
@@ -44,18 +57,26 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
             return Promise.resolve(updatedRows);
           if (sql.includes('WHERE booking_id'))
             return Promise.resolve(existingRows);
+          if (sql.includes('FROM meetings'))
+            return Promise.resolve(meetingRows);
           if (sql.includes('WHERE id =')) return Promise.resolve(currentRows);
           return Promise.resolve([]);
         }),
       },
     };
     wsMock = { emitToRoom: jest.fn() };
+    authzMock = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockImplementation(() => Promise.resolve({ roles: [], permissions })),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NoShowService,
         { provide: DataSource, useValue: dsMock },
         { provide: WebsocketService, useValue: wsMock },
+        { provide: AuthzReadRepository, useValue: authzMock },
       ],
     }).compile();
     service = module.get(NoShowService);
@@ -170,6 +191,89 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     await expect(service.update('nsc-1', { note: 'x' }, 'u1')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  // ══ Phần 5 (R5.1) — authorization chuyển vào service: permission cũ HOẶC dismiss+ownership ══
+  describe('Phần 5: host/organizer tự dismiss case của chính mình', () => {
+    it('1. User CÓ room.noshow.update → mọi transition vẫn hoạt động y hệt trước (regression)', async () => {
+      permissions = ['room.noshow.update'];
+      await expect(
+        service.update(
+          'nsc-1',
+          { detectionStatus: 'confirmed' },
+          'someone-with-permission',
+        ),
+      ).resolves.toBeDefined();
+      // UPDATE thật sự chạy với đúng dto đã truyền (KHÔNG bị chặn bởi authorization mới).
+      const updateCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('UPDATE no_show_cases'),
+      );
+      expect(updateCall[1][1]).toBe('confirmed'); // detection_status
+      // KHÔNG cần query meetings khi đã có permission — không tốn round-trip thừa.
+      expect(
+        dsMock.manager.query.mock.calls.some((c: any[]) =>
+          String(c[0]).includes('FROM meetings'),
+        ),
+      ).toBe(false);
+    });
+
+    it('2. User KHÔNG có quyền, LÀ organizer, dismissed → cho phép', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'user-1', host_id: 'other-host' }];
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'dismissed' }, 'user-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('3. User KHÔNG có quyền, LÀ host (không phải organizer), dismissed → cho phép', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'other-organizer', host_id: 'user-1' }];
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'dismissed' }, 'user-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('4. User KHÔNG có quyền, KHÔNG phải organizer/host, dismissed → 403 ĐÚNG code/message y hệt Guard cũ', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'other-1', host_id: 'other-2' }];
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'dismissed' }, 'user-1'),
+      ).rejects.toMatchObject({
+        response: {
+          success: false,
+          message: 'Bạn không có quyền thực hiện hành động này.',
+          error: { code: 'FORBIDDEN', details: {} },
+        },
+      });
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'dismissed' }, 'user-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("5. User KHÔNG có quyền, LÀ organizer, NHƯNG detectionStatus='confirmed' (không phải dismissed) → vẫn 403", async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'user-1', host_id: 'other-host' }];
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'confirmed' }, 'user-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('6. Case ĐÃ terminal (released) + user là organizer + dismissed → vẫn 400 TERMINAL, KHÔNG bị bypass bởi nhánh ownership mới', async () => {
+      currentRows = [row({ detection_status: 'released' })];
+      permissions = [];
+      meetingRows = [{ organizer_id: 'user-1', host_id: 'other-host' }];
+      await expect(
+        service.update('nsc-1', { detectionStatus: 'dismissed' }, 'user-1'),
+      ).rejects.toMatchObject({
+        response: { code: 'INVALID_NO_SHOW_TRANSITION' },
+      });
+      // Xác nhận KHÔNG bị nhảy qua: terminal check chạy TRƯỚC, KHÔNG hề query meetings.
+      expect(
+        dsMock.manager.query.mock.calls.some((c: any[]) =>
+          String(c[0]).includes('FROM meetings'),
+        ),
+      ).toBe(false);
+    });
   });
 
   // ─── LIST (GET no-show-cases) ───
