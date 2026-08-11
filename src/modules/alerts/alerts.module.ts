@@ -6,6 +6,7 @@ import { AdministrationModule } from '../administration/administration.module.js
 import { AlertRuleEntity } from './entities/alert-rule.entity.js';
 import { SecurityAlertEntity } from './entities/security-alert.entity.js';
 import { PersonControlListEntity } from './entities/person-control-list.entity.js';
+import { ZoneEntity } from '../zones/entities/zone.entity.js';
 import { AlertRulesService } from './services/alert-rules.service.js';
 import { AlertRulesController } from './controllers/alert-rules.controller.js';
 import { AlertsService } from './services/alerts.service.js';
@@ -57,6 +58,11 @@ import { SecurityAlertAutoResolveService } from './services/security-alert-auto-
       AlertRuleEntity,
       SecurityAlertEntity,
       PersonControlListEntity,
+      // [FIX 2026-08-11] ZoneEntity re-declare RIÊNG cho AlertRulesService.assertValidIntrusionZone()
+      // (validate zone_type khi tạo/sửa rule intrusion) — mirror pattern campus-dashboard/
+      // restricted-zone/crowd-alert: KHÔNG import ZonesModule (tránh kéo theo provider/controller
+      // không cần, tránh vòng phụ thuộc).
+      ZoneEntity,
     ]),
     AuthModule,
     NotificationsModule,

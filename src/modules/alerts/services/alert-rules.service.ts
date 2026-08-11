@@ -1,11 +1,14 @@
 import {
   Injectable,
+  BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not, type FindOptionsWhere } from 'typeorm';
 import { AlertRuleEntity } from '../entities/alert-rule.entity.js';
+import { ZoneEntity } from '../../zones/entities/zone.entity.js';
+import { PRESENCE_ZONE_TYPES } from '../../ivss/constants/zone-presence.constant.js';
 import type { CreateAlertRuleDto } from '../dto/create-alert-rule.dto.js';
 import type { UpdateAlertRuleDto } from '../dto/update-alert-rule.dto.js';
 import type { QueryAlertRulesDto } from '../dto/query-alert-rules.dto.js';
@@ -39,6 +42,8 @@ export class AlertRulesService {
   constructor(
     @InjectRepository(AlertRuleEntity)
     private readonly repo: Repository<AlertRuleEntity>,
+    @InjectRepository(ZoneEntity)
+    private readonly zoneRepo: Repository<ZoneEntity>,
   ) {}
 
   async create(
@@ -47,6 +52,9 @@ export class AlertRulesService {
   ): Promise<AlertRuleEntity> {
     const zoneId = dto.zoneId ?? null;
     await this.assertNoConflict(dto.alertType, zoneId);
+    if (dto.alertType === 'intrusion' && zoneId) {
+      await this.assertValidIntrusionZone(zoneId);
+    }
 
     const entity = this.repo.create({
       alertType: dto.alertType,
@@ -135,6 +143,9 @@ export class AlertRulesService {
 
     if (zoneOrTypeChanged) {
       await this.assertNoConflict(nextAlertType, nextZoneId, id);
+      if (nextAlertType === 'intrusion' && nextZoneId) {
+        await this.assertValidIntrusionZone(nextZoneId);
+      }
     }
 
     entity.alertType = nextAlertType;
@@ -221,6 +232,35 @@ export class AlertRulesService {
     if (globalDisabled) return { rule: null, suppressed: true };
 
     return { rule: null, suppressed: false }; // chưa từng cấu hình — fail-open (§2.8).
+  }
+
+  /**
+   * [FIX 2026-08-11] Chặn tạo/sửa rule `intrusion` gắn zone KHÔNG hợp lệ cho presence —
+   * tránh bẫy cấu hình im lặng (rule tạo được nhưng KHÔNG BAO GIỜ kích hoạt vì
+   * `ZonePresenceWriterService.writeAppearEvent()` chỉ ghi `zone_presence_events` cho
+   * `zone.type ∈ PRESENCE_ZONE_TYPES`, xem `zone-presence-writer.service.ts` QC-5). CHỈ gọi
+   * cho `alertType === 'intrusion'` (đọc `event_type='appear'`) — KHÔNG áp cho `crowd` (đọc
+   * `event_type='count'`, không giới hạn zone_type) hay 4 loại còn lại (không đọc
+   * `zone_presence_events`). Tái dùng `PRESENCE_ZONE_TYPES` export sẵn từ `ivss` — KHÔNG
+   * hardcode lại danh sách lần 2 (`zones/services/zone-presence-writer.service.ts` cũng có
+   * 1 bản PRIVATE tương tự, chủ ý không export để giữ đúng chiều phụ thuộc `ivss → zones`).
+   */
+  private async assertValidIntrusionZone(zoneId: string): Promise<void> {
+    const zone = await this.zoneRepo.findOne({
+      where: { id: zoneId, deletedAt: IsNull() },
+    });
+    if (!zone) {
+      throw new BadRequestException({
+        code: 'ALERT_RULE_ZONE_NOT_FOUND',
+        message: 'Không tìm thấy zone hoặc zone đã bị xoá.',
+      });
+    }
+    if (!(PRESENCE_ZONE_TYPES as readonly string[]).includes(zone.zoneType)) {
+      throw new BadRequestException({
+        code: 'ALERT_RULE_ZONE_WRONG_TYPE',
+        message: `Zone này (loại "${zone.zoneType}") không ghi nhận dữ liệu hiện diện (appear) — chỉ khu vực corridor/lobby/parking mới hợp lệ cho rule intrusion. Chọn zone khác hoặc đổi loại rule.`,
+      });
+    }
   }
 
   private async assertNoConflict(

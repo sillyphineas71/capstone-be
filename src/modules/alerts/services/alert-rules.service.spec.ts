@@ -1,13 +1,15 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument */
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AlertRuleEntity } from '../entities/alert-rule.entity.js';
+import { ZoneEntity } from '../../zones/entities/zone.entity.js';
 import { AlertRulesService } from './alert-rules.service.js';
 
 describe('AlertRulesService (ARL-001 / UC-122)', () => {
   let service: AlertRulesService;
   let repo: any;
+  let zoneRepo: any;
 
   beforeEach(async () => {
     repo = {
@@ -18,10 +20,16 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       softDelete: jest.fn().mockResolvedValue({ affected: 1 }),
       findAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
+    // [FIX 2026-08-11] assertValidIntrusionZone() — mặc định KHÔNG có zone nào (test cần
+    // zone hợp lệ phải tự mock zoneRepo.findOne trả về zone lobby/corridor/parking).
+    zoneRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AlertRulesService,
         { provide: getRepositoryToken(AlertRuleEntity), useValue: repo },
+        { provide: getRepositoryToken(ZoneEntity), useValue: zoneRepo },
       ],
     }).compile();
     service = module.get(AlertRulesService);
@@ -113,6 +121,72 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
           'admin1',
         ),
       ).rejects.toBe(boom);
+    });
+
+    describe('assertValidIntrusionZone (fix 2026-08-11, chặn intrusion gắn zone không hợp lệ presence)', () => {
+      it('intrusion + zone loại lobby → thành công (regression)', async () => {
+        zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'lobby' });
+        const r = await service.create(
+          { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r.id).toBe('r1');
+      });
+
+      it('intrusion + zone loại room → 400 ALERT_RULE_ZONE_WRONG_TYPE, KHÔNG save', async () => {
+        zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'room' });
+        await expect(
+          service.create(
+            { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+            'admin1',
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_WRONG_TYPE' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('intrusion + zoneId không tồn tại → 400 ALERT_RULE_ZONE_NOT_FOUND, KHÔNG save', async () => {
+        zoneRepo.findOne.mockResolvedValue(null);
+        await expect(
+          service.create(
+            { alertType: 'intrusion', zoneId: 'zone-missing', channels: ['in_app'] } as any,
+            'admin1',
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_NOT_FOUND' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('intrusion + zoneId=null (rule toàn khuôn viên) → thành công, KHÔNG query zones', async () => {
+        const r = await service.create(
+          { alertType: 'intrusion', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(zoneRepo.findOne).not.toHaveBeenCalled();
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r.id).toBe('r1');
+      });
+
+      it('loại KHÁC (crowd) + zone loại room → thành công, KHÔNG bị chặn, KHÔNG query zones (regression: chỉ áp cho intrusion)', async () => {
+        const r = await service.create(
+          { alertType: 'crowd', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(zoneRepo.findOne).not.toHaveBeenCalled();
+        expect(repo.save).toHaveBeenCalledTimes(1);
+        expect(r.id).toBe('r1');
+      });
+
+      it('loại KHÁC (stranger) + zoneId có giá trị → thành công, KHÔNG query zones', async () => {
+        await service.create(
+          { alertType: 'stranger', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          'admin1',
+        );
+        expect(zoneRepo.findOne).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -218,6 +292,28 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         response: { code: 'ALERT_RULE_ALREADY_EXISTS' },
       });
       expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    describe('assertValidIntrusionZone (fix 2026-08-11)', () => {
+      it('đổi zoneId sang zone loại room trong khi alertType vẫn intrusion → 400 ALERT_RULE_ZONE_WRONG_TYPE, KHÔNG save', async () => {
+        repo.findOne
+          .mockResolvedValueOnce({ ...owned(), alertType: 'intrusion' }) // load entity
+          .mockResolvedValueOnce(null); // assertNoConflict: không trùng
+        zoneRepo.findOne.mockResolvedValue({ id: 'zone-2', zoneType: 'room' });
+        await expect(
+          service.update('r1', { zoneId: 'zone-2' }, 'admin1'),
+        ).rejects.toMatchObject({
+          response: { code: 'ALERT_RULE_ZONE_WRONG_TYPE' },
+        });
+        expect(repo.save).not.toHaveBeenCalled();
+      });
+
+      it('đổi trường KHÁC (không đụng zoneId/alertType) → zoneOrTypeChanged=false, KHÔNG gọi lại helper (zoneRepo.findOne không được gọi)', async () => {
+        repo.findOne.mockResolvedValueOnce({ ...owned(), alertType: 'intrusion' });
+        await service.update('r1', { threshold: 30 }, 'admin1');
+        expect(zoneRepo.findOne).not.toHaveBeenCalled();
+        expect(repo.save).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
