@@ -50,6 +50,22 @@ const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
 // (channel+direction giống, cách nhau ngắn) — NGẮN hơn khoảng cách đọc lặp
 // quan sát thực tế của 1 xe thật (~9-10s), để không gộp nhầm 2 xe kế tiếp.
 const OCR_MERGE_WINDOW_SECONDS = 15;
+// [FIX 2026-08-11, A1] Trần TỔNG thời gian gộp — chống "cửa sổ tự làm mới vô hạn"
+// (mỗi lần merge chỉ SET event_time=NOW(), rolling-window OCR_MERGE_WINDOW_SECONDS ở
+// event_time không có trần tổng nếu các lần đọc liên tục cách nhau <15s mãi). Tính từ
+// `created_at` (cột @CreateDateColumn, set MỘT LẦN lúc INSERT, KHÔNG bị UPDATE của
+// mergeIntoRecentEvent() đụng tới) — dùng thẳng làm mốc "first_seen", KHÔNG cần thêm
+// cột/field payload mới. ~90s ≈ 6 lần merge liên tiếp ở đúng biên OCR_MERGE_WINDOW_SECONDS
+// (khoảng đọc lặp thực tế quan sát ~9-10s/lần) — dư cho 1 lượt xe thật, chặn được xe
+// đứng yên bất thường (kẹt barie) tiếp tục "làm mới" event vô thời hạn.
+const MAX_MERGE_DURATION_SECONDS = 90;
+// [FIX 2026-08-11, A2] Cap kích thước rawReads — mirror atomic slice của
+// AlertsService.bumpOccurrence() (occurrences: jsonb_agg + WITH ORDINALITY + WHERE ord >
+// GREATEST(...), atomic TRONG câu UPDATE, KHÔNG SELECT-rồi-UPDATE riêng — tránh đúng race
+// class đã sửa cho occurrences). Nhỏ hơn occurrences (20) vì A1 đã giới hạn tổng thời gian
+// gộp (~90s, tối đa ~6 lần merge ở đúng biên OCR_MERGE_WINDOW_SECONDS=15) — 12 đã dư so
+// với số lần merge thực tế tối đa trong 1 lượt xe.
+const MAX_RAW_READS = 12;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -129,6 +145,13 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
         userId,
         channelId: evt.channelId,
         direction,
+        // [FIX 2026-08-11, B4] gateDirection — giá trị ƯU TIÊN (channel_direction_map TRƯỚC
+        // → eventAction), đã tính sẵn ở trên (dòng ~120-126), TRƯỚC ĐÂY chỉ dùng để ghi
+        // gate_access_logs, KHÔNG có trong payload này → VehicleHistoryService/
+        // VehicleUnknownService (đọc payload_json->>'direction') hiện SAI CHIỀU nếu channel
+        // có map ghi đè khác eventAction thô. `direction` gốc GIỮ NGUYÊN 100% (AC-BACKCOMPAT
+        // đã chốt) — đây CHỈ thêm field mới, không đổi field cũ.
+        gateDirection,
         matchState,
         eventActionRaw: evt.eventAction ?? null,
         plateColor: evt.plateColor ?? null,
@@ -302,6 +325,18 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
    * snapshot_file_id: ưu tiên ảnh đã có (COALESCE giữ ảnh cũ nếu đã có, chỉ nhận
    * ảnh mới khi row cũ CHƯA có).
    *
+   * [FIX 2026-08-11, A2] UPDATE `rawReads` qua slice atomic (jsonb_agg + WITH ORDINALITY +
+   * WHERE ord > GREATEST(...) - MAX_RAW_READS) NGAY TRONG câu UPDATE này — KHÔNG SELECT-rồi-
+   * UPDATE riêng (mirror đúng kỹ thuật + lý do race của `AlertsService.bumpOccurrence()`
+   * `occurrences`). Cắt bớt phần tử CŨ NHẤT khi vượt `MAX_RAW_READS`, giữ nguyên thứ tự.
+   *
+   * [FIX 2026-08-11, A1] SELECT thêm điều kiện `created_at > NOW() - MAX_MERGE_DURATION_SECONDS`
+   * SONG SONG (AND, KHÔNG thay thế) điều kiện rolling-window `event_time` hiện có — chặn
+   * trần TỔNG thời gian 1 lượt xe được phép gộp, kể cả khi mỗi lần đọc vẫn nằm trong 15s
+   * kể từ lần merge gần nhất. `created_at` KHÔNG bị câu UPDATE bên dưới đụng tới (chỉ
+   * SET event_time/payload_json/snapshot_file_id) nên giữ nguyên mốc "first_seen" xuyên
+   * suốt chuỗi merge.
+   *
    * RACE FIX: nhận `manager` (EntityManager của transaction có pg_advisory_xact_lock
    * theo channelId ở caller) thay vì tự dùng `this.dataSource.manager` — để SELECT+
    * UPDATE ở đây chạy TRONG CÙNG transaction/khoá với INSERT fallback của caller,
@@ -325,9 +360,15 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
             AND payload_json->>'channelId' = $1
             AND payload_json->>'direction' = $2
             AND event_time > NOW() - ($3::int * INTERVAL '1 second')
+            AND created_at > NOW() - ($4::int * INTERVAL '1 second')
           ORDER BY event_time DESC
           LIMIT 1`,
-        [String(channelId), direction, OCR_MERGE_WINDOW_SECONDS],
+        [
+          String(channelId),
+          direction,
+          OCR_MERGE_WINDOW_SECONDS,
+          MAX_MERGE_DURATION_SECONDS,
+        ],
       );
       const recent = rows?.[0];
       if (!recent) return false;
@@ -347,11 +388,22 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
                 payload_json = jsonb_set(
                   payload_json,
                   '{rawReads}',
-                  COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb
+                  (
+                    SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+                    FROM jsonb_array_elements(
+                           COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb
+                         ) WITH ORDINALITY AS t(elem, ord)
+                    WHERE ord > GREATEST(
+                      jsonb_array_length(
+                        COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb
+                      ) - $4,
+                      0
+                    )
+                  )
                 ),
                 snapshot_file_id = COALESCE(snapshot_file_id, $2)
           WHERE id = $3`,
-        [JSON.stringify([plateNumber]), snapshotFileId, recent.id],
+        [JSON.stringify([plateNumber]), snapshotFileId, recent.id, MAX_RAW_READS],
       );
       return true;
     } catch (e) {
