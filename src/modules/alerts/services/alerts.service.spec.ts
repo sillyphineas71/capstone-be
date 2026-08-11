@@ -4,11 +4,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { SecurityAlertEntity } from '../entities/security-alert.entity.js';
 import { AlertsService } from './alerts.service.js';
+import { SecurityAlertConfigService } from './security-alert-config.service.js';
 
 describe('AlertsService (ASC-001 / UC-123)', () => {
   let service: AlertsService;
   let repo: any;
   let qb: any;
+  let securityAlertConfigService: any;
 
   beforeEach(async () => {
     qb = {
@@ -32,10 +34,19 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
       // xem alerts.service.ts.
       query: jest.fn().mockResolvedValue(undefined),
     };
+    // [FIX 2026-08-11] bumpOccurrence() đọc occurrenceDebounceSeconds mỗi lần gọi —
+    // mock default=5s (giống DEBOUNCE_CONFIG_DEFAULT thật), override per-test khi cần.
+    securityAlertConfigService = {
+      getDebounceSeconds: jest.fn().mockResolvedValue(5),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AlertsService,
         { provide: getRepositoryToken(SecurityAlertEntity), useValue: repo },
+        {
+          provide: SecurityAlertConfigService,
+          useValue: securityAlertConfigService,
+        },
       ],
     }).compile();
     service = module.get(AlertsService);
@@ -138,23 +149,58 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
   });
 
   describe('bumpOccurrence — payload_json.occurrences (fix "mất dấu vết nhiều người vi phạm")', () => {
-    // repo.query() ở đây là raw SQL (jsonb_set atomic, chạy thật trong Postgres khi production) —
-    // không có DB thật trong unit test này, nên repo.query mock TỰ MÔ PHỎNG đúng thuật toán
-    // append+cap mà câu SQL trong alerts.service.ts thực hiện (đọc params $2/$3 y hệt code
-    // thật truyền vào), để xác nhận HÀNH VI TÍCH LŨY qua nhiều lần gọi recordAlert() liên tiếp.
+    // repo.query() ở đây là raw SQL (WITH latest_match + jsonb_set atomic, chạy thật trong
+    // Postgres khi production) — không có DB thật trong unit test này, nên repo.query mock
+    // TỰ MÔ PHỎNG đúng thuật toán mà câu SQL trong alerts.service.ts thực hiện (đọc params
+    // $2/$3/$4 y hệt code thật truyền vào: entry JSON, cap 20, debounceSeconds), để xác nhận
+    // HÀNH VI qua nhiều lần gọi recordAlert() liên tiếp — bao gồm cả nhánh debounce [FIX
+    // 2026-08-11]: last_seen_at/occurrence_count LUÔN tăng vô điều kiện; occurrences CHỈ
+    // skip append khi entry mới CÙNG userId (khác null) với entry gần nhất trong mảng hiện
+    // có VÀ cách nhau dưới debounceSeconds giây — mirror đúng điều kiện SQL
+    // `latest_match`/`ABS(EXTRACT(EPOCH FROM (...))) < $4`.
+    interface OccurrenceEntry {
+      userId: string | null;
+      sourceEventId: string | null;
+      occurredAt: string;
+    }
     const makeStatefulQueryMock = (row: {
       occurrenceCount: number;
+      lastSeenAt: string | null;
       payloadJson: Record<string, unknown>;
     }) =>
       jest.fn((_sql: string, params: unknown[]) => {
-        const [, entryJson, max] = params as [string, string, number];
-        const entry = JSON.parse(entryJson) as unknown;
-        const prior = (row.payloadJson.occurrences as unknown[]) ?? [];
+        const [, entryJson, max, debounceSeconds] = params as [
+          string,
+          string,
+          number,
+          number,
+        ];
+        const entry = JSON.parse(entryJson) as OccurrenceEntry;
+        const prior = (row.payloadJson.occurrences as OccurrenceEntry[]) ?? [];
+
+        // mirror SQL: last_seen_at/occurrence_count LUÔN cập nhật vô điều kiện,
+        // KHÔNG phụ thuộc debounce (R3 — an toàn cho auto-resolve).
         row.occurrenceCount += 1;
-        row.payloadJson = {
-          ...row.payloadJson,
-          occurrences: [...prior, entry].slice(-max),
-        };
+        row.lastSeenAt = new Date().toISOString();
+
+        const latestMatch = [...prior]
+          .reverse()
+          .find((e) => e.userId !== null && e.userId === entry.userId);
+        const debounced =
+          entry.userId !== null &&
+          latestMatch !== undefined &&
+          Math.abs(
+            (new Date(entry.occurredAt).getTime() -
+              new Date(latestMatch.occurredAt).getTime()) /
+              1000,
+          ) < debounceSeconds;
+
+        if (!debounced) {
+          row.payloadJson = {
+            ...row.payloadJson,
+            occurrences: [...prior, entry].slice(-max),
+          };
+        }
         return Promise.resolve(undefined);
       });
 
@@ -165,6 +211,7 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         zoneId: 'zone-1',
         status: 'new',
         occurrenceCount: 1,
+        lastSeenAt: null as string | null,
         payloadJson: {} as Record<string, unknown>,
       };
       repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
@@ -215,6 +262,7 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         zoneId: 'zone-9',
         status: 'new',
         occurrenceCount: 20,
+        lastSeenAt: null as string | null,
         payloadJson: { occurrences: seeded } as Record<string, unknown>,
       };
       repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
@@ -235,6 +283,196 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         userId: null,
         sourceEventId: 'evt-new',
         occurredAt: '2026-08-09T02:00:00.000Z',
+      });
+    });
+
+    describe('debounce theo userId (fix 2026-08-11, chống thổi phồng khi camera bắn appear gần-trùng-giờ)', () => {
+      it('case biên — alert vừa mở, occurrences RỖNG → latest_match 0 dòng, EXISTS=false → LUÔN append (không phụ thuộc debounceSeconds)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(9999); // debounce cực lớn — vẫn phải append vì chưa có gì để so
+        const row = {
+          id: 'alert-empty',
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>, // occurrences chưa tồn tại (rỗng)
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        const r = await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-1',
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+
+        expect(r.alert.occurrenceCount).toBe(2);
+        const occurrences = r.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences).toHaveLength(1); // append thành công dù occurrences ban đầu rỗng
+        expect(occurrences[0]).toEqual({
+          userId: 'u1',
+          sourceEventId: 'evt-1',
+          occurredAt: '2026-08-11T09:00:00.000Z',
+        });
+      });
+
+      it('cùng userId, 2 lần cách nhau < debounceSeconds → occurrence_count vẫn tăng, occurrences KHÔNG có entry mới', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-3',
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-1',
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        const r2 = await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-2',
+          // 3s sau lần trước — dưới debounceSeconds=5.
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:03.000Z' },
+        });
+
+        expect(repo.query).toHaveBeenCalledTimes(2);
+        expect(r2.alert.occurrenceCount).toBe(3); // vô điều kiện: 1 (insert) → 2 → 3
+        const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences).toHaveLength(1); // lần 2 bị debounce, KHÔNG append
+        expect(occurrences[0]).toEqual({
+          userId: 'u1',
+          sourceEventId: 'evt-1',
+          occurredAt: '2026-08-11T09:00:00.000Z',
+        });
+      });
+
+      it('cùng userId, 2 lần cách nhau >= debounceSeconds → append bình thường', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-4',
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-1',
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        const r2 = await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-2',
+          // đúng 5s sau — KHÔNG < debounceSeconds=5 (biên, không debounce).
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:05.000Z' },
+        });
+
+        expect(r2.alert.occurrenceCount).toBe(3);
+        const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences).toHaveLength(2); // append bình thường
+        expect(occurrences[1]).toEqual({
+          userId: 'u1',
+          sourceEventId: 'evt-2',
+          occurredAt: '2026-08-11T09:00:05.000Z',
+        });
+      });
+
+      it('crowd (userId null) gọi liên tiếp nhanh → KHÔNG bị debounce nhầm, mỗi lần đều append (regression 4 loại alert khác)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-5',
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        // 2 lần cách nhau 1s (< debounceSeconds=5) nhưng userId=null (crowd) → không debounce.
+        await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-1',
+          payloadJson: { occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        const r2 = await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-2',
+          payloadJson: { occurredAt: '2026-08-11T09:00:01.000Z' },
+        });
+
+        const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences).toHaveLength(2); // cả 2 đều append, không bị debounce nhầm
+      });
+
+      it('last_seen_at LUÔN cập nhật dù bị debounce hay không (chống rủi ro R3 — auto-resolve không được đóng nhầm)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-6',
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        expect(row.lastSeenAt).toBeNull();
+
+        await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-1',
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        // repo.save luôn 23505 (mock chung của describe cha) → MỌI lần gọi recordAlert()
+        // ở đây đi qua bumpOccurrence(), kể cả lần "đầu tiên" trong test này.
+        const afterFirst = row.lastSeenAt;
+        expect(afterFirst).not.toBeNull();
+
+        // lần 2: 1s sau — CHẮC CHẮN bị debounce (< 5s) — nhưng last_seen_at vẫn phải đổi.
+        await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-1',
+          sourceEventId: 'evt-2',
+          payloadJson: { userId: 'u1', occurredAt: '2026-08-11T09:00:01.000Z' },
+        });
+
+        expect(row.occurrenceCount).toBe(3); // 1 → 2 → 3, vô điều kiện
+        expect(row.payloadJson.occurrences as unknown[]).toHaveLength(1); // debounced, occurrences KHÔNG đổi — chứng minh 2 việc tách rời nhau
+        // repo.query() được gọi đúng 2 lần (1 lần/recordAlert) — mock TỰ set lastSeenAt =
+        // NOW() vô điều kiện ở CẢ 2 lần (mirror `SET last_seen_at = NOW()` chạy trước CASE
+        // debounce trong SQL thật), bất kể lần đó có bị debounce hay không.
+        expect(repo.query).toHaveBeenCalledTimes(2);
       });
     });
   });

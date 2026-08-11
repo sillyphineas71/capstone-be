@@ -1,5 +1,5 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
   SystemConfigEntity,
@@ -13,8 +13,22 @@ const CONFIG_ENV = 'SECURITY_ALERTS_AUTO_RESOLVE_TIMEOUT_MINUTES';
 const CONFIG_DEFAULT = 15;
 const CONFIG_MIN = 1;
 
+/**
+ * [FIX 2026-08-11] Chống thổi phồng `occurrence_count`/`occurrences` khi CÙNG userId
+ * kích hoạt lặp lại trong thời gian ngắn (camera bắn nhiều `appear` gần-trùng-giờ cho 1
+ * lần đứng yên — xem AlertsService.bumpOccurrence()). Namespace RIÊNG với
+ * `no_show.presence_*` (rooms module) dù cùng đơn vị giây — khác domain nghiệp vụ, không
+ * dùng chung theo đúng bài học đã rút ra (mixing config field giữa 2 domain từng gây bug
+ * production ở no-show). `min: 0` = tắt debounce (mọi occurrence đều append).
+ */
+const DEBOUNCE_CONFIG_KEY = 'security_alerts.occurrence_debounce_seconds';
+const DEBOUNCE_CONFIG_ENV = 'SECURITY_ALERT_OCCURRENCE_DEBOUNCE_SECONDS';
+const DEBOUNCE_CONFIG_DEFAULT = 5;
+const DEBOUNCE_CONFIG_MIN = 0;
+
 export interface UpdateSecurityAlertConfigInput {
   autoResolveTimeoutMinutes?: number;
+  occurrenceDebounceSeconds?: number;
 }
 
 /**
@@ -59,12 +73,41 @@ export class SecurityAlertConfigService {
     return { value: CONFIG_DEFAULT, source: 'default' };
   }
 
+  /** Mirror getEffectiveTimeoutMinutes() — cùng precedence, key/env/default/min riêng. */
+  async getEffectiveDebounceSeconds(): Promise<{
+    value: number;
+    source: 'system_configs' | 'env' | 'default';
+  }> {
+    const repo = this.dataSource.getRepository(SystemConfigEntity);
+    const row = await repo.findOne({
+      where: { configKey: DEBOUNCE_CONFIG_KEY, isActive: true },
+    });
+    if (row?.configValue != null) {
+      const n = parseInt(row.configValue, 10);
+      if (Number.isInteger(n) && n >= DEBOUNCE_CONFIG_MIN) {
+        return { value: n, source: 'system_configs' };
+      }
+    }
+    const envVal = this.configService.get<number>(DEBOUNCE_CONFIG_ENV);
+    if (envVal != null) {
+      const n = Number(envVal);
+      if (Number.isInteger(n) && n >= DEBOUNCE_CONFIG_MIN)
+        return { value: n, source: 'env' };
+    }
+    return { value: DEBOUNCE_CONFIG_DEFAULT, source: 'default' };
+  }
+
   /** GET API. */
   async getAll(): Promise<{
     autoResolveTimeoutMinutes: { value: number; source: string };
+    occurrenceDebounceSeconds: { value: number; source: string };
   }> {
-    const autoResolveTimeoutMinutes = await this.getEffectiveTimeoutMinutes();
-    return { autoResolveTimeoutMinutes };
+    const [autoResolveTimeoutMinutes, occurrenceDebounceSeconds] =
+      await Promise.all([
+        this.getEffectiveTimeoutMinutes(),
+        this.getEffectiveDebounceSeconds(),
+      ]);
+    return { autoResolveTimeoutMinutes, occurrenceDebounceSeconds };
   }
 
   /** Đọc gọn dạng number (cron dùng). */
@@ -73,27 +116,77 @@ export class SecurityAlertConfigService {
     return value;
   }
 
-  /** PUT API: upsert key. version_no++ khi update. */
+  /** Đọc gọn dạng number (AlertsService.bumpOccurrence() dùng). */
+  async getDebounceSeconds(): Promise<number> {
+    const { value } = await this.getEffectiveDebounceSeconds();
+    return value;
+  }
+
+  /** PUT API: upsert ≥1 trong 2 key. version_no++ khi update. */
   async update(
     input: UpdateSecurityAlertConfigInput,
     adminId: string | null,
-  ): Promise<{ autoResolveTimeoutMinutes: { value: number; source: string } }> {
-    if (input.autoResolveTimeoutMinutes === undefined) {
+  ): Promise<{
+    autoResolveTimeoutMinutes: { value: number; source: string };
+    occurrenceDebounceSeconds: { value: number; source: string };
+  }> {
+    if (
+      input.autoResolveTimeoutMinutes === undefined &&
+      input.occurrenceDebounceSeconds === undefined
+    ) {
       throw new BadRequestException({
         code: 'NO_CONFIG_FIELDS',
-        message: 'autoResolveTimeoutMinutes is required.',
-      });
-    }
-    const val = input.autoResolveTimeoutMinutes;
-    if (!Number.isInteger(val) || val < CONFIG_MIN) {
-      throw new BadRequestException({
-        code: 'INVALID_CONFIG_VALUE',
-        message: `${CONFIG_KEY} must be an integer >= ${CONFIG_MIN}.`,
+        message:
+          'At least one of autoResolveTimeoutMinutes/occurrenceDebounceSeconds is required.',
       });
     }
 
     const repo = this.dataSource.getRepository(SystemConfigEntity);
-    const existing = await repo.findOne({ where: { configKey: CONFIG_KEY } });
+    const changed: Record<string, number> = {};
+
+    if (input.autoResolveTimeoutMinutes !== undefined) {
+      const val = input.autoResolveTimeoutMinutes;
+      if (!Number.isInteger(val) || val < CONFIG_MIN) {
+        throw new BadRequestException({
+          code: 'INVALID_CONFIG_VALUE',
+          message: `${CONFIG_KEY} must be an integer >= ${CONFIG_MIN}.`,
+        });
+      }
+      await this.upsertConfig(repo, CONFIG_KEY, val, adminId);
+      changed[CONFIG_KEY] = val;
+    }
+
+    if (input.occurrenceDebounceSeconds !== undefined) {
+      const val = input.occurrenceDebounceSeconds;
+      if (!Number.isInteger(val) || val < DEBOUNCE_CONFIG_MIN) {
+        throw new BadRequestException({
+          code: 'INVALID_CONFIG_VALUE',
+          message: `${DEBOUNCE_CONFIG_KEY} must be an integer >= ${DEBOUNCE_CONFIG_MIN}.`,
+        });
+      }
+      await this.upsertConfig(repo, DEBOUNCE_CONFIG_KEY, val, adminId);
+      changed[DEBOUNCE_CONFIG_KEY] = val;
+    }
+
+    await this.auditLogsService.logAction({
+      userId: adminId ?? undefined,
+      actionType: 'security_alert_config_update',
+      entityType: 'system_configs',
+      severity: AuditLogSeverity.WARNING,
+      metadataJson: { changed },
+    });
+
+    return this.getAll();
+  }
+
+  /** Upsert dùng chung cho cả 2 key số — mirror thân if/else trước khi tách. */
+  private async upsertConfig(
+    repo: Repository<SystemConfigEntity>,
+    key: string,
+    val: number,
+    adminId: string | null,
+  ): Promise<void> {
+    const existing = await repo.findOne({ where: { configKey: key } });
     if (existing) {
       existing.configValue = String(val);
       existing.valueType = SystemConfigValueType.NUMBER;
@@ -105,7 +198,7 @@ export class SecurityAlertConfigService {
     } else {
       await repo.save(
         repo.create({
-          configKey: CONFIG_KEY,
+          configKey: key,
           configValue: String(val),
           valueType: SystemConfigValueType.NUMBER,
           configGroup: 'security_alerts',
@@ -116,15 +209,5 @@ export class SecurityAlertConfigService {
         }),
       );
     }
-
-    await this.auditLogsService.logAction({
-      userId: adminId ?? undefined,
-      actionType: 'security_alert_config_update',
-      entityType: 'system_configs',
-      severity: AuditLogSeverity.WARNING,
-      metadataJson: { changed: { [CONFIG_KEY]: val } },
-    });
-
-    return this.getAll();
   }
 }

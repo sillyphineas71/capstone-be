@@ -12,6 +12,7 @@ import {
   type FindOptionsWhere,
 } from 'typeorm';
 import { SecurityAlertEntity } from '../entities/security-alert.entity.js';
+import { SecurityAlertConfigService } from './security-alert-config.service.js';
 import type { ZoneEntity } from '../../zones/entities/zone.entity.js';
 import type {
   AlertSeverity,
@@ -65,6 +66,7 @@ export class AlertsService {
   constructor(
     @InjectRepository(SecurityAlertEntity)
     private readonly repo: Repository<SecurityAlertEntity>,
+    private readonly securityAlertConfigService: SecurityAlertConfigService,
   ) {}
 
   private resolveSeverity(
@@ -161,6 +163,20 @@ export class AlertsService {
    * đồng thời (mất 1 entry). Áp dụng chung cho CẢ 5 alertType gọi `recordAlert()`
    * (intrusion/crowd/stranger/vehicle_control_match/person_watchlist_match) — cùng 1 bài
    * toán "mất dấu vết khi nhiều sự kiện bump vào 1 alert", không gate riêng theo loại.
+   *
+   * [FIX 2026-08-11] Chống thổi phồng `occurrence_count`/`occurrences` khi CÙNG userId kích
+   * hoạt lặp lại trong thời gian ngắn (vd camera bắn nhiều `appear` gần-trùng-giờ cho 1 lần
+   * đứng yên — UC-124). `last_seen_at`/`occurrence_count` VẪN tăng VÔ ĐIỀU KIỆN mỗi lần gọi
+   * (KHÔNG đổi 2 dòng đó) — bắt buộc để `SecurityAlertAutoResolveService` (dựa
+   * `COALESCE(last_seen_at, triggered_at)`) không tự đóng nhầm alert trong lúc người đó vẫn
+   * đang vi phạm liên tục (xem recon R3 — phương án debounce ở tầng caller/skip hẳn
+   * `recordAlert()` bị loại vì đóng băng `last_seen_at`). CHỈ phần APPEND vào `occurrences`
+   * có điều kiện: nếu entry mới CÙNG `userId` với entry gần nhất (theo thứ tự mảng hiện có)
+   * VÀ cách nhau (`occurredAt`) dưới `occurrenceDebounceSeconds` giây → SKIP append, coi là
+   * cùng 1 lần hiện diện đang tiếp diễn. `userId` NULL (vd `crowd`, không gắn 1 người cụ
+   * thể) → điều kiện tự loại trừ, KHÔNG bao giờ debounce — không cần gate riêng theo
+   * `alertType`. `occurrenceDebounceSeconds=0` (min cấu hình) → điều kiện `ABS(...) < 0`
+   * không bao giờ đúng → tắt debounce hoàn toàn, hành vi y hệt trước fix.
    */
   private async bumpOccurrence(
     id: string,
@@ -173,32 +189,55 @@ export class AlertsService {
         (input.payloadJson?.occurredAt as string | undefined) ??
         new Date().toISOString(),
     };
+    const debounceSeconds =
+      await this.securityAlertConfigService.getDebounceSeconds();
 
     await this.repo.query(
-      `UPDATE security_alerts
+      `WITH latest_match AS (
+         SELECT (elem ->> 'occurredAt')::timestamptz AS occurred_at
+         FROM security_alerts sa,
+              jsonb_array_elements(
+                COALESCE(sa.payload_json -> 'occurrences', '[]'::jsonb)
+              ) WITH ORDINALITY AS t(elem, ord)
+         WHERE sa.id = $1
+           AND $2::jsonb ->> 'userId' IS NOT NULL
+           AND elem ->> 'userId' = $2::jsonb ->> 'userId'
+         ORDER BY ord DESC
+         LIMIT 1
+       )
+       UPDATE security_alerts
           SET last_seen_at = NOW(),
               occurrence_count = occurrence_count + 1,
-              payload_json = jsonb_set(
-                COALESCE(payload_json, '{}'::jsonb),
-                '{occurrences}',
-                (
-                  SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
-                  FROM jsonb_array_elements(
-                         COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
-                         || jsonb_build_array($2::jsonb)
-                       ) WITH ORDINALITY AS t(elem, ord)
-                  WHERE ord > GREATEST(
-                    jsonb_array_length(
-                      COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
-                      || jsonb_build_array($2::jsonb)
-                    ) - $3,
-                    0
-                  )
-                ),
-                true
-              )
+              payload_json = CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM latest_match
+                  WHERE ABS(EXTRACT(EPOCH FROM (
+                    ($2::jsonb ->> 'occurredAt')::timestamptz - latest_match.occurred_at
+                  ))) < $4::numeric
+                )
+                THEN payload_json
+                ELSE jsonb_set(
+                       COALESCE(payload_json, '{}'::jsonb),
+                       '{occurrences}',
+                       (
+                         SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+                         FROM jsonb_array_elements(
+                                COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
+                                || jsonb_build_array($2::jsonb)
+                              ) WITH ORDINALITY AS t(elem, ord)
+                         WHERE ord > GREATEST(
+                           jsonb_array_length(
+                             COALESCE(payload_json -> 'occurrences', '[]'::jsonb)
+                             || jsonb_build_array($2::jsonb)
+                           ) - $3,
+                           0
+                         )
+                       ),
+                       true
+                     )
+              END
         WHERE id = $1`,
-      [id, JSON.stringify(entry), MAX_OCCURRENCES_PER_ALERT],
+      [id, JSON.stringify(entry), MAX_OCCURRENCES_PER_ALERT, debounceSeconds],
     );
     return this.getOrThrow(id);
   }

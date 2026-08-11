@@ -113,13 +113,87 @@ describe('SecurityAlertConfigService (ASC-001 auto-resolve timeout)', () => {
     );
   });
 
-  it('getAll trả đúng 1 key + source', async () => {
+  it('getAll trả đúng 2 key + source', async () => {
     repoMock.findOne.mockResolvedValue(null);
     const all = await service.getAll();
-    expect(Object.keys(all)).toEqual(['autoResolveTimeoutMinutes']);
+    expect(Object.keys(all)).toEqual([
+      'autoResolveTimeoutMinutes',
+      'occurrenceDebounceSeconds',
+    ]);
     expect(all.autoResolveTimeoutMinutes).toEqual({
       value: 15,
       source: 'default',
+    });
+    expect(all.occurrenceDebounceSeconds).toEqual({
+      value: 5,
+      source: 'default',
+    });
+  });
+
+  describe('occurrenceDebounceSeconds (fix 2026-08-11, chống thổi phồng occurrence_count)', () => {
+    it('source=system_configs khi có row hợp lệ', async () => {
+      repoMock.findOne.mockResolvedValue({ configValue: '10' });
+      const r = await service.getEffectiveDebounceSeconds();
+      expect(r).toEqual({ value: 10, source: 'system_configs' });
+    });
+
+    it('source=env khi không có row nhưng env hợp lệ', async () => {
+      repoMock.findOne.mockResolvedValue(null);
+      cfg = { SECURITY_ALERT_OCCURRENCE_DEBOUNCE_SECONDS: 8 };
+      const r = await service.getEffectiveDebounceSeconds();
+      expect(r).toEqual({ value: 8, source: 'env' });
+    });
+
+    it('source=default (5s) khi không row + không env', async () => {
+      repoMock.findOne.mockResolvedValue(null);
+      const r = await service.getEffectiveDebounceSeconds();
+      expect(r).toEqual({ value: 5, source: 'default' });
+    });
+
+    it('row value = 0 hợp lệ (min=0, KHÁC autoResolveTimeoutMinutes min=1)', async () => {
+      repoMock.findOne.mockResolvedValue({ configValue: '0' });
+      const r = await service.getEffectiveDebounceSeconds();
+      expect(r).toEqual({ value: 0, source: 'system_configs' });
+    });
+
+    it('row value âm → bỏ qua, fallback default', async () => {
+      repoMock.findOne.mockResolvedValue({ configValue: '-1' });
+      const r = await service.getEffectiveDebounceSeconds();
+      expect(r).toEqual({ value: 5, source: 'default' });
+    });
+
+    it('getDebounceSeconds trả gọn số giây hiệu lực', async () => {
+      repoMock.findOne.mockResolvedValue({ configValue: '12' });
+      const n = await service.getDebounceSeconds();
+      expect(n).toBe(12);
+    });
+
+    it('update: chỉ occurrenceDebounceSeconds → upsert đúng key, KHÔNG đụng autoResolveTimeoutMinutes', async () => {
+      repoMock.findOne.mockResolvedValue(null);
+      await service.update({ occurrenceDebounceSeconds: 7 }, 'admin1');
+      expect(repoMock.create).toHaveBeenCalledTimes(1);
+      expect(repoMock.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          configKey: 'security_alerts.occurrence_debounce_seconds',
+          configValue: '7',
+          configGroup: 'security_alerts',
+        }),
+      );
+    });
+
+    it('update: cả 2 field cùng lúc → upsert cả 2 key', async () => {
+      repoMock.findOne.mockResolvedValue(null);
+      await service.update(
+        { autoResolveTimeoutMinutes: 20, occurrenceDebounceSeconds: 7 },
+        'admin1',
+      );
+      expect(repoMock.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('update: occurrenceDebounceSeconds < min(0) → BadRequestException', async () => {
+      await expect(
+        service.update({ occurrenceDebounceSeconds: -1 }, 'admin1'),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });
