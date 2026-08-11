@@ -16,4 +16,12 @@ export class UserListItemDto {
     nullable: true,
   })
   employeeCode?: string | null;
+
+  @ApiProperty({
+    description: 'Đường dẫn ảnh đại diện của người dùng',
+    example: 'https://storage.example.com/avatars/user.jpg',
+    required: false,
+    nullable: true,
+  })
+  avatarUrl?: string | null;
 }

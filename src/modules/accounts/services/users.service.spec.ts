@@ -2563,7 +2563,15 @@ describe('UsersService', () => {
 
     it('[T5] select có employeeCode và map output có employeeCode', async () => {
       findAndCount.mockResolvedValue([
-        [{ id: 'u1', fullName: 'A', email: 'a@x.com', employeeCode: 'EMP1' }],
+        [
+          {
+            id: 'u1',
+            fullName: 'A',
+            email: 'a@x.com',
+            employeeCode: 'EMP1',
+            avatarUrl: 'https://cdn.example.com/avatars/u1.jpg',
+          },
+        ],
         1,
       ]);
 
@@ -2579,8 +2587,29 @@ describe('UsersService', () => {
         fullName: 'A',
         email: 'a@x.com',
         employeeCode: 'EMP1',
+        avatarUrl: 'https://cdn.example.com/avatars/u1.jpg',
       });
       expect(res.total).toBe(1);
+    });
+
+    // [FIX 2026-08-09] mirror listUsersForManagement — GET /users (bare) trước đây thiếu avatarUrl.
+    it('[T9] select có avatarUrl: true, map output có avatarUrl (mirror listUsersForManagement)', async () => {
+      findAndCount.mockResolvedValue([
+        [
+          {
+            id: 'u1',
+            fullName: 'A',
+            email: 'a@x.com',
+            employeeCode: null,
+            avatarUrl: null,
+          },
+        ],
+        1,
+      ]);
+      const res = await service.listUsers({ page: 1, limit: 20 });
+      const opts = findAndCount.mock.calls[0][0];
+      expect(opts.select.avatarUrl).toBe(true);
+      expect(res.data[0].avatarUrl).toBeNull();
     });
 
     it('[T7] phân trang & sort giữ nguyên (skip/take/order)', async () => {

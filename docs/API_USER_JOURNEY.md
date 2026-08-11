@@ -21,6 +21,12 @@ Ghép 3 nguồn dữ liệu của MỘT người trong MỘT ngày thành 1 time
 
 **Auth/Permission:** JWT + permission `zones.gate_log.read` (cấp cho `BUSINESS_ADMIN`, `MANAGER`, `SYSTEM_ADMIN`).
 
+Để hiện ẢNH của sự kiện `gate`/`meeting` (xem `sourceEventId` bên dưới), FE gọi thêm
+`GET /api/v1/ivss/device-events/:eventId/snapshot` — route này yêu cầu permission RIÊNG
+`ivss.access_log.read` (từ 2026-08-09 đã cấp cho cả `BUSINESS_ADMIN`/`MANAGER`, trước đó
+chỉ `SYSTEM_ADMIN` — xem migration `20260809000001-GrantAccessLogReadToBusinessAdminManager.ts`).
+Chấp nhận token qua query string `?token=...` (dùng trực tiếp trong `<img src>`), không chỉ header.
+
 ### Query params
 
 | Field | Kiểu | Bắt buộc | Ghi chú |
@@ -50,7 +56,8 @@ Ghép 3 nguồn dữ liệu của MỘT người trong MỘT ngày thành 1 time
         "zoneName": "Cổng chính",
         "plateNumber": "30G-699.46",
         "roomName": null,
-        "meetingId": null
+        "meetingId": null,
+        "sourceEventId": "d4e5f6a7-...."
       },
       {
         "time": "2026-08-11T02:39:00.000Z",
@@ -62,6 +69,7 @@ Ghép 3 nguồn dữ liệu của MỘT người trong MỘT ngày thành 1 time
         "plateNumber": null,
         "roomName": "A102",
         "meetingId": "m-uuid-...",
+        "sourceEventId": "b2c3d4e5-....",
         "durationMs": 660000,
         "eventCount": 5
       },
@@ -73,7 +81,8 @@ Ghép 3 nguồn dữ liệu của MỘT người trong MỘT ngày thành 1 time
         "zoneName": "Khu vực kho",
         "plateNumber": null,
         "roomName": null,
-        "meetingId": null
+        "meetingId": null,
+        "sourceEventId": null
       }
     ]
   }
@@ -104,6 +113,7 @@ Ghép 3 nguồn dữ liệu của MỘT người trong MỘT ngày thành 1 time
 | `plateNumber` | string \| null | `gate` | Biển số xe; `null` với `meeting`/`zone` |
 | `roomName` | string \| null | `meeting` | Tên phòng họp; `null` với `gate`/`zone` |
 | `meetingId` | string \| null | `meeting` | ID cuộc họp liên quan (nếu resolve được) |
+| `sourceEventId` | string \| null | `gate`, `meeting` (LUÔN `null` ở `zone`) | UUID của `iot_device_events` — dùng để lấy ảnh sự kiện qua `GET /ivss/device-events/:eventId/snapshot` (xem mục Auth/Permission phía trên). `gate`: có thể `null` nếu log cũ chưa từng gắn `event_id`. `meeting`: là `id` của event **đầu tiên** trong phiên gộp (đại diện cho cả phiên, không đổi khi phiên gộp thêm event). `zone` chưa hỗ trợ ảnh trong bản này — luôn `null`, không phải lỗi |
 | `endTime` | string (UTC ISO) | chỉ `meeting` | Thời điểm kết thúc phiên có mặt (event cuối trong phiên gộp) |
 | `durationMs` | number | chỉ `meeting` | Thời lượng phiên = `endTime - time` (ms); `0` nếu phiên chỉ có 1 event |
 | `eventCount` | number | chỉ `meeting` | Số lần camera nhận diện khuôn mặt trong phiên đó — minh bạch mức độ gộp dữ liệu |

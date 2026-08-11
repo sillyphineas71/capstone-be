@@ -1754,6 +1754,7 @@ export class UsersService {
           fullName: true,
           email: true,
           employeeCode: true,
+          avatarUrl: true,
         },
         order: { fullName: 'asc' },
         skip: (page - 1) * limit,
@@ -1765,6 +1766,7 @@ export class UsersService {
       fullName: u.fullName,
       email: u.email,
       employeeCode: u.employeeCode,
+      avatarUrl: u.avatarUrl,
     }));
 
     return { data, total };
