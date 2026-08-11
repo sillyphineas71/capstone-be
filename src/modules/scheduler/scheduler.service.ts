@@ -508,7 +508,9 @@ export class SchedulerService {
    * (2 giá trị đó mô tả TRẠNG THÁI FILE lúc dừng; auto_stop_reason mô tả LÝ DO gọi dừng —
    * độc lập, có thể cùng xuất hiện, vd session tới hạn giờ NHƯNG camera cũng đang mất hình).
    */
-  @Cron(CronExpression.EVERY_15_MINUTES, {
+  // CronExpression enum không có EVERY_15_MINUTES (chỉ 5/10/30) — dùng cron string tường
+  // minh, mirror pattern ivssPortraitReconcile() ở trên.
+  @Cron('0 */15 * * * *', {
     name: 'recording-max-duration-enforce',
   })
   async recordingMaxDurationEnforce(): Promise<void> {

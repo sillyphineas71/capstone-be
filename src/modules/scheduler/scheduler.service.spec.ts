@@ -567,10 +567,10 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_ENABLED: true,
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
+      const s = await build();
       dataSourceMock.query.mockResolvedValueOnce([
         { id: 'sess-1', meeting_id: 'm-1' },
       ]);
-      const s = await build();
       await s.recordingMaxDurationEnforce();
 
       expect(recordingSessionServiceMock.stopVideo).toHaveBeenCalledWith(
@@ -597,6 +597,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_ENABLED: true,
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
+      const s = await build();
       dataSourceMock.query.mockResolvedValueOnce([
         { id: 'bad', meeting_id: 'm-1' },
         { id: 'good', meeting_id: 'm-2' },
@@ -604,7 +605,6 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
       recordingSessionServiceMock.stopVideo
         .mockRejectedValueOnce(new Error('ffmpeg concat failed'))
         .mockResolvedValueOnce({ status: 'stopped' });
-      const s = await build();
 
       await expect(s.recordingMaxDurationEnforce()).resolves.toBeUndefined();
       expect(recordingSessionServiceMock.stopVideo).toHaveBeenCalledTimes(2);
@@ -615,10 +615,10 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_ENABLED: true,
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
+      const s = await build();
       recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(
         3,
       );
-      const s = await build();
       await s.recordingMaxDurationEnforce();
 
       const [, params] = dataSourceMock.query.mock.calls[0];
@@ -630,8 +630,8 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_ENABLED: true,
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
-      dataSourceMock.query.mockRejectedValueOnce(new Error('db down'));
       const s = await build();
+      dataSourceMock.query.mockRejectedValueOnce(new Error('db down'));
       await expect(s.recordingMaxDurationEnforce()).resolves.toBeUndefined();
     });
   });
