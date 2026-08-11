@@ -212,10 +212,16 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
       // F-B/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí các cột/tham
       // số cũ (payload_json vẫn param $5, processed_status vẫn param $6).
+      // [FIX 2026-08-11, Zone Access Log đường B] zone_id THÊM Ở CUỐI ($8) — tái dùng ĐÚNG
+      // presenceZoneId đã tính ở trên (dòng 173, từ channel_presence_zone_map), KHÔNG query
+      // thêm, KHÔNG đổi logic resolve zone hiện có. NULL khi channel không map presence zone
+      // (giữ nguyên hành vi cũ cho event không thuộc zone nào). Cột phục vụ RIÊNG
+      // IvssZoneAccessLogService (đọc trực tiếp iot_device_events.zone_id) — KHÔNG đụng
+      // presenceSkipped/matchState/writeAppearEvent ở trên/dưới.
       const insRows: IdRow[] = await this.dataSource.manager.query(
         `INSERT INTO iot_device_events
-           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id)
-         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7)
+           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id, zone_id)
+         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7, $8)
          RETURNING id`,
         [
           deviceId,
@@ -225,6 +231,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
           JSON.stringify(payload),
           processedStatus,
           snapshotFileId,
+          presenceZoneId,
         ],
       );
       const sourceEventId = insRows[0]?.id ?? null;

@@ -101,6 +101,8 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     captured.find((c) => c.sql.includes('INSERT INTO iot_device_events'));
   const payloadOf = () => JSON.parse(insert()!.params[4]);
   const snapshotFileIdOf = () => insert()!.params[6];
+  // [FIX 2026-08-11, Zone Access Log đường B] zone_id THÊM Ở CUỐI ($8/params[7]).
+  const zoneIdOf = () => insert()!.params[7];
 
   // IRP-001 (#40): build service với gate realtime ON/OFF (B1 — mirror configService.get bool).
   const build = async (realtime = false) => {
@@ -336,6 +338,44 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         false,
       );
       expect(snapshotFileIdOf()).toBe('media1');
+    });
+  });
+
+  // [FIX 2026-08-11, Zone Access Log đường B] INSERT iot_device_events.zone_id — tái dùng
+  // presenceZoneId đã tính sẵn (channel_presence_zone_map), KHÔNG query thêm. Cột phục vụ
+  // IvssZoneAccessLogService — KHÔNG đụng presenceSkipped/matchState/writeAppearEvent.
+  describe('zone_id column (Zone Access Log đường B)', () => {
+    const AREA = AREA_UUID;
+
+    it('channel có map presence zone → INSERT zone_id = ĐÚNG presenceZoneId đã resolve', async () => {
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt());
+      expect(zoneIdOf()).toBe(AREA);
+    });
+
+    it('channel KHÔNG map presence zone → INSERT zone_id = null (regression, không phá event không thuộc zone nào)', async () => {
+      wire(); // KHÔNG presenceMap
+      await service.onFaceEvent(evt());
+      expect(zoneIdOf()).toBeNull();
+    });
+
+    it('SQL INSERT có cột zone_id ở CUỐI danh sách, KHÔNG đổi vị trí cột/param cũ (payload_json vẫn $5, processed_status vẫn $6)', async () => {
+      wire({ presenceMap: { '5': AREA } });
+      await service.onFaceEvent(evt());
+      expect(insert()!.sql).toContain(
+        '(device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id, zone_id)',
+      );
+      expect(insert()!.sql).toContain(
+        "VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7, $8)",
+      );
+    });
+
+    it('zone_id set độc lập với presenceSkipped/writeAppearEvent — vẫn có zone_id dù userId null (presenceSkipped=unmatched_identity, KHÔNG ghi appear)', async () => {
+      wire({ presenceMap: { '5': AREA }, user: [] }); // userId null → presenceSkipped, KHÔNG writeAppearEvent
+      await service.onFaceEvent(evt());
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(payloadOf().presenceSkipped).toBe('unmatched_identity');
+      expect(zoneIdOf()).toBe(AREA); // zone_id KHÔNG phụ thuộc presenceSkipped — luôn theo channel map
     });
   });
 

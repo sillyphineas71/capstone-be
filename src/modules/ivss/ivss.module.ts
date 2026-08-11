@@ -21,9 +21,11 @@ import { IvssHealthController } from './controllers/ivss-health.controller.js';
 import { IvssPresenceController } from './controllers/ivss-presence.controller.js';
 import { IvssOccupancyController } from './controllers/ivss-occupancy.controller.js';
 import { IvssRoomAccessController } from './controllers/ivss-room-access.controller.js';
+import { IvssZoneAccessController } from './controllers/ivss-zone-access.controller.js';
 import { IvssDeviceEventSnapshotController } from './controllers/ivss-device-event-snapshot.controller.js';
 import { IvssPortraitAdminController } from './controllers/ivss-portrait-admin.controller.js';
 import { IvssRoomAccessLogService } from './services/ivss-room-access-log.service.js';
+import { IvssZoneAccessLogService } from './services/ivss-zone-access-log.service.js';
 import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
 import { JwtQueryOrHeaderAuthGuard } from '../auth/guards/jwt-query-or-header-auth.guard.js';
 import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
@@ -62,6 +64,9 @@ import { IvssPresenceConfigService } from './services/ivss-presence-config.servi
     IvssOccupancyController,
     // RAL-001 (Màn 2): nhật ký ra/vào theo phòng — prefix `ivss/rooms`, tách hẳn Màn 1.
     IvssRoomAccessController,
+    // Zone Access Log (đường B, FIX 2026-08-11): nhật ký ra/vào theo zone khu vực —
+    // prefix `ivss/zones`, mirror IvssRoomAccessController, đọc iot_device_events.zone_id.
+    IvssZoneAccessController,
     // F-F fix: TÁCH RIÊNG khỏi IvssRoomAccessController — route ảnh snapshot cần
     // JwtQueryOrHeaderAuthGuard (fallback ?token=), 2 route access-log KHÔNG đụng.
     IvssDeviceEventSnapshotController,
@@ -85,6 +90,8 @@ import { IvssPresenceConfigService } from './services/ivss-presence-config.servi
     IvssPresenceQueryService,
     IvssPresenceReportService,
     IvssRoomAccessLogService,
+    // Zone Access Log (đường B, FIX 2026-08-11).
+    IvssZoneAccessLogService,
     // F-F: đọc ảnh snapshot của iot_device_events (F-B/F-C/F-D ghi).
     DeviceEventSnapshotService,
     // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
