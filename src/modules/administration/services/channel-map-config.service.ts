@@ -288,7 +288,52 @@ export class ChannelMapConfigService {
       await this.validateEntitiesExist(entry, normalized);
     }
 
+    await this.assertNoRoleConflict(entry, normalized);
+
     return { configValue: null, configJson: normalized };
+  }
+
+  /**
+   * [FIX 2026-08-11] Chặn LƯU nếu 1 channel bị gán trùng vai — CÙNG channelId xuất hiện ở
+   * CẢ `entry.key` (map sắp ghi) lẫn `entry.conflictsWithKey` (map đối nghịch, đọc TRỰC
+   * TIẾP từ `system_configs` vì PATCH chỉ ghi 1 key/request — payload đang gửi KHÔNG chứa
+   * map kia). CHỈ chạy khi `entry.conflictsWithKey` có giá trị (room_map ↔
+   * presence_zone_map) — 5 key còn lại (zone_map/direction_map/3 threshold) bỏ qua hoàn
+   * toàn, không query gì thêm.
+   *
+   * So `normalized` (map SẮP được lưu, không phải map cũ) với map đối nghịch HIỆN CÓ
+   * trong DB — đúng trạng thái sẽ tồn tại NẾU request này thành công.
+   */
+  private async assertNoRoleConflict(
+    entry: ChannelMapConfigEntry,
+    normalized: Record<string, string>,
+  ): Promise<void> {
+    if (!entry.conflictsWithKey) return;
+
+    const rows: Array<{ config_json: Record<string, unknown> | null }> =
+      await this.dataSource.manager.query(
+        `SELECT config_json FROM system_configs WHERE config_key = $1 AND is_active = true LIMIT 1`,
+        [entry.conflictsWithKey],
+      );
+    const otherMap = rows[0]?.config_json ?? {};
+    const conflictChannelIds = Object.keys(normalized).filter((chId) =>
+      Object.prototype.hasOwnProperty.call(otherMap, chId),
+    );
+
+    if (conflictChannelIds.length > 0) {
+      throw new BadRequestException({
+        success: false,
+        message: `Channel ${conflictChannelIds.join(', ')} đã được gán cho '${entry.conflictsWithKey}' — 1 camera chỉ nên đóng 1 vai (phòng họp HOẶC khu vực hiện diện), không thể gán cả 2. Gỡ channel khỏi 1 trong 2 map trước khi lưu.`,
+        error: {
+          code: 'CHANNEL_MAP_ROLE_CONFLICT',
+          details: {
+            key: entry.key,
+            conflictsWithKey: entry.conflictsWithKey,
+            channelIds: conflictChannelIds,
+          },
+        },
+      });
+    }
   }
 
   /** Kiểm room_id/zone_id tồn tại (chưa xoá mềm) trước khi cho ghi map. */

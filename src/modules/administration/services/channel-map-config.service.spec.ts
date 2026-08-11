@@ -182,6 +182,161 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
     });
   });
 
+  describe('upsert() — role conflict channel_room_map ↔ channel_presence_zone_map (FIX 2026-08-11)', () => {
+    const wireInsertSuccess = (configKey: string, configJson: Record<string, string>) => {
+      em.query.mockImplementation((sql: string) => {
+        if (sql.includes('SELECT id, updated_at')) return Promise.resolve([]);
+        if (sql.includes('INSERT INTO system_configs'))
+          return Promise.resolve([
+            {
+              config_key: configKey,
+              config_value: null,
+              config_json: configJson,
+              updated_at: new Date(),
+            },
+          ]);
+        return Promise.resolve([]);
+      });
+    };
+
+    it('channelId đã tồn tại trong channel_presence_zone_map → PATCH channel_room_map bị 400 CHANNEL_MAP_ROLE_CONFLICT', async () => {
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([{ config_json: { '5': ZONE_UUID } }]); // presence_zone_map đã có channel 5
+        return Promise.resolve([]);
+      });
+
+      await expect(
+        service.upsert('ivss.channel_room_map', { '5': ROOM_UUID }, 'u1'),
+      ).rejects.toMatchObject({
+        response: { error: { code: 'CHANNEL_MAP_ROLE_CONFLICT' } },
+      });
+    });
+
+    it('đối xứng 2 chiều: channelId đã tồn tại trong channel_room_map → PATCH channel_presence_zone_map cũng bị 400', async () => {
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM zones')) return Promise.resolve([{ id: ZONE_UUID }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([{ config_json: { '5': ROOM_UUID } }]); // room_map đã có channel 5
+        return Promise.resolve([]);
+      });
+
+      await expect(
+        service.upsert(
+          'ivss.channel_presence_zone_map',
+          { '5': ZONE_UUID },
+          'u1',
+        ),
+      ).rejects.toMatchObject({
+        response: { error: { code: 'CHANNEL_MAP_ROLE_CONFLICT' } },
+      });
+    });
+
+    it('error liệt kê rõ channelIds xung đột + conflictsWithKey', async () => {
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([
+            { config_json: { '5': ZONE_UUID, '6': ZONE_UUID } },
+          ]);
+        return Promise.resolve([]);
+      });
+
+      await expect(
+        service.upsert(
+          'ivss.channel_room_map',
+          { '5': ROOM_UUID, '6': ROOM_UUID, '9': ROOM_UUID },
+          'u1',
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          error: {
+            code: 'CHANNEL_MAP_ROLE_CONFLICT',
+            details: {
+              key: 'ivss.channel_room_map',
+              conflictsWithKey: 'ivss.channel_presence_zone_map',
+              channelIds: ['5', '6'], // '9' KHÔNG xung đột — không liệt kê nhầm
+            },
+          },
+        },
+      });
+    });
+
+    it('channelId hoàn toàn mới, không trùng gì → thành công như cũ (regression)', async () => {
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM system_configs'))
+          return Promise.resolve([{ config_json: { '9': ZONE_UUID } }]); // channel khác, không trùng
+        return Promise.resolve([]);
+      });
+      wireInsertSuccess('ivss.channel_room_map', { '5': ROOM_UUID });
+
+      const result = await service.upsert(
+        'ivss.channel_room_map',
+        { '5': ROOM_UUID },
+        'u1',
+      );
+      expect(result.value).toEqual({ '5': ROOM_UUID });
+    });
+
+    it('map đối nghịch chưa từng được cấu hình (DB rỗng) → không lỗi, coi như không có gì để giao nhau', async () => {
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM system_configs')) return Promise.resolve([]); // chưa có row nào
+        return Promise.resolve([]);
+      });
+      wireInsertSuccess('ivss.channel_room_map', { '5': ROOM_UUID });
+
+      const result = await service.upsert(
+        'ivss.channel_room_map',
+        { '5': ROOM_UUID },
+        'u1',
+      );
+      expect(result.value).toEqual({ '5': ROOM_UUID });
+    });
+
+    it('key KHÔNG có conflictsWithKey (channel_zone_map) → KHÔNG query map đối nghịch, không bị ảnh hưởng', async () => {
+      const calls: string[] = [];
+      dataSource.manager.query.mockImplementation((sql: string) => {
+        calls.push(sql);
+        if (sql.includes('FROM zones')) return Promise.resolve([{ id: ZONE_UUID }]);
+        return Promise.resolve([]);
+      });
+      wireInsertSuccess('ivss.channel_zone_map', { '5': ZONE_UUID });
+
+      const result = await service.upsert(
+        'ivss.channel_zone_map',
+        { '5': ZONE_UUID },
+        'u1',
+      );
+      expect(result.value).toEqual({ '5': ZONE_UUID });
+      expect(calls.some((sql) => sql.includes('FROM system_configs'))).toBe(
+        false,
+      );
+    });
+
+    it('key threshold (attendance.late_grace_minutes) → KHÔNG có conflictsWithKey, KHÔNG query gì (giữ nguyên hiệu năng)', async () => {
+      wireInsertSuccess('attendance.late_grace_minutes', {} as any);
+      em.query.mockImplementation((sql: string) => {
+        if (sql.includes('SELECT id, updated_at')) return Promise.resolve([]);
+        if (sql.includes('INSERT INTO system_configs'))
+          return Promise.resolve([
+            {
+              config_key: 'attendance.late_grace_minutes',
+              config_value: '5',
+              config_json: null,
+              updated_at: new Date(),
+            },
+          ]);
+        return Promise.resolve([]);
+      });
+
+      await service.upsert('attendance.late_grace_minutes', 5, 'u1');
+      expect(dataSource.manager.query).not.toHaveBeenCalled();
+    });
+  });
+
   describe('upsert() — map key: channel_direction_map', () => {
     it('direction hợp lệ (enter/leave/seen) → 200', async () => {
       em.query.mockImplementation((sql: string) => {

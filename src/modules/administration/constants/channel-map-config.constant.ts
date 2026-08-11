@@ -29,6 +29,15 @@ export interface ChannelMapConfigEntry {
   mapEntryKind?: MapEntryKind;
   configGroup: string;
   description: string;
+  /**
+   * [FIX 2026-08-11] Key map ĐỐI NGHỊCH — 1 channel KHÔNG được xuất hiện đồng thời ở CẢ
+   * key này lẫn `conflictsWithKey` (1 camera chỉ nên đóng 1 vai: phòng họp HOẶC khu vực
+   * hiện diện). Khai 2 CHIỀU (cả 2 entry trỏ nhau) để `ChannelMapConfigService` chặn được
+   * dù admin sửa key nào trước. Trước đây chỉ có `logger.warn()` lúc ĐỌC ở
+   * `ivss-presence-ingestion.service.ts` — đây là chặn LƯU tại nguồn, không thay thế WARN
+   * đó (vẫn giữ làm lưới bắt bù dữ liệu cũ trót ghi trước khi có validate này).
+   */
+  conflictsWithKey?: string;
 }
 
 export const CHANNEL_MAP_CONFIG_ENTRIES: readonly ChannelMapConfigEntry[] = [
@@ -37,6 +46,7 @@ export const CHANNEL_MAP_CONFIG_ENTRIES: readonly ChannelMapConfigEntry[] = [
     kind: 'map',
     mapEntryKind: 'room_uuid',
     configGroup: 'ivss',
+    conflictsWithKey: 'ivss.channel_presence_zone_map',
     description:
       'Channel camera IVSS → phòng họp (room_id). Đọc bởi ivss-occupancy-ingest.service.ts, ivss-presence-ingestion.service.ts.',
   },
@@ -53,6 +63,7 @@ export const CHANNEL_MAP_CONFIG_ENTRIES: readonly ChannelMapConfigEntry[] = [
     kind: 'map',
     mapEntryKind: 'zone_uuid',
     configGroup: 'ivss',
+    conflictsWithKey: 'ivss.channel_room_map',
     description:
       'Channel camera IVSS → zone hiện diện (zone_id). Đọc bởi ivss-presence-ingestion.service.ts, ivss-occupancy-ingest.service.ts, vehicle-control-alert.service.ts.',
   },
