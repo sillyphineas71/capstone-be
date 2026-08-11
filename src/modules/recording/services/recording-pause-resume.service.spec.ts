@@ -2,6 +2,7 @@ import {
   ConflictException,
   NotFoundException,
   BadGatewayException,
+  ForbiddenException,
 } from '@nestjs/common';
 import * as os from 'os';
 import { RecordingSessionService } from './recording-session.service.js';
@@ -14,7 +15,14 @@ import { RecordingSessionService } from './recording-session.service.js';
 describe('RecordingSessionService pause/resume (UC-114/115)', () => {
   function makeService() {
     const query = jest.fn();
-    const dataSource = { manager: { query } };
+    const manager = { query };
+    // [FIX 2026-08-11, R3/R4/R8] pauseVideo()/resumeVideo() giờ bọc thân hàm trong
+    // dataSource.transaction() (khoá theo sessionId) — mock gọi callback với CHÍNH
+    // `manager` ở trên để mọi test hiện có (mock query trực tiếp) chạy đúng KHÔNG đổi.
+    const dataSource = {
+      manager,
+      transaction: jest.fn((cb: (m: any) => unknown) => cb(manager)),
+    };
     const configService = { get: jest.fn(() => os.tmpdir()) };
     const processManager = {
       markStopping: jest.fn(),
@@ -34,10 +42,16 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
+  // [FIX 2026-08-11] Mọi transaction giờ mở đầu bằng 1 câu SELECT pg_advisory_xact_lock —
+  // helper trả giá trị placeholder (nội dung không được app code dùng tới) để prepend vào
+  // MỌI chuỗi mockResolvedValueOnce bên dưới, giữ đúng thứ tự các call tiếp theo.
+  const lockOk = () => [{}];
+
   // ---------- PAUSE (UC-114) ----------
   it('[P1] pause OK → markStopping+stop, status=paused, segments push, paused_at set', async () => {
     const { service, query, processManager } = makeService();
     query
+      .mockResolvedValueOnce(lockOk()) // pg_advisory_xact_lock
       .mockResolvedValueOnce([
         {
           id: 's1',
@@ -56,7 +70,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
     expect(res.status).toBe('paused');
     expect(res.pauseCount).toBe(1);
 
-    const updateArgs = (query.mock.calls[1] as unknown[][])[1];
+    const updateArgs = (query.mock.calls[2] as unknown[][])[1];
     expect(updateArgs[0]).toBe('paused');
     const meta = JSON.parse(updateArgs[1] as string) as {
       segments: string[];
@@ -70,7 +84,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
 
   it('[P2] pause khi ≠recording → 409 RECORDING_NOT_RECORDING', async () => {
     const { service, query } = makeService();
-    query.mockResolvedValueOnce([
+    query.mockResolvedValueOnce(lockOk()).mockResolvedValueOnce([
       {
         id: 's1',
         meeting_id: 'm1',
@@ -86,7 +100,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
 
   it('[P3] pause session không tồn tại/khác meeting → 404', async () => {
     const { service, query } = makeService();
-    query.mockResolvedValueOnce([]);
+    query.mockResolvedValueOnce(lockOk()).mockResolvedValueOnce([]);
     await expect(service.pauseVideo('m1', 's1')).rejects.toThrow(
       NotFoundException,
     );
@@ -95,6 +109,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
   it('[P9] (BR-05) markStopping gọi TRƯỚC stop', async () => {
     const { service, query, processManager } = makeService();
     query
+      .mockResolvedValueOnce(lockOk())
       .mockResolvedValueOnce([
         {
           id: 's1',
@@ -109,6 +124,56 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
     const markOrder = processManager.markStopping.mock.invocationCallOrder[0];
     const stopOrder = processManager.stop.mock.invocationCallOrder[0];
     expect(markOrder).toBeLessThan(stopOrder);
+  });
+
+  // ---------- PAUSE — R10 ownership ----------
+  it('[P10] host của meeting → pause OK (không phải admin)', async () => {
+    const { service, query } = makeService();
+    query
+      .mockResolvedValueOnce([{ id: 'u1' }]) // assertHostOrAdmin: host check
+      .mockResolvedValueOnce(lockOk())
+      .mockResolvedValueOnce([
+        {
+          id: 's1',
+          meeting_id: 'm1',
+          status: 'recording',
+          storage_path: '/rec/s1.mp4',
+          metadata_json: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const res = await service.pauseVideo('m1', 's1', 'u1');
+    expect(res.status).toBe('paused');
+  });
+
+  it('[P11] không phải host và không phải admin → 403 PERMISSION_DENIED', async () => {
+    const { service, query } = makeService();
+    query
+      .mockResolvedValueOnce([]) // host check: rỗng
+      .mockResolvedValueOnce([{ role_code: 'EMPLOYEE' }]); // role check: không phải admin
+    await expect(service.pauseVideo('m1', 's1', 'u2')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('[P12] SYSTEM_ADMIN không phải host → vẫn pause OK (bypass)', async () => {
+    const { service, query } = makeService();
+    query
+      .mockResolvedValueOnce([]) // host check: rỗng
+      .mockResolvedValueOnce([{ role_code: 'SYSTEM_ADMIN' }])
+      .mockResolvedValueOnce(lockOk())
+      .mockResolvedValueOnce([
+        {
+          id: 's1',
+          meeting_id: 'm1',
+          status: 'recording',
+          storage_path: '/rec/s1.mp4',
+          metadata_json: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const res = await service.pauseVideo('m1', 's1', 'admin1');
+    expect(res.status).toBe('paused');
   });
 
   // ---------- RESUME (UC-115) ----------
@@ -140,6 +205,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
       .spyOn(service as never, 'buildRtspUrl')
       .mockReturnValue('rtsp://fake' as never);
     query
+      .mockResolvedValueOnce(lockOk()) // pg_advisory_xact_lock
       .mockResolvedValueOnce([pausedSession()]) // SELECT session
       .mockResolvedValueOnce(deviceRow) // SELECT device
       .mockResolvedValueOnce([]); // UPDATE
@@ -152,7 +218,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
     expect(res.status).toBe('recording');
     expect(res.pausedDurationSeconds).toBeGreaterThanOrEqual(9); // ~10s pause
 
-    const updateArgs = (query.mock.calls[2] as unknown[][])[1];
+    const updateArgs = (query.mock.calls[3] as unknown[][])[1];
     expect(updateArgs[0]).toBe('recording');
     const meta = JSON.parse(updateArgs[3] as string) as {
       segments: string[];
@@ -164,7 +230,9 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
 
   it('[P5] resume khi ≠paused → 409 RECORDING_NOT_PAUSED', async () => {
     const { service, query } = makeService();
-    query.mockResolvedValueOnce([pausedSession({ status: 'recording' })]);
+    query
+      .mockResolvedValueOnce(lockOk())
+      .mockResolvedValueOnce([pausedSession({ status: 'recording' })]);
     await expect(service.resumeVideo('m1', 's1')).rejects.toThrow(
       ConflictException,
     );
@@ -179,6 +247,7 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
       .spyOn(service as never, 'buildRtspUrl')
       .mockReturnValue('rtsp://fake' as never);
     query
+      .mockResolvedValueOnce(lockOk()) // pg_advisory_xact_lock
       .mockResolvedValueOnce([pausedSession()]) // SELECT session
       .mockResolvedValueOnce(deviceRow); // SELECT device
 
@@ -187,7 +256,56 @@ describe('RecordingSessionService pause/resume (UC-114/115)', () => {
     );
     // Đã stop process segment mới hỏng
     expect(processManager.stop).toHaveBeenCalledWith('s1');
-    // KHÔNG có query UPDATE thứ 3 (status vẫn paused trong DB)
-    expect(query).toHaveBeenCalledTimes(2);
+    // KHÔNG có query UPDATE thứ 4 (status vẫn paused trong DB) — lock + SELECT session +
+    // SELECT device = 3 call, KHÔNG có UPDATE.
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  // ---------- RESUME — R10 ownership ----------
+  it('[P13] host của meeting → resume OK (không phải admin)', async () => {
+    const { service, query } = makeService();
+    jest
+      .spyOn(service as never, 'probeStart')
+      .mockResolvedValue('capturing' as never);
+    jest
+      .spyOn(service as never, 'buildRtspUrl')
+      .mockReturnValue('rtsp://fake' as never);
+    query
+      .mockResolvedValueOnce([{ id: 'u1' }]) // assertHostOrAdmin: host check
+      .mockResolvedValueOnce(lockOk())
+      .mockResolvedValueOnce([pausedSession()])
+      .mockResolvedValueOnce(deviceRow)
+      .mockResolvedValueOnce([]);
+    const res = await service.resumeVideo('m1', 's1', 'u1');
+    expect(res.status).toBe('recording');
+  });
+
+  it('[P14] không phải host và không phải admin → 403 PERMISSION_DENIED', async () => {
+    const { service, query } = makeService();
+    query
+      .mockResolvedValueOnce([]) // host check: rỗng
+      .mockResolvedValueOnce([{ role_code: 'EMPLOYEE' }]); // role check: không phải admin
+    await expect(service.resumeVideo('m1', 's1', 'u2')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('[P15] SYSTEM_ADMIN không phải host → vẫn resume OK (bypass)', async () => {
+    const { service, query } = makeService();
+    jest
+      .spyOn(service as never, 'probeStart')
+      .mockResolvedValue('capturing' as never);
+    jest
+      .spyOn(service as never, 'buildRtspUrl')
+      .mockReturnValue('rtsp://fake' as never);
+    query
+      .mockResolvedValueOnce([]) // host check: rỗng
+      .mockResolvedValueOnce([{ role_code: 'SYSTEM_ADMIN' }])
+      .mockResolvedValueOnce(lockOk())
+      .mockResolvedValueOnce([pausedSession()])
+      .mockResolvedValueOnce(deviceRow)
+      .mockResolvedValueOnce([]);
+    const res = await service.resumeVideo('m1', 's1', 'admin1');
+    expect(res.status).toBe('recording');
   });
 });

@@ -51,8 +51,18 @@ describe('RecordingSessionService (REC-002)', () => {
   });
 
   // query() router theo SQL
+  // [FIX 2026-08-11, R10] mặc định host=[{id:'u1'}] (userId 'u1' dùng khắp file này được coi
+  // là host/organizer) để MỌI test hiện có (không liên quan ownership) tiếp tục qua được
+  // assertHostOrAdmin() không đổi hành vi; test ownership riêng override host/role.
   const makeQuery =
-    (opts: { meeting?: any[]; device?: any[]; active?: any[]; cfg?: any[] }) =>
+    (opts: {
+      meeting?: any[];
+      device?: any[];
+      active?: any[];
+      cfg?: any[];
+      host?: any[];
+      role?: any[];
+    }) =>
     (sql: string) => {
       if (sql.includes('FROM meetings'))
         return Promise.resolve(opts.meeting ?? [{ id: 'm1' }]);
@@ -62,6 +72,10 @@ describe('RecordingSessionService (REC-002)', () => {
         return Promise.resolve(opts.active ?? []);
       if (sql.includes('FROM recording_configs'))
         return Promise.resolve(opts.cfg ?? []);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(opts.host ?? [{ id: 'u1' }]);
+      if (sql.includes('FROM user_roles'))
+        return Promise.resolve(opts.role ?? []);
       return Promise.resolve([]);
     };
 
@@ -78,6 +92,12 @@ describe('RecordingSessionService (REC-002)', () => {
         }),
       },
     };
+    // [FIX 2026-08-11, R1] startVideo() giờ bọc bước 4+8 trong dataSource.transaction() —
+    // mock gọi callback với CHÍNH dataSourceMock.manager (mirror vehicle-resolve.service.spec.ts)
+    // để mọi test hiện có (đã mock dataSourceMock.manager.query/create/save) tiếp tục chạy đúng.
+    dataSourceMock.transaction = jest.fn((cb: (m: any) => unknown) =>
+      cb(dataSourceMock.manager),
+    );
     managerMock = {
       start: jest.fn(),
       has: jest.fn().mockReturnValue(true),
@@ -250,6 +270,36 @@ describe('RecordingSessionService (REC-002)', () => {
     expect(redacted).not.toContain('p%40ss');
     expect(redacted).not.toContain(raw);
   });
+
+  // ─── R10: ownership (Host/Organizer meeting hoặc Admin) ───
+  it('[R10] host của meeting → 201 (không phải admin)', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [{ id: 'u1' }], role: [] }),
+    );
+    const r = await service.startVideo('m1', { cameraDeviceId: 'cam-1' }, 'u1');
+    expect(r.status).toBe('recording');
+  });
+
+  it('[R10] không phải host và không phải admin → 403 PERMISSION_DENIED', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], role: [{ role_code: 'EMPLOYEE' }] }),
+    );
+    await expect(
+      service.startVideo('m1', { cameraDeviceId: 'cam-1' }, 'u2'),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('[R10] SYSTEM_ADMIN không phải host → vẫn 201 (bypass)', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      makeQuery({ host: [], role: [{ role_code: 'SYSTEM_ADMIN' }] }),
+    );
+    const r = await service.startVideo(
+      'm1',
+      { cameraDeviceId: 'cam-1' },
+      'admin1',
+    );
+    expect(r.status).toBe('recording');
+  });
 });
 
 // ─── REC-003: stopVideo ───
@@ -271,11 +321,18 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
   });
 
   // manager.query router: SELECT recording_sessions → session; UPDATE → [].
+  // [FIX 2026-08-11, R10] mặc định host=[{id:'u1'}] (userId 'u1' dùng khắp block này coi
+  // như host/organizer) để MỌI test hiện có tiếp tục qua assertHostOrAdmin() không đổi
+  // hành vi; test ownership riêng override qua opts.host/opts.role.
   const selectReturns =
-    (session: any[] | null) =>
+    (session: any[] | null, opts: { host?: any[]; role?: any[] } = {}) =>
     (sql: string): Promise<any[]> => {
       if (sql.includes('SELECT') && sql.includes('recording_sessions'))
         return Promise.resolve(session ?? []);
+      if (sql.includes('FROM meeting_participants'))
+        return Promise.resolve(opts.host ?? [{ id: 'u1' }]);
+      if (sql.includes('FROM user_roles'))
+        return Promise.resolve(opts.role ?? []);
       return Promise.resolve([]);
     };
 
@@ -298,6 +355,12 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
       manager: { query: jest.fn() },
       createQueryRunner: jest.fn(() => qr),
     };
+    // [FIX 2026-08-11, R8] stopVideo() giờ bọc TOÀN BỘ thân hàm trong dataSource.transaction()
+    // (khoá theo sessionId) — mock gọi callback với dataSourceMock.manager, giữ nguyên mọi
+    // test hiện có (đã mock dataSourceMock.manager.query qua selectReturns()).
+    dataSourceMock.transaction = jest.fn((cb: (m: any) => unknown) =>
+      cb(dataSourceMock.manager),
+    );
     managerMock = {
       has: jest.fn().mockReturnValue(true),
       stop: jest.fn().mockResolvedValue('exited'),
@@ -428,6 +491,44 @@ describe('RecordingSessionService.stopVideo (REC-003)', () => {
     );
     expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(qr.release).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── R10: ownership (Host/Organizer meeting hoặc Admin) ───
+  it('[R10] host của meeting → 200 (không phải admin)', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()], { host: [{ id: 'u1' }], role: [] }),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+    const r = await service.stopVideo('m1', 'sess-1', 'u1');
+    expect(r.status).toBe('stopped');
+  });
+
+  it('[R10] không phải host và không phải admin → 403 PERMISSION_DENIED', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()], {
+        host: [],
+        role: [{ role_code: 'EMPLOYEE' }],
+      }),
+    );
+    await expect(service.stopVideo('m1', 'sess-1', 'u2')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('[R10] SYSTEM_ADMIN không phải host → vẫn 200 (bypass)', async () => {
+    dataSourceMock.manager.query.mockImplementation(
+      selectReturns([baseSession()], {
+        host: [],
+        role: [{ role_code: 'SYSTEM_ADMIN' }],
+      }),
+    );
+    qr.query
+      .mockResolvedValueOnce([{ id: 'media-1' }])
+      .mockResolvedValueOnce(undefined);
+    const r = await service.stopVideo('m1', 'sess-1', 'admin1');
+    expect(r.status).toBe('stopped');
   });
 
   // ─── REC-005: ffprobe metadata ───

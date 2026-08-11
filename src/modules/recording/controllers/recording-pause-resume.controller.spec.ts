@@ -31,10 +31,12 @@ describe('RecordingSessionController pause/resume (UC-114/115)', () => {
 
   afterEach(() => jest.clearAllMocks());
 
+  const reqWith = (userId: string | null) => ({ user: { userId } }) as any;
+
   it('[C1] pause gọi service đúng + envelope', async () => {
     mockService.pauseVideo.mockResolvedValue({ status: 'paused' });
-    const res = await controller.pauseVideo('m1', 's1');
-    expect(mockService.pauseVideo).toHaveBeenCalledWith('m1', 's1');
+    const res = await controller.pauseVideo(reqWith('u1'), 'm1', 's1');
+    expect(mockService.pauseVideo).toHaveBeenCalledWith('m1', 's1', 'u1');
     expect(res).toEqual({
       success: true,
       message: 'Video recording paused',
@@ -44,13 +46,25 @@ describe('RecordingSessionController pause/resume (UC-114/115)', () => {
 
   it('[C2] resume gọi service đúng + envelope', async () => {
     mockService.resumeVideo.mockResolvedValue({ status: 'recording' });
-    const res = await controller.resumeVideo('m1', 's1');
-    expect(mockService.resumeVideo).toHaveBeenCalledWith('m1', 's1');
+    const res = await controller.resumeVideo(reqWith('u1'), 'm1', 's1');
+    expect(mockService.resumeVideo).toHaveBeenCalledWith('m1', 's1', 'u1');
     expect(res).toEqual({
       success: true,
       message: 'Video recording resumed',
       data: { status: 'recording' },
     });
+  });
+
+  it('[C5] pause: userId lấy từ req.user.sub khi thiếu userId', async () => {
+    mockService.pauseVideo.mockResolvedValue({ status: 'paused' });
+    await controller.pauseVideo({ user: { sub: 'u2' } } as any, 'm1', 's1');
+    expect(mockService.pauseVideo).toHaveBeenCalledWith('m1', 's1', 'u2');
+  });
+
+  it('[C6] resume: userId = null khi req.user rỗng (không throw)', async () => {
+    mockService.resumeVideo.mockResolvedValue({ status: 'recording' });
+    await controller.resumeVideo({} as any, 'm1', 's1');
+    expect(mockService.resumeVideo).toHaveBeenCalledWith('m1', 's1', null);
   });
 
   // eslint-disable-next-line @typescript-eslint/unbound-method

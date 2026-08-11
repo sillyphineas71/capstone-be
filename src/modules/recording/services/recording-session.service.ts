@@ -90,6 +90,13 @@ export class RecordingSessionService {
       });
     }
 
+    // [FIX 2026-08-11, R10] Ownership: permission 'recording.video.start' được cấp rộng
+    // (kể cả EMPLOYEE) — lớp thứ 2 này đảm bảo chỉ Host/Organizer của CHÍNH meeting này
+    // hoặc Admin mới được bắt đầu ghi hình, không phải bất kỳ ai có permission chung.
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId, 'bắt đầu ghi hình');
+    }
+
     // 2. Camera (body.cameraDeviceId)
     const deviceRows: Array<{
       id: string;
@@ -123,58 +130,76 @@ export class RecordingSessionService {
       });
     }
 
-    // 4. Active session?
-    const activeRows: Array<{ id: string }> =
-      await this.dataSource.manager.query(
-        `SELECT id FROM recording_sessions
-         WHERE meeting_id = $1
-           AND status IN ('starting','recording','paused')
-           AND stopped_at IS NULL
-         LIMIT 1`,
-        [meetingId],
-      );
-    if (activeRows && activeRows.length > 0) {
-      throw new ConflictException({
-        code: 'RECORDING_ALREADY_ACTIVE',
-        message: 'A recording session is already active for this meeting.',
-      });
-    }
+    // [FIX 2026-08-11, R1] Bọc bước 4 (check active) + bước 8 (tạo session) trong 1
+    // transaction, khoá pg_advisory_xact_lock theo meetingId NGAY ĐẦU — 2 request start
+    // đồng thời cùng meeting giờ xếp hàng (transaction sau đợi transaction trước COMMIT rồi
+    // mới SELECT bước 4, luôn thấy session vừa tạo) — mirror vehicle-resolve.service.ts.
+    // Bước 9 (spawn/probe, side-effect ngoài DB) CHỦ Ý nằm NGOÀI transaction — không giữ
+    // connection/lock trong lúc chờ process ngoài.
+    const { sessionId, outPath, startedAt } = await this.dataSource.transaction(
+      async (manager) => {
+        await manager.query(
+          `SELECT pg_advisory_xact_lock(hashtext('recording_start_' || $1::text))`,
+          [meetingId],
+        );
 
-    // 5. Link recording_config (best-effort)
-    const cfgRows: Array<{ id: string }> = await this.dataSource.manager.query(
-      'SELECT id FROM recording_configs WHERE meeting_id = $1 LIMIT 1',
-      [meetingId],
+        // 4. Active session? (FRESH read SAU KHI có lock — KHÔNG dùng giá trị đọc trước lock).
+        const activeRows: Array<{ id: string }> = await manager.query(
+          `SELECT id FROM recording_sessions
+           WHERE meeting_id = $1
+             AND status IN ('starting','recording','paused')
+             AND stopped_at IS NULL
+           LIMIT 1`,
+          [meetingId],
+        );
+        if (activeRows && activeRows.length > 0) {
+          throw new ConflictException({
+            code: 'RECORDING_ALREADY_ACTIVE',
+            message:
+              'A recording session is already active for this meeting.',
+          });
+        }
+
+        // 5. Link recording_config (best-effort)
+        const cfgRows: Array<{ id: string }> = await manager.query(
+          'SELECT id FROM recording_configs WHERE meeting_id = $1 LIMIT 1',
+          [meetingId],
+        );
+        const recordingConfigId = cfgRows?.[0]?.id ?? null;
+
+        // 7. storage path
+        const baseDir = this.configService.get<string>(
+          'RECORDING_STORAGE_PATH',
+          './storage/recordings',
+        );
+        const sessionId = randomUUID();
+        const outPath = path.join(path.resolve(baseDir), `${sessionId}.mp4`);
+        fs.mkdirSync(path.resolve(baseDir), { recursive: true });
+
+        // 8. Tạo recording_session (status=recording)
+        const startedAt = new Date();
+        const session = manager.create(RecordingSessionEntity, {
+          id: sessionId,
+          meetingId,
+          recordingConfigId,
+          sessionType: RecordingSessionType.VIDEO,
+          sourceType: RecordingSourceType.IP_CAMERA,
+          deviceId: device.id,
+          startedAt,
+          status: RecordingSessionStatus.RECORDING,
+          startedBy: userId,
+          storageProvider: 'local',
+          storagePath: outPath,
+        });
+        await manager.save(RecordingSessionEntity, session);
+
+        return { sessionId, outPath, startedAt };
+      },
     );
-    const recordingConfigId = cfgRows?.[0]?.id ?? null;
 
-    // 6. Dựng URL (in-memory; KHÔNG log/lưu). Decrypt password nếu có.
+    // 6. Dựng URL (in-memory; KHÔNG log/lưu). Decrypt password nếu có. KHÔNG cần nằm trong
+    // transaction (không đụng DB), giữ ngoài để lock giải phóng sớm nhất có thể.
     const url = this.buildRtspUrl(cfg);
-
-    // 7. storage path
-    const baseDir = this.configService.get<string>(
-      'RECORDING_STORAGE_PATH',
-      './storage/recordings',
-    );
-    const sessionId = randomUUID();
-    const outPath = path.join(path.resolve(baseDir), `${sessionId}.mp4`);
-    fs.mkdirSync(path.resolve(baseDir), { recursive: true });
-
-    // 8. Tạo recording_session (status=recording)
-    const startedAt = new Date();
-    const session = this.dataSource.manager.create(RecordingSessionEntity, {
-      id: sessionId,
-      meetingId,
-      recordingConfigId,
-      sessionType: RecordingSessionType.VIDEO,
-      sourceType: RecordingSourceType.IP_CAMERA,
-      deviceId: device.id,
-      startedAt,
-      status: RecordingSessionStatus.RECORDING,
-      startedBy: userId,
-      storageProvider: 'local',
-      storagePath: outPath,
-    });
-    await this.dataSource.manager.save(RecordingSessionEntity, session);
 
     // 9. Spawn ffmpeg + probe no-data (REC-007): exit→failed; file>0→recording; hết cửa sổ & file 0→no_data.
     this.processManager.start(sessionId, url, outPath);
@@ -261,127 +286,154 @@ export class RecordingSessionService {
     mediaFileId: string | null;
     captured: boolean;
   }> {
-    // 1. Load session
-    const rows: Array<{
-      id: string;
-      meeting_id: string;
-      status: string;
-      storage_path: string | null;
-      started_at: string | Date;
-      paused_duration_seconds: number | null;
-      metadata_json: Record<string, unknown> | null;
-    }> = await this.dataSource.manager.query(
-      `SELECT id, meeting_id, status, storage_path, started_at,
-              paused_duration_seconds, metadata_json
-       FROM recording_sessions WHERE id = $1`,
-      [sessionId],
-    );
-    const session = rows?.[0];
-    if (!session || session.meeting_id !== meetingId) {
-      throw new NotFoundException({
-        code: 'RECORDING_SESSION_NOT_FOUND',
-        message: 'Recording session not found.',
-      });
+    // [FIX 2026-08-11, R10] Ownership: check TRƯỚC transaction/lock (không cần lock cho 1
+    // permission check) — chỉ Host/Organizer của meeting hoặc Admin được dừng ghi hình.
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId, 'dừng ghi hình');
     }
 
-    // 2. Active?
-    const activeStatuses = [
-      RecordingSessionStatus.STARTING,
-      RecordingSessionStatus.RECORDING,
-      RecordingSessionStatus.PAUSED,
-    ];
-    if (!activeStatuses.includes(session.status as RecordingSessionStatus)) {
-      throw new ConflictException({
-        code: 'RECORDING_NOT_ACTIVE',
-        message: 'Recording session is not active.',
-      });
-    }
-
-    // 3. Dừng tiến trình. UC-114/115: paused → process đã dừng lúc pause (KHÔNG stop lại,
-    //    KHÔNG coi là orphan). recording/starting → stop graceful; không handle → orphan.
-    let stopResult: 'exited' | 'killed' | 'orphan' | 'skipped_paused';
-    if (
-      (session.status as RecordingSessionStatus) ===
-      RecordingSessionStatus.PAUSED
-    ) {
-      stopResult = 'skipped_paused';
-    } else {
-      stopResult = this.processManager.has(sessionId)
-        ? await this.processManager.stop(sessionId)
-        : 'orphan';
-    }
-    const isOrphan = stopResult === 'orphan';
-
-    // 4. Chốt file (đợi exit ở bước 3 xong mới đọc).
-    const stoppedAt = new Date();
-    const startedAt = new Date(session.started_at);
-    const paused = session.paused_duration_seconds ?? 0;
-    const durationSeconds = Math.max(
-      0,
-      Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
-    );
-
-    const baseMeta = session.metadata_json ?? {};
-    const metadata = isOrphan ? { ...baseMeta, orphan_stop: true } : baseMeta;
-
-    // UC-114/115: session có segment (đã pause/resume) → concat N segment → 1 file cuối.
-    //   Session 0-pause (segments rỗng) → resolveStopFile trả storage_path cũ (LUỒNG CŨ Y HỆT — BR-06).
-    const { storagePath, cleanup: cleanupSegments } =
-      await this.resolveStopFile(sessionId, session);
-    const exists = !!storagePath && fs.existsSync(storagePath);
-    const size = exists ? fs.statSync(storagePath).size : 0;
-
-    // 5a. File thiếu / rỗng → stopped nhưng KHÔNG tạo media_files.
-    if (!exists || size === 0) {
-      await this.dataSource.manager.query(
-        `UPDATE recording_sessions
-         SET status = $1, stopped_at = $2, stopped_by = $3,
-             duration_seconds = $4, error_message = $5, metadata_json = $6
-         WHERE id = $7`,
-        [
-          RecordingSessionStatus.STOPPED,
-          stoppedAt,
-          userId,
-          durationSeconds,
-          'empty file',
-          JSON.stringify(metadata),
-          sessionId,
-        ],
+    // [FIX 2026-08-11, R8 — CRUX] Khoá + đọc-kiểm-ghi TOÀN BỘ trong 1 transaction, GIỮ lock
+    // xuyên suốt tới UPDATE cuối cùng (kể cả nhánh finalizeFileToStopped) — KHÔNG chỉ khoá
+    // phần quyết định rồi thả sớm. Lý do: nếu thả lock sau bước đọc, 1 pauseVideo() xen vào
+    // ngay sau đó (trước khi UPDATE cuối của stopVideo chạy) vẫn có thể ghi đè
+    // status='paused' + segment mới, rồi bị UPDATE cuối của stopVideo (dùng snapshot CŨ) ghi
+    // đè ngược lại → mất đúng segment vừa pause xong. Giữ lock tới hết đảm bảo pauseVideo()
+    // (cùng khoá sessionId) HOẶC chạy xong TRƯỚC (stopVideo thấy state mới nhất) HOẶC bị chặn
+    // chờ tới khi stopVideo COMMIT xong (không còn cửa sổ xen giữa).
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('recording_session_' || $1::text))`,
+        [sessionId],
       );
+
+      // 1. Load session (FRESH read SAU KHI có lock — KHÔNG dùng snapshot đọc trước lock).
+      const rows: Array<{
+        id: string;
+        meeting_id: string;
+        status: string;
+        storage_path: string | null;
+        started_at: string | Date;
+        paused_duration_seconds: number | null;
+        metadata_json: Record<string, unknown> | null;
+      }> = await manager.query(
+        `SELECT id, meeting_id, status, storage_path, started_at,
+                paused_duration_seconds, metadata_json
+         FROM recording_sessions WHERE id = $1`,
+        [sessionId],
+      );
+      const session = rows?.[0];
+      if (!session || session.meeting_id !== meetingId) {
+        throw new NotFoundException({
+          code: 'RECORDING_SESSION_NOT_FOUND',
+          message: 'Recording session not found.',
+        });
+      }
+
+      // 2. Active?
+      const activeStatuses = [
+        RecordingSessionStatus.STARTING,
+        RecordingSessionStatus.RECORDING,
+        RecordingSessionStatus.PAUSED,
+      ];
+      if (!activeStatuses.includes(session.status as RecordingSessionStatus)) {
+        throw new ConflictException({
+          code: 'RECORDING_NOT_ACTIVE',
+          message: 'Recording session is not active.',
+        });
+      }
+
+      // 3. Dừng tiến trình. UC-114/115: paused → process đã dừng lúc pause (KHÔNG stop lại,
+      //    KHÔNG coi là orphan). recording/starting → stop graceful; không handle → orphan.
+      let stopResult: 'exited' | 'killed' | 'orphan' | 'skipped_paused';
+      if (
+        (session.status as RecordingSessionStatus) ===
+        RecordingSessionStatus.PAUSED
+      ) {
+        stopResult = 'skipped_paused';
+      } else {
+        stopResult = this.processManager.has(sessionId)
+          ? await this.processManager.stop(sessionId)
+          : 'orphan';
+      }
+      const isOrphan = stopResult === 'orphan';
+
+      // 4. Chốt file (đợi exit ở bước 3 xong mới đọc).
+      const stoppedAt = new Date();
+      const startedAt = new Date(session.started_at);
+      const paused = session.paused_duration_seconds ?? 0;
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) -
+          paused,
+      );
+
+      const baseMeta = session.metadata_json ?? {};
+      const metadata = isOrphan
+        ? { ...baseMeta, orphan_stop: true }
+        : baseMeta;
+
+      // UC-114/115: session có segment (đã pause/resume) → concat N segment → 1 file cuối.
+      //   Session 0-pause (segments rỗng) → resolveStopFile trả storage_path cũ (LUỒNG CŨ Y HỆT — BR-06).
+      //   `session` ở đây là snapshot FRESH (đọc SAU lock ở bước 1) — segments luôn đầy đủ.
+      const { storagePath, cleanup: cleanupSegments } =
+        await this.resolveStopFile(sessionId, session);
+      const exists = !!storagePath && fs.existsSync(storagePath);
+      const size = exists ? fs.statSync(storagePath).size : 0;
+
+      // 5a. File thiếu / rỗng → stopped nhưng KHÔNG tạo media_files.
+      if (!exists || size === 0) {
+        await manager.query(
+          `UPDATE recording_sessions
+           SET status = $1, stopped_at = $2, stopped_by = $3,
+               duration_seconds = $4, error_message = $5, metadata_json = $6
+           WHERE id = $7`,
+          [
+            RecordingSessionStatus.STOPPED,
+            stoppedAt,
+            userId,
+            durationSeconds,
+            'empty file',
+            JSON.stringify(metadata),
+            sessionId,
+          ],
+        );
+        return {
+          recordingSessionId: sessionId,
+          status: RecordingSessionStatus.STOPPED,
+          stoppedAt,
+          durationSeconds,
+          fileSizeBytes: '0',
+          mediaFileId: null,
+          captured: false,
+        };
+      }
+
+      // 5b. Có file → finalize (size/checksum/duration + transaction RIÊNG, queryRunner của
+      // chính helper — kết nối KHÁC connection đang giữ lock ở đây, nhưng vẫn nằm TRONG thời
+      // gian sống của lock vì được await TRƯỚC KHI transaction ngoài này commit). Dùng chung helper.
+      const result = await this.finalizeFileToStopped({
+        sessionId,
+        meetingId,
+        storagePath,
+        startedAt,
+        paused,
+        userId,
+        baseMetadata: metadata,
+      });
+
+      // UC-114/115 (C4): concat OK + finalize xong → xoá segment files + list.txt. (0-pause: noop.)
+      cleanupSegments();
+
       return {
         recordingSessionId: sessionId,
         status: RecordingSessionStatus.STOPPED,
-        stoppedAt,
-        durationSeconds,
-        fileSizeBytes: '0',
-        mediaFileId: null,
-        captured: false,
+        stoppedAt: result.stoppedAt,
+        durationSeconds: result.durationSeconds,
+        fileSizeBytes: result.fileSizeBytes,
+        mediaFileId: result.mediaFileId,
+        captured: true,
       };
-    }
-
-    // 5b. Có file → finalize (size/checksum/duration + transaction). Dùng chung helper.
-    const result = await this.finalizeFileToStopped({
-      sessionId,
-      meetingId,
-      storagePath,
-      startedAt,
-      paused,
-      userId,
-      baseMetadata: metadata,
     });
-
-    // UC-114/115 (C4): concat OK + finalize xong → xoá segment files + list.txt. (0-pause: noop.)
-    cleanupSegments();
-
-    return {
-      recordingSessionId: sessionId,
-      status: RecordingSessionStatus.STOPPED,
-      stoppedAt: result.stoppedAt,
-      durationSeconds: result.durationSeconds,
-      fileSizeBytes: result.fileSizeBytes,
-      mediaFileId: result.mediaFileId,
-      captured: true,
-    };
   }
 
   /**
@@ -392,74 +444,91 @@ export class RecordingSessionService {
   async pauseVideo(
     meetingId: string,
     sessionId: string,
+    userId: string | null = null,
   ): Promise<{
     recordingSessionId: string;
     status: string;
     pauseCount: number;
   }> {
-    // A. Load session
-    const rows: Array<{
-      id: string;
-      meeting_id: string;
-      status: string;
-      storage_path: string | null;
-      metadata_json: Record<string, unknown> | null;
-    }> = await this.dataSource.manager.query(
-      `SELECT id, meeting_id, status, storage_path, metadata_json
-       FROM recording_sessions WHERE id = $1`,
-      [sessionId],
-    );
-    const session = rows?.[0];
-    if (!session || session.meeting_id !== meetingId) {
-      throw new NotFoundException({
-        code: 'RECORDING_SESSION_NOT_FOUND',
-        message: 'Recording session not found.',
-      });
+    // [FIX 2026-08-11, R10] Ownership: check TRƯỚC transaction/lock — chỉ Host/Organizer
+    // của meeting hoặc Admin được tạm dừng ghi hình.
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId, 'tạm dừng ghi hình');
     }
 
-    // B. Guard: chỉ pause khi đang recording
-    if (
-      (session.status as RecordingSessionStatus) !==
-      RecordingSessionStatus.RECORDING
-    ) {
-      throw new ConflictException({
-        code: 'RECORDING_NOT_RECORDING',
-        message: 'Recording session is not recording.',
-      });
-    }
+    // [FIX 2026-08-11, R3/R4/R8] Khoá + đọc-kiểm-ghi TOÀN BỘ trong 1 transaction — cùng
+    // khoá 'recording_session_'||sessionId với stopVideo()/resumeVideo() → 2 request cùng
+    // sessionId (vd Pause+Stop gần như đồng thời) xếp hàng, KHÔNG còn xen kẽ đọc/ghi.
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('recording_session_' || $1::text))`,
+        [sessionId],
+      );
 
-    // C. markStopping TRƯỚC stop (BR-05: tránh bị đánh failed; đóng file segment sạch).
-    this.processManager.markStopping(sessionId);
-    await this.processManager.stop(sessionId);
+      // A. Load session (FRESH read SAU KHI có lock).
+      const rows: Array<{
+        id: string;
+        meeting_id: string;
+        status: string;
+        storage_path: string | null;
+        metadata_json: Record<string, unknown> | null;
+      }> = await manager.query(
+        `SELECT id, meeting_id, status, storage_path, metadata_json
+         FROM recording_sessions WHERE id = $1`,
+        [sessionId],
+      );
+      const session = rows?.[0];
+      if (!session || session.meeting_id !== meetingId) {
+        throw new NotFoundException({
+          code: 'RECORDING_SESSION_NOT_FOUND',
+          message: 'Recording session not found.',
+        });
+      }
 
-    // D. Ghi segment hiện tại vào metadata + set paused (merge KHÔNG đè orphan_stop/recovered).
-    const meta = session.metadata_json ?? {};
-    const segments = Array.isArray(meta.segments)
-      ? (meta.segments as unknown[]).filter(
-          (p): p is string => typeof p === 'string',
-        )
-      : [];
-    if (session.storage_path && !segments.includes(session.storage_path)) {
-      segments.push(session.storage_path);
-    }
-    const pauseCount =
-      (typeof meta.pause_count === 'number' ? meta.pause_count : 0) + 1;
-    const merged = {
-      ...meta,
-      segments,
-      paused_at: new Date().toISOString(),
-      pause_count: pauseCount,
-    };
-    await this.dataSource.manager.query(
-      `UPDATE recording_sessions SET status = $1, metadata_json = $2 WHERE id = $3`,
-      [RecordingSessionStatus.PAUSED, JSON.stringify(merged), sessionId],
-    );
+      // B. Guard: chỉ pause khi đang recording
+      if (
+        (session.status as RecordingSessionStatus) !==
+        RecordingSessionStatus.RECORDING
+      ) {
+        throw new ConflictException({
+          code: 'RECORDING_NOT_RECORDING',
+          message: 'Recording session is not recording.',
+        });
+      }
 
-    return {
-      recordingSessionId: sessionId,
-      status: RecordingSessionStatus.PAUSED,
-      pauseCount,
-    };
+      // C. markStopping TRƯỚC stop (BR-05: tránh bị đánh failed; đóng file segment sạch).
+      this.processManager.markStopping(sessionId);
+      await this.processManager.stop(sessionId);
+
+      // D. Ghi segment hiện tại vào metadata + set paused (merge KHÔNG đè orphan_stop/recovered).
+      const meta = session.metadata_json ?? {};
+      const segments = Array.isArray(meta.segments)
+        ? (meta.segments as unknown[]).filter(
+            (p): p is string => typeof p === 'string',
+          )
+        : [];
+      if (session.storage_path && !segments.includes(session.storage_path)) {
+        segments.push(session.storage_path);
+      }
+      const pauseCount =
+        (typeof meta.pause_count === 'number' ? meta.pause_count : 0) + 1;
+      const merged = {
+        ...meta,
+        segments,
+        paused_at: new Date().toISOString(),
+        pause_count: pauseCount,
+      };
+      await manager.query(
+        `UPDATE recording_sessions SET status = $1, metadata_json = $2 WHERE id = $3`,
+        [RecordingSessionStatus.PAUSED, JSON.stringify(merged), sessionId],
+      );
+
+      return {
+        recordingSessionId: sessionId,
+        status: RecordingSessionStatus.PAUSED,
+        pauseCount,
+      };
+    });
   }
 
   /**
@@ -470,119 +539,137 @@ export class RecordingSessionService {
   async resumeVideo(
     meetingId: string,
     sessionId: string,
+    userId: string | null = null,
   ): Promise<{
     recordingSessionId: string;
     status: string;
     pausedDurationSeconds: number;
   }> {
-    // A. Load session
-    const rows: Array<{
-      id: string;
-      meeting_id: string;
-      status: string;
-      device_id: string | null;
-      paused_duration_seconds: number | null;
-      metadata_json: Record<string, unknown> | null;
-    }> = await this.dataSource.manager.query(
-      `SELECT id, meeting_id, status, device_id, paused_duration_seconds, metadata_json
-       FROM recording_sessions WHERE id = $1`,
-      [sessionId],
-    );
-    const session = rows?.[0];
-    if (!session || session.meeting_id !== meetingId) {
-      throw new NotFoundException({
-        code: 'RECORDING_SESSION_NOT_FOUND',
-        message: 'Recording session not found.',
-      });
+    // [FIX 2026-08-11, R10] Ownership: check TRƯỚC transaction/lock — chỉ Host/Organizer
+    // của meeting hoặc Admin được tiếp tục ghi hình.
+    if (userId) {
+      await this.assertHostOrAdmin(meetingId, userId, 'tiếp tục ghi hình');
     }
 
-    // B. Guard: chỉ resume khi đang paused
-    if (
-      (session.status as RecordingSessionStatus) !==
-      RecordingSessionStatus.PAUSED
-    ) {
-      throw new ConflictException({
-        code: 'RECORDING_NOT_PAUSED',
-        message: 'Recording session is not paused.',
-      });
-    }
+    // [FIX 2026-08-11, R3/R4/R8] Khoá + đọc-kiểm-ghi TOÀN BỘ trong 1 transaction — cùng
+    // namespace khoá 'recording_session_'||sessionId với pauseVideo()/stopVideo().
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext('recording_session_' || $1::text))`,
+        [sessionId],
+      );
 
-    // C. Dựng lại RTSP url (in-memory, KHÔNG log) từ device.rtsp_config — như startVideo.
-    const deviceRows: Array<{
-      metadata_json: Record<string, unknown> | null;
-    }> = await this.dataSource.manager.query(
-      'SELECT metadata_json FROM iot_devices WHERE id = $1',
-      [session.device_id],
-    );
-    const metaCfg = deviceRows?.[0]?.metadata_json?.['rtsp_config'];
-    const cfg = metaCfg ? (metaCfg as RtspConfig) : null;
-    if (!cfg || !cfg.rtsp_host || !cfg.rtsp_path) {
-      throw new BadRequestException({
-        code: 'RTSP_NOT_CONFIGURED',
-        message: 'Camera RTSP is not configured.',
-      });
-    }
-    const url = this.buildRtspUrl(cfg);
-
-    // D. Segment mới {sessionId}_seg{n}.mp4 (n = số segment hiện có) → start + probe no-data.
-    const meta = session.metadata_json ?? {};
-    const segments = Array.isArray(meta.segments)
-      ? (meta.segments as unknown[]).filter(
-          (p): p is string => typeof p === 'string',
-        )
-      : [];
-    const baseDir = this.configService.get<string>(
-      'RECORDING_STORAGE_PATH',
-      './storage/recordings',
-    );
-    fs.mkdirSync(path.resolve(baseDir), { recursive: true });
-    const segNew = path.join(
-      path.resolve(baseDir),
-      `${sessionId}_seg${segments.length}.mp4`,
-    );
-
-    this.processManager.start(sessionId, url, segNew);
-    const probe = await this.probeStart(sessionId, segNew);
-    if (probe === 'exited' || probe === 'no_data') {
-      // C5: GIỮ status=paused (KHÔNG update DB), không cộng pausedDuration, không mất segment cũ.
-      if (this.processManager.has(sessionId)) {
-        await this.processManager.stop(sessionId);
+      // A. Load session (FRESH read SAU KHI có lock).
+      const rows: Array<{
+        id: string;
+        meeting_id: string;
+        status: string;
+        device_id: string | null;
+        paused_duration_seconds: number | null;
+        metadata_json: Record<string, unknown> | null;
+      }> = await manager.query(
+        `SELECT id, meeting_id, status, device_id, paused_duration_seconds, metadata_json
+         FROM recording_sessions WHERE id = $1`,
+        [sessionId],
+      );
+      const session = rows?.[0];
+      if (!session || session.meeting_id !== meetingId) {
+        throw new NotFoundException({
+          code: 'RECORDING_SESSION_NOT_FOUND',
+          message: 'Recording session not found.',
+        });
       }
-      throw new BadGatewayException({
-        code: 'RECORDING_NO_VIDEO',
-        message: 'Camera không gửi dữ liệu video khi tiếp tục ghi.',
-      });
-    }
 
-    // E. capturing → cộng khoảng pause vào pausedDurationSeconds + xoá paused_at + recording.
-    const pausedAt =
-      typeof meta.paused_at === 'string' ? new Date(meta.paused_at) : null;
-    const pausedInc = pausedAt
-      ? Math.max(0, Math.floor((Date.now() - pausedAt.getTime()) / 1000))
-      : 0;
-    const newPausedDuration =
-      (session.paused_duration_seconds ?? 0) + pausedInc;
-    const { paused_at: _removed, ...restMeta } = meta;
-    void _removed;
-    const merged = { ...restMeta, segments: [...segments, segNew] };
-    await this.dataSource.manager.query(
-      `UPDATE recording_sessions
-       SET status = $1, paused_duration_seconds = $2, storage_path = $3, metadata_json = $4
-       WHERE id = $5`,
-      [
-        RecordingSessionStatus.RECORDING,
-        newPausedDuration,
-        segNew,
-        JSON.stringify(merged),
-        sessionId,
-      ],
-    );
+      // B. Guard: chỉ resume khi đang paused
+      if (
+        (session.status as RecordingSessionStatus) !==
+        RecordingSessionStatus.PAUSED
+      ) {
+        throw new ConflictException({
+          code: 'RECORDING_NOT_PAUSED',
+          message: 'Recording session is not paused.',
+        });
+      }
 
-    return {
-      recordingSessionId: sessionId,
-      status: RecordingSessionStatus.RECORDING,
-      pausedDurationSeconds: newPausedDuration,
-    };
+      // C. Dựng lại RTSP url (in-memory, KHÔNG log) từ device.rtsp_config — như startVideo.
+      const deviceRows: Array<{
+        metadata_json: Record<string, unknown> | null;
+      }> = await manager.query(
+        'SELECT metadata_json FROM iot_devices WHERE id = $1',
+        [session.device_id],
+      );
+      const metaCfg = deviceRows?.[0]?.metadata_json?.['rtsp_config'];
+      const cfg = metaCfg ? (metaCfg as RtspConfig) : null;
+      if (!cfg || !cfg.rtsp_host || !cfg.rtsp_path) {
+        throw new BadRequestException({
+          code: 'RTSP_NOT_CONFIGURED',
+          message: 'Camera RTSP is not configured.',
+        });
+      }
+      const url = this.buildRtspUrl(cfg);
+
+      // D. Segment mới {sessionId}_seg{n}.mp4 (n = số segment hiện có) → start + probe no-data.
+      const meta = session.metadata_json ?? {};
+      const segments = Array.isArray(meta.segments)
+        ? (meta.segments as unknown[]).filter(
+            (p): p is string => typeof p === 'string',
+          )
+        : [];
+      const baseDir = this.configService.get<string>(
+        'RECORDING_STORAGE_PATH',
+        './storage/recordings',
+      );
+      fs.mkdirSync(path.resolve(baseDir), { recursive: true });
+      const segNew = path.join(
+        path.resolve(baseDir),
+        `${sessionId}_seg${segments.length}.mp4`,
+      );
+
+      this.processManager.start(sessionId, url, segNew);
+      const probe = await this.probeStart(sessionId, segNew);
+      if (probe === 'exited' || probe === 'no_data') {
+        // C5: GIỮ status=paused (KHÔNG update DB), không cộng pausedDuration, không mất
+        // segment cũ — throw ở đây tự động ROLLBACK transaction (chưa UPDATE gì), giữ đúng
+        // ngữ nghĩa cũ.
+        if (this.processManager.has(sessionId)) {
+          await this.processManager.stop(sessionId);
+        }
+        throw new BadGatewayException({
+          code: 'RECORDING_NO_VIDEO',
+          message: 'Camera không gửi dữ liệu video khi tiếp tục ghi.',
+        });
+      }
+
+      // E. capturing → cộng khoảng pause vào pausedDurationSeconds + xoá paused_at + recording.
+      const pausedAt =
+        typeof meta.paused_at === 'string' ? new Date(meta.paused_at) : null;
+      const pausedInc = pausedAt
+        ? Math.max(0, Math.floor((Date.now() - pausedAt.getTime()) / 1000))
+        : 0;
+      const newPausedDuration =
+        (session.paused_duration_seconds ?? 0) + pausedInc;
+      const { paused_at: _removed, ...restMeta } = meta;
+      void _removed;
+      const merged = { ...restMeta, segments: [...segments, segNew] };
+      await manager.query(
+        `UPDATE recording_sessions
+         SET status = $1, paused_duration_seconds = $2, storage_path = $3, metadata_json = $4
+         WHERE id = $5`,
+        [
+          RecordingSessionStatus.RECORDING,
+          newPausedDuration,
+          segNew,
+          JSON.stringify(merged),
+          sessionId,
+        ],
+      );
+
+      return {
+        recordingSessionId: sessionId,
+        status: RecordingSessionStatus.RECORDING,
+        pausedDurationSeconds: newPausedDuration,
+      };
+    });
   }
 
   /**
@@ -1112,10 +1199,19 @@ export class RecordingSessionService {
     };
   }
 
-  /** Host/Organizer của meeting hoặc Business/System Admin — ngoài ra từ chối. */
+  /**
+   * Host/Organizer của meeting hoặc Business/System Admin — ngoài ra từ chối.
+   *
+   * [FIX 2026-08-11, R10] `action` (mặc định 'upload audio', giữ NGUYÊN message cũ cho 2
+   * caller gốc — uploadAudioForTranscription/createAudioSession — KHÔNG đổi hành vi) để
+   * dùng chung cho startVideo/pauseVideo/resumeVideo/stopVideo với message đúng ngữ cảnh,
+   * KHÔNG viết lại logic kiểm tra (mirror đúng 1 nguồn, tránh 2 nơi định nghĩa "ai được
+   * thao tác recording của meeting này").
+   */
   private async assertHostOrAdmin(
     meetingId: string,
     userId: string,
+    action: string = 'upload audio',
   ): Promise<void> {
     const hostRows: Array<{ id: string }> = await this.dataSource.manager.query(
       `SELECT id FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2 AND participant_role = 'host'`,
@@ -1134,8 +1230,7 @@ export class RecordingSessionService {
     if (!isAdmin) {
       throw new ForbiddenException({
         code: 'PERMISSION_DENIED',
-        message:
-          'Chỉ Host/Organizer hoặc Admin được upload audio cho meeting này.',
+        message: `Chỉ Host/Organizer hoặc Admin được ${action} cho meeting này.`,
       });
     }
   }
