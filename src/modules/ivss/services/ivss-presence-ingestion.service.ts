@@ -14,6 +14,7 @@ import {
   IVSS_CHANNEL_PRESENCE_ZONE_MAP_KEY,
   type PresenceSkippedReason,
 } from '../constants/zone-presence.constant.js';
+import { IvssPresenceConfigService } from './ivss-presence-config.service.js';
 
 /** Subfolder storage cho snapshot ảnh sự kiện IVSS (mọi matchState có imageBase64). */
 const SNAPSHOT_FOLDER = 'stranger-snapshots';
@@ -91,6 +92,7 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
     private readonly zonePresenceWriter: ZonePresenceWriterService,
     private readonly storageService: StorageService,
     private readonly restrictedZoneIntrusionService: RestrictedZoneIntrusionService,
+    private readonly ivssPresenceConfigService: IvssPresenceConfigService,
   ) {
     this.realtimeEnabled = this.configService.get<boolean>(
       'IVSS_REALTIME_ENABLED',
@@ -109,7 +111,23 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       }
 
       const szUid = evt.personUid;
-      const userId = await this.resolveUser(szUid);
+      let userId = await this.resolveUser(szUid);
+      // [FIX 2026-08-11, Phần B, Case 5] similarity thấp hơn ngưỡng cấu hình → KHÔNG
+      // coi là khớp danh tính thật. Null-hoá userId NGAY TẠI ĐÂY (trước matchStateOf,
+      // payload, writeAppearEvent, evaluateZoneEventNow, broadcastPresence) để mọi
+      // nhánh phía sau tự nhiên coi như "không nhận ra người" — KHÔNG sửa chữ ký/logic
+      // matchStateOf(). evt.similarity=null (bridge không gửi/SDK không trả) → GIỮ
+      // NGUYÊN hành vi cũ, không áp ngưỡng (không đủ căn cứ để từ chối).
+      if (evt.similarity != null) {
+        const { minSimilarityThreshold } =
+          await this.ivssPresenceConfigService.getValues();
+        if (evt.similarity < minSimilarityThreshold) {
+          this.logger.warn(
+            `IVSS event similarity ${evt.similarity} < ngưỡng ${minSimilarityThreshold} (channel=${evt.channelId} szUid=${szUid}) — không coi là khớp danh tính.`,
+          );
+          userId = null;
+        }
+      }
       const roomId = await this.resolveRoom(evt.channelId);
 
       const { eventTime, utcFallback } = this.parseUtc(evt.utc);
@@ -232,18 +250,20 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       // skip (mọi presenceSkipped đã ở payload). try/catch NUỐT lỗi — KHÔNG vỡ điểm danh/ack.
       if (!presenceSkipped && presenceZoneId && userId) {
         try {
-          const { presenceId } = await this.zonePresenceWriter.writeAppearEvent({
-            zoneId: presenceZoneId,
-            userId,
-            eventTime,
-            deviceId,
-            metadata: {
-              channelId: evt.channelId,
-              szUid,
-              similarity: evt.similarity ?? null,
-              sourceEventId,
+          const { presenceId } = await this.zonePresenceWriter.writeAppearEvent(
+            {
+              zoneId: presenceZoneId,
+              userId,
+              eventTime,
+              deviceId,
+              metadata: {
+                channelId: evt.channelId,
+                szUid,
+                similarity: evt.similarity ?? null,
+                sourceEventId,
+              },
             },
-          });
+          );
 
           // Đường TỨC THỜI (bên cạnh cron evaluateIntrusions() 5 phút — KHÔNG
           // thay thế, cron vẫn chạy làm lưới quét bù). try/catch RIÊNG — lỗi ở

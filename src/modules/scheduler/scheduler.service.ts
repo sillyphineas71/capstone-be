@@ -384,7 +384,14 @@ export class SchedulerService {
    * Gate SCHEDULER_ENABLED && SCHEDULER_IVSS_PORTRAIT_ENABLED (default OFF).
    * ⚠ CHƯA BẬT PRODUCTION — chờ luồng check-in họp verify xong. KHÔNG ném ra cron (ARCH-02).
    */
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'ivss-portrait-reconcile' })
+  // [FIX 2026-08-11, Case 3] Rút ngắn 5 phút → 30 giây: reconcilePortraits() quét CÓ ĐIỀU
+  // KIỆN (status='active'/deleted_at IS NULL, partial index ux_face_profiles_user_active),
+  // tập dữ liệu "nóng" tỉ lệ theo headcount đang hoạt động, KHÔNG phình theo lịch sử — xác
+  // nhận qua EXPLAIN thật trước khi đổi (không suy đoán). Mục đích: cùng cơ chế với
+  // reconcilePortraits() (KHÔNG enroll tức thời lúc duyệt ảnh — xem admin-biometric-review
+  // .service.ts, tránh vòng phụ thuộc AccountsModule↔IvssModule) nhưng rút ngắn độ trễ tối
+  // đa từ 5 phút xuống 30 giây.
+  @Cron('*/30 * * * * *', { name: 'ivss-portrait-reconcile' })
   async ivssPortraitReconcile(): Promise<void> {
     if (!this.schedulerEnabled || !this.ivssPortraitEnabled) return;
 

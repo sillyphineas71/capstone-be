@@ -27,6 +27,7 @@ import { IvssRoomAccessLogService } from './services/ivss-room-access-log.servic
 import { DeviceEventSnapshotService } from './services/device-event-snapshot.service.js';
 import { JwtQueryOrHeaderAuthGuard } from '../auth/guards/jwt-query-or-header-auth.guard.js';
 import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.service.js';
+import { IvssPresenceConfigService } from './services/ivss-presence-config.service.js';
 
 /**
  * IvssModule (IVS-001 #36) — lớp tích hợp IVSS bridge: client (outbound) + webhook (inbound)
@@ -88,6 +89,9 @@ import { IvssOccupancyIngestService } from './services/ivss-occupancy-ingest.ser
     DeviceEventSnapshotService,
     // IVSS-OCC-001 (A-OCC): occupancy ingest (dùng OccupancyPersistenceService từ PresenceModule).
     IvssOccupancyIngestService,
+    // [FIX 2026-08-11, Phần B] ngưỡng similarity tối thiểu cho nhận diện khuôn mặt
+    // — AuditLogsService inject trực tiếp (AdministrationModule @Global(), không cần import).
+    IvssPresenceConfigService,
   ],
   exports: [IVSS_BRIDGE, IvssPersonSyncService, IvssPortraitSyncService],
 })

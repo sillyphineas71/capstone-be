@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/require-await */
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerService } from './scheduler.service.js';
@@ -258,6 +260,16 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     await expect(s.ivssPortraitReconcile()).resolves.toBeUndefined();
   });
 
+  // [FIX 2026-08-11, Case 3] chặn hồi quy: cron rút ngắn 5 phút → 30 giây (cron expression
+  // tường minh, KHÔNG có hằng số 30-giây trong CronExpression enum chuẩn của @nestjs/schedule).
+  it("ivssPortraitReconcile: @Cron dùng '*/30 * * * * *' (30 giây), KHÔNG còn EVERY_5_MINUTES", () => {
+    const src = readFileSync(join(__dirname, 'scheduler.service.ts'), 'utf8');
+    const match =
+      /@Cron\(([^,]+),\s*\{\s*name:\s*'ivss-portrait-reconcile'/.exec(src);
+    expect(match).not.toBeNull();
+    expect(match?.[1].trim()).toBe("'*/30 * * * * *'");
+  });
+
   // ── ARZ-001 evaluateRestrictedZoneIntrusions cron ──
   it('evaluateRestrictedZoneIntrusions gate OFF (default) → KHÔNG gọi evaluateIntrusions', async () => {
     cfg = { SCHEDULER_ENABLED: true };
@@ -449,7 +461,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED default false
     const s = await build();
     await s.securityAlertAutoResolve();
-    expect(securityAlertAutoResolveMock.autoResolveExpired).not.toHaveBeenCalled();
+    expect(
+      securityAlertAutoResolveMock.autoResolveExpired,
+    ).not.toHaveBeenCalled();
   });
 
   it('securityAlertAutoResolve ON → gọi autoResolveExpired 1 lần', async () => {
@@ -459,7 +473,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     };
     const s = await build();
     await s.securityAlertAutoResolve();
-    expect(securityAlertAutoResolveMock.autoResolveExpired).toHaveBeenCalledTimes(1);
+    expect(
+      securityAlertAutoResolveMock.autoResolveExpired,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it('securityAlertAutoResolve: SCHEDULER_ENABLED=false → KHÔNG chạy dù cờ riêng bật', async () => {
@@ -469,7 +485,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     };
     const s = await build();
     await s.securityAlertAutoResolve();
-    expect(securityAlertAutoResolveMock.autoResolveExpired).not.toHaveBeenCalled();
+    expect(
+      securityAlertAutoResolveMock.autoResolveExpired,
+    ).not.toHaveBeenCalled();
   });
 
   it('securityAlertAutoResolve: autoResolveExpired throw → KHÔNG ném ra cron (ARCH-02)', async () => {

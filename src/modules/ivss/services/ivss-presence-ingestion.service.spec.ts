@@ -7,6 +7,7 @@ import { WebsocketService } from '../../websocket/websocket.service.js';
 import { ZonePresenceWriterService } from '../../zones/services/zone-presence-writer.service.js';
 import { StorageService } from '../../storage/storage.service.js';
 import { RestrictedZoneIntrusionService } from '../../restricted-zone/services/restricted-zone-intrusion.service.js';
+import { IvssPresenceConfigService } from './ivss-presence-config.service.js';
 
 const ROOM_UUID = '11111111-1111-1111-1111-111111111111';
 const MEETING_UUID = '22222222-2222-2222-2222-222222222222';
@@ -27,6 +28,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   let writerMock: any;
   let storageMock: any;
   let intrusionMock: any;
+  let presenceConfigMock: any;
   let captured: Array<{ sql: string; params: any[] }>;
   const AREA_UUID = '33333333-3333-3333-3333-333333333333';
 
@@ -114,6 +116,10 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
           useValue: intrusionMock,
         },
         {
+          provide: IvssPresenceConfigService,
+          useValue: presenceConfigMock,
+        },
+        {
           provide: ConfigService,
           useValue: {
             get: (key: string, def: unknown) =>
@@ -142,6 +148,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     };
     intrusionMock = {
       evaluateZoneEventNow: jest.fn().mockResolvedValue(false),
+    };
+    presenceConfigMock = {
+      getValues: jest.fn().mockResolvedValue({ minSimilarityThreshold: 0.7 }),
     };
     service = await build(false);
   });
@@ -779,6 +788,62 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       );
       // Xác định thứ tự khi 1 user có cả 2 nguồn (không phụ thuộc thứ tự vật lý).
       expect(q.sql).toContain('ORDER BY last_synced_at DESC NULLS LAST');
+    });
+  });
+
+  // ══ Phần B (Case 5) — ngưỡng similarity tối thiểu ═══════════════════════════
+  describe('Phần B: ngưỡng similarity tối thiểu (minSimilarityThreshold)', () => {
+    const AREA = AREA_UUID;
+    const nowIso = () => new Date().toISOString();
+
+    it('similarity >= ngưỡng → hành vi KHÔNG đổi (vẫn matched, userId giữ nguyên)', async () => {
+      presenceConfigMock.getValues.mockResolvedValue({
+        minSimilarityThreshold: 0.7,
+      });
+      wire();
+      await service.onFaceEvent(evt({ similarity: 0.7 }));
+      const p = payloadOf();
+      expect(p.matchState).toBe('matched');
+      expect(p.userId).toBe('u1');
+    });
+
+    it('similarity < ngưỡng → userId null-hoá TRƯỚC khi lan xuống: matchState=unmatched_identity, payload.userId=null, KHÔNG writeAppearEvent/evaluateZoneEventNow/broadcastPresence', async () => {
+      presenceConfigMock.getValues.mockResolvedValue({
+        minSimilarityThreshold: 0.7,
+      });
+      wire({ presenceMap: { '5': AREA } });
+      service = await build(true); // realtime ON để xác nhận broadcastPresence cũng KHÔNG chạy
+      await service.onFaceEvent(evt({ similarity: 0.5, utc: nowIso() }));
+      const p = payloadOf();
+      expect(p.matchState).toBe('unmatched_identity');
+      expect(p.userId).toBeNull();
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(intrusionMock.evaluateZoneEventNow).not.toHaveBeenCalled();
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('similarity=null (bridge không trả) → GIỮ NGUYÊN hành vi cũ, không áp ngưỡng', async () => {
+      presenceConfigMock.getValues.mockResolvedValue({
+        minSimilarityThreshold: 0.7,
+      });
+      wire();
+      await service.onFaceEvent(evt({ similarity: undefined }));
+      const p = payloadOf();
+      expect(p.matchState).toBe('matched');
+      expect(p.userId).toBe('u1');
+      expect(presenceConfigMock.getValues).not.toHaveBeenCalled();
+    });
+
+    it('ngưỡng đọc qua IvssPresenceConfigService.getValues(), KHÔNG hard-code: đổi ngưỡng → đổi kết quả', async () => {
+      presenceConfigMock.getValues.mockResolvedValue({
+        minSimilarityThreshold: 0.95, // nâng ngưỡng cao hơn similarity gửi lên
+      });
+      wire();
+      await service.onFaceEvent(evt({ similarity: 0.9 }));
+      expect(presenceConfigMock.getValues).toHaveBeenCalledTimes(1);
+      const p = payloadOf();
+      expect(p.matchState).toBe('unmatched_identity');
+      expect(p.userId).toBeNull();
     });
   });
 });
