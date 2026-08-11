@@ -437,6 +437,43 @@ export class RecordingSessionService {
   }
 
   /**
+   * [FIX 2026-08-12, R9 — Lớp 1] Tự động dừng TẤT CẢ session ghi hình đang active của 1
+   * meeting (vd khi meeting kết thúc). 1 meeting có thể có nhiều session active cùng lúc
+   * (video + audio, hoặc nhiều lượt do lỗi/start lại) — dừng từng cái, 1 cái lỗi KHÔNG
+   * chặn các cái còn lại (mirror RecordingReconcileService's orphan loop). `userId=null`:
+   * caller hệ thống (endMeeting/cron) — assertHostOrAdmin() trong stopVideo() tự bỏ qua
+   * (if (userId) ...), KHÔNG throw ForbiddenException cho luồng tự động.
+   */
+  async stopAllActiveForMeeting(
+    meetingId: string,
+    userId: string | null,
+  ): Promise<{ scanned: number; stopped: number; failed: number }> {
+    const rows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM recording_sessions
+       WHERE meeting_id = $1 AND status IN ('starting','recording','paused')`,
+      [meetingId],
+    );
+
+    let stopped = 0;
+    let failed = 0;
+    for (const row of rows) {
+      try {
+        await this.stopVideo(meetingId, row.id, userId);
+        stopped++;
+      } catch (e: unknown) {
+        failed++;
+        this.logger.error(
+          `[stopAllActiveForMeeting] session ${row.id} (meeting ${meetingId}) failed: ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    }
+
+    return { scanned: rows.length, stopped, failed };
+  }
+
+  /**
    * UC-114 — Tạm dừng ghi hình (SEGMENT). BR-05: markStopping + stop ffmpeg → đóng file
    * segment hiện tại; từ đây KHÔNG process nào ghi cho tới resume ⇒ đoạn pause không tồn
    * tại trong bất kỳ file nào. KHÔNG audit (nhất quán start/stop).

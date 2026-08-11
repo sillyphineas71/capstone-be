@@ -119,6 +119,8 @@ describe('LiveMeetingService.getMeetingTimeline (UC-99)', () => {
       {} as any,
       {} as any,
       { get: jest.fn((_k: string, d: unknown) => d) } as any,
+      {} as any,
+      {} as any,
     );
     return { service, noteQb, usersQb };
   }

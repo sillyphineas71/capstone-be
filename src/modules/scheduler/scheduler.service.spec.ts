@@ -18,6 +18,9 @@ import { GateLogPairingService } from '../zones/services/gate-log-pairing.servic
 import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
 import { SecurityAlertAutoResolveService } from '../alerts/services/security-alert-auto-resolve.service.js';
+import { RecordingSessionService } from '../recording/services/recording-session.service.js';
+import { RecordingSystemConfigService } from '../recording/services/recording-system-config.service.js';
+import { DataSource } from 'typeorm';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
   let detectMock: any;
@@ -32,6 +35,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let liveMeetingMock: any;
   let meetingRequestReviewMock: any;
   let securityAlertAutoResolveMock: any;
+  let dataSourceMock: any;
+  let recordingSessionServiceMock: any;
+  let recordingSystemConfigServiceMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -128,9 +134,19 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     securityAlertAutoResolveMock = {
       autoResolveExpired: jest.fn(async () => ({ scanned: 0, resolved: 0 })),
     };
+    dataSourceMock = {
+      query: jest.fn(async () => []),
+    };
+    recordingSessionServiceMock = {
+      stopVideo: jest.fn(async () => ({ status: 'stopped' })),
+    };
+    recordingSystemConfigServiceMock = {
+      getMaxDurationHours: jest.fn(async () => 6),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
+        { provide: DataSource, useValue: dataSourceMock },
         {
           provide: ConfigService,
           useValue: { get: (k: string, d?: unknown) => cfg[k] ?? d },
@@ -157,6 +173,14 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         {
           provide: SecurityAlertAutoResolveService,
           useValue: securityAlertAutoResolveMock,
+        },
+        {
+          provide: RecordingSessionService,
+          useValue: recordingSessionServiceMock,
+        },
+        {
+          provide: RecordingSystemConfigService,
+          useValue: recordingSystemConfigServiceMock,
         },
       ],
     }).compile();
@@ -500,5 +524,115 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
       new Error('boom'),
     );
     await expect(s.securityAlertAutoResolve()).resolves.toBeUndefined();
+  });
+
+  // ── [FIX 2026-08-12, R9 — Lớp 2] cron recording-max-duration-enforce ──
+  describe('recordingMaxDurationEnforce()', () => {
+    it('gate OFF (default) → KHÔNG đọc config, KHÔNG query recording_sessions', async () => {
+      cfg = { SCHEDULER_ENABLED: true }; // SCHEDULER_RECORDING_MAX_DURATION_ENABLED default false
+      const s = await build();
+      await s.recordingMaxDurationEnforce();
+      expect(
+        recordingSystemConfigServiceMock.getMaxDurationHours,
+      ).not.toHaveBeenCalled();
+      expect(dataSourceMock.query).not.toHaveBeenCalled();
+    });
+
+    it('SCHEDULER_ENABLED=false → KHÔNG chạy dù cờ riêng bật', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: false,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      const s = await build();
+      await s.recordingMaxDurationEnforce();
+      expect(dataSourceMock.query).not.toHaveBeenCalled();
+    });
+
+    it('ON → query đúng status IN (recording,paused) AND started_at < NOW() - (maxHours * 1h)', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: true,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      const s = await build();
+      await s.recordingMaxDurationEnforce();
+
+      const [sql, params] = dataSourceMock.query.mock.calls[0];
+      expect(sql).toContain("status IN ('recording','paused')");
+      expect(sql).toContain("started_at < NOW() - ($1::int * INTERVAL '1 hour')");
+      expect(params).toEqual([6]); // maxHours mặc định từ mock RecordingSystemConfigService
+    });
+
+    it('session quá hạn (status=recording) → dừng thật: gọi stopVideo(meetingId, id, null) + tag metadata_json.auto_stop_reason', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: true,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      dataSourceMock.query.mockResolvedValueOnce([
+        { id: 'sess-1', meeting_id: 'm-1' },
+      ]);
+      const s = await build();
+      await s.recordingMaxDurationEnforce();
+
+      expect(recordingSessionServiceMock.stopVideo).toHaveBeenCalledWith(
+        'm-1',
+        'sess-1',
+        null,
+      );
+      // Query thứ 2 = UPDATE tag metadata_json — KHÔNG lẫn với error_message
+      // 'empty file'/'no video data' (mô tả trạng thái file, khác lý do gọi dừng).
+      const [updateSql, updateParams] = dataSourceMock.query.mock.calls[1];
+      expect(updateSql).toContain('UPDATE recording_sessions');
+      expect(updateSql).toContain('metadata_json');
+      const tagJson = JSON.parse(updateParams[0] as string) as {
+        auto_stop_reason: string;
+        max_duration_hours: number;
+      };
+      expect(tagJson.auto_stop_reason).toBe('max_duration_exceeded');
+      expect(tagJson.max_duration_hours).toBe(6);
+      expect(updateParams[1]).toBe('sess-1');
+    });
+
+    it('1 session lỗi → session còn lại VẪN được xử lý, KHÔNG ném ra cron (ARCH-02)', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: true,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      dataSourceMock.query.mockResolvedValueOnce([
+        { id: 'bad', meeting_id: 'm-1' },
+        { id: 'good', meeting_id: 'm-2' },
+      ]);
+      recordingSessionServiceMock.stopVideo
+        .mockRejectedValueOnce(new Error('ffmpeg concat failed'))
+        .mockResolvedValueOnce({ status: 'stopped' });
+      const s = await build();
+
+      await expect(s.recordingMaxDurationEnforce()).resolves.toBeUndefined();
+      expect(recordingSessionServiceMock.stopVideo).toHaveBeenCalledTimes(2);
+    });
+
+    it('đổi config qua RecordingSystemConfigService (vd 3 giờ) → cron dùng ĐÚNG giá trị mới, KHÔNG hardcode', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: true,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(
+        3,
+      );
+      const s = await build();
+      await s.recordingMaxDurationEnforce();
+
+      const [, params] = dataSourceMock.query.mock.calls[0];
+      expect(params).toEqual([3]);
+    });
+
+    it('query lỗi (vd DB down) → KHÔNG ném ra cron (ARCH-02)', async () => {
+      cfg = {
+        SCHEDULER_ENABLED: true,
+        SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
+      };
+      dataSourceMock.query.mockRejectedValueOnce(new Error('db down'));
+      const s = await build();
+      await expect(s.recordingMaxDurationEnforce()).resolves.toBeUndefined();
+    });
   });
 });

@@ -1,6 +1,7 @@
 ﻿import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import { CheckInAlertService } from '../attendance/services/checkin-alert.service.js';
 import { IotDevicesService } from '../iot/services/iot-devices.service.js';
 import { NoShowDetectionService } from '../rooms/services/no-show-detection.service.js';
@@ -15,6 +16,8 @@ import { SecurityAlertAutoResolveService } from '../alerts/services/security-ale
 import { GateLogPairingService } from '../zones/services/gate-log-pairing.service.js';
 import { LiveMeetingService } from '../live-meeting/services/live-meeting.service.js';
 import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
+import { RecordingSessionService } from '../recording/services/recording-session.service.js';
+import { RecordingSystemConfigService } from '../recording/services/recording-system-config.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -48,8 +51,10 @@ export class SchedulerService {
   private readonly meetingStatusEnabled: boolean;
   private readonly meetingRequestExpireEnabled: boolean;
   private readonly securityAlertAutoResolveEnabled: boolean;
+  private readonly recordingMaxDurationEnabled: boolean;
 
   constructor(
+    private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
     private readonly checkInAlertService: CheckInAlertService,
     private readonly iotDevicesService: IotDevicesService,
@@ -65,6 +70,8 @@ export class SchedulerService {
     private readonly liveMeetingService: LiveMeetingService,
     private readonly meetingRequestReviewService: MeetingRequestReviewService,
     private readonly securityAlertAutoResolveService: SecurityAlertAutoResolveService,
+    private readonly recordingSessionService: RecordingSessionService,
+    private readonly recordingSystemConfigService: RecordingSystemConfigService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -140,9 +147,16 @@ export class SchedulerService {
       'SCHEDULER_SECURITY_ALERT_AUTO_RESOLVE_ENABLED',
       false,
     );
+    // [FIX 2026-08-12, R9 — Lớp 2] Lưới an toàn cuối: session recording chạy quá lâu (không
+    // ai pause/stop, và Lớp 1 — auto-stop khi endMeeting() — không kích hoạt được vì lý do
+    // nào đó) tự động bị dừng. Gate riêng, ĐỘC LẬP với meeting-status/auto-complete.
+    this.recordingMaxDurationEnabled = this.configService.get<boolean>(
+      'SCHEDULER_RECORDING_MAX_DURATION_ENABLED',
+      false,
+    );
 
     this.logger.log(
-      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled} | meeting-request-expire=${this.meetingRequestExpireEnabled} | security-alert-auto-resolve=${this.securityAlertAutoResolveEnabled}`,
+      `SchedulerService initialized — enabled=${this.schedulerEnabled} | no-show=${this.noShowEnabled} | auto-release=${this.autoReleaseEnabled} | reminder=${this.reminderEnabled} | device-offline-detect=${this.deviceOfflineDetectEnabled} | face-sync=${this.faceSyncEnabled} | early-vacancy=${this.earlyVacancyEnabled} | ivss-sync=${this.ivssSyncEnabled} | ivss-portrait=${this.ivssPortraitEnabled} | restricted-zone=${this.restrictedZoneEnabled} | crowd-alert=${this.crowdAlertEnabled} | gate-pairing=${this.gatePairingEnabled} | auto-complete=${this.autoCompleteEnabled} | meeting-status=${this.meetingStatusEnabled} | meeting-request-expire=${this.meetingRequestExpireEnabled} | security-alert-auto-resolve=${this.securityAlertAutoResolveEnabled} | recording-max-duration=${this.recordingMaxDurationEnabled}`,
     );
   }
 
@@ -476,6 +490,80 @@ export class SchedulerService {
     } catch (e) {
       this.logger.error(
         `[Scheduler] security-alert-auto-resolve failed: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * [FIX 2026-08-12, R9 — Lớp 2] Lưới an toàn cuối: session ghi hình chạy quá lâu (không ai
+   * pause/stop, và Lớp 1 — auto-stop khi endMeeting() — không kích hoạt được, vd meeting
+   * không bao giờ chuyển 'completed' vì lý do khác) sẽ tự động bị dừng. ĐỘC LẬP với Lớp 1 —
+   * KHÔNG đụng gì tới executeEndMeetingInTransaction()/endMeeting()/stopAllActiveForMeeting().
+   * Ngưỡng đọc qua RecordingSystemConfigService (mặc định 6 giờ, KHÔNG hardcode).
+   * Gate SCHEDULER_ENABLED && SCHEDULER_RECORDING_MAX_DURATION_ENABLED (default OFF).
+   * KHÔNG ném ra cron. metadata_json.auto_stop_reason='max_duration_exceeded' — tag RIÊNG,
+   * KHÔNG lẫn với error_message='empty file'/'no video data received from camera' hiện có
+   * (2 giá trị đó mô tả TRẠNG THÁI FILE lúc dừng; auto_stop_reason mô tả LÝ DO gọi dừng —
+   * độc lập, có thể cùng xuất hiện, vd session tới hạn giờ NHƯNG camera cũng đang mất hình).
+   */
+  @Cron(CronExpression.EVERY_15_MINUTES, {
+    name: 'recording-max-duration-enforce',
+  })
+  async recordingMaxDurationEnforce(): Promise<void> {
+    if (!this.schedulerEnabled || !this.recordingMaxDurationEnabled) return;
+
+    try {
+      const maxHours =
+        await this.recordingSystemConfigService.getMaxDurationHours();
+      const rows: Array<{ id: string; meeting_id: string }> =
+        await this.dataSource.query(
+          `SELECT id, meeting_id FROM recording_sessions
+           WHERE status IN ('recording','paused')
+             AND started_at < NOW() - ($1::int * INTERVAL '1 hour')`,
+          [maxHours],
+        );
+
+      let stopped = 0;
+      let failed = 0;
+      for (const row of rows) {
+        try {
+          await this.recordingSessionService.stopVideo(
+            row.meeting_id,
+            row.id,
+            null,
+          );
+          // Tag RIÊNG lý do dừng — merge (||) để KHÔNG đè metadata_json mà
+          // stopVideo()/finalizeFileToStopped() vừa ghi (vd segments, orphan_stop).
+          await this.dataSource.query(
+            `UPDATE recording_sessions
+             SET metadata_json = COALESCE(metadata_json, '{}'::jsonb) || $1::jsonb
+             WHERE id = $2`,
+            [
+              JSON.stringify({
+                auto_stop_reason: 'max_duration_exceeded',
+                max_duration_hours: maxHours,
+              }),
+              row.id,
+            ],
+          );
+          stopped++;
+        } catch (e) {
+          failed++;
+          this.logger.error(
+            `[Scheduler] recording-max-duration-enforce: session ${row.id} (meeting ${row.meeting_id}) failed: ${
+              e instanceof Error ? e.message : 'unknown'
+            }`,
+          );
+        }
+      }
+      this.logger.log(
+        `[Scheduler] recording-max-duration-enforce: maxHours=${maxHours} scanned=${rows.length} stopped=${stopped} failed=${failed}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `[Scheduler] recording-max-duration-enforce failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

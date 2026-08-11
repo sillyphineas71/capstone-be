@@ -66,6 +66,7 @@ import { TimelineItemDto } from '../dto/timeline-item.dto.js';
 import { DepartmentEntity } from '../../accounts/entities/department.entity.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { RecordingSessionService } from '../../recording/services/recording-session.service.js';
 
 import { StartMeetingResponseDto } from '../dto/start-meeting-response.dto.js';
 import { EndMeetingResponseDto } from '../dto/end-meeting-response.dto.js';
@@ -134,6 +135,7 @@ export class LiveMeetingService {
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
     private readonly guestInviteService: GuestInviteService,
+    private readonly recordingSessionService: RecordingSessionService,
   ) {
     this.schedulerQueueName = this.configService.get<string>(
       'QUEUE_SCHEDULER',
@@ -1999,6 +2001,26 @@ export class LiveMeetingService {
     } catch (guestRevokeError: unknown) {
       this.logger.error(
         `[endMeeting] revokeAllForMeeting (guest access) failed for meeting ${meetingId}: ${(guestRevokeError as Error).message}`,
+      );
+    }
+
+    // [FIX 2026-08-12, R9 — Lớp 1] Meeting đã kết thúc (commit xong) → tự động dừng MỌI
+    // session ghi hình còn active của meeting này (host quên bấm "Dừng ghi hình"). Best-
+    // effort — lỗi ở bước này KHÔNG được làm fail response endMeeting (việc kết thúc họp
+    // quan trọng hơn). userId=null: caller hệ thống, bỏ qua ownership check trong stopVideo().
+    try {
+      const r = await this.recordingSessionService.stopAllActiveForMeeting(
+        meetingId,
+        null,
+      );
+      if (r.scanned > 0) {
+        this.logger.log(
+          `[endMeeting] auto-stop recording: scanned=${r.scanned} stopped=${r.stopped} failed=${r.failed}`,
+        );
+      }
+    } catch (autoStopError: unknown) {
+      this.logger.error(
+        `[endMeeting] stopAllActiveForMeeting failed for meeting ${meetingId}: ${(autoStopError as Error).message}`,
       );
     }
 

@@ -14,6 +14,9 @@ import { MEETING_END_ERRORS } from '../constants/meeting-end-error.constant.js';
 describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () => {
   let service: LiveMeetingService;
   let dsMock: any;
+  let recordingServiceMock: {
+    stopAllActiveForMeeting: jest.Mock;
+  };
 
   const build = () => {
     dsMock = {
@@ -22,12 +25,19 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
       transaction: jest.fn(),
       manager: { query: jest.fn() },
     };
+    recordingServiceMock = {
+      stopAllActiveForMeeting: jest
+        .fn()
+        .mockResolvedValue({ scanned: 0, stopped: 0, failed: 0 }),
+    };
     return new LiveMeetingService(
       dsMock,
       { emitToRoom: jest.fn() } as any,
       { addJob: jest.fn(), getQueue: jest.fn() } as any,
       { create: jest.fn(), markCompleted: jest.fn() } as any,
       { get: jest.fn((_k: string, d?: unknown) => d) } as any,
+      { revokeAllForMeeting: jest.fn().mockResolvedValue(0) } as any,
+      recordingServiceMock as any,
     );
   };
 
@@ -186,6 +196,54 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
         skipped: 0,
         failed: 1,
       });
+    });
+  });
+
+  // [FIX 2026-08-12, R9 — Lớp 1] endMeeting() KHÔNG bị spy/mock ở đây (khác các test trên) —
+  // để chứng minh đường CRON (autoCompleteOverdueMeetings → endMeeting) cũng chạy qua ĐÚNG
+  // logic auto-stop recording mới thêm, không phải chỉ đường thủ công (đã test riêng ở
+  // live-meeting.service.spec.ts). Mirror mockTransactionalEm/mockQueryBuilder của
+  // live-meeting.service.spec.ts (không import chung — file này cố tình tách biệt).
+  describe('autoCompleteOverdueMeetings() → endMeeting() THẬT (R9, không mock endMeeting)', () => {
+    it('cron chạy hết endMeeting() thật → vẫn gọi stopAllActiveForMeeting(meetingId, null) — chứng minh 2 đường dùng chung 1 hàm', async () => {
+      const meeting = {
+        id: 'm1',
+        organizerId: 'org-1',
+        hostId: 'host-1',
+        roomId: 'room-1',
+        status: MeetingStatus.IN_PROGRESS,
+        startTime: new Date(Date.now() - 60 * 60 * 1000),
+        endTime: new Date(Date.now() - 1000),
+        actualStartTime: new Date(Date.now() - 60 * 60 * 1000),
+        actualEndTime: null,
+        deletedAt: null,
+      };
+      const queryBuilder = {
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(meeting),
+      };
+      const em = {
+        createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
+        create: jest.fn((_e: unknown, obj: any) => obj),
+        save: jest.fn().mockResolvedValue({}),
+      };
+      dsMock.query.mockResolvedValue([{ id: 'm1', organizer_id: 'org-1' }]);
+      dsMock.getRepository.mockReturnValue({
+        findOne: jest.fn().mockResolvedValue(meeting),
+      });
+      dsMock.transaction.mockImplementation((cb: (m: unknown) => unknown) =>
+        cb(em),
+      );
+
+      const r = await service.autoCompleteOverdueMeetings();
+
+      expect(r).toEqual({ scanned: 1, completed: 1, skipped: 0, failed: 0 });
+      expect(recordingServiceMock.stopAllActiveForMeeting).toHaveBeenCalledWith(
+        'm1',
+        null,
+      );
     });
   });
 });
