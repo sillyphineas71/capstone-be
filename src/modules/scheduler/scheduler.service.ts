@@ -211,9 +211,15 @@ export class SchedulerService {
 
   /**
    * No-show detection job.
-   * Cron: SCHEDULER_NO_SHOW_CHECK_CRON (default: every 5 minutes)
+   *
+   * EVERY_MINUTE chứ không phải 5 phút: threshold/warning-grace cấu hình được
+   * qua NoShowConfigService (có thể đặt 1 phút) — cron 5 phút làm sai lệch tới
+   * gần 5 phút so với ngưỡng đã cấu hình (xem phân tích 2026-08-13). Cùng lý do
+   * với meeting-status-advance bên dưới. SCHEDULER_NO_SHOW_CHECK_CRON hiện KHÔNG
+   * được đọc ở đâu (dead config) — @Cron() không thể nhận giá trị runtime từ
+   * ConfigService, nên interval vẫn phải hardcode.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'no-show-check' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'no-show-check' })
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
@@ -238,11 +244,13 @@ export class SchedulerService {
 
   /**
    * Auto-release room job.
-   * Cron: SCHEDULER_AUTO_RELEASE_CRON (default: every 5 minutes)
    *
-   * TODO: Gọi UtilizationService.autoReleaseRooms() khi implement.
+   * EVERY_MINUTE — cùng lý do với no-show-check ở trên: auto_release_grace_minutes
+   * cấu hình được (vd 5 phút), nhưng cron riêng 5 phút/lần cộng dồn thêm tới gần
+   * 5 phút trễ nữa lên trên grace đã cấu hình. SCHEDULER_AUTO_RELEASE_CRON hiện
+   * KHÔNG được đọc ở đâu (dead config), tương tự no-show-check.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'auto-release' })
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'auto-release' })
   async autoRelease(): Promise<void> {
     if (!this.schedulerEnabled || !this.autoReleaseEnabled) return;
 
@@ -601,13 +609,17 @@ export class SchedulerService {
    * TODO: Gọi NotificationsService.sendScheduledReminders() khi implement.
    */
   @Cron(CronExpression.EVERY_HOUR, { name: 'notification-reminder' })
-  async sendReminders(): Promise<void> {
-    if (!this.schedulerEnabled || !this.reminderEnabled) return;
+  sendReminders(): Promise<void> {
+    // KHÔNG `async`: thân hàm chưa có await nào (stub, xem TODO dưới) — eslint
+    // require-await. Vẫn trả Promise để chữ ký gọi được bằng `await` không đổi.
+    if (!this.schedulerEnabled || !this.reminderEnabled)
+      return Promise.resolve();
 
     this.logger.log(
       '[Scheduler] sendReminders() triggered — TODO: implement reminder notification logic.',
     );
     // TODO: inject NotificationsService và gọi sendScheduledReminders()
+    return Promise.resolve();
   }
 
   /**
