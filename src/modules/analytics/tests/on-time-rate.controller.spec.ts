@@ -186,7 +186,13 @@ describe('OnTimeRateController', () => {
       );
       expect(result.data.items).toHaveLength(1);
       expect(result.data.total).toBe(1);
-      expect(result.meta).toEqual({});
+      // FE đọc phân trang ở res.meta — controller mirror từ data (13/08/2026).
+      expect(result.meta).toEqual({
+        total: 1,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+      });
       expect(mockService.getOnTimeRateByUsers).toHaveBeenCalledWith(
         { userId: mockUserId },
         query,

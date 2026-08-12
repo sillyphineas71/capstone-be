@@ -67,6 +67,10 @@ export class UserLateStatsItemDto {
   absentCount: number;
   totalRequired: number;
   lateRate: number;
+  // Alias tương thích FE (be_required_endpoints.md 13/08/2026):
+  // totalMeetings = totalRequired; onTimeRate = onTimeCount/totalRequired*100 (làm tròn 1 chữ số).
+  totalMeetings: number;
+  onTimeRate: number;
 }
 
 export class UserLateStatsResponseDto {

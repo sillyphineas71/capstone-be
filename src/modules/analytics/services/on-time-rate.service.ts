@@ -340,8 +340,18 @@ export class OnTimeRateService {
 
     await logAction(total);
 
+    // Bổ sung alias tương thích FE: totalMeetings + onTimeRate (làm tròn 1 chữ số).
+    const enrichedItems = items.map((it) => ({
+      ...it,
+      totalMeetings: it.totalRequired,
+      onTimeRate:
+        it.totalRequired > 0
+          ? Math.round((it.onTimeCount / it.totalRequired) * 1000) / 10
+          : 0,
+    }));
+
     const data: UserLateStatsResponseDto = {
-      items,
+      items: enrichedItems,
       total,
       page,
       limit,
@@ -407,7 +417,10 @@ export class OnTimeRateService {
     const currentMonth = localTime.getUTCMonth(); // 0-indexed
     const currentDay = localTime.getUTCDate();
 
-    const activePreset = preset || 'month';
+    // Nếu client không truyền preset nhưng đã cung cấp cả from & to
+    // (cách FE gọi /on-time-rate/users), coi như khoảng thời gian tùy chọn
+    // thay vì mặc định về tháng hiện tại.
+    const activePreset = preset || (from && to ? 'custom' : 'month');
 
     if (activePreset === 'day') {
       const todayStr = localTime.toISOString().split('T')[0];

@@ -135,7 +135,13 @@ export class OnTimeRateController {
         success: true,
         message,
         data,
-        meta: {},
+        // FE đọc phân trang ở res.meta (be_required_endpoints.md); mirror từ data.
+        meta: {
+          total: data.total,
+          page: data.page,
+          limit: data.limit,
+          totalPages: data.totalPages,
+        },
       };
     } catch (error: unknown) {
       if (error instanceof HttpException) {

@@ -8,10 +8,12 @@ import { UserEntity } from '../accounts/entities/user.entity.js';
 import { BackgroundJobsService } from './services/background-jobs.service.js';
 import { AuditLogsService } from './services/audit-logs.service.js';
 import { AuditLogQueryService } from './services/audit-log-query.service.js';
+import { UserAuditLogQueryService } from './services/user-audit-log-query.service.js';
 import { AuditLogExportService } from './services/audit-log-export.service.js';
 import { AuditLogQueryRepository } from './repositories/audit-log-query.repository.js';
 import { BackgroundJobsController } from './controllers/background-jobs.controller.js';
 import { AuditLogsController } from './controllers/audit-logs.controller.js';
+import { UserAuditLogsController } from './controllers/user-audit-logs.controller.js';
 import { SystemConfigController } from './controllers/system-config.controller.js';
 import { SystemConfigService } from './services/system-config.service.js';
 import { ChannelMapConfigController } from './controllers/channel-map-config.controller.js';
@@ -67,6 +69,7 @@ import { AuthModule } from '../auth/auth.module.js';
   controllers: [
     BackgroundJobsController,
     AuditLogsController,
+    UserAuditLogsController,
     SystemConfigController,
     ChannelMapConfigController,
   ],
@@ -74,6 +77,7 @@ import { AuthModule } from '../auth/auth.module.js';
     BackgroundJobsService,
     AuditLogsService,
     AuditLogQueryService,
+    UserAuditLogQueryService,
     AuditLogExportService,
     AuditLogQueryRepository,
     SystemConfigService,

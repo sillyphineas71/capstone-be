@@ -22,6 +22,27 @@ export interface AuditLogRow {
 }
 
 /**
+ * Row giàu field cho GET /users/:userId/audit-logs — trả kèm actor email,
+ * ip_address và các JSON payload (new/metadata/old) để service dựng
+ * description/status/payload cho FE (be-user-activity-log-requirement.md).
+ */
+export interface UserAuditLogRow {
+  id: string;
+  created_at: Date;
+  user_id: string | null;
+  action_type: string;
+  entity_type: string;
+  entity_id: string | null;
+  severity: string;
+  ip_address: string | null;
+  new_value_json: Record<string, unknown> | null;
+  metadata_json: Record<string, unknown> | null;
+  old_value_json: Record<string, unknown> | null;
+  user_full_name: string | null;
+  user_email: string | null;
+}
+
+/**
  * AuditLogQueryRepository — repository ĐỌC dành riêng cho feature view audit logs.
  *
  * KHÔNG sửa và KHÔNG mở rộng AuditLogsService (service GHI dùng chung).
@@ -122,6 +143,58 @@ export class AuditLogQueryRepository {
     `;
 
     const result = await this.dataSource.query(query, params);
+    return parseInt(result[0]?.total ?? '0', 10);
+  }
+
+  /**
+   * findUserAuditLogs — nhật ký hoạt động của MỘT user với tư cách ĐỐI TƯỢNG
+   * bị tác động (entity_type='users' AND entity_id=userId).
+   *
+   * Khác findPaginated (lọc theo actor `user_id`). Dùng cho modal "Lịch sử
+   * hoạt động" của Business Admin — xem be-user-activity-log-requirement.md.
+   * ORDER BY created_at DESC cố định; LEFT JOIN users lấy tên + email actor.
+   */
+  async findUserAuditLogs(
+    targetUserId: string,
+    page: number,
+    limit: number,
+  ): Promise<UserAuditLogRow[]> {
+    const offset = (page - 1) * limit;
+    const query = `
+      SELECT
+        al.id,
+        al.created_at,
+        al.user_id,
+        al.action_type,
+        al.entity_type,
+        al.entity_id,
+        al.severity,
+        al.ip_address,
+        al.new_value_json,
+        al.metadata_json,
+        al.old_value_json,
+        u.full_name AS user_full_name,
+        u.email AS user_email
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      WHERE al.entity_type = 'users' AND al.entity_id = $1
+      ORDER BY al.created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+    return this.dataSource.query(query, [targetUserId, limit, offset]);
+  }
+
+  /**
+   * countUserAuditLogs — đếm tổng log của MỘT user (đối tượng bị tác động).
+   * KHÔNG JOIN/ORDER BY/LIMIT.
+   */
+  async countUserAuditLogs(targetUserId: string): Promise<number> {
+    const query = `
+      SELECT COUNT(*) AS total
+      FROM audit_logs al
+      WHERE al.entity_type = 'users' AND al.entity_id = $1
+    `;
+    const result = await this.dataSource.query(query, [targetUserId]);
     return parseInt(result[0]?.total ?? '0', 10);
   }
 
