@@ -14,6 +14,7 @@ import { ZonesModule } from '../zones/zones.module.js';
 import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
 import { RecordingModule } from '../recording/recording.module.js';
+import { PresenceModule } from '../presence/presence.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -56,6 +57,11 @@ import { RecordingModule } from '../recording/recording.module.js';
     // (stopVideo) + RecordingSystemConfigService (ngưỡng giờ). Cạnh scheduler → recording
     // MỘT CHIỀU (recording không import scheduler) ⇒ không circular.
     RecordingModule,
+    // [FIX 2026-08-13, R12] cron no-show-check gọi thêm OccupancyPersistenceService
+    // .reconcilePendingConfirmations() TRƯỚC detect() — xác nhận có mặt theo đồng hồ thực,
+    // không chờ event mới. Cạnh scheduler → presence MỘT CHIỀU (presence không import
+    // scheduler) ⇒ không circular.
+    PresenceModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],

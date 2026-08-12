@@ -22,10 +22,6 @@ interface UsageRow {
   first_presence_at: Date | string | null;
 }
 
-interface StreakRow {
-  streak_start: Date | string | null;
-}
-
 /**
  * OccupancyPersistenceService (OCC-001 refactor / IVSS-OCC-001) — ghi occupancy DÙNG CHUNG.
  *
@@ -41,11 +37,31 @@ interface StreakRow {
  * (count>0 thoáng qua) kích hoạt NGAY LẬP TỨC first_presence_at + usage_status='in_use' +
  * rooms.current_status='occupied' cùng lúc, không có debounce. Nay CHỈ khi booking chưa
  * từng được xác nhận có mặt (`first_presence_at IS NULL`), phải tích lũy đủ
- * `presenceConfirmSeconds` giây liên tục (chấp nhận gián đoạn ngắn hơn
- * `presenceNoiseToleranceSeconds` là nhiễu cảm biến, không phải chấm dứt) mới xác nhận —
- * và CẢ 3 side-effect (first_presence_at/usage_status/rooms.current_status) đồng bộ theo
- * cùng 1 lần xác nhận đó, tránh trạng thái "phòng occupied nhưng chưa ai được coi là có mặt".
- * Booking ĐÃ xác nhận trước đó (`first_presence_at` đã có giá trị) giữ NGUYÊN hành vi cũ.
+ * `presenceConfirmSeconds` giây liên tục mới xác nhận — và CẢ 3 side-effect
+ * (first_presence_at/usage_status/rooms.current_status) đồng bộ theo cùng 1 lần xác nhận
+ * đó, tránh trạng thái "phòng occupied nhưng chưa ai được coi là có mặt". Booking ĐÃ xác
+ * nhận trước đó (`first_presence_at` đã có giá trị) giữ NGUYÊN hành vi cũ.
+ *
+ * [FIX 2026-08-13, R12] Đổi hẳn thuật toán tính streak — bản cũ giả định cảm biến báo
+ * ĐỊNH KỲ (coi im lặng > `presenceNoiseToleranceSeconds` là dấu hiệu đã rời đi, tính cụm
+ * event gần nhau). Thực tế cảm biến camera đang dùng là loại **báo khi CHUYỂN TRẠNG THÁI**
+ * (chỉ gửi 1 lần lúc vào khung + 1 lần lúc ra khung, KHÔNG gửi liên tục khi đứng yên) — với
+ * loại cảm biến này, im lặng là BÌNH THƯỜNG (vẫn đang có mặt), không phải dấu hiệu rời đi.
+ * Xác nhận qua thực tế: đứng liên tục 40s trong khung vẫn bị tính no-show vì thuật toán cũ
+ * không có event thứ 2 nào để tính lại streak.
+ *
+ * Mô hình mới: hiện diện được coi là LIÊN TỤC kể từ event dương (`occupancy_count>0`) ĐẦU
+ * TIÊN sau lần "rời đi thật" gần nhất — "rời đi thật" = 1 event `occupancy_count=0` mà
+ * KHÔNG có event dương nào theo sau trong vòng `presenceNoiseToleranceSeconds` giây (loại
+ * trừ nhiễu cảm biến thoáng qua, vd đứng sát mép khung hình). Xem `computeStreakStart()`.
+ * `presenceConfirmSeconds` vẫn giữ nguyên ý nghĩa chống lách (Case A — vào rồi ra ngay):
+ * event `count=0` thật đến sớm trước khi đủ ngưỡng vẫn cắt streak về 0 như cũ.
+ *
+ * [FIX 2026-08-13, R12 phần 2] Việc tính streak TRƯỚC ĐÂY chỉ chạy khi có event MỚI tới
+ * (bên trong `persist()`) — với cảm biến chỉ báo 1 lần lúc vào, không có event thứ 2 nào
+ * để kích hoạt tính lại streak dù bao nhiêu giây trôi qua thật ngoài đời. `reconcilePendingConfirmations()`
+ * bù cho khoảng trống này: được cron gọi định kỳ (KHÔNG phụ thuộc có event mới hay không),
+ * tính streak tới thời điểm `now()` cho mọi booking chưa xác nhận có mặt.
  */
 @Injectable()
 export class OccupancyPersistenceService {
@@ -162,60 +178,20 @@ export class OccupancyPersistenceService {
         } else if (occupancyCount > 0) {
           // Chưa từng xác nhận có mặt + event hiện tại count>0 → tính streak, bound
           // TRONG ĐÚNG cửa sổ booking đã resolve (chống leak sang booking liền kề).
-          const streakRows = (await queryRunner.query(
-            `WITH positive_events AS (
-               SELECT event_time
-                 FROM room_events
-                WHERE room_id = $1
-                  AND event_type = 'occupancy_detected'
-                  AND occupancy_count > 0
-                  AND event_time >= $2
-                  AND event_time <= $3
-                  AND event_time <= $4
-                ORDER BY event_time DESC
-             ),
-             -- Postgres KHÔNG cho lồng window function trực tiếp (LEAD trong SUM) →
-             -- tách gap_to_prev ra 1 CTE riêng trước khi SUM ở CTE kế tiếp.
-             with_gap AS (
-               SELECT event_time,
-                      event_time - LEAD(event_time) OVER (ORDER BY event_time DESC)
-                        AS gap_to_prev
-                 FROM positive_events
-             ),
-             -- ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING (LOẠI TRỪ dòng hiện tại):
-             -- gap_to_prev của 1 dòng mô tả khoảng cách TỪ dòng đó TỚI dòng cũ hơn liền kề —
-             -- nếu vượt tolerance, đó là ranh giới NGAY SAU dòng đó (thuộc về dòng CŨ HƠN bị
-             -- loại, KHÔNG PHẢI chính dòng này). Dùng SUM bao gồm cả dòng hiện tại (thiếu
-             -- ROWS EXCLUSIVE) sẽ gán nhầm break cho chính dòng vừa tạo ra khoảng cách đó
-             -- (đã bắt lỗi này bằng kiểm chứng thực nghiệm trên Postgres thật trước khi áp
-             -- vào đây — xem test_streak_sql.sql).
-             grouped AS (
-               SELECT event_time,
-                      COALESCE(
-                        SUM(CASE WHEN gap_to_prev > ($5::int * interval '1 second') THEN 1 ELSE 0 END)
-                          OVER (
-                            ORDER BY event_time DESC
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                          ),
-                        0
-                      ) AS break_group
-                 FROM with_gap
-             )
-             SELECT MIN(event_time) AS streak_start
-               FROM grouped
-              WHERE break_group = 0`,
-            [
-              roomId,
-              booking.reserved_start_time,
-              booking.reserved_end_time,
-              eventTime,
-              presenceNoiseToleranceSeconds,
-            ],
-          )) as StreakRow[];
-          const streakStart = streakRows?.[0]?.streak_start;
+          const upperBound =
+            eventTime < new Date(booking.reserved_end_time)
+              ? eventTime
+              : new Date(booking.reserved_end_time);
+          const streakStart = await this.computeStreakStart(
+            queryRunner,
+            roomId,
+            new Date(booking.reserved_start_time),
+            upperBound,
+            presenceNoiseToleranceSeconds,
+          );
 
           const streakDurationMs = streakStart
-            ? eventTime.getTime() - new Date(streakStart).getTime()
+            ? eventTime.getTime() - streakStart.getTime()
             : -1;
           const confirmedNow =
             streakDurationMs >= presenceConfirmSeconds * 1000;
@@ -299,5 +275,203 @@ export class OccupancyPersistenceService {
     }
 
     return { statusChanged: statusChangedToOccupied };
+  }
+
+  /**
+   * [FIX 2026-08-13, R12] Tính thời điểm bắt đầu chuỗi hiện diện liên tục hiện tại, trong
+   * cửa sổ [boundStart, boundEnd]. "Liên tục" = kể từ event dương (`occupancy_count>0`) đầu
+   * tiên SAU lần "rời đi thật" gần nhất — "rời đi thật" là 1 event `occupancy_count=0`
+   * KHÔNG có event dương nào theo sau trong vòng `noiseToleranceSeconds` giây (loại trừ
+   * nhiễu cảm biến thoáng qua). Không có event dương nào trong cửa sổ → trả `null`.
+   *
+   * Dùng chung cho cả 2 nơi: persist() (boundEnd = eventTime của event vừa nhận) và
+   * reconcilePendingConfirmations() (boundEnd = now(), không phụ thuộc có event mới hay
+   * không) — 1 nguồn tính toán DUY NHẤT, tránh 2 công thức lệch nhau.
+   */
+  private async computeStreakStart(
+    executor: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    roomId: string,
+    boundStart: Date,
+    boundEnd: Date,
+    noiseToleranceSeconds: number,
+  ): Promise<Date | null> {
+    const rows = (await executor.query(
+      `WITH zero_events AS (
+         SELECT event_time
+           FROM room_events
+          WHERE room_id = $1
+            AND event_type = 'occupancy_detected'
+            AND occupancy_count = 0
+            AND event_time >= $2
+            AND event_time <= $3
+       ),
+       -- "Rời đi thật": event=0 KHÔNG có event dương nào theo sau trong vòng tolerance
+       -- giây (loại nhiễu cảm biến — vd đứng sát mép khung hình thoáng bị mất dấu).
+       real_departures AS (
+         SELECT z.event_time
+           FROM zero_events z
+          WHERE NOT EXISTS (
+            SELECT 1 FROM room_events p
+             WHERE p.room_id = $1
+               AND p.event_type = 'occupancy_detected'
+               AND p.occupancy_count > 0
+               AND p.event_time > z.event_time
+               AND p.event_time <= z.event_time + ($4::int * interval '1 second')
+          )
+       ),
+       last_departure AS (
+         SELECT MAX(event_time) AS departed_at FROM real_departures
+       )
+       SELECT MIN(e.event_time) AS streak_start
+         FROM room_events e, last_departure d
+        WHERE e.room_id = $1
+          AND e.event_type = 'occupancy_detected'
+          AND e.occupancy_count > 0
+          AND e.event_time >= $2
+          AND e.event_time <= $3
+          AND (d.departed_at IS NULL OR e.event_time > d.departed_at)`,
+      [roomId, boundStart, boundEnd, noiseToleranceSeconds],
+    )) as Array<{ streak_start: Date | string | null }>;
+    const streakStart = rows?.[0]?.streak_start;
+    return streakStart ? new Date(streakStart) : null;
+  }
+
+  /**
+   * [FIX 2026-08-13, R12 phần 2] Xác nhận có mặt theo ĐỒNG HỒ THỰC — KHÔNG chờ event mới.
+   *
+   * Bù lỗ hổng: `persist()` chỉ tính lại streak khi có event MỚI tới. Cảm biến báo-khi-
+   * chuyển-trạng-thái (1 lần lúc vào, im lặng khi đứng yên, 1 lần lúc ra) có thể không bao
+   * giờ gửi event thứ 2 — nếu vậy `persist()` không còn cơ hội nào để tự xác nhận đủ
+   * `presenceConfirmSeconds` giây, dù người vẫn đang đứng trong phòng thật.
+   *
+   * Gọi định kỳ bởi cron `no-show-check` (SchedulerService.checkNoShow, TRƯỚC
+   * NoShowDetectionService.detect() trong cùng lần chạy) — mỗi booking chưa xác nhận có
+   * mặt, có ít nhất 1 event dương, được tính lại streak tới `now()`; đủ ngưỡng thì xác nhận
+   * NGAY, không cần đợi event mới. Idempotent (`WHERE first_presence_at IS NULL` trong
+   * UPDATE) — an toàn nếu chạy đồng thời với persist() của 1 event mới vừa tới.
+   */
+  async reconcilePendingConfirmations(): Promise<{
+    scanned: number;
+    confirmed: number;
+  }> {
+    const { presenceConfirmSeconds, presenceNoiseToleranceSeconds } =
+      await this.noShowConfigService.getValues();
+    const now = new Date();
+
+    const candidates: Array<{
+      booking_id: string;
+      room_id: string;
+      reserved_start_time: Date | string;
+      reserved_end_time: Date | string;
+    }> = await this.dataSource.manager.query(
+      `SELECT b.id AS booking_id, b.room_id, b.reserved_start_time, b.reserved_end_time
+         FROM room_bookings b
+         JOIN room_booking_usages u ON u.booking_id = b.id
+        WHERE b.status IN ('approved','active')
+          AND u.first_presence_at IS NULL
+          AND b.reserved_start_time <= $1
+          AND b.reserved_end_time > $1
+          AND EXISTS (
+            SELECT 1 FROM room_events re
+             WHERE re.room_id = b.room_id
+               AND re.event_type = 'occupancy_detected'
+               AND re.occupancy_count > 0
+               AND re.event_time >= b.reserved_start_time
+               AND re.event_time <= $1
+          )`,
+      [now],
+    );
+
+    let confirmed = 0;
+    for (const c of candidates) {
+      try {
+        const reservedEnd = new Date(c.reserved_end_time);
+        const upperBound = now < reservedEnd ? now : reservedEnd;
+        const streakStart = await this.computeStreakStart(
+          this.dataSource.manager,
+          c.room_id,
+          new Date(c.reserved_start_time),
+          upperBound,
+          presenceNoiseToleranceSeconds,
+        );
+        if (!streakStart) continue;
+        const durationMs = now.getTime() - streakStart.getTime();
+        if (durationMs < presenceConfirmSeconds * 1000) continue;
+
+        const queryRunner = this.dataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+        let statusChanged = false;
+        try {
+          const upd = (await queryRunner.query(
+            `UPDATE room_booking_usages
+                SET first_presence_at = $2,
+                    last_presence_at = $2,
+                    occupancy_source = 'camera',
+                    usage_status = CASE
+                      WHEN usage_status = 'not_started' THEN 'in_use'
+                      ELSE usage_status END
+              WHERE booking_id = $1 AND first_presence_at IS NULL
+              RETURNING id`,
+            [c.booking_id, streakStart],
+          )) as unknown;
+          const updRows = this.rowsOf<{ id: string }>(upd);
+          if (updRows.length > 0) {
+            const roomUpd = (await queryRunner.query(
+              `UPDATE rooms SET current_status = 'occupied'
+               WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
+               RETURNING id`,
+              [c.room_id],
+            )) as unknown;
+            statusChanged = this.rowsOf<{ id: string }>(roomUpd).length > 0;
+            confirmed++;
+          }
+          await queryRunner.commitTransaction();
+        } catch (e) {
+          await queryRunner.rollbackTransaction();
+          throw e;
+        } finally {
+          await queryRunner.release();
+        }
+
+        if (statusChanged) {
+          try {
+            this.websocketService.emitToRoom(
+              `room:${c.room_id}`,
+              'room.status.updated',
+              {
+                roomId: c.room_id,
+                status: 'occupied',
+                timestamp: now.toISOString(),
+              },
+            );
+          } catch (e) {
+            this.logger.warn(
+              `WS emit room.status.updated (reconcile) failed: ${
+                e instanceof Error ? e.message : 'unknown'
+              }`,
+            );
+          }
+        }
+      } catch (e) {
+        this.logger.error(
+          `reconcilePendingConfirmations: booking ${c.booking_id} failed: ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    }
+
+    return { scanned: candidates.length, confirmed };
+  }
+
+  /** UPDATE…RETURNING qua TypeORM trả [rows,count]; SELECT/INSERT trả rows. Chuẩn hoá. */
+  private rowsOf<T>(result: unknown): T[] {
+    if (Array.isArray(result)) {
+      const head: unknown = result[0];
+      if (Array.isArray(head)) return head as T[];
+      return result as T[];
+    }
+    return [];
   }
 }

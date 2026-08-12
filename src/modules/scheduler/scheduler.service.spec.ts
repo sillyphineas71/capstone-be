@@ -20,6 +20,7 @@ import { MeetingRequestReviewService } from '../meetings/services/meeting-reques
 import { SecurityAlertAutoResolveService } from '../alerts/services/security-alert-auto-resolve.service.js';
 import { RecordingSessionService } from '../recording/services/recording-session.service.js';
 import { RecordingSystemConfigService } from '../recording/services/recording-system-config.service.js';
+import { OccupancyPersistenceService } from '../presence/services/occupancy-persistence.service.js';
 import { DataSource } from 'typeorm';
 
 describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)', () => {
@@ -38,6 +39,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   let dataSourceMock: any;
   let recordingSessionServiceMock: any;
   let recordingSystemConfigServiceMock: any;
+  let occupancyPersistenceMock: any;
   let cfg: Record<string, unknown>;
   const calls: string[] = [];
 
@@ -143,6 +145,12 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
     recordingSystemConfigServiceMock = {
       getMaxDurationHours: jest.fn(async () => 6),
     };
+    occupancyPersistenceMock = {
+      reconcilePendingConfirmations: jest.fn(async () => {
+        calls.push('presence-reconcile');
+        return { scanned: 0, confirmed: 0 };
+      }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
@@ -182,24 +190,39 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
           provide: RecordingSystemConfigService,
           useValue: recordingSystemConfigServiceMock,
         },
+        {
+          provide: OccupancyPersistenceService,
+          useValue: occupancyPersistenceMock,
+        },
       ],
     }).compile();
     return module.get(SchedulerService);
   };
 
-  it('checkNoShow gate OFF (default) → KHÔNG gọi detect/warn', async () => {
+  it('checkNoShow gate OFF (default) → KHÔNG gọi presence-reconcile/detect/warn', async () => {
     cfg = { SCHEDULER_ENABLED: true }; // no-show check default false
     const s = await build();
     await s.checkNoShow();
+    expect(
+      occupancyPersistenceMock.reconcilePendingConfirmations,
+    ).not.toHaveBeenCalled();
     expect(detectMock.detect).not.toHaveBeenCalled();
     expect(lifecycleMock.warnBatch).not.toHaveBeenCalled();
   });
 
-  it('checkNoShow ON → thứ tự detect → reconcile → warn', async () => {
+  // [FIX 2026-08-13, R12] presence-reconcile phải chạy TRƯỚC detect — xác nhận có mặt
+  // theo đồng hồ thực trước khi detect() quét, để cùng lần chạy không tạo case oan cho
+  // booking vừa đủ ngưỡng presenceConfirmSeconds nhưng chưa có event mới nào kích hoạt lại.
+  it('checkNoShow ON → thứ tự presence-reconcile → detect → reconcile → warn', async () => {
     cfg = { SCHEDULER_ENABLED: true, SCHEDULER_NO_SHOW_CHECK_ENABLED: true };
     const s = await build();
     await s.checkNoShow();
-    expect(calls).toEqual(['detect', 'reconcile', 'warn']);
+    expect(calls).toEqual([
+      'presence-reconcile',
+      'detect',
+      'reconcile',
+      'warn',
+    ]);
   });
 
   it('autoRelease gate OFF → KHÔNG gọi batch', async () => {
@@ -558,7 +581,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
 
       const [sql, params] = dataSourceMock.query.mock.calls[0];
       expect(sql).toContain("status IN ('recording','paused')");
-      expect(sql).toContain("started_at < NOW() - ($1::int * INTERVAL '1 hour')");
+      expect(sql).toContain(
+        "started_at < NOW() - ($1::int * INTERVAL '1 hour')",
+      );
       expect(params).toEqual([6]); // maxHours mặc định từ mock RecordingSystemConfigService
     });
 
@@ -616,9 +641,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
       const s = await build();
-      recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(
-        3,
-      );
+      recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(3);
       await s.recordingMaxDurationEnforce();
 
       const [, params] = dataSourceMock.query.mock.calls[0];

@@ -6,33 +6,6 @@ import { OccupancyPersistenceService } from './occupancy-persistence.service.js'
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { NoShowConfigService } from '../../rooms/services/no-show-config.service.js';
 
-/**
- * [FIX 2026-08-09, Phần 3] Mô phỏng CHÍNH XÁC thuật toán SQL streak (positive_events →
- * with_gap → grouped, `ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING`) bằng JS — vì
- * mock ở đây không chạy Postgres thật. Thuật toán SQL thật (kể cả off-by-one đã bắt được
- * lúc build: gán nhầm break cho chính dòng gây ra khoảng cách thay vì dòng CŨ HƠN) đã được
- * xác nhận THỰC NGHIỆM trên Postgres 17.5 thật trước khi viết vào service — xem comment
- * trong occupancy-persistence.service.ts. Hàm này chỉ để test "calling contract" ở tầng
- * mock, KHÔNG thay thế xác nhận SQL thật.
- */
-const simulateStreakStart = (
-  positiveEventTimesDesc: Date[],
-  toleranceSeconds: number,
-): Date | null => {
-  if (positiveEventTimesDesc.length === 0) return null;
-  let breakIndex = positiveEventTimesDesc.length;
-  for (let i = 0; i < positiveEventTimesDesc.length - 1; i++) {
-    const gapMs =
-      positiveEventTimesDesc[i].getTime() -
-      positiveEventTimesDesc[i + 1].getTime();
-    if (gapMs > toleranceSeconds * 1000) {
-      breakIndex = i + 1;
-      break;
-    }
-  }
-  return positiveEventTimesDesc[breakIndex - 1];
-};
-
 describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
   let service: OccupancyPersistenceService;
   let dataSourceMock: any;
@@ -95,7 +68,7 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
           return Promise.resolve(bookingRows);
         if (sql.includes('SELECT first_presence_at FROM room_booking_usages'))
           return Promise.resolve(usageRows);
-        if (sql.includes('positive_events')) return Promise.resolve(streakRows);
+        if (sql.includes('real_departures')) return Promise.resolve(streakRows);
         if (sql.includes('UPDATE rooms'))
           return Promise.resolve(roomUpdateRows);
         return Promise.resolve(undefined);
@@ -168,7 +141,7 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
     await service.persist(input());
     expect(qrCalled('INSERT INTO presence_snapshots')).toBe(true);
     expect(qrCalled('UPDATE room_booking_usages')).toBe(true);
-    expect(qrCalled('positive_events')).toBe(false); // KHÔNG chạy streak query nữa.
+    expect(qrCalled('real_departures')).toBe(false); // KHÔNG chạy streak query nữa.
     expect(qrCalled('UPDATE rooms')).toBe(true); // mirror hành vi cũ: flip ngay theo count>0.
   });
 
@@ -224,7 +197,7 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
     expect(call[0]).toContain('reserved_start_time <= $2');
   });
 
-  // ══ Phần 3 — streak-based confirmation: 5 case bắt buộc (a)-(e) ══════════════════
+  // ══ Phần 3 — streak-based confirmation (R12: liên tục tới khi gặp event=0 thật) ══
   describe('Phần 3 — streak-based presence confirmation', () => {
     it('R3.2: SELECT booking đã mở rộng thêm reserved_start_time/reserved_end_time', async () => {
       await service.persist(input());
@@ -265,54 +238,40 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
       expect(r.statusChanged).toBe(true);
     });
 
-    it('(c) gián đoạn NGẮN hơn noise-tolerance (2s < 3s) → KHÔNG gãy streak, cộng dồn đúng qua simulateStreakStart', async () => {
-      // Mirror đúng kịch bản đã xác nhận thực nghiệm trên Postgres thật (test_streak_sql.sql):
-      // 20,22,24,26 (mỗi gap 2s <= tolerance 3s) → streak_start = 20 (không lùi về 00/10).
-      const base = new Date('2026-06-30T09:00:00.000Z').getTime();
-      const eventsDesc = [26, 24, 22, 20].map((s) => new Date(base + s * 1000));
-      const tolerance = 3;
-      const computed = simulateStreakStart(eventsDesc, tolerance);
-      expect(computed).toEqual(new Date(base + 20 * 1000)); // đúng như xác nhận qua psql.
+    // [FIX 2026-08-13, R12] Bug thực tế: cảm biến báo-khi-chuyển-trạng-thái chỉ gửi 1 event
+    // lúc vào rồi im lặng (không gửi liên tục khi đứng yên) — khoảng lặng dài giữa 2 event
+    // dương, KHÔNG có event=0 nào ở giữa, KHÔNG được coi là rời đi. streak vẫn phải tính từ
+    // event dương ĐẦU TIÊN, bất kể khoảng cách sau đó bao xa.
+    it('(c) [R12] im lặng dài (40s) giữa 2 event dương, KHÔNG có event=0 ở giữa → streak KHÔNG gãy, streak_start = event dương đầu tiên', async () => {
+      const firstPositive = new Date('2026-06-30T09:00:00.000Z');
+      const eventTime = new Date('2026-06-30T09:00:40.000Z'); // 40s sau, im lặng hoàn toàn ở giữa
+      // Đây chính là điều service.computeStreakStart() phải trả về — mock trực tiếp kết quả
+      // SQL (không mô phỏng bằng JS, vì công thức mới là 1 câu SQL đơn giản: MIN(event dương)
+      // sau lần "rời đi thật" gần nhất — không có event=0 nào ⇒ streak_start = event đầu tiên).
+      streakRows = [{ streak_start: firstPositive }];
+      noShowValues = { ...noShowValues, presenceConfirmSeconds: 30 };
 
-      const eventTime = eventsDesc[0]; // 09:00:26
-      streakRows = [{ streak_start: computed }];
-      noShowValues = {
-        ...noShowValues,
-        presenceNoiseToleranceSeconds: tolerance,
-        presenceConfirmSeconds: 6, // 26-20=6s vừa đủ ngưỡng → xác nhận
-      };
       const r = await service.persist(input({ eventTime }));
       const usageCall = findCall('UPDATE room_booking_usages');
-      expect(usageCall[1][1]).toEqual(new Date(base + 20 * 1000)); // first_presence_at = 09:00:20
+      expect(usageCall[1]).toEqual(['bk-1', firstPositive, eventTime]); // 40s >= 30s → confirm
       expect(r.statusChanged).toBe(true);
     });
 
-    it('(d) gián đoạn DÀI hơn noise-tolerance (10s > 3s) → GÃY, tính lại streak từ event sau gián đoạn', async () => {
-      // Cùng dữ liệu đã xác nhận qua psql: 00,10,20,22,24,26 với tolerance=3s
-      // → streak_start = 20 (KHÔNG lùi về 00/10, vì gap 20<-10 = 10s > 3s là break thật).
-      const base = new Date('2026-06-30T09:00:00.000Z').getTime();
-      const eventsDesc = [26, 24, 22, 20, 10, 0].map(
-        (s) => new Date(base + s * 1000),
-      );
-      const tolerance = 3;
-      const computed = simulateStreakStart(eventsDesc, tolerance);
-      expect(computed).toEqual(new Date(base + 20 * 1000));
-      expect(computed).not.toEqual(new Date(base)); // KHÔNG lùi về event 09:00:00 (trước gián đoạn dài).
+    it('(d) [R12] có event=0 THẬT (không có event dương nào theo sau trong tolerance) trước đó → streak tính lại từ event dương SAU lần rời đi đó, KHÔNG lùi về trước', async () => {
+      // Người rời đi thật lúc 09:00:10, quay lại lúc 09:00:30 — streak phải tính từ 09:00:30,
+      // KHÔNG được cộng gộp với lần có mặt trước đó lúc 09:00:00.
+      const secondEntry = new Date('2026-06-30T09:00:30.000Z');
+      const eventTime = new Date('2026-06-30T09:00:36.000Z');
+      streakRows = [{ streak_start: secondEntry }];
+      noShowValues = { ...noShowValues, presenceConfirmSeconds: 6 }; // 36-30=6s vừa đủ
 
-      const eventTime = eventsDesc[0];
-      streakRows = [{ streak_start: computed }];
-      noShowValues = {
-        ...noShowValues,
-        presenceNoiseToleranceSeconds: tolerance,
-        presenceConfirmSeconds: 6, // 26-20=6s đủ ngưỡng
-      };
       const r = await service.persist(input({ eventTime }));
       const usageCall = findCall('UPDATE room_booking_usages');
-      expect(usageCall[1][1]).toEqual(new Date(base + 20 * 1000));
+      expect(usageCall[1]).toEqual(['bk-1', secondEntry, eventTime]);
       expect(r.statusChanged).toBe(true);
     });
 
-    it('(e) event ở biên booking liền kề → streak query bind ĐÚNG reserved_start_time/reserved_end_time của booking đã resolve (chống leak sang booking khác)', async () => {
+    it('(e) event ở biên booking liền kề → streak query bind ĐÚNG reserved_start_time/upperBound (min(eventTime, reserved_end_time)) của booking đã resolve (chống leak sang booking khác)', async () => {
       const bookingAStart = new Date('2026-06-30T08:00:00.000Z');
       const bookingAEnd = new Date('2026-06-30T09:00:00.000Z'); // booking A: 08:00-09:00
       bookingRows = [
@@ -329,15 +288,14 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
       await service.persist(input({ eventTime }));
 
       const streakCall = qr.query.mock.calls.find((c: any[]) =>
-        String(c[0]).includes('positive_events'),
+        String(c[0]).includes('real_departures'),
       );
       expect(streakCall).toBeDefined();
-      // params thứ tự: [roomId, reserved_start_time, reserved_end_time, eventTime, tolerance]
+      // params thứ tự: [roomId, boundStart, upperBound, tolerance] — upperBound = min(eventTime, reserved_end_time).
       expect(streakCall[1]).toEqual([
         'room-1',
         bookingAStart,
-        bookingAEnd,
-        eventTime,
+        eventTime, // eventTime (08:59) < reserved_end_time (09:00) → upperBound = eventTime
         noShowValues.presenceNoiseToleranceSeconds,
       ]);
       // KHÔNG có window/booking nào khác (vd 09:00-10:00 của booking B) lọt vào bound —
@@ -348,9 +306,119 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
     it('booking chưa confirm + occupancyCount==0 → KHÔNG chạm room_booking_usages (tránh bug cũ: count=0 vẫn set first_presence_at qua COALESCE)', async () => {
       const r = await service.persist(input({ occupancyCount: 0 }));
       expect(qrCalled('UPDATE room_booking_usages')).toBe(false);
-      expect(qrCalled('positive_events')).toBe(false); // không cần tính streak khi count=0.
+      expect(qrCalled('real_departures')).toBe(false); // không cần tính streak khi count=0.
       expect(qrCalled('UPDATE rooms')).toBe(false);
       expect(r.statusChanged).toBe(false);
+    });
+  });
+
+  // ══ R12 phần 2 — reconcilePendingConfirmations (xác nhận theo đồng hồ thực) ══════
+  describe('reconcilePendingConfirmations (R12 phần 2)', () => {
+    let dsManagerQueryMock: jest.Mock;
+
+    beforeEach(() => {
+      dsManagerQueryMock = jest.fn();
+      dataSourceMock.manager = { query: dsManagerQueryMock };
+    });
+
+    it('không có booking nào đang chờ xác nhận → scanned=0, confirmed=0, KHÔNG mở transaction', async () => {
+      dsManagerQueryMock.mockResolvedValue([]);
+      const r = await service.reconcilePendingConfirmations();
+      expect(r).toEqual({ scanned: 0, confirmed: 0 });
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('có booking chờ xác nhận, streak đã đủ presenceConfirmSeconds theo now() → UPDATE room_booking_usages + rooms, confirmed=1', async () => {
+      const candidate = {
+        booking_id: 'bk-9',
+        room_id: 'room-9',
+        reserved_start_time: new Date('2026-08-13T01:00:00.000Z'),
+        reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
+      };
+      const streakStart = new Date(Date.now() - 40_000); // 40s trước "now" thật của test
+      dsManagerQueryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM room_bookings'))
+          return Promise.resolve([candidate]);
+        if (sql.includes('real_departures'))
+          return Promise.resolve([{ streak_start: streakStart }]);
+        return Promise.resolve(undefined);
+      });
+      qr.query.mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE room_booking_usages'))
+          return Promise.resolve([[{ id: 'usage-1' }], 1]);
+        if (sql.includes('UPDATE rooms'))
+          return Promise.resolve([[{ id: 'room-9' }], 1]);
+        return Promise.resolve(undefined);
+      });
+
+      const r = await service.reconcilePendingConfirmations();
+      expect(r).toEqual({ scanned: 1, confirmed: 1 });
+      expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
+      const usageCall = qr.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('UPDATE room_booking_usages'),
+      );
+      expect(usageCall[1]).toEqual(['bk-9', streakStart]);
+    });
+
+    it('streak CHƯA đủ ngưỡng → KHÔNG mở transaction, confirmed=0', async () => {
+      const candidate = {
+        booking_id: 'bk-9',
+        room_id: 'room-9',
+        reserved_start_time: new Date('2026-08-13T01:00:00.000Z'),
+        reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
+      };
+      const streakStart = new Date(Date.now() - 5_000); // chỉ 5s, chưa đủ 30s mặc định
+      dsManagerQueryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM room_bookings'))
+          return Promise.resolve([candidate]);
+        if (sql.includes('real_departures'))
+          return Promise.resolve([{ streak_start: streakStart }]);
+        return Promise.resolve(undefined);
+      });
+
+      const r = await service.reconcilePendingConfirmations();
+      expect(r).toEqual({ scanned: 1, confirmed: 0 });
+      expect(dataSourceMock.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('1 booking lỗi giữa chừng KHÔNG làm hỏng cả batch — lỗi được log, các booking khác vẫn xử lý', async () => {
+      const candidates = [
+        {
+          booking_id: 'bk-err',
+          room_id: 'room-err',
+          reserved_start_time: new Date('2026-08-13T01:00:00.000Z'),
+          reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
+        },
+        {
+          booking_id: 'bk-ok',
+          room_id: 'room-ok',
+          reserved_start_time: new Date('2026-08-13T01:00:00.000Z'),
+          reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
+        },
+      ];
+      const streakStart = new Date(Date.now() - 40_000);
+      dsManagerQueryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM room_bookings'))
+          return Promise.resolve(candidates);
+        if (sql.includes('real_departures')) {
+          return dsManagerQueryMock.mock.calls.filter((c: any[]) =>
+            String(c[0]).includes('real_departures'),
+          ).length === 1
+            ? Promise.reject(new Error('db boom'))
+            : Promise.resolve([{ streak_start: streakStart }]);
+        }
+        return Promise.resolve(undefined);
+      });
+      qr.query.mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE room_booking_usages'))
+          return Promise.resolve([[{ id: 'usage-ok' }], 1]);
+        if (sql.includes('UPDATE rooms'))
+          return Promise.resolve([[{ id: 'room-ok' }], 1]);
+        return Promise.resolve(undefined);
+      });
+
+      const r = await service.reconcilePendingConfirmations();
+      expect(r).toEqual({ scanned: 2, confirmed: 1 });
     });
   });
 });

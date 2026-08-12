@@ -81,14 +81,16 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
         // đúng nhánh streak thay vì nhánh "đã confirmed" cũ.
         if (sql.includes('SELECT first_presence_at FROM room_booking_usages'))
           return Promise.resolve([{ first_presence_at: null }]);
-        // Streak "đủ ngưỡng" mặc định (31s trước eventTime của CHÍNH request đang test,
+        // Streak "đủ ngưỡng" mặc định (31s trước boundEnd của CHÍNH request đang test,
         // presenceConfirmSeconds mock=30s) — giữ nguyên kỳ vọng "confirm ngay trong 1
         // request" của các test cũ trong file này (không phải trọng tâm test streak chi
         // tiết — đã có occupancy-persistence.service.spec.ts riêng cho việc đó).
-        if (sql.includes('positive_events')) {
-          const eventTime = params?.[3] as Date | undefined;
-          const streakStart = eventTime
-            ? new Date(eventTime.getTime() - 31_000)
+        // [FIX 2026-08-13, R12] params: [roomId, boundStart, boundEnd, tolerance] — boundEnd
+        // ở index 2 (KHÔNG còn eventTime riêng ở index 3 như thuật toán streak cũ).
+        if (sql.includes('real_departures')) {
+          const boundEnd = params?.[2] as Date | undefined;
+          const streakStart = boundEnd
+            ? new Date(boundEnd.getTime() - 31_000)
             : new Date(Date.now() - 31_000);
           return Promise.resolve([{ streak_start: streakStart }]);
         }
