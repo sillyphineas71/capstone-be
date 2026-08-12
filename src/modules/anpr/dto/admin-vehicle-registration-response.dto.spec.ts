@@ -62,4 +62,40 @@ describe('toAdminVehicleRegistrationResponse (UC-101)', () => {
     expect(out.vehicle_type).toBe('car');
     expect(out.status).toBe('active');
   });
+
+  // ── T6b: account_expires_at mapper (VPT-BE-06 / VPT-001) ──
+
+  it('T6b: entity.user.accountExpiresAt = Date → account_expires_at = đúng ISO string', () => {
+    const entity = baseEntity();
+    const expireDate = new Date('2027-12-31T17:00:00.000Z');
+    entity.user = {
+      id: 'u1',
+      fullName: 'Nguyen Van A',
+      email: 'a@example.com',
+      accountExpiresAt: expireDate,
+    } as VehicleRegistrationEntity['user'];
+    const out = toAdminVehicleRegistrationResponse(entity);
+    expect(out.account_expires_at).toBe(expireDate.toISOString());
+  });
+
+  it('T6b: entity.user.accountExpiresAt = null (nhân viên thường) → account_expires_at === null', () => {
+    const entity = baseEntity();
+    entity.user = {
+      id: 'u1',
+      fullName: 'Nguyen Van A',
+      email: 'a@example.com',
+      accountExpiresAt: null,
+    } as VehicleRegistrationEntity['user'];
+    const out = toAdminVehicleRegistrationResponse(entity);
+    expect(out.account_expires_at).toBeNull();
+  });
+
+  it('T6b: entity.user = null → account_expires_at === null (cùng nhánh với owner === null, không nổ)', () => {
+    const entity = baseEntity();
+    entity.user = null as unknown as VehicleRegistrationEntity['user'];
+    const out = toAdminVehicleRegistrationResponse(entity);
+    expect(out.owner).toBeNull();
+    expect(out.account_expires_at).toBeNull();
+  });
 });
+

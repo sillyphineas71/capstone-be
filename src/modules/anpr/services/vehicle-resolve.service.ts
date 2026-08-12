@@ -464,13 +464,18 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
   /**
    * OQ-1: biển active đang sống → {userId, vehicleRegistrationId}; disabled/đã-xóa/không-có → null.
    * QC-7: trả thêm `id` (vehicle_registration_id) cho gate_access_logs — cùng MỘT query.
+   * VPT-001: JOIN users để lọc tài khoản hết hạn (account_expires_at < NOW()) hoặc
+   *           đã bị xoá (u.deleted_at IS NOT NULL) — biển của tài khoản như vậy → null (unmatched).
    */
   private async resolveUserByPlate(
     plateNumber: string,
   ): Promise<ResolvedVehicle | null> {
     const rows: UserRow[] = await this.dataSource.manager.query(
-      `SELECT id, user_id FROM vehicle_registrations
-       WHERE plate_number = $1 AND status = 'active' AND deleted_at IS NULL
+      `SELECT vr.id, vr.user_id FROM vehicle_registrations vr
+       JOIN users u ON u.id = vr.user_id
+       WHERE vr.plate_number = $1 AND vr.status = 'active' AND vr.deleted_at IS NULL
+         AND u.deleted_at IS NULL
+         AND (u.account_expires_at IS NULL OR u.account_expires_at >= NOW())
        LIMIT 1`,
       [plateNumber],
     );

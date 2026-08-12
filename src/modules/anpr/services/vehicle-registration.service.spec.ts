@@ -416,4 +416,28 @@ describe('VehicleRegistrationService (VPR-001 / UC1)', () => {
       expect(r.meta).toEqual({ page: 1, limit: 20, total: 25, totalPages: 2 });
     });
   });
+
+  // ── VPT-BE-05: adminSoftDelete (VPT-001) ──
+  describe('adminSoftDelete()', () => {
+    it('id tồn tại (deletedAt IS NULL) → softDelete gọi với đúng id', async () => {
+      const entity = { id: 'veh1', deletedAt: null };
+      repo.findOne.mockResolvedValue(entity);
+      await service.adminSoftDelete('veh1');
+      expect(repo.findOne).toHaveBeenCalledWith({
+        where: { id: 'veh1', deletedAt: expect.anything() },
+      });
+      expect(repo.softDelete).toHaveBeenCalledWith('veh1');
+    });
+
+    it('id không tồn tại / đã xoá (findOne null) → ném NotFoundException code VEHICLE_NOT_FOUND_OR_FORBIDDEN, softDelete KHÔNG gọi', async () => {
+      repo.findOne.mockResolvedValue(undefined);
+      await expect(service.adminSoftDelete('not-exist')).rejects.toMatchObject({
+        response: {
+          code: 'VEHICLE_NOT_FOUND_OR_FORBIDDEN',
+          message: 'Không tìm thấy biển số',
+        },
+      });
+      expect(repo.softDelete).not.toHaveBeenCalled();
+    });
+  });
 });

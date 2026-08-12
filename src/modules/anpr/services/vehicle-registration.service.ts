@@ -265,6 +265,24 @@ export class VehicleRegistrationService {
     await this.repo.softDelete(id);
   }
 
+  /**
+   * Admin xóa-mềm bất kỳ biển số nào (VPT-BE-05 / VPT-001).
+   * KHÔNG fold userId — admin xoá hộ, không cần là chủ xe.
+   * id không tồn tại / đã xoá → NotFoundException VEHICLE_NOT_FOUND_OR_FORBIDDEN.
+   */
+  async adminSoftDelete(id: string): Promise<void> {
+    const entity = await this.repo.findOne({
+      where: { id, deletedAt: IsNull() },
+    });
+    if (!entity) {
+      throw new NotFoundException({
+        code: 'VEHICLE_NOT_FOUND_OR_FORBIDDEN',
+        message: 'Không tìm thấy biển số',
+      });
+    }
+    await this.repo.softDelete(id);
+  }
+
   /** OQ-4: ^[0-9A-Z]+$ && dài 6–10 && ≥1 chữ && ≥1 số. */
   private isValidPlate(plate: string): boolean {
     if (

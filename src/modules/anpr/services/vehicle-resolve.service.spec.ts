@@ -149,15 +149,53 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     expect(insert()!.params).toHaveLength(5);
   });
 
-  it('resolve query: plate_number + status active + deleted_at IS NULL', async () => {
+  it('resolve query: plate_number + status active + deleted_at IS NULL + JOIN users (VPT-001)', async () => {
     wire();
     await service.onVehicleEvent(evt());
     const q = captured.find((c) =>
       c.sql.includes('FROM vehicle_registrations'),
     );
-    expect(String(q?.sql)).toContain("status = 'active'");
-    expect(String(q?.sql)).toContain('deleted_at IS NULL');
+    expect(String(q?.sql)).toContain("vr.status = 'active'");
+    expect(String(q?.sql)).toContain('vr.deleted_at IS NULL');
+    expect(String(q?.sql)).toContain('JOIN users u ON u.id = vr.user_id');
+    expect(String(q?.sql)).toContain('u.deleted_at IS NULL');
+    expect(String(q?.sql)).toContain('u.account_expires_at IS NULL OR u.account_expires_at >= NOW()');
     expect(q?.params).toEqual(['30A12345']); // DATA-03: dùng plateNumber đã chuẩn
+  });
+
+  // ── VPT-001: hết hạn / xoá tài khoản → unmatched ──
+
+  it('VPT-001: hết hạn/xoá tài khoản → unmatched (userId null, matchState unmatched, processed_status unmatched)', async () => {
+    // Biển active nhưng user đã hết hạn/xoá → query JOIN không trả row → resolve null.
+    // Mock: user: [] = không có row nào khớp điều kiện JOIN (hết hạn hoặc deleted_at IS NOT NULL).
+    wire({ user: [] });
+    await service.onVehicleEvent(evt());
+    expect(insert()!.params[3]).toBe('unmatched');
+    const p = payloadOf();
+    expect(p.matchState).toBe('unmatched');
+    expect(p.userId).toBeNull();
+  });
+
+  it('VPT-001: account_expires_at = null (nhân viên thường, không giới hạn) → matched như cũ', async () => {
+    // account_expires_at IS NULL → điều kiện OR thoả → JOIN trả row → matched bình thường.
+    // Default wire() mock user: [{ id: 'reg1', user_id: 'u1' }] — biểu thị row có trong JOIN.
+    wire();
+    await service.onVehicleEvent(evt());
+    const p = payloadOf();
+    expect(p.userId).toBe('u1');
+    expect(p.matchState).toBe('matched');
+  });
+
+  it('VPT-001: account_expires_at tương lai (đã gia hạn) → matched như cũ', async () => {
+    // account_expires_at >= NOW() → điều kiện OR thoả → JOIN trả row → matched.
+    // Lưu ý: mock raw-SQL không phân biệt được lý do "vì sao có/không có row" ở tầng unit test;
+    // chỉ assert hành vi 2 nhánh: có row (matched) / không có row (unmatched) — giới hạn đã
+    // ghi ở plan §2.3, không phải thiếu sót. Wire trả row → matched.
+    wire();
+    await service.onVehicleEvent(evt());
+    const p = payloadOf();
+    expect(p.userId).toBe('u1');
+    expect(p.matchState).toBe('matched');
   });
 
   it('direction: in→enter, out→leave, absent/lạ→seen', async () => {
@@ -398,14 +436,14 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
   });
 
   describe('resolveUserByPlate mở rộng (QC-7)', () => {
-    it('matched → {userId, vehicleRegistrationId} (một query SELECT id, user_id)', async () => {
+    it('matched → {userId, vehicleRegistrationId} (một query SELECT vr.id, vr.user_id JOIN users)', async () => {
       dsMock.manager.query.mockResolvedValueOnce([
         { id: 'reg-9', user_id: 'u9' },
       ]);
       const r = await (service as any).resolveUserByPlate('30A12345');
       expect(r).toEqual({ userId: 'u9', vehicleRegistrationId: 'reg-9' });
       const sql = String(dsMock.manager.query.mock.calls[0][0]);
-      expect(sql).toContain('SELECT id, user_id');
+      expect(sql).toContain('SELECT vr.id, vr.user_id');
     });
 
     it('không match → null', async () => {

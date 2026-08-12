@@ -21,4 +21,9 @@ describe('normalizePlate (VPR-001 / UC1)', () => {
   it('chỉ còn [A-Z0-9] sau normalize', () => {
     expect(normalizePlate('  ab-cd.12  ')).toMatch(/^[A-Z0-9]*$/);
   });
+
+  it('undefined/null → "" (KHÔNG String(undefined) = "UNDEFINED")', () => {
+    expect(normalizePlate(undefined)).toBe('');
+    expect(normalizePlate(null)).toBe('');
+  });
 });

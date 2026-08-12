@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/unbound-method */
+import { NotFoundException } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { PERMISSIONS_KEY } from '../../auth/decorators/require-permissions.decorator.js';
+import { ALLOW_PARTNER_ACCOUNT_KEY } from '../../../common/decorators/allow-partner-account.decorator.js';
 import { VehicleRegistrationController } from './vehicle-registration.controller.js';
 
 describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
@@ -264,7 +266,7 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
         PERMISSIONS_KEY,
         controller.listUnknown,
       );
-      expect(perms).toEqual(['anpr.vehicle.unknown_view']);
+      expect(perms).toEqual(['anpr.vehicle.unknown_view', 'vehicle_alert.read']);
     });
   });
 
@@ -315,6 +317,78 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
       expect(guards).toContain(PermissionsGuard);
       const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.historyAll);
       expect(perms).toEqual(['anpr.vehicle.history_view']);
+    });
+  });
+
+  // ── T3b: @AllowPartnerAccount metadata (VPT-BE-07 / VPT-001) ──
+  describe('T3b — @AllowPartnerAccount() metadata', () => {
+    it('historyOwn() có metadata ALLOW_PARTNER_ACCOUNT_KEY = true', () => {
+      expect(
+        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.historyOwn),
+      ).toBe(true);
+    });
+
+    it('list() có metadata ALLOW_PARTNER_ACCOUNT_KEY = true', () => {
+      expect(
+        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.list),
+      ).toBe(true);
+    });
+
+    it('historyAll() KHÔNG có metadata ALLOW_PARTNER_ACCOUNT_KEY', () => {
+      expect(
+        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.historyAll),
+      ).toBeFalsy();
+    });
+
+    it('listAll() KHÔNG có metadata ALLOW_PARTNER_ACCOUNT_KEY', () => {
+      expect(
+        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.listAll),
+      ).toBeFalsy();
+    });
+
+    it('registerForUser() KHÔNG có metadata ALLOW_PARTNER_ACCOUNT_KEY', () => {
+      expect(
+        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.registerForUser),
+      ).toBeFalsy();
+    });
+  });
+
+  // ── T4b: removeAsAdmin (VPT-BE-05 / VPT-001) ──
+  describe('T4b — removeAsAdmin()', () => {
+    beforeEach(() => {
+      service.adminSoftDelete = jest.fn().mockResolvedValue(undefined);
+    });
+
+    it('adminSoftDelete được gọi với đúng id + response envelope {success, message, data:null}', async () => {
+      const r = await controller.removeAsAdmin('veh1');
+      expect(service.adminSoftDelete).toHaveBeenCalledWith('veh1');
+      expect(r).toEqual({
+        success: true,
+        message: 'Vehicle deleted successfully',
+        data: null,
+      });
+    });
+
+    it('id không tồn tại → service ném NotFoundException — controller không hòa tan exception', async () => {
+      service.adminSoftDelete = jest.fn().mockRejectedValue(
+        new NotFoundException({
+          code: 'VEHICLE_NOT_FOUND_OR_FORBIDDEN',
+          message: 'Không tìm thấy biển số',
+        }),
+      );
+      await expect(controller.removeAsAdmin('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(service.adminSoftDelete).toHaveBeenCalledWith('not-exist');
+    });
+
+    it('guard = JwtAuthGuard + PermissionsGuard; permission = [anpr.vehicle.admin_delete]', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.removeAsAdmin) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).toContain(PermissionsGuard);
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.removeAsAdmin);
+      expect(perms).toEqual(['anpr.vehicle.admin_delete']);
     });
   });
 });

@@ -115,6 +115,10 @@ describe('VehicleWebhookController (VWH-001 / UC4)', () => {
       await controller.receiveEvent(d);
       const event = handler.onVehicleEvent.mock.calls[0]?.[0];
       expect(event).toBeDefined();
+      // normalizePlate(undefined) = '' (đã sửa — xem normalize-plate.ts). Test này gọi
+      // controller.receiveEvent() trực tiếp, bỏ qua ValidationPipe thật (nơi @IsNotEmpty()
+      // của VehicleEventDto.plateNumber sẽ chặn request thiếu field bằng 400 trước khi tới
+      // đây) — vẫn giữ assertion đúng hành vi phòng thủ của normalizePlate, không phải giả định.
       expect(event.plateNumber).toBe('');
     });
   });
