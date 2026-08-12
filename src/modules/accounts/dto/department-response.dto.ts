@@ -30,6 +30,12 @@ export class DepartmentResponseDto {
   @ApiProperty({ description: 'Trạng thái hoạt động' })
   isActive: boolean;
 
+  @ApiProperty({
+    description:
+      'Số lượng nhân viên đang hoạt động trực thuộc TRỰC TIẾP phòng ban (employment_status active/probation, account_status active) — không đệ quy phòng ban con',
+  })
+  memberCount: number;
+
   @ApiProperty({ description: 'Thời điểm tạo', format: 'date-time' })
   createdAt: Date;
 

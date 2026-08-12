@@ -21,7 +21,19 @@ describe('DepartmentsService', () => {
   let dataSource: jest.Mocked<DataSource>;
   let em: jest.Mocked<EntityManager>;
   let repo: { findAndCount: jest.Mock; findOne: jest.Mock };
-  let userRepo: { find: jest.Mock };
+  let userRepo: {
+    find: jest.Mock;
+    count: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
+  let userQueryBuilder: {
+    select: jest.Mock;
+    addSelect: jest.Mock;
+    where: jest.Mock;
+    andWhere: jest.Mock;
+    groupBy: jest.Mock;
+    getRawMany: jest.Mock;
+  };
 
   const validDto: CreateDepartmentDto = {
     departmentCode: 'IT',
@@ -38,7 +50,19 @@ describe('DepartmentsService', () => {
     } as unknown as jest.Mocked<EntityManager>;
 
     repo = { findAndCount: jest.fn(), findOne: jest.fn() };
-    userRepo = { find: jest.fn() };
+    userQueryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    userRepo = {
+      find: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
+      createQueryBuilder: jest.fn().mockReturnValue(userQueryBuilder),
+    };
     dataSource = {
       transaction: jest
         .fn()
@@ -91,6 +115,8 @@ describe('DepartmentsService', () => {
       expect(result.id).toBe('new-dept-uuid');
       expect(result.departmentCode).toBe('IT');
       expect(result.isActive).toBe(true);
+      // Phòng ban vừa tạo chắc chắn chưa có nhân viên nào.
+      expect(result.memberCount).toBe(0);
       expect(dataSource.transaction).toHaveBeenCalled();
     });
 
@@ -567,6 +593,7 @@ describe('DepartmentsService', () => {
         return null;
       });
       em.update.mockResolvedValue(undefined as any);
+      userRepo.count.mockResolvedValue(4);
 
       const result = await service.updateDepartment(
         'd1',
@@ -579,6 +606,7 @@ describe('DepartmentsService', () => {
       expect(result.managerUserId).toBe('m1');
       expect(result.parentDepartmentId).toBe('p1');
       expect(result.departmentName).toBe('Phòng CNTT');
+      expect(result.memberCount).toBe(4);
     });
 
     it('clear parent/manager bằng null → cập nhật thành null', async () => {
@@ -689,6 +717,35 @@ describe('DepartmentsService', () => {
         managerUserId: 'm1',
       });
       expect(r.data[0].createdAt).toBeInstanceOf(Date);
+    });
+
+    it('memberCount: gắn đúng số lượng theo kết quả GROUP BY batch query (1 query cho cả trang)', async () => {
+      repo.findAndCount.mockResolvedValue([
+        [deptRow({ id: 'd1' }), deptRow({ id: 'd2' }), deptRow({ id: 'd3' })],
+        3,
+      ]);
+      userQueryBuilder.getRawMany.mockResolvedValue([
+        { departmentId: 'd1', count: '5' },
+        { departmentId: 'd2', count: '0' },
+        // d3 không xuất hiện trong kết quả GROUP BY (0 nhân viên)
+      ]);
+
+      const r = await service.listDepartments({});
+
+      expect(userRepo.createQueryBuilder).toHaveBeenCalledTimes(1);
+      expect(userQueryBuilder.where).toHaveBeenCalledWith(
+        'u.departmentId IN (:...departmentIds)',
+        { departmentIds: ['d1', 'd2', 'd3'] },
+      );
+      expect(r.data.find((d) => d.id === 'd1')?.memberCount).toBe(5);
+      expect(r.data.find((d) => d.id === 'd2')?.memberCount).toBe(0);
+      expect(r.data.find((d) => d.id === 'd3')?.memberCount).toBe(0);
+    });
+
+    it('memberCount: list rỗng → KHÔNG gọi batch query (tránh query thừa)', async () => {
+      repo.findAndCount.mockResolvedValue([[], 0]);
+      await service.listDepartments({});
+      expect(userRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
 
@@ -886,6 +943,18 @@ describe('DepartmentsService', () => {
       expect(result.isActive).toBe(false);
     });
 
+    it('memberCount: trả đúng số nhân viên active đang trực thuộc, lọc qua UserEntity.count()', async () => {
+      repo.findOne.mockResolvedValue(baseDept);
+      userRepo.count.mockResolvedValue(7);
+
+      const result = await service.getDepartmentById('dept-uuid');
+
+      expect(result.memberCount).toBe(7);
+      expect(userRepo.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({ departmentId: 'dept-uuid' }),
+      });
+    });
+
     it('[AC-003] id không tồn tại → ném NotFoundException DEPARTMENT_NOT_FOUND', async () => {
       repo.findOne.mockResolvedValue(null);
 
@@ -949,6 +1018,8 @@ describe('DepartmentsService', () => {
       );
 
       expect(result.isActive).toBe(false);
+      // BR-05 vừa xác nhận 0 nhân viên active nên response memberCount phải là 0.
+      expect(result.memberCount).toBe(0);
       expect(em.update).toHaveBeenCalledWith(
         DepartmentEntity,
         'dept-active',
@@ -1052,6 +1123,8 @@ describe('DepartmentsService', () => {
       );
 
       expect(result.isActive).toBe(true);
+      // Phòng ban inactive không thể nhận nhân viên mới trong lúc tắt.
+      expect(result.memberCount).toBe(0);
       expect(em.update).toHaveBeenCalledWith(
         DepartmentEntity,
         'dept-inactive',

@@ -4,7 +4,7 @@
 - **Feature Name**: Get Department Detail
 - **Module / Domain**: accounts
 - **Created Date**: 2026-08-12
-- **Status**: Draft
+- **Status**: ✅ Đã triển khai (2026-08-12)
 - **Related**: DEPT-UPD-001 (PATCH /departments/:id, BE-08), ACCT-DEPT-MEMBERS-001 (GET /departments/:id/members)
 - **Source Documents**:
   - Yêu cầu trực tiếp của Thiếu Chủ (2026-08-12): rà soát API cho trang FE `/business-admin/departments` (đang mock data).
@@ -16,6 +16,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-12 | **Bổ sung `memberCount` vào `DepartmentResponseDto`** theo yêu cầu trực tiếp của Thiếu Chủ (đếm nhân viên trực thuộc trực tiếp, cùng định nghĩa "active member" với `GET /departments/:id/members` — ACCT-DEPT-MEMBERS-001). Field này áp dụng cho **mọi** endpoint trả về `DepartmentResponseDto`, không chỉ `GET /departments/:id` — xem mục 11 (mới). | §7, §11 (mới) |
 | 2026-08-12 | Khởi tạo spec. Phát hiện gap: FE hiện phải gọi `GET /departments` (list) rồi lọc client-side để lấy chi tiết 1 phòng ban — không có endpoint detail-by-id. | Toàn bộ file |
 
 ---
@@ -126,11 +127,13 @@ Auth: Bearer JWT (JwtAuthGuard + PermissionsGuard, permission department.read)
     "managerUserId": "uuid",
     "description": "Mô tả phòng ban",
     "isActive": true,
+    "memberCount": 12,
     "createdAt": "2026-08-12T00:00:00.000Z",
     "updatedAt": "2026-08-12T00:00:00.000Z"
   }
 }
 ```
+> `memberCount` — xem mục 11 để biết định nghĩa và cách tính chi tiết.
 
 ### 7.3 Response 404
 ```json
@@ -151,16 +154,35 @@ Auth: Bearer JWT (JwtAuthGuard + PermissionsGuard, permission department.read)
 - **AC-004**: Given `id` đã soft-delete, trả `404 DEPARTMENT_NOT_FOUND`.
 - **AC-005**: Given `id` sai định dạng UUID, trả `400`.
 - **AC-006**: Given actor không có permission `department.read`, trả `403`.
-- **AC-007**: Response body không chứa field nào ngoài 9 field của `DepartmentResponseDto`.
+- **AC-007**: Response body không chứa field nào ngoài 10 field của `DepartmentResponseDto` (đã gồm `memberCount` — xem §11).
 
 ---
 
 ## 9. Out of Scope
 - Trả kèm object `parentDepartment` lồng nhau hoặc danh sách `children` — FE tự gọi thêm `GET /departments?parentId=...` nếu cần.
-- Trả kèm số lượng thành viên (`memberCount`) — FE tự gọi `GET /departments/:id/members` nếu cần đếm.
-- Bất kỳ thay đổi nào ở `POST`/`GET (list)`/`PATCH`/`:id/members` hiện có.
+- Bất kỳ thay đổi nào ở `POST`/`GET (list)`/`PATCH`/`:id/members` hiện có ngoài việc bổ sung `memberCount` (xem §11).
 
 ---
 
 ## 10. Assumptions
 - Không cần scope-restriction theo phòng ban của actor (đồng nhất hành vi đọc hiện tại của `GET /departments`, vốn không giới hạn theo scope).
+
+---
+
+## 11. `memberCount` — bổ sung 2026-08-12 (yêu cầu trực tiếp của Thiếu Chủ)
+
+### 11.1 Định nghĩa
+Số nhân viên **đang hoạt động** (`account_status='active'`, `employment_status ∈ {active, probation}`, `deleted_at IS NULL`) trực thuộc **TRỰC TIẾP** phòng ban (`users.department_id = :id`, không đệ quy phòng ban con) — **cùng định nghĩa "member" với `GET /departments/:id/members`** (ACCT-DEPT-MEMBERS-001), đảm bảo số hiển thị trên badge khớp với danh sách chi tiết khi FE click vào xem.
+
+### 11.2 Áp dụng cho TẤT CẢ endpoint trả `DepartmentResponseDto`
+| Endpoint | Cách tính | Query thêm? |
+|---|---|---|
+| `GET /departments` (list) | 1 query `GROUP BY department_id` duy nhất cho cả trang (tránh N+1) | Có (1 query/trang) |
+| `GET /departments/:id` | `COUNT` trực tiếp | Có (1 query) |
+| `PATCH /departments/:id` | `COUNT` trực tiếp sau khi update | Có (1 query) |
+| `POST /departments` (create) | Hardcode `0` | Không — phòng ban vừa tạo chắc chắn chưa ai được gán vào |
+| `POST /departments/:id/deactivate` | Hardcode `0` | Không — BR-05 (ACCT-DEPT-DEACTIVATE-001) đã xác nhận 0 nhân viên active ngay trước khi cho phép deactivate thành công |
+| `POST /departments/:id/reactivate` | Hardcode `0` | Không — phòng ban inactive không thể nhận thêm nhân viên trong lúc tắt (`PATCH /users/:id` chặn gán vào department không active, mã lỗi `DEPARTMENT_INACTIVE_OR_DELETED`) |
+
+### 11.3 Implementation
+`DepartmentsService.toResponse(dept, memberCount)` nhận `memberCount` làm tham số thay vì tự tính bên trong — giữ `toResponse()` đồng bộ (sync), việc query bất đồng bộ được thực hiện ở tầng gọi (`countActiveMembers()` cho 1 phòng ban, `countActiveMembersBatch()` cho nhiều phòng ban cùng lúc dùng `GROUP BY`).

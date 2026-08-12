@@ -7,7 +7,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DataSource, IsNull, ILike, In } from 'typeorm';
+import { DataSource, IsNull, ILike, In, Repository } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
@@ -218,6 +218,9 @@ export class DepartmentsService {
           managerUserId: createdDept!.managerUserId,
           description: createdDept!.description,
           isActive: createdDept!.isActive,
+          // Phòng ban vừa tạo chắc chắn chưa có nhân viên nào (không ai có thể
+          // được gán departmentId trỏ tới 1 id chưa tồn tại trước đó).
+          memberCount: 0,
           createdAt: createdDept!.createdAt,
           updatedAt: createdDept!.updatedAt,
         },
@@ -239,6 +242,7 @@ export class DepartmentsService {
       managerUserId: createdDept!.managerUserId,
       description: createdDept!.description,
       isActive: createdDept!.isActive,
+      memberCount: 0, // phòng ban vừa tạo, chắc chắn chưa có nhân viên nào
       createdAt: createdDept!.createdAt,
       updatedAt: createdDept!.updatedAt,
     };
@@ -449,7 +453,11 @@ export class DepartmentsService {
       }
     });
 
-    return this.toResponse(updatedDept!);
+    const memberCount = await this.countActiveMembers(
+      this.dataSource.getRepository(UserEntity),
+      id,
+    );
+    return this.toResponse(updatedDept!, memberCount);
   }
 
   /**
@@ -528,7 +536,11 @@ export class DepartmentsService {
       });
     }
 
-    return this.toResponse(dept);
+    const memberCount = await this.countActiveMembers(
+      this.dataSource.getRepository(UserEntity),
+      id,
+    );
+    return this.toResponse(dept, memberCount);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -662,7 +674,9 @@ export class DepartmentsService {
       }
     });
 
-    return this.toResponse(updatedDept!);
+    // BR-05 vừa xác nhận activeMemberCount === 0 trước khi cho phép deactivate
+    // thành công, nên tại đây chắc chắn là 0 — không cần query lại.
+    return this.toResponse(updatedDept!, 0);
   }
 
   /**
@@ -759,7 +773,11 @@ export class DepartmentsService {
       }
     });
 
-    return this.toResponse(updatedDept!);
+    // Phòng ban đang inactive KHÔNG thể nhận thêm nhân viên trong lúc tắt
+    // (PATCH /users/:id chặn gán vào department không active — xem
+    // users.service.ts, mã lỗi DEPARTMENT_INACTIVE_OR_DELETED), nên tại thời
+    // điểm reactivate chắc chắn vẫn là 0 — không cần query lại.
+    return this.toResponse(updatedDept!, 0);
   }
 
   /**
@@ -795,8 +813,15 @@ export class DepartmentsService {
       take: limit,
     });
 
+    // 1 query GROUP BY duy nhất cho cả trang, tránh N+1.
+    const memberCountMap = await this.countActiveMembersBatch(
+      rows.map((dept) => dept.id),
+    );
+
     return {
-      data: rows.map((dept) => this.toResponse(dept)),
+      data: rows.map((dept) =>
+        this.toResponse(dept, memberCountMap.get(dept.id) ?? 0),
+      ),
       meta: {
         page,
         limit,
@@ -877,7 +902,10 @@ export class DepartmentsService {
   }
 
   /** Map DepartmentEntity → DepartmentResponseDto (dùng chung cho list). */
-  private toResponse(dept: DepartmentEntity): DepartmentResponseDto {
+  private toResponse(
+    dept: DepartmentEntity,
+    memberCount: number,
+  ): DepartmentResponseDto {
     return {
       id: dept.id,
       departmentCode: dept.departmentCode,
@@ -886,8 +914,67 @@ export class DepartmentsService {
       managerUserId: dept.managerUserId,
       description: dept.description,
       isActive: dept.isActive,
+      memberCount,
       createdAt: dept.createdAt,
       updatedAt: dept.updatedAt,
     };
+  }
+
+  /**
+   * Đếm nhân viên đang hoạt động (employment_status active/probation,
+   * account_status active) trực thuộc TRỰC TIẾP 1 phòng ban — cùng định nghĩa
+   * "member" với `listDepartmentMembers` (ACCT-DEPT-MEMBERS-001) để số liệu
+   * nhất quán giữa badge số lượng và danh sách chi tiết.
+   */
+  private async countActiveMembers(
+    repo: Repository<UserEntity>,
+    departmentId: string,
+  ): Promise<number> {
+    return repo.count({
+      where: {
+        departmentId,
+        deletedAt: IsNull(),
+        accountStatus: AccountStatus.ACTIVE,
+        employmentStatus: In([
+          EmploymentStatus.ACTIVE,
+          EmploymentStatus.PROBATION,
+        ]),
+      },
+    });
+  }
+
+  /**
+   * Đếm hàng loạt (1 query GROUP BY) cho nhiều phòng ban cùng lúc — dùng cho
+   * `listDepartments` để tránh N+1 query trên trang có nhiều bản ghi.
+   */
+  private async countActiveMembersBatch(
+    departmentIds: string[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (departmentIds.length === 0) return map;
+
+    const rows = await this.dataSource
+      .getRepository(UserEntity)
+      .createQueryBuilder('u')
+      .select('u.departmentId', 'departmentId')
+      .addSelect('COUNT(*)', 'count')
+      .where('u.departmentId IN (:...departmentIds)', { departmentIds })
+      .andWhere('u.deletedAt IS NULL')
+      .andWhere('u.accountStatus = :accountStatus', {
+        accountStatus: AccountStatus.ACTIVE,
+      })
+      .andWhere('u.employmentStatus IN (:...employmentStatuses)', {
+        employmentStatuses: [
+          EmploymentStatus.ACTIVE,
+          EmploymentStatus.PROBATION,
+        ],
+      })
+      .groupBy('u.departmentId')
+      .getRawMany<{ departmentId: string; count: string }>();
+
+    for (const row of rows) {
+      map.set(row.departmentId, parseInt(row.count, 10));
+    }
+    return map;
   }
 }
