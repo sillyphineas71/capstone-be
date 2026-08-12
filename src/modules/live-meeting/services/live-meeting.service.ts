@@ -2053,8 +2053,16 @@ export class LiveMeetingService {
    * Quét CẢ họp đã quá `end_time` (không chỉ họp đang trong khung giờ): đưa
    * chúng qua `in_progress` chính là để `autoCompleteOverdueMeetings()` ngay
    * sau đó `endMeeting()` được — đã chốt: họp quá giờ không ai tới VẪN chuyển
-   * `completed` (no-show là việc của NoShowDetectionService, không chặn vòng
-   * đời trạng thái ở đây).
+   * `completed`.
+   *
+   * [CẬP NHẬT 2026-08-13] Ghi chú cũ ở đây từng nói "no-show không chặn vòng
+   * đời trạng thái ở đây" — vẫn ĐÚNG cho riêng bước start/detect/warn (KHÔNG
+   * đổi gì ở autoStartDueMeetings() này). NHƯNG bước cuối cùng của no-show
+   * (auto/manual RELEASE phòng, khi hết cơ hội phản hồi) nay CÓ chủ động gọi
+   * `endMeeting()` ngay lúc đó (xem `NoShowLifecycleService.endMeetingDueToNoShow()`),
+   * KHÔNG còn chờ tới `autoCompleteOverdueMeetings()` quét theo `end_time` như
+   * trước — tránh khoảng trống "phòng đã giải phóng nhưng meeting vẫn
+   * in_progress + ghi hình chạy cho phòng trống" từng xảy ra thực tế.
    *
    * KHÔNG đụng `cancelled`/`draft`/`pending_approval`/`completed`.
    * Idempotent: `WHERE status='scheduled'` nên chạy lại không lật gì thêm.

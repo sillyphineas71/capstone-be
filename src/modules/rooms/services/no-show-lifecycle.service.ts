@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  HttpException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -17,6 +18,8 @@ import { AuditLogsService } from '../../administration/services/audit-logs.servi
 import { AuditLogSeverity } from '../../administration/entities/audit-log.entity.js';
 import { NoShowConfigService } from './no-show-config.service.js';
 import { buildNoShowAlertEmail } from '../../mail/templates/builders.js';
+import { LiveMeetingService } from '../../live-meeting/services/live-meeting.service.js';
+import { MEETING_END_ERRORS } from '../../live-meeting/constants/meeting-end-error.constant.js';
 
 interface CaseRef {
   id: string;
@@ -70,7 +73,20 @@ export type ReleaseResult = {
  * autoReleaseBatch (#33): warning_sent quá deadline → release(auto).
  * manualRelease (#33b): pre-check 404/400 + map skip → 200/409.
  *
- * SEC-03 bind raw-SQL. ARCH-01 KHÔNG mutate rooms/meetings. SEC-01 notify/audit metadata-only.
+ * SEC-03 bind raw-SQL. SEC-01 notify/audit metadata-only.
+ *
+ * [FIX 2026-08-13] release() giờ CÓ mutate meetings (đổi từ ARCH-01 cũ): sau khi phòng
+ * được giải phóng (auto lẫn manual), gọi endMeetingDueToNoShow() best-effort để kết thúc
+ * luôn meeting gắn với booking đó — tránh trạng thái "phòng đã giải phóng nhưng meeting
+ * vẫn in_progress + ghi hình chạy tiếp cho phòng trống" tới tận scheduled end_time (đã xác
+ * nhận qua thực tế, không phải suy đoán). Tái dùng NGUYÊN LiveMeetingService.endMeeting()
+ * (đã test kỹ, tự dừng ghi hình + huỷ warning job + notify) — KHÔNG viết lại logic kết
+ * thúc phiên. Có chủ đích đổi lại comment cũ ở autoStartDueMeetings() (live-meeting.service.ts)
+ * từng ghi "no-show không chặn vòng đời trạng thái" — quyết định đó CHỈ còn đúng cho bước
+ * detect/warn (không đổi), KHÔNG còn đúng cho bước release cuối cùng (nay chủ động kết thúc).
+ * meeting kết thúc do no-show vẫn mang status COMPLETED như mọi meeting khác (giữ đúng luật
+ * sẵn có "started meeting chỉ completed, không cancelled" — meetings.service.ts:2694-2710) —
+ * phân biệt no-show bằng join no_show_cases/room_events, KHÔNG thêm status mới.
  */
 @Injectable()
 export class NoShowLifecycleService {
@@ -83,6 +99,7 @@ export class NoShowLifecycleService {
     private readonly notificationsService: NotificationsService,
     private readonly noShowConfigService: NoShowConfigService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly liveMeetingService: LiveMeetingService,
   ) {}
 
   // ── R1: reconcile presence ────────────────────────────────────────────────
@@ -220,11 +237,12 @@ export class NoShowLifecycleService {
 
       await queryRunner.commitTransaction();
 
-      // Sau commit (best-effort): notify + (manual) audit.
+      // Sau commit (best-effort): notify + kết thúc meeting + (manual) audit.
       await this.notifyNoShow(
         { id: caseId, booking_id, meeting_id, room_id },
         'released',
       );
+      await this.endMeetingDueToNoShow(meeting_id);
       if (mode === 'manual') {
         await this.auditLogsService.logAction({
           userId: actor ?? undefined,
@@ -425,6 +443,69 @@ export class NoShowLifecycleService {
       }
     } catch (e) {
       this.logger.warn(`notifyNoShow ${c.id} failed: ${this.errMsg(e)}`);
+    }
+  }
+
+  /**
+   * [FIX 2026-08-13] Kết thúc meeting gắn với booking vừa bị no-show giải phóng — best-
+   * effort, KHÔNG ném ra ngoài release() (giống notifyNoShow, ARCH-02). Tái dùng nguyên
+   * LiveMeetingService.endMeeting() (đã tự dừng ghi hình/huỷ warning job/notify) — actor
+   * = organizer của chính meeting đó (system gọi thay, giống pattern
+   * autoCompleteOverdueMeetings() ở live-meeting.service.ts).
+   *
+   * Bỏ qua êm (log info, KHÔNG coi là lỗi) các trạng thái đã hợp lệ không cần xử lý thêm:
+   * meeting không còn tồn tại, đã completed/cancelled trước đó (race với luồng khác), hoặc
+   * vẫn đang `scheduled` (SCHEDULER_MEETING_STATUS_ENABLED tắt/chưa kịp tick — endMeeting()
+   * chỉ nhận IN_PROGRESS, cạnh hiếm này chưa xử lý, để nguyên chờ auto-complete theo end_time
+   * như trước — KHÔNG mở rộng thêm nhánh cancelMeeting() vì cancelMeeting() cũng chặn cứng
+   * bằng check `now() >= startTime`, luôn đúng ở đây nên vẫn sẽ throw MEETING_ALREADY_STARTED).
+   */
+  private async endMeetingDueToNoShow(meetingId: string): Promise<void> {
+    try {
+      const rows: Array<{ organizer_id: string | null }> =
+        await this.dataSource.manager.query(
+          `SELECT organizer_id FROM meetings WHERE id = $1 LIMIT 1`,
+          [meetingId],
+        );
+      const organizerId = rows[0]?.organizer_id;
+      if (!organizerId) {
+        this.logger.warn(
+          `endMeetingDueToNoShow: meeting ${meetingId} not found or no organizer, skip`,
+        );
+        return;
+      }
+
+      await this.liveMeetingService.endMeeting(
+        meetingId,
+        { userId: organizerId },
+        { userAgent: 'no-show-auto-release' },
+      );
+      this.logger.log(
+        `endMeetingDueToNoShow: meeting ${meetingId} ended (source=no_show_release)`,
+      );
+    } catch (e) {
+      const code =
+        e instanceof HttpException
+          ? (e.getResponse() as { error?: { code?: string } })?.error?.code
+          : undefined;
+      if (
+        code === MEETING_END_ERRORS.MEETING_ALREADY_COMPLETED ||
+        code === MEETING_END_ERRORS.MEETING_NOT_FOUND ||
+        code === MEETING_END_ERRORS.MEETING_CANCELLED
+      ) {
+        this.logger.debug(
+          `endMeetingDueToNoShow: meeting ${meetingId} already terminal (${code}), skip`,
+        );
+      } else if (code === MEETING_END_ERRORS.MEETING_NOT_STARTED) {
+        this.logger.log(
+          `endMeetingDueToNoShow: meeting ${meetingId} still scheduled (chưa tới IN_PROGRESS), ` +
+            `chưa kết thúc được — chờ auto-complete theo end_time như trước fix này`,
+        );
+      } else {
+        this.logger.error(
+          `endMeetingDueToNoShow: meeting ${meetingId} failed: ${this.errMsg(e)}`,
+        );
+      }
     }
   }
 

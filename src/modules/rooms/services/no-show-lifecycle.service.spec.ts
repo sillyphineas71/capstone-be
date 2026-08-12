@@ -12,6 +12,7 @@ import { NoShowConfigService } from './no-show-config.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
+import { LiveMeetingService } from '../../live-meeting/services/live-meeting.service.js';
 
 // Shape helpers: UPDATE…RETURNING → [rows,count]; SELECT/INSERT → rows.
 const ret = (rows: any[]) => [rows, rows.length];
@@ -23,6 +24,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
   let wsMock: any;
   let notifMock: any;
   let auditMock: any;
+  let liveMeetingMock: any;
   let configValues: any;
   let cfg: Record<string, unknown>;
 
@@ -45,6 +47,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
       enqueueEmailNotification: jest.fn().mockResolvedValue({}),
     };
     auditMock = { logAction: jest.fn().mockResolvedValue(undefined) };
+    liveMeetingMock = { endMeeting: jest.fn().mockResolvedValue({}) };
     configValues = {
       thresholdMinutes: 15,
       warningGraceMinutes: 0,
@@ -66,6 +69,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
           useValue: { getValues: () => Promise.resolve(configValues) },
         },
         { provide: AuditLogsService, useValue: auditMock },
+        { provide: LiveMeetingService, useValue: liveMeetingMock },
       ],
     }).compile();
     service = module.get(NoShowLifecycleService);
