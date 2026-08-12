@@ -81,18 +81,19 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
         // đúng nhánh streak thay vì nhánh "đã confirmed" cũ.
         if (sql.includes('SELECT first_presence_at FROM room_booking_usages'))
           return Promise.resolve([{ first_presence_at: null }]);
-        // Streak "đủ ngưỡng" mặc định (31s trước boundEnd của CHÍNH request đang test,
-        // presenceConfirmSeconds mock=30s) — giữ nguyên kỳ vọng "confirm ngay trong 1
-        // request" của các test cũ trong file này (không phải trọng tâm test streak chi
+        // Đoạn "đủ ngưỡng" mặc định (bắt đầu 31s trước boundEnd của CHÍNH request đang
+        // test, presenceConfirmSeconds mock=30s) — giữ nguyên kỳ vọng "confirm ngay trong
+        // 1 request" của các test cũ trong file này (không phải trọng tâm test streak chi
         // tiết — đã có occupancy-persistence.service.spec.ts riêng cho việc đó).
-        // [FIX 2026-08-13, R12] params: [roomId, boundStart, boundEnd, tolerance] — boundEnd
-        // ở index 2 (KHÔNG còn eventTime riêng ở index 3 như thuật toán streak cũ).
+        // [FIX 2026-08-13, R12b] params: [roomId, boundStart, boundEnd, tolerance,
+        // presenceConfirmSeconds] — boundEnd ở index 2 (không đổi). Kết quả trả về đổi
+        // shape { seg_start, is_active } (không còn { streak_start } của bản R12 đầu).
         if (sql.includes('real_departures')) {
           const boundEnd = params?.[2] as Date | undefined;
-          const streakStart = boundEnd
+          const segStart = boundEnd
             ? new Date(boundEnd.getTime() - 31_000)
             : new Date(Date.now() - 31_000);
-          return Promise.resolve([{ streak_start: streakStart }]);
+          return Promise.resolve([{ seg_start: segStart, is_active: true }]);
         }
         if (sql.includes('UPDATE rooms'))
           return Promise.resolve(roomUpdateRows);

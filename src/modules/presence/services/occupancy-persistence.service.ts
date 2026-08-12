@@ -50,18 +50,26 @@ interface UsageRow {
  * Xác nhận qua thực tế: đứng liên tục 40s trong khung vẫn bị tính no-show vì thuật toán cũ
  * không có event thứ 2 nào để tính lại streak.
  *
- * Mô hình mới: hiện diện được coi là LIÊN TỤC kể từ event dương (`occupancy_count>0`) ĐẦU
- * TIÊN sau lần "rời đi thật" gần nhất — "rời đi thật" = 1 event `occupancy_count=0` mà
- * KHÔNG có event dương nào theo sau trong vòng `presenceNoiseToleranceSeconds` giây (loại
- * trừ nhiễu cảm biến thoáng qua, vd đứng sát mép khung hình). Xem `computeStreakStart()`.
- * `presenceConfirmSeconds` vẫn giữ nguyên ý nghĩa chống lách (Case A — vào rồi ra ngay):
- * event `count=0` thật đến sớm trước khi đủ ngưỡng vẫn cắt streak về 0 như cũ.
+ * Mô hình: hiện diện được chia thành các ĐOẠN, ranh giới là lần "rời đi thật" — "rời đi
+ * thật" = 1 event `occupancy_count=0` mà KHÔNG có event dương nào theo sau trong vòng
+ * `presenceNoiseToleranceSeconds` giây (loại trừ nhiễu cảm biến thoáng qua, vd đứng sát mép
+ * khung hình). `presenceConfirmSeconds` vẫn giữ nguyên ý nghĩa chống lách (Case A — vào rồi
+ * ra ngay): đoạn ngắn hơn ngưỡng thì không tính. Xem `computeConfirmedSegment()`.
  *
- * [FIX 2026-08-13, R12 phần 2] Việc tính streak TRƯỚC ĐÂY chỉ chạy khi có event MỚI tới
- * (bên trong `persist()`) — với cảm biến chỉ báo 1 lần lúc vào, không có event thứ 2 nào
- * để kích hoạt tính lại streak dù bao nhiêu giây trôi qua thật ngoài đời. `reconcilePendingConfirmations()`
+ * [FIX 2026-08-13, R12b] Bản R12 đầu chỉ xét ĐOẠN ĐANG HOẠT ĐỘNG tính tới thời điểm đánh
+ * giá — sai với ca "đứng đủ ngưỡng RỒI MỚI rời đi": lúc đánh giá SAU khi đã rời, "đoạn đang
+ * hoạt động" luôn rỗng, quên mất đoạn TRƯỚC ĐÓ đã từng đủ giờ. Sửa: xét TOÀN BỘ đoạn (kể cả
+ * đã đóng do đã rời đi), lấy đoạn ĐẦU TIÊN đủ ngưỡng — không chỉ đoạn cuối cùng/đang mở.
+ * Vì vậy `persist()` nay kiểm tra lại cho CẢ event dương lẫn event=0 (trước đây event=0 bị
+ * bỏ qua hoàn toàn), và chỉ cho phép flip `rooms.current_status='occupied'` khi đoạn vừa
+ * xác nhận CÒN ĐANG MỞ (`isActive`) — xác nhận qua 1 đoạn đã đóng thì không được báo đang
+ * có mặt ngay lúc này.
+ *
+ * [FIX 2026-08-13, R12 phần 2] Việc tính lại đoạn hiện diện TRƯỚC ĐÂY chỉ chạy khi có event
+ * MỚI tới (bên trong `persist()`) — với cảm biến chỉ báo 1-2 lần (vào/ra), có thể không có
+ * event nào tới ĐÚNG lúc đủ ngưỡng để kích hoạt tính lại. `reconcilePendingConfirmations()`
  * bù cho khoảng trống này: được cron gọi định kỳ (KHÔNG phụ thuộc có event mới hay không),
- * tính streak tới thời điểm `now()` cho mọi booking chưa xác nhận có mặt.
+ * tính lại tới thời điểm `now()` cho mọi booking chưa xác nhận có mặt.
  */
 @Injectable()
 export class OccupancyPersistenceService {
@@ -175,28 +183,28 @@ export class OccupancyPersistenceService {
             [booking.booking_id, eventTime, occupancyCount],
           );
           // allowRoomStatusFlip giữ true (mặc định) — mirror đúng logic cũ.
-        } else if (occupancyCount > 0) {
-          // Chưa từng xác nhận có mặt + event hiện tại count>0 → tính streak, bound
-          // TRONG ĐÚNG cửa sổ booking đã resolve (chống leak sang booking liền kề).
+        } else {
+          // [FIX 2026-08-13, R12b] Chưa từng xác nhận có mặt — kiểm tra lại đoạn hiện diện
+          // gần nhất, BẤT KỂ event hiện tại là dương hay =0. Lý do gộp làm 1 nhánh (trước đây
+          // tách riêng, nhánh count==0 luôn no-op): 1 đoạn hiện diện có thể đã đủ
+          // presenceConfirmSeconds giây RỒI MỚI kết thúc (event=0 tới) — nếu chỉ kiểm tra lúc
+          // event dương, ca "đứng đủ 30s+ rồi rời đi" sẽ KHÔNG BAO GIỜ được xác nhận vì
+          // event=0 (event cuối cùng, kích hoạt persist() lần này) trước đây bị bỏ qua hoàn
+          // toàn. Xác nhận qua thực tế: đứng 30+ giây rồi rời khung vẫn bị báo no-show.
           const upperBound =
             eventTime < new Date(booking.reserved_end_time)
               ? eventTime
               : new Date(booking.reserved_end_time);
-          const streakStart = await this.computeStreakStart(
+          const confirmedSegment = await this.computeConfirmedSegment(
             queryRunner,
             roomId,
             new Date(booking.reserved_start_time),
             upperBound,
             presenceNoiseToleranceSeconds,
+            presenceConfirmSeconds,
           );
 
-          const streakDurationMs = streakStart
-            ? eventTime.getTime() - streakStart.getTime()
-            : -1;
-          const confirmedNow =
-            streakDurationMs >= presenceConfirmSeconds * 1000;
-
-          if (confirmedNow) {
+          if (confirmedSegment) {
             await queryRunner.query(
               `UPDATE room_booking_usages
                SET first_presence_at = $2,
@@ -206,16 +214,18 @@ export class OccupancyPersistenceService {
                      WHEN usage_status = 'not_started' THEN 'in_use'
                      ELSE usage_status END
                WHERE booking_id = $1`,
-              [booking.booking_id, streakStart, eventTime],
+              [booking.booking_id, confirmedSegment.start, eventTime],
             );
+            // Chỉ cho phép flip rooms.current_status='occupied' nếu đoạn vừa xác nhận
+            // CÒN ĐANG MỞ (chưa rời đi) — xác nhận qua chính event=0 (đã rời) thì KHÔNG
+            // được đánh dấu occupied (mâu thuẫn: vừa xác nhận có mặt đủ giờ, vừa nói đang
+            // có mặt NGAY LÚC NÀY trong khi họ vừa rời khỏi phòng).
+            allowRoomStatusFlip = confirmedSegment.isActive;
           } else {
-            // Chưa đủ ngưỡng: KHÔNG update gì cả — lần event tiếp theo tự tính lại streak.
+            // Chưa có đoạn nào đủ ngưỡng: KHÔNG update gì cả — event/cron reconcile tiếp
+            // theo tự tính lại.
             allowRoomStatusFlip = false;
           }
-        } else {
-          // booking chưa xác nhận + occupancyCount == 0: KHÔNG chạm room_booking_usages
-          // (tránh bug cũ: count=0 vẫn set first_presence_at qua COALESCE).
-          allowRoomStatusFlip = false;
         }
       }
 
@@ -278,23 +288,34 @@ export class OccupancyPersistenceService {
   }
 
   /**
-   * [FIX 2026-08-13, R12] Tính thời điểm bắt đầu chuỗi hiện diện liên tục hiện tại, trong
-   * cửa sổ [boundStart, boundEnd]. "Liên tục" = kể từ event dương (`occupancy_count>0`) đầu
-   * tiên SAU lần "rời đi thật" gần nhất — "rời đi thật" là 1 event `occupancy_count=0`
-   * KHÔNG có event dương nào theo sau trong vòng `noiseToleranceSeconds` giây (loại trừ
-   * nhiễu cảm biến thoáng qua). Không có event dương nào trong cửa sổ → trả `null`.
+   * [FIX 2026-08-13, R12b] Tìm đoạn hiện diện LIÊN TỤC ĐẦU TIÊN (trong cửa sổ
+   * [boundStart, boundEnd]) đã đạt đủ `presenceConfirmSeconds` giây — đoạn có thể ĐÃ ĐÓNG
+   * (người rời đi rồi mới được xác nhận, tính theo mốc lúc rời) hoặc CÒN ĐANG MỞ (chưa rời,
+   * tính theo `boundEnd`). Trả `null` nếu chưa đoạn nào đủ ngưỡng.
    *
-   * Dùng chung cho cả 2 nơi: persist() (boundEnd = eventTime của event vừa nhận) và
-   * reconcilePendingConfirmations() (boundEnd = now(), không phụ thuộc có event mới hay
-   * không) — 1 nguồn tính toán DUY NHẤT, tránh 2 công thức lệch nhau.
+   * Vì sao KHÔNG chỉ xét "đoạn đang hoạt động tính tới boundEnd" (bản R12 lần đầu bị sai):
+   * nếu người đứng đủ ngưỡng RỒI MỚI rời đi (event=0 tới), đánh giá tại thời điểm SAU khi
+   * rời đi sẽ luôn thấy "đoạn hiện tại" rỗng (không có event dương nào sau lúc rời) —
+   * KHÔNG NHỚ được rằng đoạn TRƯỚC ĐÓ đã từng đủ giờ. Phải xét TOÀN BỘ đoạn (kể cả đã đóng),
+   * lấy đoạn ĐẦU TIÊN đủ ngưỡng, không chỉ đoạn cuối cùng.
+   *
+   * "Rời đi thật" = 1 event `occupancy_count=0` KHÔNG có event dương nào theo sau trong
+   * vòng `noiseToleranceSeconds` giây (loại nhiễu cảm biến thoáng qua). Mỗi event dương
+   * được gán vào 1 đoạn theo lần rời-đi-thật GẦN NHẤT TRƯỚC nó; đoạn kết thúc ở lần rời-đi-
+   * thật kế tiếp (nếu có) hoặc `boundEnd` (nếu đoạn còn đang mở).
+   *
+   * Dùng chung cho cả 2 nơi: persist() (boundEnd = eventTime của event vừa nhận — chạy cho
+   * CẢ event dương lẫn event=0, không chỉ event dương) và reconcilePendingConfirmations()
+   * (boundEnd = now(), không phụ thuộc có event mới hay không) — 1 nguồn tính toán DUY NHẤT.
    */
-  private async computeStreakStart(
+  private async computeConfirmedSegment(
     executor: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
     roomId: string,
     boundStart: Date,
     boundEnd: Date,
     noiseToleranceSeconds: number,
-  ): Promise<Date | null> {
+    presenceConfirmSeconds: number,
+  ): Promise<{ start: Date; isActive: boolean } | null> {
     const rows = (await executor.query(
       `WITH zero_events AS (
          SELECT event_time
@@ -319,21 +340,53 @@ export class OccupancyPersistenceService {
                AND p.event_time <= z.event_time + ($4::int * interval '1 second')
           )
        ),
-       last_departure AS (
-         SELECT MAX(event_time) AS departed_at FROM real_departures
+       positive_events AS (
+         SELECT event_time
+           FROM room_events
+          WHERE room_id = $1
+            AND event_type = 'occupancy_detected'
+            AND occupancy_count > 0
+            AND event_time >= $2
+            AND event_time <= $3
+       ),
+       -- Gán mỗi event dương vào 1 đoạn hiện diện, nhóm theo lần rời-đi-thật GẦN NHẤT
+       -- TRƯỚC nó (NULL = trước lần rời đi thật đầu tiên, hoặc chưa từng có lần nào).
+       tagged AS (
+         SELECT p.event_time,
+                (SELECT MAX(d.event_time) FROM real_departures d
+                  WHERE d.event_time < p.event_time) AS since
+           FROM positive_events p
+       ),
+       segments AS (
+         SELECT since, MIN(event_time) AS seg_start, MAX(event_time) AS seg_last_positive
+           FROM tagged
+          GROUP BY since
+       ),
+       -- Đoạn CÒN ĐANG MỞ (chưa có lần rời-đi-thật nào sau event dương cuối của nó) → dùng
+       -- boundEnd làm mốc kết thúc tạm; đoạn ĐÃ ĐÓNG → dùng đúng thời điểm rời đi thật.
+       segments_end AS (
+         SELECT s.seg_start,
+                (SELECT MIN(d.event_time) FROM real_departures d
+                  WHERE d.event_time > s.seg_last_positive) AS next_departure
+           FROM segments s
        )
-       SELECT MIN(e.event_time) AS streak_start
-         FROM room_events e, last_departure d
-        WHERE e.room_id = $1
-          AND e.event_type = 'occupancy_detected'
-          AND e.occupancy_count > 0
-          AND e.event_time >= $2
-          AND e.event_time <= $3
-          AND (d.departed_at IS NULL OR e.event_time > d.departed_at)`,
-      [roomId, boundStart, boundEnd, noiseToleranceSeconds],
-    )) as Array<{ streak_start: Date | string | null }>;
-    const streakStart = rows?.[0]?.streak_start;
-    return streakStart ? new Date(streakStart) : null;
+       SELECT seg_start, (next_departure IS NULL) AS is_active
+         FROM segments_end
+        WHERE COALESCE(next_departure, $3::timestamptz) - seg_start
+              >= ($5::int * interval '1 second')
+        ORDER BY seg_start ASC
+        LIMIT 1`,
+      [
+        roomId,
+        boundStart,
+        boundEnd,
+        noiseToleranceSeconds,
+        presenceConfirmSeconds,
+      ],
+    )) as Array<{ seg_start: Date | string; is_active: boolean }>;
+    const row = rows?.[0];
+    if (!row) return null;
+    return { start: new Date(row.seg_start), isActive: row.is_active };
   }
 
   /**
@@ -387,16 +440,15 @@ export class OccupancyPersistenceService {
       try {
         const reservedEnd = new Date(c.reserved_end_time);
         const upperBound = now < reservedEnd ? now : reservedEnd;
-        const streakStart = await this.computeStreakStart(
+        const confirmedSegment = await this.computeConfirmedSegment(
           this.dataSource.manager,
           c.room_id,
           new Date(c.reserved_start_time),
           upperBound,
           presenceNoiseToleranceSeconds,
+          presenceConfirmSeconds,
         );
-        if (!streakStart) continue;
-        const durationMs = now.getTime() - streakStart.getTime();
-        if (durationMs < presenceConfirmSeconds * 1000) continue;
+        if (!confirmedSegment) continue;
 
         const queryRunner = this.dataSource.createQueryRunner();
         await queryRunner.connect();
@@ -413,10 +465,13 @@ export class OccupancyPersistenceService {
                       ELSE usage_status END
               WHERE booking_id = $1 AND first_presence_at IS NULL
               RETURNING id`,
-            [c.booking_id, streakStart],
+            [c.booking_id, confirmedSegment.start],
           )) as unknown;
           const updRows = this.rowsOf<{ id: string }>(upd);
-          if (updRows.length > 0) {
+          // Chỉ flip rooms.current_status='occupied' nếu đoạn vừa xác nhận CÒN ĐANG MỞ
+          // (người vẫn còn trong phòng) — đoạn đã đóng (họ rời đi rồi mới được reconcile
+          // xác nhận) thì KHÔNG được đánh dấu occupied.
+          if (updRows.length > 0 && confirmedSegment.isActive) {
             const roomUpd = (await queryRunner.query(
               `UPDATE rooms SET current_status = 'occupied'
                WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
@@ -424,8 +479,8 @@ export class OccupancyPersistenceService {
               [c.room_id],
             )) as unknown;
             statusChanged = this.rowsOf<{ id: string }>(roomUpd).length > 0;
-            confirmed++;
           }
+          if (updRows.length > 0) confirmed++;
           await queryRunner.commitTransaction();
         } catch (e) {
           await queryRunner.rollbackTransaction();
