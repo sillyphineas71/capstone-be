@@ -126,6 +126,42 @@ describe('AuditLogQueryRepository', () => {
       expect(sql).not.toContain("'; DROP TABLE");
       expect(sql).toMatch(/\$\d+/); // should have positional params
     });
+
+    it('should SELECT the actor avatar_url column', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+      await repository.findPaginated({}, 1, 20);
+
+      const [sql] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/u\.avatar_url AS user_avatar_url/i);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // findDistinctActionTypes — nguồn dựng dropdown lọc "Loại hành động"
+  // ---------------------------------------------------------------------------
+  describe('findDistinctActionTypes()', () => {
+    it('should GROUP BY action_type and ORDER BY frequency desc', async () => {
+      mockDataSource.query.mockResolvedValue([]);
+      await repository.findDistinctActionTypes();
+
+      const [sql] = mockDataSource.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/GROUP BY al\.action_type/i);
+      expect(sql).toMatch(/ORDER BY COUNT\(\*\) DESC/i);
+    });
+
+    it('should coerce count string to number', async () => {
+      mockDataSource.query.mockResolvedValue([
+        { action_type: 'login', count: '120' },
+        { action_type: 'ACCOUNT_LOCK', count: '3' },
+      ]);
+
+      const rows = await repository.findDistinctActionTypes();
+
+      expect(rows).toEqual([
+        { action_type: 'login', count: 120 },
+        { action_type: 'ACCOUNT_LOCK', count: 3 },
+      ]);
+    });
   });
 
   // ---------------------------------------------------------------------------

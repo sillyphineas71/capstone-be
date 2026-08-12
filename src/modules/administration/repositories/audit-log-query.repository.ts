@@ -19,6 +19,14 @@ export interface AuditLogRow {
   entity_id: string | null;
   severity: string;
   user_full_name: string | null;
+  // Chỉ có ở findPaginated (list). findAllForExport KHÔNG select cột này.
+  user_avatar_url?: string | null;
+}
+
+/** Một giá trị action_type có trong dữ liệu + số bản ghi tương ứng. */
+export interface ActionTypeCountRow {
+  action_type: string;
+  count: number;
 }
 
 /**
@@ -80,7 +88,8 @@ export class AuditLogQueryRepository {
         al.entity_type,
         al.entity_id,
         al.severity,
-        u.full_name AS user_full_name
+        u.full_name AS user_full_name,
+        u.avatar_url AS user_avatar_url
       FROM audit_logs al
       LEFT JOIN users u ON u.id = al.user_id
       ${sql}
@@ -144,6 +153,29 @@ export class AuditLogQueryRepository {
 
     const result = await this.dataSource.query(query, params);
     return parseInt(result[0]?.total ?? '0', 10);
+  }
+
+  /**
+   * findDistinctActionTypes — liệt kê tất cả giá trị action_type CÓ THẬT trong
+   * bảng audit_logs kèm số lượng bản ghi, sắp xếp theo tần suất giảm dần.
+   *
+   * Dùng cho GET /audit-logs/action-types để FE dựng dropdown "Loại hành động"
+   * từ dữ liệu thật thay vì hard-code — action_type là chuỗi tự do (varchar),
+   * không có enum cố định nên đây là nguồn tra cứu chính xác duy nhất.
+   */
+  async findDistinctActionTypes(): Promise<ActionTypeCountRow[]> {
+    const query = `
+      SELECT al.action_type, COUNT(*) AS count
+      FROM audit_logs al
+      GROUP BY al.action_type
+      ORDER BY COUNT(*) DESC, al.action_type ASC
+    `;
+    const rows: Array<{ action_type: string; count: string }> =
+      await this.dataSource.query(query);
+    return rows.map((r) => ({
+      action_type: r.action_type,
+      count: parseInt(r.count ?? '0', 10),
+    }));
   }
 
   /**
