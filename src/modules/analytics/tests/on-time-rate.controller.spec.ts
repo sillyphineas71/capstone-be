@@ -17,6 +17,7 @@ describe('OnTimeRateController', () => {
     mockService = {
       getOnTimeRate: jest.fn(),
       getLateHistory: jest.fn(),
+      getOnTimeRateByUsers: jest.fn(),
     } as unknown as jest.Mocked<OnTimeRateService>;
 
     controller = new OnTimeRateController(mockService);
@@ -138,6 +139,94 @@ describe('OnTimeRateController', () => {
           userId: mockUserId,
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getOnTimeRateByUsers', () => {
+    it('valid request -> 200 with user stats response shape', async () => {
+      const mockResult = {
+        data: {
+          items: [
+            {
+              userId: mockTargetId,
+              fullName: 'User A',
+              email: 'a@co.com',
+              avatarUrl: null,
+              employeeCode: 'EMP001',
+              departmentId: 'd1',
+              departmentName: 'Dept 1',
+              lateCount: 2,
+              onTimeCount: 8,
+              absentCount: 0,
+              totalRequired: 10,
+              lateRate: 20.0,
+            },
+          ],
+          total: 1,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          period: { from: '2026-06-01', to: '2026-06-30' },
+          graceMinutes: 0,
+        },
+        message:
+          'Thống kê tỷ lệ tham dự đúng giờ theo nhân sự được truy xuất thành công',
+      };
+
+      mockService.getOnTimeRateByUsers.mockResolvedValue(mockResult);
+
+      const query = { preset: 'month', page: 1, limit: 10 };
+      const result = await controller.getOnTimeRateByUsers(query, {
+        userId: mockUserId,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ tham dự đúng giờ theo nhân sự được truy xuất thành công',
+      );
+      expect(result.data.items).toHaveLength(1);
+      expect(result.data.total).toBe(1);
+      expect(result.meta).toEqual({});
+      expect(mockService.getOnTimeRateByUsers).toHaveBeenCalledWith(
+        { userId: mockUserId },
+        query,
+      );
+    });
+
+    it('service throws ForbiddenException -> re-thrown as-is', async () => {
+      mockService.getOnTimeRateByUsers.mockRejectedValue(
+        new ForbiddenException({
+          success: false,
+          message: 'Department is outside your scope',
+        }),
+      );
+
+      await expect(
+        controller.getOnTimeRateByUsers({} as any, { userId: mockUserId }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('service throws NotFoundException -> re-thrown as-is', async () => {
+      mockService.getOnTimeRateByUsers.mockRejectedValue(
+        new NotFoundException({
+          success: false,
+          message: 'Department not found',
+        }),
+      );
+
+      await expect(
+        controller.getOnTimeRateByUsers({} as any, { userId: mockUserId }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('service throws unexpected error -> InternalServerErrorException', async () => {
+      mockService.getOnTimeRateByUsers.mockRejectedValue(
+        new Error('DB failure'),
+      );
+
+      await expect(
+        controller.getOnTimeRateByUsers({} as any, { userId: mockUserId }),
+      ).rejects.toThrow(InternalServerErrorException);
     });
   });
 });

@@ -11,6 +11,22 @@ export interface OnTimeRateQueryParams {
   graceMinutes: number;
 }
 
+export interface UserLateStatRow {
+  userId: string;
+  fullName: string;
+  email: string;
+  avatarUrl: string | null;
+  employeeCode: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  lateCount: number | string;
+  onTimeCount: number | string;
+  absentCount: number | string;
+  totalRequired: number | string;
+  lateRate: number | string;
+  totalCount: number | string;
+}
+
 @Injectable()
 export class OnTimeRateRepository {
   private readonly logger = new Logger(OnTimeRateRepository.name);
@@ -378,5 +394,155 @@ export class OnTimeRateRepository {
     `;
 
     return this.dataSource.query(sql, [userId, from, to, graceMinutes]);
+  }
+
+  async checkDepartmentExists(departmentId: string): Promise<boolean> {
+    const rows = await this.dataSource.query(
+      `SELECT 1 FROM departments WHERE id = $1 AND is_active = true LIMIT 1`,
+      [departmentId],
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  async getLateByUsers(
+    params: OnTimeRateQueryParams,
+    sortBy: 'lateRate' | 'lateCount' | 'fullName' = 'lateRate',
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{
+    items: Array<{
+      userId: string;
+      fullName: string;
+      email: string;
+      avatarUrl: string | null;
+      employeeCode: string | null;
+      departmentId: string | null;
+      departmentName: string | null;
+      lateCount: number;
+      onTimeCount: number;
+      absentCount: number;
+      totalRequired: number;
+      lateRate: number;
+    }>;
+    total: number;
+  }> {
+    const scope = this.buildScopeWhere(params);
+    if (scope.clause === 'FALSE') {
+      return { items: [], total: 0 };
+    }
+
+    const graceIdx = scope.values.length + 1;
+    const fromIdx = graceIdx + 1;
+    const toIdx = graceIdx + 2;
+    const limitIdx = graceIdx + 3;
+    const offsetIdx = graceIdx + 4;
+
+    const sortMap: Record<string, string> = {
+      lateRate: 'late_rate DESC, full_name ASC',
+      lateCount: 'late_count DESC, full_name ASC',
+      fullName: 'full_name ASC',
+    };
+    const orderByClause = sortMap[sortBy] || sortMap.lateRate;
+    const offset = (page - 1) * limit;
+
+    const sql = `
+      WITH classified AS (
+        SELECT
+          u.id AS user_id,
+          u.full_name,
+          u.email,
+          u.avatar_url,
+          u.employee_code,
+          u.department_id,
+          d.department_name,
+          CASE
+            WHEN ar.id IS NULL OR ar.attendance_status = 'absent' OR NOT ar.is_present THEN 'absent'
+            WHEN $${graceIdx} = 0 THEN
+              CASE WHEN NOT ar.is_late THEN 'on_time' ELSE 'late' END
+            ELSE
+              CASE WHEN ar.late_minutes IS NULL OR ar.late_minutes <= $${graceIdx} THEN 'on_time' ELSE 'late' END
+          END AS status_bucket
+        FROM meeting_participants mp
+        INNER JOIN meetings m ON m.id = mp.meeting_id
+        INNER JOIN users u ON u.id = mp.user_id
+        LEFT JOIN departments d ON d.id = u.department_id
+        LEFT JOIN attendance_records ar ON ar.meeting_id = m.id AND ar.user_id = mp.user_id
+        WHERE m.status = 'completed'
+          AND m.deleted_at IS NULL
+          AND mp.invitation_status <> 'declined'
+          AND (ar.id IS NULL OR ar.attendance_status NOT IN ('invalidated', 'pending_review'))
+          AND m.start_time >= ($${fromIdx} || ' 00:00:00+07')::timestamptz
+          AND m.start_time <= ($${toIdx} || ' 23:59:59.999+07')::timestamptz
+          AND ${scope.clause}
+      ),
+      aggregated AS (
+        SELECT
+          user_id,
+          full_name,
+          email,
+          avatar_url,
+          employee_code,
+          department_id,
+          department_name,
+          COUNT(*) FILTER (WHERE status_bucket = 'late')::int AS late_count,
+          COUNT(*) FILTER (WHERE status_bucket = 'on_time')::int AS on_time_count,
+          COUNT(*) FILTER (WHERE status_bucket = 'absent')::int AS absent_count,
+          COUNT(*)::int AS total_required,
+          CASE 
+            WHEN COUNT(*) > 0 THEN ROUND((COUNT(*) FILTER (WHERE status_bucket = 'late')::decimal / COUNT(*)::decimal) * 100, 1)
+            ELSE 0 
+          END::float AS late_rate
+        FROM classified
+        GROUP BY user_id, full_name, email, avatar_url, employee_code, department_id, department_name
+      )
+      SELECT
+        user_id AS "userId",
+        full_name AS "fullName",
+        email,
+        avatar_url AS "avatarUrl",
+        employee_code AS "employeeCode",
+        department_id AS "departmentId",
+        department_name AS "departmentName",
+        late_count AS "lateCount",
+        on_time_count AS "onTimeCount",
+        absent_count AS "absentCount",
+        total_required AS "totalRequired",
+        late_rate AS "lateRate",
+        COUNT(*) OVER()::int AS "totalCount"
+      FROM aggregated
+      ORDER BY ${orderByClause}
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
+    `;
+
+    const rows = await this.dataSource.query<UserLateStatRow[]>(sql, [
+      ...scope.values,
+      params.graceMinutes,
+      params.from,
+      params.to,
+      limit,
+      offset,
+    ]);
+
+    if (!rows || rows.length === 0) {
+      return { items: [], total: 0 };
+    }
+
+    const total = Number(rows[0].totalCount ?? 0);
+    const items = rows.map((r) => ({
+      userId: r.userId,
+      fullName: r.fullName,
+      email: r.email,
+      avatarUrl: r.avatarUrl ?? null,
+      employeeCode: r.employeeCode ?? null,
+      departmentId: r.departmentId ?? null,
+      departmentName: r.departmentName ?? null,
+      lateCount: Number(r.lateCount ?? 0),
+      onTimeCount: Number(r.onTimeCount ?? 0),
+      absentCount: Number(r.absentCount ?? 0),
+      totalRequired: Number(r.totalRequired ?? 0),
+      lateRate: Number(r.lateRate ?? 0),
+    }));
+
+    return { items, total };
   }
 }

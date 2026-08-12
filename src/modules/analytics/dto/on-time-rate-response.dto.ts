@@ -53,3 +53,29 @@ export class LateHistoryResponseDto {
   period: { from: string; to: string };
   lateMeetings: LateMeetingItemDto[];
 }
+
+export class UserLateStatsItemDto {
+  userId: string;
+  fullName: string;
+  email: string;
+  avatarUrl: string | null;
+  employeeCode: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  lateCount: number;
+  onTimeCount: number;
+  absentCount: number;
+  totalRequired: number;
+  lateRate: number;
+}
+
+export class UserLateStatsResponseDto {
+  items: UserLateStatsItemDto[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  period: { from: string; to: string };
+  graceMinutes: number;
+  message?: string;
+}
