@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing';
 import { Reflector } from '@nestjs/core';
-import { NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import type { Request } from 'express';
 import { DepartmentsController } from './departments.controller.js';
 import { DepartmentsService } from '../services/departments.service.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -14,14 +19,32 @@ describe('DepartmentsController', () => {
     createDepartment: jest.Mock;
     listDepartments: jest.Mock;
     listDepartmentMembers: jest.Mock;
+    getDepartmentById: jest.Mock;
+    deactivateDepartment: jest.Mock;
+    reactivateDepartment: jest.Mock;
   };
   let reflector: Reflector;
+
+  const baseDept = {
+    id: 'dept-uuid',
+    departmentCode: 'IT',
+    departmentName: 'Phòng IT',
+    parentDepartmentId: null,
+    managerUserId: null,
+    description: null,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 
   beforeEach(async () => {
     service = {
       createDepartment: jest.fn(),
       listDepartments: jest.fn(),
       listDepartmentMembers: jest.fn(),
+      getDepartmentById: jest.fn(),
+      deactivateDepartment: jest.fn(),
+      reactivateDepartment: jest.fn(),
     };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DepartmentsController],
@@ -120,6 +143,171 @@ describe('DepartmentsController', () => {
     });
   });
 
+  // ── ACCT-DEPT-DETAIL-001 ────────────────────────────────────────────────
+
+  describe('getDepartmentById', () => {
+    it('[AC-001] 200 + envelope đúng shape khi tìm thấy', async () => {
+      service.getDepartmentById.mockResolvedValue(baseDept);
+
+      const res = await controller.getDepartmentById('dept-uuid');
+
+      expect(service.getDepartmentById).toHaveBeenCalledWith('dept-uuid');
+      expect(res).toEqual({
+        success: true,
+        message: 'Lấy chi tiết phòng ban thành công',
+        data: baseDept,
+      });
+    });
+
+    it('[AC-002] isActive=false vẫn trả về 200', async () => {
+      service.getDepartmentById.mockResolvedValue({
+        ...baseDept,
+        isActive: false,
+      });
+
+      const res = await controller.getDepartmentById('dept-uuid');
+
+      expect(res.data.isActive).toBe(false);
+      expect(res.success).toBe(true);
+    });
+
+    it('[AC-003/AC-004] propagate NotFoundException từ service khi không tìm thấy', async () => {
+      service.getDepartmentById.mockRejectedValue(
+        new NotFoundException({
+          success: false,
+          message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+          error: { code: 'DEPARTMENT_NOT_FOUND', details: { id: 'missing' } },
+        }),
+      );
+
+      await expect(controller.getDepartmentById('missing')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  // ── ACCT-DEPT-DEACTIVATE-001 ─────────────────────────────────────────────
+
+  describe('deactivateDepartment', () => {
+    const mockReq = { user: { userId: 'actor-id' } } as unknown as Request;
+
+    it('[AC-001] 200 + isActive=false khi deactivate thành công', async () => {
+      const deactivatedDept = { ...baseDept, isActive: false };
+      service.deactivateDepartment.mockResolvedValue(deactivatedDept);
+
+      const res = await controller.deactivateDepartment(
+        'dept-uuid',
+        mockReq,
+        '127.0.0.1',
+      );
+
+      expect(service.deactivateDepartment).toHaveBeenCalledWith(
+        'dept-uuid',
+        'actor-id',
+        expect.any(Object),
+      );
+      expect(res.success).toBe(true);
+      expect(res.data.isActive).toBe(false);
+      expect(res.message).toBe('Vô hiệu hoá phòng ban thành công');
+    });
+
+    it('[AC-002] DEPARTMENT_HAS_ACTIVE_CHILDREN → propagate ConflictException', async () => {
+      service.deactivateDepartment.mockRejectedValue(
+        new ConflictException({
+          success: false,
+          message: 'Không thể vô hiệu hoá: còn phòng ban con active.',
+          error: { code: 'DEPARTMENT_HAS_ACTIVE_CHILDREN', details: {} },
+        }),
+      );
+
+      await expect(
+        controller.deactivateDepartment('dept-uuid', mockReq, '127.0.0.1'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('[AC-003] DEPARTMENT_HAS_ACTIVE_MEMBERS → propagate ConflictException', async () => {
+      service.deactivateDepartment.mockRejectedValue(
+        new ConflictException({
+          success: false,
+          message: 'Không thể vô hiệu hoá: còn nhân viên active.',
+          error: { code: 'DEPARTMENT_HAS_ACTIVE_MEMBERS', details: {} },
+        }),
+      );
+
+      await expect(
+        controller.deactivateDepartment('dept-uuid', mockReq, '127.0.0.1'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('[AC-005] PARTNER_DEPARTMENT_PROTECTED → propagate ForbiddenException', async () => {
+      service.deactivateDepartment.mockRejectedValue(
+        new ForbiddenException({
+          success: false,
+          message: 'Không thể vô hiệu hoá department cố định.',
+          error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
+        }),
+      );
+
+      await expect(
+        controller.deactivateDepartment('partner-uuid', mockReq, '127.0.0.1'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('reactivateDepartment', () => {
+    const mockReq = { user: { userId: 'actor-id' } } as unknown as Request;
+
+    it('[AC-006] 200 + isActive=true khi reactivate thành công', async () => {
+      const reactivatedDept = { ...baseDept, isActive: true };
+      service.reactivateDepartment.mockResolvedValue(reactivatedDept);
+
+      const res = await controller.reactivateDepartment(
+        'dept-uuid',
+        mockReq,
+        '127.0.0.1',
+      );
+
+      expect(service.reactivateDepartment).toHaveBeenCalledWith(
+        'dept-uuid',
+        'actor-id',
+        expect.any(Object),
+      );
+      expect(res.success).toBe(true);
+      expect(res.data.isActive).toBe(true);
+      expect(res.message).toBe('Kích hoạt lại phòng ban thành công');
+    });
+
+    it('[AC-007] PARENT_DEPARTMENT_INACTIVE → propagate ConflictException', async () => {
+      service.reactivateDepartment.mockRejectedValue(
+        new ConflictException({
+          success: false,
+          message: 'Không thể kích hoạt lại: phòng ban cha đang inactive.',
+          error: { code: 'PARENT_DEPARTMENT_INACTIVE', details: {} },
+        }),
+      );
+
+      await expect(
+        controller.reactivateDepartment('dept-uuid', mockReq, '127.0.0.1'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('[AC-008] DEPARTMENT_ALREADY_ACTIVE → propagate ConflictException', async () => {
+      service.reactivateDepartment.mockRejectedValue(
+        new ConflictException({
+          success: false,
+          message: 'Phòng ban đã ở trạng thái hoạt động.',
+          error: { code: 'DEPARTMENT_ALREADY_ACTIVE', details: {} },
+        }),
+      );
+
+      await expect(
+        controller.reactivateDepartment('dept-uuid', mockReq, '127.0.0.1'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ── RBAC metadata (@RequirePermissions) ─────────────────────────────────
+
   describe('RBAC metadata (@RequirePermissions)', () => {
     it('listDepartments yêu cầu department.read', () => {
       const perms = reflector.get<string[]>(
@@ -143,6 +331,30 @@ describe('DepartmentsController', () => {
         controller.listDepartmentMembers,
       );
       expect(perms).toEqual(['accounts.user.list']);
+    });
+
+    it('[ACCT-DEPT-DETAIL-001] getDepartmentById yêu cầu department.read', () => {
+      const perms = reflector.get<string[]>(
+        PERMISSIONS_KEY,
+        controller.getDepartmentById,
+      );
+      expect(perms).toEqual(['department.read']);
+    });
+
+    it('[ACCT-DEPT-DEACTIVATE-001] deactivateDepartment yêu cầu department.deactivate', () => {
+      const perms = reflector.get<string[]>(
+        PERMISSIONS_KEY,
+        controller.deactivateDepartment,
+      );
+      expect(perms).toEqual(['department.deactivate']);
+    });
+
+    it('[ACCT-DEPT-DEACTIVATE-001] reactivateDepartment yêu cầu department.deactivate', () => {
+      const perms = reflector.get<string[]>(
+        PERMISSIONS_KEY,
+        controller.reactivateDepartment,
+      );
+      expect(perms).toEqual(['department.deactivate']);
     });
   });
 });

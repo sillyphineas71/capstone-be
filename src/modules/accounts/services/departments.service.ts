@@ -265,8 +265,7 @@ export class DepartmentsService {
       dto.departmentName === undefined &&
       dto.parentDepartmentId === undefined &&
       dto.managerUserId === undefined &&
-      dto.description === undefined &&
-      dto.isActive === undefined
+      dto.description === undefined
     ) {
       throw new BadRequestException({
         success: false,
@@ -292,7 +291,6 @@ export class DepartmentsService {
         parentDepartmentId: dept.parentDepartmentId,
         managerUserId: dept.managerUserId,
         description: dept.description,
-        isActive: dept.isActive,
       };
 
       let departmentName = dept.departmentName;
@@ -404,17 +402,11 @@ export class DepartmentsService {
           dto.description === null ? null : this.stripHtml(dto.description);
       }
 
-      let isActive = dept.isActive;
-      if (dto.isActive !== undefined) {
-        isActive = dto.isActive;
-      }
-
       await em.update(DepartmentEntity, id, {
         departmentName,
         parentDepartmentId,
         managerUserId,
         description,
-        isActive,
         updatedBy: updaterId,
       });
 
@@ -424,7 +416,6 @@ export class DepartmentsService {
         parentDepartmentId,
         managerUserId,
         description,
-        isActive,
         updatedBy: updaterId,
         updatedAt: new Date(),
       };
@@ -445,7 +436,6 @@ export class DepartmentsService {
             parentDepartmentId,
             managerUserId,
             description,
-            isActive,
           },
         });
         await em.save(AuditLogEntity, auditLog);
@@ -514,6 +504,262 @@ export class DepartmentsService {
     return (
       dto.departmentCode.trim().toUpperCase() + '::' + dto.departmentName.trim()
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCT-DEPT-DETAIL-001 — GET /departments/:id
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Trả về 1 phòng ban theo `id`.
+   * • `isActive=false` vẫn trả về bình thường (không lọc theo trạng thái hoạt động).
+   * • Nếu không tìm thấy hoặc đã soft-delete → 404 DEPARTMENT_NOT_FOUND.
+   */
+  async getDepartmentById(id: string): Promise<DepartmentResponseDto> {
+    const dept = await this.dataSource
+      .getRepository(DepartmentEntity)
+      .findOne({ where: { id, deletedAt: IsNull() } });
+
+    if (!dept) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+        error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+      });
+    }
+
+    return this.toResponse(dept);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCT-DEPT-DEACTIVATE-001 — POST /departments/:id/deactivate+reactivate
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Vô hiệu hoá phòng ban (`isActive=false`).
+   *
+   * Business Rules:
+   *  BR-01: không tồn tại / soft-deleted → 404.
+   *  BR-02: PARTNER_DEPARTMENT_ID → 403.
+   *  BR-03: đã inactive → 409 DEPARTMENT_ALREADY_INACTIVE.
+   *  BR-04: còn phòng ban con active → 409 DEPARTMENT_HAS_ACTIVE_CHILDREN.
+   *  BR-05: còn nhân viên active → 409 DEPARTMENT_HAS_ACTIVE_MEMBERS.
+   */
+  async deactivateDepartment(
+    id: string,
+    actorId: string,
+    clientContext: ClientContext,
+  ): Promise<DepartmentResponseDto> {
+    // BR-02
+    if (id === PARTNER_DEPARTMENT_ID) {
+      throw new ForbiddenException({
+        success: false,
+        message:
+          'Không thể vô hiệu hoá department cố định đánh dấu tài khoản đối tác.',
+        error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
+      });
+    }
+
+    let updatedDept: DepartmentEntity;
+
+    await this.dataSource.transaction(async (em) => {
+      // BR-01
+      const dept = await em.findOne(DepartmentEntity, {
+        where: { id, deletedAt: IsNull() },
+      });
+      if (!dept) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+          error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+        });
+      }
+
+      // BR-03
+      if (!dept.isActive) {
+        throw new ConflictException({
+          success: false,
+          message: 'Phòng ban đã ở trạng thái không hoạt động.',
+          error: { code: 'DEPARTMENT_ALREADY_INACTIVE', details: { id } },
+        });
+      }
+
+      // BR-04: kiểm tra phòng ban con active
+      const activeChildren = await em.find(DepartmentEntity, {
+        where: { parentDepartmentId: id, isActive: true, deletedAt: IsNull() },
+        select: { id: true },
+      });
+      if (activeChildren.length > 0) {
+        throw new ConflictException({
+          success: false,
+          message:
+            'Không thể vô hiệu hoá: phòng ban còn phòng ban con đang hoạt động.',
+          error: {
+            code: 'DEPARTMENT_HAS_ACTIVE_CHILDREN',
+            details: { childDepartmentIds: activeChildren.map((c) => c.id) },
+          },
+        });
+      }
+
+      // BR-05: kiểm tra nhân viên active
+      const activeMemberCount = await em.count(UserEntity, {
+        where: {
+          departmentId: id,
+          deletedAt: IsNull(),
+          accountStatus: AccountStatus.ACTIVE,
+          employmentStatus: In([
+            EmploymentStatus.ACTIVE,
+            EmploymentStatus.PROBATION,
+          ]),
+        },
+      });
+      if (activeMemberCount > 0) {
+        throw new ConflictException({
+          success: false,
+          message:
+            'Không thể vô hiệu hoá: phòng ban còn nhân viên đang hoạt động.',
+          error: {
+            code: 'DEPARTMENT_HAS_ACTIVE_MEMBERS',
+            details: { activeMemberCount },
+          },
+        });
+      }
+
+      await em.update(DepartmentEntity, id, {
+        isActive: false,
+        updatedBy: actorId,
+      });
+
+      updatedDept = {
+        ...dept,
+        isActive: false,
+        updatedBy: actorId,
+        updatedAt: new Date(),
+      };
+
+      // Audit log (best-effort)
+      try {
+        const auditLog = em.create(AuditLogEntity, {
+          userId: actorId,
+          actionType: 'deactivate',
+          entityType: 'department',
+          entityId: id,
+          severity: AuditLogSeverity.INFO,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+          oldValueJson: { isActive: true },
+          newValueJson: { isActive: false },
+        });
+        await em.save(AuditLogEntity, auditLog);
+      } catch (auditError) {
+        this.logger.error(
+          'Failed to save audit log for deactivate department ' +
+            id +
+            ': ' +
+            (auditError as Error).message,
+        );
+      }
+    });
+
+    return this.toResponse(updatedDept!);
+  }
+
+  /**
+   * Kích hoạt lại phòng ban (`isActive=true`).
+   *
+   * Business Rules:
+   *  BR-06: không tồn tại / soft-deleted → 404.
+   *  BR-07: đã active → 409 DEPARTMENT_ALREADY_ACTIVE.
+   *  BR-08: phòng ban cha đang inactive → 409 PARENT_DEPARTMENT_INACTIVE.
+   *  (PARTNER_DEPARTMENT_ID không bị chặn khi reactivate.)
+   */
+  async reactivateDepartment(
+    id: string,
+    actorId: string,
+    clientContext: ClientContext,
+  ): Promise<DepartmentResponseDto> {
+    let updatedDept: DepartmentEntity;
+
+    await this.dataSource.transaction(async (em) => {
+      // BR-06
+      const dept = await em.findOne(DepartmentEntity, {
+        where: { id, deletedAt: IsNull() },
+      });
+      if (!dept) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+          error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+        });
+      }
+
+      // BR-07
+      if (dept.isActive) {
+        throw new ConflictException({
+          success: false,
+          message: 'Phòng ban đã ở trạng thái hoạt động.',
+          error: { code: 'DEPARTMENT_ALREADY_ACTIVE', details: { id } },
+        });
+      }
+
+      // BR-08: phòng ban cha có inactive?
+      if (dept.parentDepartmentId) {
+        const parent = await em.findOne(DepartmentEntity, {
+          where: { id: dept.parentDepartmentId },
+          select: { id: true, isActive: true },
+        });
+        if (parent && !parent.isActive) {
+          throw new ConflictException({
+            success: false,
+            message:
+              'Không thể kích hoạt lại: phòng ban cha đang không hoạt động.',
+            error: {
+              code: 'PARENT_DEPARTMENT_INACTIVE',
+              details: { parentDepartmentId: dept.parentDepartmentId },
+            },
+          });
+        }
+      }
+
+      await em.update(DepartmentEntity, id, {
+        isActive: true,
+        updatedBy: actorId,
+      });
+
+      updatedDept = {
+        ...dept,
+        isActive: true,
+        updatedBy: actorId,
+        updatedAt: new Date(),
+      };
+
+      // Audit log (best-effort)
+      try {
+        const auditLog = em.create(AuditLogEntity, {
+          userId: actorId,
+          actionType: 'reactivate',
+          entityType: 'department',
+          entityId: id,
+          severity: AuditLogSeverity.INFO,
+          ipAddress: clientContext.ipAddress || null,
+          userAgent: clientContext.userAgent || null,
+          requestId: clientContext.requestId || null,
+          oldValueJson: { isActive: false },
+          newValueJson: { isActive: true },
+        });
+        await em.save(AuditLogEntity, auditLog);
+      } catch (auditError) {
+        this.logger.error(
+          'Failed to save audit log for reactivate department ' +
+            id +
+            ': ' +
+            (auditError as Error).message,
+        );
+      }
+    });
+
+    return this.toResponse(updatedDept!);
   }
 
   /**

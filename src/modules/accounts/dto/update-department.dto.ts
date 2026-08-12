@@ -1,5 +1,4 @@
 import {
-  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
@@ -20,6 +19,11 @@ import { NoEmojiOrControlConstraint } from '../validators/no-emoji-or-control.va
  * đang sửa, nên PATCH gửi lại đúng tên hiện tại (không đổi) sẽ bị từ chối
  * nhầm là trùng. Tính duy nhất tên khi update được kiểm tra trong
  * `DepartmentsService.updateDepartment()` với điều kiện loại trừ `id` hiện tại.
+ *
+ * BREAKING CHANGE (2026-08-12, ACCT-DEPT-DEACTIVATE-001):
+ * Field `isActive` đã bị XOÁ khỏi DTO này. Việc bật/tắt phòng ban nay
+ * được thực hiện qua POST /departments/:id/deactivate và /reactivate.
+ * Gửi `isActive` trong PATCH body sẽ nhận 400 (forbidNonWhitelisted).
  */
 export class UpdateDepartmentDto {
   @Transform(({ value }: { value: unknown }) =>
@@ -51,8 +55,4 @@ export class UpdateDepartmentDto {
   @IsOptional()
   @IsString({ message: 'Mô tả phòng ban phải là chuỗi ký tự' })
   description?: string | null;
-
-  @IsOptional()
-  @IsBoolean({ message: 'Trạng thái hoạt động phải là boolean' })
-  isActive?: boolean;
 }

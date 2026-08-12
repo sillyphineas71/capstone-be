@@ -46,6 +46,8 @@ import { DepartmentMemberItemDto } from '../dto/department-member-item.dto.js';
 export class DepartmentsController {
   constructor(private readonly departmentsService: DepartmentsService) {}
 
+  // ── POST /departments ──────────────────────────────────────────────────────
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -108,6 +110,8 @@ export class DepartmentsController {
     };
   }
 
+  // ── GET /departments ───────────────────────────────────────────────────────
+
   @Get()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('department.read')
@@ -160,6 +164,51 @@ export class DepartmentsController {
     };
   }
 
+  // ── GET /departments/:id — ACCT-DEPT-DETAIL-001 ───────────────────────────
+  // QUAN TRỌNG: route này phải được đặt TRƯỚC :id/members để NestJS khớp đúng
+  // thứ tự. Hiện tại không có xung đột vì :id/members có suffix /members.
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('department.read')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xem chi tiết 1 phòng ban',
+    description:
+      'Trả về đúng 1 bản ghi phòng ban theo id. isActive=false vẫn được trả về. Tái dùng permission department.read — không cần permission mới. (ACCT-DEPT-DETAIL-001)',
+  })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Chi tiết phòng ban.',
+    type: DepartmentResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission department.read).',
+  })
+  async getDepartmentById(@Param('id', ParseUUIDPipe) id: string): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto;
+  }> {
+    const data = await this.departmentsService.getDepartmentById(id);
+
+    return {
+      success: true,
+      message: 'Lấy chi tiết phòng ban thành công',
+      data,
+    };
+  }
+
+  // ── GET /departments/:id/members ──────────────────────────────────────────
+
   @Get(':id/members')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('accounts.user.list')
@@ -199,6 +248,8 @@ export class DepartmentsController {
     };
   }
 
+  // ── PATCH /departments/:id ────────────────────────────────────────────────
+
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -214,7 +265,7 @@ export class DepartmentsController {
   @ApiOperation({
     summary: 'Cập nhật phòng ban',
     description:
-      'Cho phép Admin/Manager cập nhật tên, phòng ban cha, người quản lý, mô tả, trạng thái hoạt động. KHÔNG cho sửa departmentCode.',
+      'Cho phép Admin/Manager cập nhật tên, phòng ban cha, người quản lý, mô tả. KHÔNG cho sửa departmentCode. BREAKING CHANGE (2026-08-12, ACCT-DEPT-DEACTIVATE-001): field isActive đã bị xóa khỏi endpoint này — dùng POST /departments/:id/deactivate và /reactivate thay thế.',
   })
   @ApiParam({ name: 'id', type: String, format: 'uuid' })
   @ApiBody({ type: UpdateDepartmentDto })
@@ -225,7 +276,8 @@ export class DepartmentsController {
   })
   @ApiResponse({
     status: HttpStatus.BAD_REQUEST,
-    description: 'Body rỗng — không có trường nào để cập nhật.',
+    description:
+      'Body rỗng — không có trường nào để cập nhật, hoặc gửi field isActive (đã bị xóa khỏi endpoint này).',
   })
   @ApiResponse({
     status: HttpStatus.NOT_FOUND,
@@ -271,6 +323,124 @@ export class DepartmentsController {
       success: true,
       message: 'Cập nhật phòng ban thành công',
       data: result,
+    };
+  }
+
+  // ── ACCT-DEPT-DEACTIVATE-001 ───────────────────────────────────────────────
+
+  @Post(':id/deactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('department.deactivate')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Vô hiệu hoá phòng ban',
+    description:
+      'Đặt isActive=false. Business rules: từ chối nếu còn phòng ban con active (409 DEPARTMENT_HAS_ACTIVE_CHILDREN) hoặc nhân viên active (409 DEPARTMENT_HAS_ACTIVE_MEMBERS). Không cho deactivate PARTNER_DEPARTMENT_ID (403). (ACCT-DEPT-DEACTIVATE-001)',
+  })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Phòng ban đã bị vô hiệu hoá.',
+    type: DepartmentResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description:
+      'DEPARTMENT_ALREADY_INACTIVE | DEPARTMENT_HAS_ACTIVE_CHILDREN | DEPARTMENT_HAS_ACTIVE_MEMBERS',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission department.deactivate) hoặc PARTNER_DEPARTMENT_PROTECTED.',
+  })
+  async deactivateDepartment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const data = await this.departmentsService.deactivateDepartment(
+      id,
+      actorId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Vô hiệu hoá phòng ban thành công',
+      data,
+    };
+  }
+
+  @Post(':id/reactivate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('department.deactivate')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Kích hoạt lại phòng ban',
+    description:
+      'Đặt isActive=true. Business rules: từ chối nếu phòng ban cha đang inactive (409 PARENT_DEPARTMENT_INACTIVE). PARTNER_DEPARTMENT_ID không bị chặn khi reactivate. (ACCT-DEPT-DEACTIVATE-001)',
+  })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Phòng ban đã được kích hoạt lại.',
+    type: DepartmentResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Phòng ban không tồn tại hoặc đã bị xóa.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CONFLICT,
+    description: 'DEPARTMENT_ALREADY_ACTIVE | PARENT_DEPARTMENT_INACTIVE',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Không có quyền truy cập (thiếu hoặc sai JWT).',
+  })
+  @ApiForbiddenResponse({
+    description: 'Không đủ quyền hạn (thiếu permission department.deactivate).',
+  })
+  async reactivateDepartment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: DepartmentResponseDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const data = await this.departmentsService.reactivateDepartment(
+      id,
+      actorId,
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message: 'Kích hoạt lại phòng ban thành công',
+      data,
     };
   }
 }

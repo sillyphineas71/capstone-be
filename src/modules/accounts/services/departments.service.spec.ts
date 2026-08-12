@@ -4,6 +4,7 @@ import { DataSource, EntityManager } from 'typeorm';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -13,6 +14,7 @@ import { CreateDepartmentDto } from '../dto/create-department.dto.js';
 import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { UserEntity } from '../entities/user.entity.js';
+import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
 
 describe('DepartmentsService', () => {
   let service: DepartmentsService;
@@ -609,9 +611,14 @@ describe('DepartmentsService', () => {
       em.update.mockResolvedValue(undefined as any);
       em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
 
-      await service.updateDepartment('d1', { isActive: false }, 'updater-id', {
-        ipAddress: '127.0.0.1',
-      });
+      await service.updateDepartment(
+        'd1',
+        { description: 'mo ta moi' },
+        'updater-id',
+        {
+          ipAddress: '127.0.0.1',
+        },
+      );
 
       expect(em.save).toHaveBeenCalled();
     });
@@ -804,41 +811,330 @@ describe('DepartmentsService', () => {
   });
 
   describe('PTA partner department protection', () => {
-  it('blocks update of the fixed partner department for any actor', async () => {
-    await expect(
-      service.updateDepartment(
-        '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f',
-        { departmentName: 'Renamed' },
-        'system-admin',
-        {},
-      ),
-    ).rejects.toMatchObject({
-      response: { error: { code: 'PARTNER_DEPARTMENT_PROTECTED' } },
-      status: 403,
+    it('blocks update of the fixed partner department for any actor', async () => {
+      await expect(
+        service.updateDepartment(
+          '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f',
+          { departmentName: 'Renamed' },
+          'system-admin',
+          {},
+        ),
+      ).rejects.toMatchObject({
+        response: { error: { code: 'PARTNER_DEPARTMENT_PROTECTED' } },
+        status: 403,
+      });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
-    expect(dataSource.transaction).not.toHaveBeenCalled();
+
+    it('allows update of other departments', async () => {
+      const dept = {
+        id: 'other-dept',
+        departmentName: 'IT',
+        parentDepartmentId: null,
+        managerUserId: null,
+        description: null,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      em.findOne.mockResolvedValue(dept);
+
+      const result = await service.updateDepartment(
+        'other-dept',
+        { departmentName: 'Phong IT' },
+        'admin',
+        {},
+      );
+      expect(result.id).toBe('other-dept');
+    });
   });
 
-  it('allows update of other departments', async () => {
-    const dept = {
-      id: 'other-dept',
-      departmentName: 'IT',
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCT-DEPT-DETAIL-001 — getDepartmentById
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe('getDepartmentById', () => {
+    const baseDept = {
+      id: 'dept-uuid',
+      departmentCode: 'IT',
+      departmentName: 'Phòng Công nghệ thông tin',
       parentDepartmentId: null,
       managerUserId: null,
       description: null,
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
+      deletedAt: null,
     };
-    em.findOne.mockResolvedValue(dept);
 
-    const result = await service.updateDepartment(
-      'other-dept',
-      { departmentName: 'Phong IT' },
-      'admin',
-      {},
-    );
-    expect(result.id).toBe('other-dept');
+    it('[AC-001] tìm thấy phòng ban active → trả về DepartmentResponseDto đúng shape', async () => {
+      repo.findOne.mockResolvedValue(baseDept);
+
+      const result = await service.getDepartmentById('dept-uuid');
+
+      expect(result.id).toBe('dept-uuid');
+      expect(result.departmentCode).toBe('IT');
+      expect(result.isActive).toBe(true);
+      expect(dataSource.getRepository).toHaveBeenCalledWith(DepartmentEntity);
+    });
+
+    it('[AC-002] phòng ban isActive=false → vẫn trả về (không lọc theo trạng thái)', async () => {
+      repo.findOne.mockResolvedValue({ ...baseDept, isActive: false });
+
+      const result = await service.getDepartmentById('dept-uuid');
+
+      expect(result.isActive).toBe(false);
+    });
+
+    it('[AC-003] id không tồn tại → ném NotFoundException DEPARTMENT_NOT_FOUND', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.getDepartmentById('nonexistent')).rejects.toThrow(
+        NotFoundException,
+      );
+      await expect(
+        service.getDepartmentById('nonexistent'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({ code: 'DEPARTMENT_NOT_FOUND' }),
+        }),
+      });
+    });
+
+    it('[AC-004] id của bản ghi đã soft-delete → ném NotFoundException (findOne trả null vì where deletedAt IS NULL)', async () => {
+      // repo.findOne với where {deletedAt: IsNull()} sẽ trả null cho bản ghi deleted
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getDepartmentById('soft-deleted-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCT-DEPT-DEACTIVATE-001 — deactivateDepartment
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe('deactivateDepartment', () => {
+    const activeDept = {
+      id: 'dept-active',
+      departmentCode: 'IT',
+      departmentName: 'Phòng IT',
+      parentDepartmentId: null,
+      managerUserId: null,
+      description: null,
+      isActive: true,
+      createdBy: null,
+      updatedBy: null,
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    beforeEach(() => {
+      em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
+      em.save.mockResolvedValue({});
+    });
+
+    it('[AC-001] Happy path: deactivate thành công → isActive=false, audit ghi', async () => {
+      em.findOne.mockResolvedValue(activeDept); // BR-01 OK
+      em.find.mockResolvedValue([]); // BR-04: không có con active
+      em.count = jest.fn().mockResolvedValue(0); // BR-05: không có nhân viên active
+      em.update = jest.fn().mockResolvedValue(undefined);
+
+      const result = await service.deactivateDepartment(
+        'dept-active',
+        'actor-id',
+        {},
+      );
+
+      expect(result.isActive).toBe(false);
+      expect(em.update).toHaveBeenCalledWith(
+        DepartmentEntity,
+        'dept-active',
+        expect.objectContaining({ isActive: false }),
+      );
+    });
+
+    it('[BR-02] PARTNER_DEPARTMENT_ID → ném ForbiddenException PARTNER_DEPARTMENT_PROTECTED', async () => {
+      await expect(
+        service.deactivateDepartment(PARTNER_DEPARTMENT_ID, 'actor', {}),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('[BR-03] đã inactive → ném ConflictException DEPARTMENT_ALREADY_INACTIVE', async () => {
+      em.findOne.mockResolvedValue({ ...activeDept, isActive: false });
+
+      await expect(
+        service.deactivateDepartment('dept-active', 'actor', {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DEPARTMENT_ALREADY_INACTIVE',
+          }),
+        }),
+      });
+    });
+
+    it('[BR-04] còn phòng ban con active → ném ConflictException DEPARTMENT_HAS_ACTIVE_CHILDREN', async () => {
+      em.findOne.mockResolvedValue(activeDept);
+      em.find.mockResolvedValue([{ id: 'child-uuid' }]); // có con active
+
+      await expect(
+        service.deactivateDepartment('dept-active', 'actor', {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DEPARTMENT_HAS_ACTIVE_CHILDREN',
+          }),
+        }),
+      });
+    });
+
+    it('[BR-05] còn nhân viên active → ném ConflictException DEPARTMENT_HAS_ACTIVE_MEMBERS', async () => {
+      em.findOne.mockResolvedValue(activeDept);
+      em.find.mockResolvedValue([]); // không có con active
+      em.count = jest.fn().mockResolvedValue(3); // có 3 nhân viên active
+
+      await expect(
+        service.deactivateDepartment('dept-active', 'actor', {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'DEPARTMENT_HAS_ACTIVE_MEMBERS',
+          }),
+        }),
+      });
+    });
+
+    it('[BR-01] phòng ban không tồn tại → ném NotFoundException DEPARTMENT_NOT_FOUND', async () => {
+      em.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.deactivateDepartment('nonexistent', 'actor', {}),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ACCT-DEPT-DEACTIVATE-001 — reactivateDepartment
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe('reactivateDepartment', () => {
+    const inactiveDept = {
+      id: 'dept-inactive',
+      departmentCode: 'HR',
+      departmentName: 'Phòng Nhân sự',
+      parentDepartmentId: null,
+      managerUserId: null,
+      description: null,
+      isActive: false,
+      createdBy: null,
+      updatedBy: null,
+      deletedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    beforeEach(() => {
+      em.create.mockImplementation(<T>(_: any, plain: T): T => plain);
+      em.save.mockResolvedValue({});
+      em.update = jest.fn().mockResolvedValue(undefined);
+    });
+
+    it('[AC-006] Happy path: không có cha → reactivate thành công → isActive=true', async () => {
+      em.findOne.mockResolvedValue(inactiveDept); // dept, no parent
+
+      const result = await service.reactivateDepartment(
+        'dept-inactive',
+        'actor',
+        {},
+      );
+
+      expect(result.isActive).toBe(true);
+      expect(em.update).toHaveBeenCalledWith(
+        DepartmentEntity,
+        'dept-inactive',
+        expect.objectContaining({ isActive: true }),
+      );
+    });
+
+    it('[AC-006b] Có cha active → reactivate thành công', async () => {
+      const deptWithParent = {
+        ...inactiveDept,
+        parentDepartmentId: 'parent-uuid',
+      };
+      const activePart = { id: 'parent-uuid', isActive: true };
+
+      em.findOne
+        .mockResolvedValueOnce(deptWithParent) // find dept
+        .mockResolvedValueOnce(activePart); // find parent
+
+      const result = await service.reactivateDepartment(
+        'dept-inactive',
+        'actor',
+        {},
+      );
+
+      expect(result.isActive).toBe(true);
+    });
+
+    it('[BR-07] đã active → ném ConflictException DEPARTMENT_ALREADY_ACTIVE', async () => {
+      em.findOne.mockResolvedValue({ ...inactiveDept, isActive: true });
+
+      await expect(
+        service.reactivateDepartment('dept-inactive', 'actor', {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({ code: 'DEPARTMENT_ALREADY_ACTIVE' }),
+        }),
+      });
+    });
+
+    it('[BR-08] cha đang inactive → ném ConflictException PARENT_DEPARTMENT_INACTIVE', async () => {
+      const deptWithParent = {
+        ...inactiveDept,
+        parentDepartmentId: 'parent-uuid',
+      };
+      const inactiveParent = { id: 'parent-uuid', isActive: false };
+
+      em.findOne
+        .mockResolvedValueOnce(deptWithParent)
+        .mockResolvedValueOnce(inactiveParent);
+
+      await expect(
+        service.reactivateDepartment('dept-inactive', 'actor', {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'PARENT_DEPARTMENT_INACTIVE',
+          }),
+        }),
+      });
+    });
+
+    it('[BR-06] phòng ban không tồn tại → ném NotFoundException DEPARTMENT_NOT_FOUND', async () => {
+      em.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.reactivateDepartment('nonexistent', 'actor', {}),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('[spec §1 quyết định 4] PARTNER_DEPARTMENT_ID không bị chặn khi reactivate', async () => {
+      const partnerDeptInactive = {
+        ...inactiveDept,
+        id: PARTNER_DEPARTMENT_ID,
+      };
+      em.findOne.mockResolvedValue(partnerDeptInactive);
+
+      // Không throw ForbiddenException — chỉ kiểm tra không bị lỗi 403
+      const result = await service.reactivateDepartment(
+        PARTNER_DEPARTMENT_ID,
+        'actor',
+        {},
+      );
+      expect(result.isActive).toBe(true);
+    });
   });
 });
