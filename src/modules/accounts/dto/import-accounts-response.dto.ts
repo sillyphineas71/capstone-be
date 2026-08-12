@@ -14,8 +14,10 @@ export interface ImportAccountRowResult {
   status: ImportAccountRowStatus;
   reason?: string;
   userId?: string;
-  /** Chỉ có giá trị khi request có gửi kèm ảnh sinh trắc học (field `photos`). */
+  /** Chỉ có giá trị khi request có gửi kèm ảnh sinh trắc học (field `photos`/`photosZip`). */
   biometricStatus?: string;
+  /** Chỉ có giá trị khi dòng này có điền cột `license_plate`. */
+  vehiclePlateStatus?: string;
 }
 
 /**

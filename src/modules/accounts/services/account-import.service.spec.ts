@@ -1,5 +1,6 @@
 import * as ExcelJS from 'exceljs';
-import { BadRequestException } from '@nestjs/common';
+import JSZip from 'jszip';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
 import { AccountImportService } from './account-import.service.js';
 import { UserEntity } from '../entities/user.entity.js';
@@ -40,6 +41,7 @@ describe('AccountImportService', () => {
   let usersService: { persistAccount: jest.Mock };
   let notificationsService: { enqueueEmailNotification: jest.Mock };
   let cloudinaryService: { uploadImage: jest.Mock; deleteImage: jest.Mock };
+  let vehicleRegistrationService: { register: jest.Mock };
   let dataSource: any;
 
   // Mutable DB fixtures
@@ -68,6 +70,9 @@ describe('AccountImportService', () => {
         .fn()
         .mockResolvedValue({ publicId: 'p1', secureUrl: 'https://x/p1.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
+    };
+    vehicleRegistrationService = {
+      register: jest.fn().mockResolvedValue({ id: 'vr-1' }),
     };
 
     const deptRepo = {
@@ -132,6 +137,7 @@ describe('AccountImportService', () => {
       usersService as any,
       notificationsService as any,
       cloudinaryService as any,
+      vehicleRegistrationService as any,
     );
   });
 
@@ -318,7 +324,12 @@ describe('AccountImportService', () => {
 
   const jpegPhoto = (originalname: string) => {
     const buffer = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00]);
-    return { buffer, originalname, mimetype: 'image/jpeg', size: buffer.length };
+    return {
+      buffer,
+      originalname,
+      mimetype: 'image/jpeg',
+      size: buffer.length,
+    };
   };
 
   it('commit + gửi kèm ảnh nhưng chưa xác nhận consent → BadRequestException', async () => {
@@ -332,13 +343,9 @@ describe('AccountImportService', () => {
       },
     ]);
     await expect(
-      service.importAccounts(
-        fileOf(buf),
-        { commit: true },
-        actor,
-        ctx,
-        [jpegPhoto('EMP001.jpg')],
-      ),
+      service.importAccounts(fileOf(buf), { commit: true }, actor, ctx, [
+        jpegPhoto('EMP001.jpg'),
+      ]),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(usersService.persistAccount).not.toHaveBeenCalled();
   });
@@ -398,7 +405,11 @@ describe('AccountImportService', () => {
   });
 
   it('commit: role BUSINESS_ADMIN không cần sinh trắc học → role_exempt, không upload', async () => {
-    dbRoles.push({ id: 'role-badmin', roleCode: 'BUSINESS_ADMIN', isActive: true });
+    dbRoles.push({
+      id: 'role-badmin',
+      roleCode: 'BUSINESS_ADMIN',
+      isActive: true,
+    });
     const buf = await buildXlsx([
       {
         full_name: 'A',
@@ -469,5 +480,175 @@ describe('AccountImportService', () => {
     const row = report.results.find((r) => r.email === 'a@company.com');
     expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
     expect(row?.biometricStatus).toBe('not_provided');
+  });
+
+  // ── Biển số xe kèm import (tùy chọn, cột license_plate) ────────────────
+
+  it('preview: license_plate sai định dạng → invalid_plate, KHÔNG gọi DB', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        license_plate: '123',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: false },
+      actor,
+      ctx,
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.vehiclePlateStatus).toBe('invalid_plate');
+    expect(vehicleRegistrationService.register).not.toHaveBeenCalled();
+  });
+
+  it('preview: license_plate đúng định dạng → pending_commit, KHÔNG gọi DB', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        license_plate: '30A-123.45',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: false },
+      actor,
+      ctx,
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.vehiclePlateStatus).toBe('pending_commit');
+    expect(vehicleRegistrationService.register).not.toHaveBeenCalled();
+  });
+
+  it('commit: license_plate hợp lệ → đăng ký hộ qua VehicleRegistrationService, vehiclePlateStatus=attached', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        license_plate: '30A-123.45',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true },
+      actor,
+      ctx,
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.vehiclePlateStatus).toBe('attached');
+    expect(vehicleRegistrationService.register).toHaveBeenCalledWith(
+      'new-a@company.com',
+      { plateRaw: '30A-123.45' },
+    );
+  });
+
+  it('commit: biển đã được đăng ký (conflict) → vehiclePlateStatus=duplicate_plate, tài khoản vẫn SUCCESS', async () => {
+    vehicleRegistrationService.register.mockRejectedValueOnce(
+      new ConflictException({
+        code: 'PLATE_ALREADY_REGISTERED',
+        message: 'Biển số này đã được đăng ký',
+      }),
+    );
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        license_plate: '30A12345',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true },
+      actor,
+      ctx,
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.vehiclePlateStatus).toBe('duplicate_plate');
+  });
+
+  it('không điền license_plate → vehiclePlateStatus để trống, không gọi DB', async () => {
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true },
+      actor,
+      ctx,
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.vehiclePlateStatus).toBeUndefined();
+    expect(vehicleRegistrationService.register).not.toHaveBeenCalled();
+  });
+
+  // ── Ảnh sinh trắc học gộp trong 1 file .zip (photosZip) ─────────────────
+
+  it('commit: gửi ảnh qua photosZip (gộp) → giải nén, khớp employee_code, biometricStatus=attached', async () => {
+    const zip = new JSZip();
+    zip.file('EMP001.jpg', Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00]));
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+    ]);
+    const report = await service.importAccounts(
+      fileOf(buf),
+      { commit: true, biometricConsentConfirmed: true },
+      actor,
+      ctx,
+      [],
+      { buffer: zipBuffer, size: zipBuffer.length, originalname: 'photos.zip' },
+    );
+    const row = report.results.find((r) => r.email === 'a@company.com');
+    expect(row?.status).toBe(ImportAccountRowStatus.SUCCESS);
+    expect(row?.biometricStatus).toBe('attached');
+    expect(cloudinaryService.uploadImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('commit: photosZip nhưng chưa xác nhận consent → BadRequestException', async () => {
+    const zip = new JSZip();
+    zip.file('EMP001.jpg', Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00]));
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    const buf = await buildXlsx([
+      {
+        full_name: 'A',
+        email: 'a@company.com',
+        department_code: 'ENG',
+        role_codes: 'EMPLOYEE',
+        employee_code: 'EMP001',
+      },
+    ]);
+    await expect(
+      service.importAccounts(fileOf(buf), { commit: true }, actor, ctx, [], {
+        buffer: zipBuffer,
+        size: zipBuffer.length,
+        originalname: 'photos.zip',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(usersService.persistAccount).not.toHaveBeenCalled();
   });
 });

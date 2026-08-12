@@ -72,6 +72,9 @@ import { DefaultVehicleEventHandler } from './handlers/default-vehicle-event.han
     // VRE-001 (UC5): handler thật thay default log-only (UC4).
     { provide: VEHICLE_EVENT_HANDLER, useExisting: VehicleResolveService },
   ],
-  exports: [TypeOrmModule],
+  // VPT-IMPORT-001: export VehicleRegistrationService để AccountsModule tái dùng
+  // register() cho cột license_plate (tùy chọn) trong import Excel nhân viên —
+  // KHÔNG trùng lặp logic normalize/validate/conflict biển số.
+  exports: [TypeOrmModule, VehicleRegistrationService],
 })
 export class AnprModule {}
