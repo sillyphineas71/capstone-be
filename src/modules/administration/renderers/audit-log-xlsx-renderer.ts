@@ -1,5 +1,10 @@
 import * as ExcelJS from 'exceljs';
 import type { AuditLogItemDto } from '../dto/audit-log-response.dto.js';
+import {
+  translateActionTypeToVn,
+  translateEntityTypeToVn,
+  translateSeverityToVn,
+} from '../constants/audit-log-vn-labels.constant.js';
 
 export interface AuditLogExportMeta {
   generatedAt: Date;
@@ -34,11 +39,16 @@ function formatVnDateTime(date: Date): string {
 }
 
 /**
- * renderAuditLogExportXlsx — 1 sheet, 1 dòng/bản ghi audit log.
+ * renderAuditLogExportXlsx — 1 sheet, 1 dòng/bản ghi audit log, đúng 7 cột
+ * theo yêu cầu FE (Docs/Nam_Sent/be-audit-log-export-requirement.md §3):
+ * Thời gian, Người thực hiện, Mã người thực hiện, Hành động, Loại đối tượng,
+ * Mã đối tượng, Mức độ. KHÔNG oldValueJson/newValueJson/metadataJson/
+ * ipAddress/userAgent/requestId. Mirror style renderUserExportXlsx
+ * (reports/renderers/user-export-xlsx-renderer.ts).
  *
- * Chỉ xuất đúng 5 trường như response API list (FR-025 §0.5) — KHÔNG
- * oldValueJson/newValueJson/metadataJson/ipAddress/userAgent/requestId.
- * Mirror style renderUserExportXlsx (reports/renderers/user-export-xlsx-renderer.ts).
+ * actionType/entityType/severity được dịch sang tiếng Việt chuẩn hóa qua
+ * constants/audit-log-vn-labels.constant.ts (§2 tài liệu FE) — CHỈ áp dụng
+ * cho file Excel, KHÔNG ảnh hưởng response JSON GET /audit-logs.
  *
  * Nếu `meta.returnedCount < meta.totalMatching` (bị cắt bởi MAX_EXPORT_ROWS),
  * thêm 1 dòng cảnh báo tô đỏ ở cuối — tránh mất dữ liệu âm thầm trên audit
@@ -54,14 +64,14 @@ export async function renderAuditLogExportXlsx(
 
   const sheet = workbook.addWorksheet('Nhật ký hệ thống');
 
-  sheet.mergeCells('A1:F1');
+  sheet.mergeCells('A1:G1');
   const titleCell = sheet.getCell('A1');
   titleCell.value = 'NHẬT KÝ KIỂM TRA HỆ THỐNG';
   titleCell.font = { bold: true, size: 14 };
   titleCell.alignment = { horizontal: 'center' };
   sheet.getRow(1).height = 26;
 
-  sheet.mergeCells('A2:F2');
+  sheet.mergeCells('A2:G2');
   sheet.getCell('A2').value =
     `Người xuất: ${meta.extractedByEmail}  |  Thời điểm xuất: ${formatVnDateTime(meta.generatedAt)}  |  ` +
     `Khoảng thời gian: ${meta.from} → ${meta.to}  |  Số dòng xuất: ${meta.returnedCount}/${meta.totalMatching}`;
@@ -92,10 +102,10 @@ export async function renderAuditLogExportXlsx(
       formatVnDateTime(row.createdAt),
       row.actorName,
       row.actorUserId ?? '',
-      row.actionType,
-      row.entityType,
+      translateActionTypeToVn(row.actionType),
+      translateEntityTypeToVn(row.entityType),
       row.entityId ?? '',
-      row.severity,
+      translateSeverityToVn(row.severity),
     ]);
   }
 
