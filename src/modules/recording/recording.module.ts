@@ -16,6 +16,7 @@ import { RecordingProcessManager } from './services/recording-process-manager.js
 import { RecordingReconcileService } from './services/recording-reconcile.service.js';
 import { MediaFilesController } from './controllers/media-files.controller.js';
 import { MediaFilesService } from './services/media-files.service.js';
+import { RecordingSystemConfigService } from './services/recording-system-config.service.js';
 
 /**
  * RecordingModule quản lý các entity recording + CRUD recording-config (REC-001).
@@ -48,7 +49,13 @@ import { MediaFilesService } from './services/media-files.service.js';
     RecordingProcessManager,
     RecordingReconcileService,
     MediaFilesService,
+    RecordingSystemConfigService,
   ],
-  exports: [TypeOrmModule],
+  // [FIX 2026-08-12, R9] Export RecordingSessionService để LiveMeetingModule inject được
+  // (auto-stop ghi hình khi meeting kết thúc — Lớp 1) và RecordingSystemConfigService để
+  // SchedulerModule inject được (cron recording-max-duration-enforce — Lớp 2). KHÔNG tạo
+  // circular: RecordingModule không import LiveMeetingModule/SchedulerModule (trực tiếp lẫn
+  // qua AuthModule/JwtModule/CacheModule).
+  exports: [TypeOrmModule, RecordingSessionService, RecordingSystemConfigService],
 })
 export class RecordingModule {}

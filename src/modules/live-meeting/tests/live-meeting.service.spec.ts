@@ -29,6 +29,7 @@ import { QueueService } from '../../queue/queue.service.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { ConfigService } from '@nestjs/config';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { RecordingSessionService } from '../../recording/services/recording-session.service.js';
 
 describe('LiveMeetingService', () => {
   let service: LiveMeetingService;
@@ -41,6 +42,14 @@ describe('LiveMeetingService', () => {
 
   const mockGuestInviteService = {
     revokeAllForMeeting: jest.fn().mockResolvedValue(0),
+  };
+
+  // [FIX 2026-08-12, R9 — Lớp 1] endMeeting() gọi stopAllActiveForMeeting() best-effort sau
+  // transaction — mock để không phá vỡ toàn bộ suite hiện có (default: không session nào active).
+  const mockRecordingSessionService = {
+    stopAllActiveForMeeting: jest
+      .fn()
+      .mockResolvedValue({ scanned: 0, stopped: 0, failed: 0 }),
   };
 
   const now = new Date();
@@ -135,6 +144,10 @@ describe('LiveMeetingService', () => {
           // transaction — mock để không phá vỡ toàn bộ suite hiện có.
           provide: GuestInviteService,
           useValue: mockGuestInviteService,
+        },
+        {
+          provide: RecordingSessionService,
+          useValue: mockRecordingSessionService,
         },
       ],
     }).compile();
@@ -532,6 +545,60 @@ describe('LiveMeetingService', () => {
       await expect(
         service.endMeeting('m-001', { userId: 'host-1' }, {}),
       ).resolves.toBeDefined();
+    });
+
+    // ────────────────────────────────────────
+    //  [FIX 2026-08-12, R9 — Lớp 1] Auto-stop recording khi meeting kết thúc
+    //  (đường THỦ CÔNG — host bấm "Kết thúc họp" → controller → endMeeting()
+    //  trực tiếp; đường CRON được test riêng ở
+    //  live-meeting-status-advance.service.spec.ts vì dùng chung endMeeting()).
+    // ────────────────────────────────────────
+    it('[R9] should call stopAllActiveForMeeting(meetingId, null) after ending the meeting', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(
+        mockRecordingSessionService.stopAllActiveForMeeting,
+      ).toHaveBeenCalledWith('m-001', null);
+    });
+
+    it('[R9] should NOT fail endMeeting when stopAllActiveForMeeting throws (best-effort)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      mockRecordingSessionService.stopAllActiveForMeeting.mockRejectedValueOnce(
+        new Error('recording service down'),
+      );
+
+      const result = await service.endMeeting(
+        'm-001',
+        { userId: 'host-1' },
+        {},
+      );
+      expect(result.status).toBe(MeetingStatus.COMPLETED);
+    });
+
+    it('[R9] should NOT call stopAllActiveForMeeting-triggered stopVideo when there are no active sessions (mock trả scanned=0)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+      mockRecordingSessionService.stopAllActiveForMeeting.mockResolvedValueOnce(
+        { scanned: 0, stopped: 0, failed: 0 },
+      );
+
+      await expect(
+        service.endMeeting('m-001', { userId: 'host-1' }, {}),
+      ).resolves.toBeDefined();
+      expect(
+        mockRecordingSessionService.stopAllActiveForMeeting,
+      ).toHaveBeenCalledTimes(1);
     });
 
     // ────────────────────────────────────────

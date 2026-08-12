@@ -77,6 +77,7 @@ describe('IotDevicesService', () => {
       logConfigureAi: jest.fn(),
       logRevokeFaceServerToken: jest.fn(),
       logRotateFaceServerToken: jest.fn(),
+      logConfigureFaceServer: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -998,6 +999,117 @@ describe('IotDevicesService', () => {
       await expect(
         service.receiveVerifyEvent(callbackInput(TOKEN)),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('TKR-001 — configureFaceServer (route mới POST /face-server/configure)', () => {
+    const validDto = {
+      callback_protocol: 'https' as const,
+      allowed_source_ip: '10.0.0.5',
+      heartbeat_path: '/heartbeat',
+      verify_path: '/verify',
+      stranger_path: '/stranger',
+    };
+    const faceDeviceWithRoom = (over: any = {}) => ({
+      id: 'dev1',
+      deviceType: IoTDeviceType.FACE_SERVER,
+      roomId: 'room1',
+      metadataJson: {},
+      ...over,
+    });
+
+    it('device chưa cấu hình, đã gán room → 200, tạo face_server_config mới, trả oneTimeCallbackToken khớp hash', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(faceDeviceWithRoom());
+
+      const { device, oneTimeCallbackToken } = await service.configureFaceServer(
+        'admin1',
+        'dev1',
+        validDto,
+      );
+
+      const fsc = device.metadataJson!.face_server_config as any;
+      const expectHash = nodeCrypto
+        .createHash('sha256')
+        .update(oneTimeCallbackToken)
+        .digest('hex');
+      expect(fsc.callback_token_hash).toBe(expectHash);
+      expect(fsc.callback_protocol).toBe('https');
+      expect(fsc.allowed_source_ip).toBe('10.0.0.5');
+      expect(fsc.heartbeat_path).toBe('/heartbeat');
+      expect(fsc.callback_enabled).toBe(true); // default khi DTO không truyền
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(auditRepoMock.logConfigureFaceServer).toHaveBeenCalledTimes(1);
+      // SEC: audit KHÔNG chứa token/hash
+      const auditArg = auditRepoMock.logConfigureFaceServer.mock.calls[0][1];
+      expect(JSON.stringify(auditArg)).not.toContain(oneTimeCallbackToken);
+    });
+
+    it('device CHƯA gán room → 409 DEVICE_ROOM_ASSIGNMENT_REQUIRED', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({ roomId: null }),
+      );
+      await expect(
+        service.configureFaceServer('admin1', 'dev1', validDto),
+      ).rejects.toMatchObject({
+        response: { code: 'DEVICE_ROOM_ASSIGNMENT_REQUIRED' },
+      });
+    });
+
+    it('device deviceType KHÁC face_server → 409 DEVICE_TYPE_NOT_FACE_SERVER', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({ deviceType: IoTDeviceType.ROOM_CAMERA }),
+      );
+      await expect(
+        service.configureFaceServer('admin1', 'dev1', validDto),
+      ).rejects.toMatchObject({
+        response: { code: 'DEVICE_TYPE_NOT_FACE_SERVER' },
+      });
+    });
+
+    it('device KHÔNG tồn tại → 404 IOT_DEVICE_NOT_FOUND', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(null);
+      await expect(
+        service.configureFaceServer('admin1', 'dev1', validDto),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('gọi CONFIGURE 2 lần liên tiếp (upsert) → lần 2 vẫn 200, face_server_config bị THAY hoàn toàn, hash lần 2 ≠ hash lần 1', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(faceDeviceWithRoom());
+      const first = await service.configureFaceServer(
+        'admin1',
+        'dev1',
+        validDto,
+      );
+      const fscFirst = first.device.metadataJson!.face_server_config as any;
+
+      // Lần 2: device trong DB giờ đã có config từ lần 1 (fresh read).
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({
+          metadataJson: { face_server_config: fscFirst },
+        }),
+      );
+      const second = await service.configureFaceServer('admin1', 'dev1', {
+        ...validDto,
+        allowed_source_ip: '10.0.0.9', // đổi 1 field để chứng minh ghi đè
+      });
+      const fscSecond = second.device.metadataJson!.face_server_config as any;
+
+      expect(second.oneTimeCallbackToken).not.toBe(first.oneTimeCallbackToken);
+      expect(fscSecond.callback_token_hash).not.toBe(
+        fscFirst.callback_token_hash,
+      );
+      expect(fscSecond.allowed_source_ip).toBe('10.0.0.9');
+      expect(auditRepoMock.logConfigureFaceServer).toHaveBeenCalledTimes(2);
+    });
+
+    it('save lỗi → rollbackTransaction + release (rethrow)', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(faceDeviceWithRoom());
+      queryRunnerMock.manager.save.mockRejectedValueOnce(new Error('db down'));
+      await expect(
+        service.configureFaceServer('admin1', 'dev1', validDto),
+      ).rejects.toThrow('db down');
+      expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.release).toHaveBeenCalled();
     });
   });
 

@@ -27,6 +27,7 @@ import { QueueService } from '../../queue/queue.service.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { ConfigService } from '@nestjs/config';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { RecordingSessionService } from '../../recording/services/recording-session.service.js';
 
 describe('LiveMeetingService - scheduleWarningJob', () => {
   let service: LiveMeetingService;
@@ -94,6 +95,14 @@ describe('LiveMeetingService - scheduleWarningJob', () => {
         {
           provide: GuestInviteService,
           useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: RecordingSessionService,
+          useValue: {
+            stopAllActiveForMeeting: jest
+              .fn()
+              .mockResolvedValue({ scanned: 0, stopped: 0, failed: 0 }),
+          },
         },
       ],
     }).compile();
@@ -262,6 +271,14 @@ describe('LiveMeetingService - cancelWarningJob', () => {
         {
           provide: GuestInviteService,
           useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: RecordingSessionService,
+          useValue: {
+            stopAllActiveForMeeting: jest
+              .fn()
+              .mockResolvedValue({ scanned: 0, stopped: 0, failed: 0 }),
+          },
         },
       ],
     }).compile();

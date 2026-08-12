@@ -21,6 +21,7 @@ import { AssignRoomDto } from '../dto/assign-room.dto.js';
 import { ConfigureRtspDto } from '../dto/configure-rtsp.dto.js';
 import { ConfigureAiConfigDto } from '../dto/configure-ai-config.dto.js';
 import { RevokeFaceServerTokenDto } from '../dto/revoke-face-server-token.dto.js';
+import { ConfigureFaceServerDto } from '../dto/configure-face-server.dto.js';
 import { IotDevicesService } from '../services/iot-devices.service.js';
 import { toIotDeviceResponse } from '../dto/iot-device-response.dto.js';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -233,6 +234,43 @@ export class IotDevicesController {
       success: true,
       message: 'AI configuration updated successfully',
       data: toIotDeviceResponse(device),
+    };
+  }
+
+  // TKR-001 (#11): cấu hình face-server (tạo mới HOẶC ghi đè config hiện có — service
+  // configureFaceServer() KHÔNG check "đã config" nên gọi lại là upsert, không throw).
+  // POST action 200. Trả one_time_callback_token (plaintext 1 lần, giống rotate).
+  @Post(':id/face-server/configure')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('iot_devices:configure_face_server')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: false,
+      transform: true,
+    }),
+  )
+  async configureFaceServer(
+    @Req() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfigureFaceServerDto,
+  ) {
+    const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+
+    const result = await this.iotDevicesService.configureFaceServer(
+      userId,
+      id,
+      dto,
+    );
+
+    return {
+      success: true,
+      message: 'Face server configured successfully',
+      data: {
+        device: toIotDeviceResponse(result.device),
+        one_time_callback_token: result.oneTimeCallbackToken,
+      },
     };
   }
 

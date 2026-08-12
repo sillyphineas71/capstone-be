@@ -9,7 +9,11 @@ import { PERMISSIONS_KEY } from '../../auth/decorators/require-permissions.decor
 
 describe('IotDevicesController — check-availability (A5)', () => {
   let controller: IotDevicesController;
-  let service: { checkAvailability: jest.Mock };
+  let service: {
+    checkAvailability: jest.Mock;
+    configureAiConfig: jest.Mock;
+    configureFaceServer: jest.Mock;
+  };
   let reflector: Reflector;
 
   const deviceEntity = (over: any = {}): any => ({
@@ -42,7 +46,11 @@ describe('IotDevicesController — check-availability (A5)', () => {
   });
 
   beforeEach(async () => {
-    service = { checkAvailability: jest.fn(), configureAiConfig: jest.fn() };
+    service = {
+      checkAvailability: jest.fn(),
+      configureAiConfig: jest.fn(),
+      configureFaceServer: jest.fn(),
+    };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IotDevicesController],
       providers: [{ provide: IotDevicesService, useValue: service }],
@@ -118,5 +126,91 @@ describe('IotDevicesController — check-availability (A5)', () => {
       controller.configureAiConfig,
     );
     expect(perms).toEqual(['iot.device.configure_ai']);
+  });
+
+  // ── TKR-001: POST :id/face-server/configure ──
+  describe('configureFaceServer', () => {
+    const configuredDevice = (): any => ({
+      ...deviceEntity(),
+      deviceType: 'face_server',
+      metadataJson: {
+        face_server_config: {
+          callback_enabled: true,
+          callback_protocol: 'https',
+          allowed_source_ip: '10.0.0.5',
+          heartbeat_path: '/heartbeat',
+          verify_path: '/verify',
+          stranger_path: '/stranger',
+          callback_token_hash:
+            'abc123def456realhashvaluethatmustneverleak',
+          callback_token_last4: 'z9y8',
+          configured_at: '2026-08-12T00:00:00.000Z',
+        },
+      },
+    });
+    const dto = {
+      callback_protocol: 'https' as const,
+      allowed_source_ip: '10.0.0.5',
+      heartbeat_path: '/heartbeat',
+      verify_path: '/verify',
+      stranger_path: '/stranger',
+    };
+
+    it('gọi service.configureFaceServer(userId, id, dto) + envelope { device, oneTimeCallbackToken }', async () => {
+      service.configureFaceServer.mockResolvedValue({
+        device: configuredDevice(),
+        oneTimeCallbackToken: 'plaintext-token-shown-once',
+      });
+
+      const res: any = await controller.configureFaceServer(
+        { user: { userId: 'actor-1' } },
+        'face-1',
+        dto,
+      );
+
+      expect(service.configureFaceServer).toHaveBeenCalledWith(
+        'actor-1',
+        'face-1',
+        dto,
+      );
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Face server configured successfully');
+      expect(res.data.one_time_callback_token).toBe(
+        'plaintext-token-shown-once',
+      );
+      expect(res.data.device).toBeDefined();
+    });
+
+    it('response device.metadata_json KHÔNG lộ callback_token_hash (mask "***", token thật CHỈ ở one_time_callback_token)', async () => {
+      service.configureFaceServer.mockResolvedValue({
+        device: configuredDevice(),
+        oneTimeCallbackToken: 'plaintext-token-shown-once',
+      });
+
+      const res: any = await controller.configureFaceServer(
+        { user: { userId: 'actor-1' } },
+        'face-1',
+        dto,
+      );
+
+      expect(
+        res.data.device.metadata_json.face_server_config.callback_token_hash,
+      ).toBe('***');
+      expect(
+        res.data.device.metadata_json.face_server_config
+          .callback_token_last4,
+      ).toBe('***');
+      expect(JSON.stringify(res.data.device)).not.toContain(
+        'abc123def456realhashvaluethatmustneverleak',
+      );
+    });
+
+    it('metadata @RequirePermissions = iot_devices:configure_face_server', () => {
+      const perms = reflector.get<string[]>(
+        PERMISSIONS_KEY,
+        controller.configureFaceServer,
+      );
+      expect(perms).toEqual(['iot_devices:configure_face_server']);
+    });
   });
 });

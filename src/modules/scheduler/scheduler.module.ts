@@ -13,6 +13,7 @@ import { AlertsModule } from '../alerts/alerts.module.js';
 import { ZonesModule } from '../zones/zones.module.js';
 import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
 import { MeetingsModule } from '../meetings/meetings.module.js';
+import { RecordingModule } from '../recording/recording.module.js';
 
 /**
  * SchedulerModule — Skeleton cho các cron job.
@@ -51,6 +52,10 @@ import { MeetingsModule } from '../meetings/meetings.module.js';
     // Cạnh scheduler → meetings MỘT CHIỀU (meetings không import scheduler,
     // RoomsModule đã import MeetingsModule sẵn nên đây không phải circular mới).
     MeetingsModule,
+    // R9 Lớp 2: cron recording-max-duration-enforce inject RecordingSessionService
+    // (stopVideo) + RecordingSystemConfigService (ngưỡng giờ). Cạnh scheduler → recording
+    // MỘT CHIỀU (recording không import scheduler) ⇒ không circular.
+    RecordingModule,
   ],
   providers: [SchedulerService],
   exports: [SchedulerService],
