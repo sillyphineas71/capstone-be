@@ -54,9 +54,9 @@ describe('SecurityAlertConfigController (ASC-001 auto-resolve timeout)', () => {
     svcMock.update.mockRejectedValue(
       new BadRequestException({ code: 'NO_CONFIG_FIELDS' }),
     );
-    await expect(
-      controller.update({}, { userId: 'u1' }),
-    ).rejects.toThrow(BadRequestException);
+    await expect(controller.update({}, { userId: 'u1' })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   // R2: GET + PUT gated JwtAuthGuard + PermissionsGuard, permission

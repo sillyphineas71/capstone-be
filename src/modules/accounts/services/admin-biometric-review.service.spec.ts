@@ -107,7 +107,7 @@ describe('AdminBiometricReviewService', () => {
         // 2) lock user
         [{ id: USER_ID, accountStatus: 'active', deletedAt: null }],
         // 3) các face_profile ACTIVE cũ
-        (over.oldActive ?? []) as unknown[],
+        over.oldActive ?? [],
       ];
       let qbCall = 0;
       const qb = {
@@ -132,7 +132,7 @@ describe('AdminBiometricReviewService', () => {
         }),
       };
 
-      (mockDataSource.transaction as jest.Mock).mockImplementation(
+      mockDataSource.transaction.mockImplementation(
         (cb: (m: unknown) => unknown) => cb(manager),
       );
       return { manager, queries };
@@ -199,7 +199,7 @@ describe('AdminBiometricReviewService', () => {
       expect(manager.query).toHaveBeenCalled();
       expect(portraitSqlOf(queries)).toBeDefined();
       expect(
-        (mockDataSource.manager.query as jest.Mock).mock.calls.filter(
+        mockDataSource.manager.query.mock.calls.filter(
           (c: unknown[]) =>
             typeof c[0] === 'string' &&
             c[0].includes('UPDATE device_user_mappings'),
@@ -311,7 +311,10 @@ describe('AdminBiometricReviewService', () => {
             email: 'a.nguyen@example.com',
             employeeCode: 'EMP001',
             avatarUrl: 'https://cdn.example.com/avatars/user-1.png',
-            department: { id: 'dept-1', departmentName: 'Software Engineering' },
+            department: {
+              id: 'dept-1',
+              departmentName: 'Software Engineering',
+            },
             ...overUser,
           },
         },
@@ -322,7 +325,7 @@ describe('AdminBiometricReviewService', () => {
         const result = await service.listBiometricSubmissions({
           page: 1,
           limit: 10,
-        } as any);
+        });
         expect(result.data[0].avatarUrl).toBe(
           'https://cdn.example.com/avatars/user-1.png',
         );
@@ -336,13 +339,13 @@ describe('AdminBiometricReviewService', () => {
         const result = await service.listBiometricSubmissions({
           page: 1,
           limit: 10,
-        } as any);
+        });
         expect(result.data[0].avatarUrl).toBeNull();
       });
 
       it("SELECT thêm 'u.avatarUrl' — u đã JOIN sẵn, KHÔNG JOIN mới", async () => {
         mockQueryBuilder.getManyAndCount.mockResolvedValue([baseItem(), 1]);
-        await service.listBiometricSubmissions({ page: 1, limit: 10 } as any);
+        await service.listBiometricSubmissions({ page: 1, limit: 10 });
         expect(mockQueryBuilder.select).toHaveBeenCalledWith(
           expect.arrayContaining(['u.avatarUrl']),
         );
@@ -358,7 +361,7 @@ describe('AdminBiometricReviewService', () => {
     const FP_ID = 'fp-1';
 
     const wireFindOne = (userOver: Record<string, unknown> = {}) => {
-      (mockRepository.findOne as jest.Mock).mockResolvedValue({
+      mockRepository.findOne.mockResolvedValue({
         id: FP_ID,
         userId: 'user-1',
         status: FaceProfileStatus.PENDING_REVIEW,
@@ -417,7 +420,7 @@ describe('AdminBiometricReviewService', () => {
       const list = await service.listBiometricSubmissions({
         page: 1,
         limit: 10,
-      } as any);
+      });
 
       expect(detail.avatarUrl).toBe(AVATAR);
       expect(list.data[0].avatarUrl).toBe(AVATAR);

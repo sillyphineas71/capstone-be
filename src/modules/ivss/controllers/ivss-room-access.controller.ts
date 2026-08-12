@@ -42,7 +42,8 @@ export class IvssRoomAccessController {
 
   @Get('access-log')
   @ApiOperation({
-    summary: 'Admin xem nhật ký ra/vào theo ngày cho TOÀN hệ thống (mọi phòng), có phân trang + tìm kiếm',
+    summary:
+      'Admin xem nhật ký ra/vào theo ngày cho TOÀN hệ thống (mọi phòng), có phân trang + tìm kiếm',
   })
   async accessLogAll(@Query() query: QueryRoomAccessLogDto) {
     const data = await this.roomAccessLogService.getRoomAccessLog(null, {
@@ -57,7 +58,8 @@ export class IvssRoomAccessController {
 
   @Get('rooms/:roomId/access-log')
   @ApiOperation({
-    summary: 'Admin xem nhật ký ra/vào theo ngày cho MỘT phòng cụ thể (404 nếu phòng không tồn tại)',
+    summary:
+      'Admin xem nhật ký ra/vào theo ngày cho MỘT phòng cụ thể (404 nếu phòng không tồn tại)',
   })
   async accessLog(
     @Param('roomId', ParseUUIDPipe) roomId: string,

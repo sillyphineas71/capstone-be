@@ -11,6 +11,8 @@ export function slugifyFileNamePart(input: string, maxLength = 80): string {
     .replace(combiningDiacriticals, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D');
-  const slug = noDiacritics.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const slug = noDiacritics
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
   return (slug || 'bien_ban').slice(0, maxLength);
 }

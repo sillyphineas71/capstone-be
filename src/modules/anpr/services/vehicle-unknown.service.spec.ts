@@ -33,7 +33,9 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
 
   const countCall = () => captured.find((c) => c.sql.includes('COUNT(*)'));
   const rowsCall = () =>
-    captured.find((c) => c.sql.includes('ORDER BY iot_device_events.event_time DESC'));
+    captured.find((c) =>
+      c.sql.includes('ORDER BY iot_device_events.event_time DESC'),
+    );
 
   const q = (over: any = {}) => ({ page: 1, limit: 20, ...over });
 
@@ -99,7 +101,9 @@ describe('VehicleUnknownService (VUN-001 / UC6)', () => {
     wire();
     await service.listUnknown(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain(
+      "iot_device_events.event_type = 'ivss_vehicle_event'",
+    );
     expect(sql).toContain(
       "iot_device_events.payload_json->>'matchState' = 'unmatched'",
     );

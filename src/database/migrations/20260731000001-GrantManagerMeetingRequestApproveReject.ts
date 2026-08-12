@@ -14,9 +14,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * moi, chi them dong role_permissions. Dung WHERE NOT EXISTS (nhu backfill) thay
  * ON CONFLICT de idempotent ma khong phu thuoc unique constraint.
  */
-export class GrantManagerMeetingRequestApproveReject20260731000001
-  implements MigrationInterface
-{
+export class GrantManagerMeetingRequestApproveReject20260731000001 implements MigrationInterface {
   name = 'GrantManagerMeetingRequestApproveReject20260731000001';
 
   private readonly permissionCodes = [

@@ -25,7 +25,10 @@ export class ListVehicleHistoryQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -43,26 +46,38 @@ export class ListVehicleHistoryQueryDto {
   @IsISO8601()
   to?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo hướng di chuyển', enum: ['enter', 'leave', 'seen'] })
+  @ApiPropertyOptional({
+    description: 'Lọc theo hướng di chuyển',
+    enum: ['enter', 'leave', 'seen'],
+  })
   @IsOptional()
   @IsIn(['enter', 'leave', 'seen'])
   direction?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo biển số (chuẩn hoá trước khi so)', maxLength: 20 })
+  @ApiPropertyOptional({
+    description: 'Lọc theo biển số (chuẩn hoá trước khi so)',
+    maxLength: 20,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(20)
   plateNumber?: string;
 
   // Chỉ admin route (listAll) dùng — lọc chỉ-khớp / chỉ-lạ.
-  @ApiPropertyOptional({ description: 'Lọc theo trạng thái khớp đăng ký (chỉ admin route)', enum: ['matched', 'unmatched'] })
+  @ApiPropertyOptional({
+    description: 'Lọc theo trạng thái khớp đăng ký (chỉ admin route)',
+    enum: ['matched', 'unmatched'],
+  })
   @IsOptional()
   @IsIn(['matched', 'unmatched'])
   matchState?: string;
 
   // Chỉ admin route (listAll) dùng — tìm theo tên chủ xe (users.full_name, ILIKE).
   // listForUser KHÔNG expose owner/userId (privacy-by-design) nên field này vô nghĩa ở đó.
-  @ApiPropertyOptional({ description: 'Tìm theo tên chủ xe (chỉ admin route)', maxLength: 255 })
+  @ApiPropertyOptional({
+    description: 'Tìm theo tên chủ xe (chỉ admin route)',
+    maxLength: 255,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)

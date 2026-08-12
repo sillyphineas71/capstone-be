@@ -60,7 +60,9 @@ export class AlertRulesController {
   @Get()
   @RequirePermissions('alert_rules.read')
   @UsePipes(ALERT_RULE_PIPE)
-  @ApiOperation({ summary: 'Xem danh sách quy tắc cảnh báo, có phân trang + lọc' })
+  @ApiOperation({
+    summary: 'Xem danh sách quy tắc cảnh báo, có phân trang + lọc',
+  })
   async list(@Query() query: QueryAlertRulesDto) {
     const { items, meta } = await this.alertRulesService.list(query);
     return {

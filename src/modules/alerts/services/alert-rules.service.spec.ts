@@ -135,7 +135,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       it('intrusion + zone loại lobby → thành công (regression)', async () => {
         zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'lobby' });
         const r = await service.create(
-          { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          {
+            alertType: 'intrusion',
+            zoneId: 'zone-1',
+            channels: ['in_app'],
+          } as any,
           'admin1',
         );
         expect(repo.save).toHaveBeenCalledTimes(1);
@@ -146,7 +150,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'room' });
         await expect(
           service.create(
-            { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+            {
+              alertType: 'intrusion',
+              zoneId: 'zone-1',
+              channels: ['in_app'],
+            } as any,
             'admin1',
           ),
         ).rejects.toMatchObject({
@@ -159,7 +167,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
         zoneRepo.findOne.mockResolvedValue(null);
         await expect(
           service.create(
-            { alertType: 'intrusion', zoneId: 'zone-missing', channels: ['in_app'] } as any,
+            {
+              alertType: 'intrusion',
+              zoneId: 'zone-missing',
+              channels: ['in_app'],
+            } as any,
             'admin1',
           ),
         ).rejects.toMatchObject({
@@ -196,7 +208,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
 
       it('loại KHÁC (stranger) + zoneId có giá trị → thành công, KHÔNG query zones', async () => {
         await service.create(
-          { alertType: 'stranger', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          {
+            alertType: 'stranger',
+            zoneId: 'zone-1',
+            channels: ['in_app'],
+          } as any,
           'admin1',
         );
         expect(zoneRepo.findOne).not.toHaveBeenCalled();
@@ -231,7 +247,11 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       it('intrusion + zoneId hợp lệ (zone loại lobby) → thành công như cũ (regression)', async () => {
         zoneRepo.findOne.mockResolvedValue({ id: 'zone-1', zoneType: 'lobby' });
         const r = await service.create(
-          { alertType: 'intrusion', zoneId: 'zone-1', channels: ['in_app'] } as any,
+          {
+            alertType: 'intrusion',
+            zoneId: 'zone-1',
+            channels: ['in_app'],
+          } as any,
           'admin1',
         );
         expect(repo.save).toHaveBeenCalledTimes(1);
@@ -385,7 +405,10 @@ describe('AlertRulesService (ARL-001 / UC-122)', () => {
       });
 
       it('đổi trường KHÁC (không đụng zoneId/alertType) → zoneOrTypeChanged=false, KHÔNG gọi lại helper (zoneRepo.findOne không được gọi)', async () => {
-        repo.findOne.mockResolvedValueOnce({ ...owned(), alertType: 'intrusion' });
+        repo.findOne.mockResolvedValueOnce({
+          ...owned(),
+          alertType: 'intrusion',
+        });
         await service.update('r1', { threshold: 30 }, 'admin1');
         expect(zoneRepo.findOne).not.toHaveBeenCalled();
         expect(repo.save).toHaveBeenCalledTimes(1);

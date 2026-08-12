@@ -1280,7 +1280,9 @@ describe('MeetingsService', () => {
           }),
         }),
       );
-      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.createNotification,
+      ).not.toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_TIME_UPDATED,
         }),
@@ -1344,7 +1346,10 @@ describe('MeetingsService', () => {
 
     it('[BUG-REPRO] PENDING_APPROVAL: KHÔNG gửi email cho participants khi sửa giờ (meeting chưa từng được Manager duyệt)', async () => {
       setupMocks();
-      const pendingMeeting = { ...fakeMeeting, status: MeetingStatus.PENDING_APPROVAL };
+      const pendingMeeting = {
+        ...fakeMeeting,
+        status: MeetingStatus.PENDING_APPROVAL,
+      };
       mockRepo.findOne.mockImplementation(async (options: any = {}) => {
         const where = options.where ?? {};
         const id = where.id;
@@ -1412,7 +1417,9 @@ describe('MeetingsService', () => {
       expect(
         mockNotificationsService.enqueueEmailNotification,
       ).not.toHaveBeenCalled();
-      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.createNotification,
+      ).not.toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_TIME_UPDATED,
         }),
@@ -1962,7 +1969,9 @@ describe('MeetingsService', () => {
       expect(
         mockNotificationsService.enqueueEmailNotification,
       ).not.toHaveBeenCalled();
-      expect(mockNotificationsService.createNotification).not.toHaveBeenCalledWith(
+      expect(
+        mockNotificationsService.createNotification,
+      ).not.toHaveBeenCalledWith(
         expect.objectContaining({
           notificationType: NotificationType.MEETING_ROOM_UPDATED,
         }),
@@ -2092,7 +2101,12 @@ describe('MeetingsService', () => {
       setupEmQueryFullFlow();
       setupNotificationMocks();
 
-      await service.cancelMeeting('meeting-uuid', authUser, clientContext, 'Ly do');
+      await service.cancelMeeting(
+        'meeting-uuid',
+        authUser,
+        clientContext,
+        'Ly do',
+      );
 
       expect(mockGuestInviteService.revokeAllForMeeting).toHaveBeenCalledWith(
         'meeting-uuid',
@@ -3432,15 +3446,30 @@ describe('MeetingsService', () => {
         recurrenceRuleId: null,
         parentMeetingId: null,
         deletedAt: null,
-        organizer: { id: 'org-user-id', fullName: 'Org User', email: 'org@test.com' },
-        host: { id: 'host-user-id', fullName: 'Host User', email: 'host@test.com' },
+        organizer: {
+          id: 'org-user-id',
+          fullName: 'Org User',
+          email: 'org@test.com',
+        },
+        host: {
+          id: 'host-user-id',
+          fullName: 'Host User',
+          email: 'host@test.com',
+        },
       };
 
       mockRepo.findOne.mockImplementation(async (options?: any) => {
         const where = options?.where ?? {};
         if (where.id === 'meeting-uuid') return mockMeeting;
-        if (where.meetingId === 'meeting-uuid' && where.userId === 'participant-1') {
-          return { id: 'part-1', meetingId: 'meeting-uuid', userId: 'participant-1' };
+        if (
+          where.meetingId === 'meeting-uuid' &&
+          where.userId === 'participant-1'
+        ) {
+          return {
+            id: 'part-1',
+            meetingId: 'meeting-uuid',
+            userId: 'participant-1',
+          };
         }
         return null;
       });
@@ -3449,8 +3478,18 @@ describe('MeetingsService', () => {
       mockRepo.createQueryBuilder.mockReturnValue(qb);
 
       const agendaRows = [
-        { id: 'agenda-1', title: 'Start', plannedDurationMinutes: 15, agendaOrder: 0 },
-        { id: 'agenda-2', title: 'middle', plannedDurationMinutes: 15, agendaOrder: 1 },
+        {
+          id: 'agenda-1',
+          title: 'Start',
+          plannedDurationMinutes: 15,
+          agendaOrder: 0,
+        },
+        {
+          id: 'agenda-2',
+          title: 'middle',
+          plannedDurationMinutes: 15,
+          agendaOrder: 1,
+        },
       ];
       const agendaAttachmentFiles = [
         {

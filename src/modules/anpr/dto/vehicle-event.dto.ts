@@ -15,7 +15,10 @@ import { Type } from 'class-transformer';
  * channelId → number (R: @Type). SEC-01: imageBase64 KHÔNG log/audit. UC4 normalize plateNumber.
  */
 export class VehicleEventDto {
-  @ApiProperty({ description: 'Biển số xe do bridge đọc được (dạng thô, sẽ được chuẩn hoá ở UC4)' })
+  @ApiProperty({
+    description:
+      'Biển số xe do bridge đọc được (dạng thô, sẽ được chuẩn hoá ở UC4)',
+  })
   @IsString()
   @IsNotEmpty()
   plateNumber: string;
@@ -29,7 +32,9 @@ export class VehicleEventDto {
   @IsISO8601()
   utc: string;
 
-  @ApiPropertyOptional({ description: 'Hành động sự kiện (vd: enter/leave/seen)' })
+  @ApiPropertyOptional({
+    description: 'Hành động sự kiện (vd: enter/leave/seen)',
+  })
   @IsOptional()
   @IsString()
   eventAction?: string;
@@ -51,7 +56,8 @@ export class VehicleEventDto {
 
   /** SEC-01: KHÔNG log/audit trường này — chỉ dùng để lưu snapshot. */
   @ApiPropertyOptional({
-    description: 'Ảnh snapshot dạng base64 (nếu bridge gửi) — KHÔNG được log/audit',
+    description:
+      'Ảnh snapshot dạng base64 (nếu bridge gửi) — KHÔNG được log/audit',
   })
   @IsOptional()
   @IsString()

@@ -43,7 +43,14 @@ export class MyScheduleQueryDto {
 
   @IsOptional()
   @IsEnum(
-    ['draft', 'pending_approval', 'scheduled', 'in_progress', 'cancelled', 'completed'],
+    [
+      'draft',
+      'pending_approval',
+      'scheduled',
+      'in_progress',
+      'cancelled',
+      'completed',
+    ],
     {
       each: true,
       message: 'status khong hop le',

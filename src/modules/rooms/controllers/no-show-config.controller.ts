@@ -29,7 +29,9 @@ export class NoShowConfigController {
   @Get()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('room.noshow.configure')
-  @ApiOperation({ summary: 'Admin xem toàn bộ ngưỡng cấu hình no-show hiện tại' })
+  @ApiOperation({
+    summary: 'Admin xem toàn bộ ngưỡng cấu hình no-show hiện tại',
+  })
   async get() {
     const data = await this.noShowConfigService.getAll();
     return { success: true, message: 'No-show config retrieved', data };
@@ -46,7 +48,9 @@ export class NoShowConfigController {
       transform: true,
     }),
   )
-  @ApiOperation({ summary: 'Admin cập nhật ngưỡng cấu hình no-show (≥1 field)' })
+  @ApiOperation({
+    summary: 'Admin cập nhật ngưỡng cấu hình no-show (≥1 field)',
+  })
   async update(@Body() dto: UpdateNoShowConfigDto, @Req() req: any) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
     const data = await this.noShowConfigService.update(dto, userId);

@@ -48,7 +48,9 @@ export class VehicleControlListController {
   @HttpCode(HttpStatus.CREATED)
   @RequirePermissions('vehicle_control.create')
   @UsePipes(CONTROL_LIST_PIPE)
-  @ApiOperation({ summary: 'Thêm 1 biển số vào danh sách kiểm soát (blocklist/watchlist)' })
+  @ApiOperation({
+    summary: 'Thêm 1 biển số vào danh sách kiểm soát (blocklist/watchlist)',
+  })
   async create(
     @CurrentUser() user: { userId: string },
     @Body() dto: CreateVehicleControlListDto,
@@ -67,7 +69,9 @@ export class VehicleControlListController {
   @Get()
   @RequirePermissions('vehicle_control.read')
   @UsePipes(CONTROL_LIST_PIPE)
-  @ApiOperation({ summary: 'Xem danh sách biển số kiểm soát, có phân trang + lọc' })
+  @ApiOperation({
+    summary: 'Xem danh sách biển số kiểm soát, có phân trang + lọc',
+  })
   async list(@Query() query: ListVehicleControlListQueryDto) {
     const { items, meta } = await this.vehicleControlListService.list(query);
     return {
@@ -80,7 +84,9 @@ export class VehicleControlListController {
 
   @Get(':id')
   @RequirePermissions('vehicle_control.read')
-  @ApiOperation({ summary: 'Xem chi tiết 1 mục trong danh sách kiểm soát biển số theo ID' })
+  @ApiOperation({
+    summary: 'Xem chi tiết 1 mục trong danh sách kiểm soát biển số theo ID',
+  })
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const entity = await this.vehicleControlListService.getDetail(id);
     return {

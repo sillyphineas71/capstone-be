@@ -34,7 +34,8 @@ export class UnmappedReviewController {
   @RequirePermissions('face.unmapped.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @ApiOperation({
-    summary: 'Admin xem danh sách verify khuôn mặt gần đây chưa khớp mapping person↔user',
+    summary:
+      'Admin xem danh sách verify khuôn mặt gần đây chưa khớp mapping person↔user',
   })
   async list(@Query() query: ListUnmappedQueryDto) {
     const result = await this.unmappedReviewService.list(query);
@@ -53,7 +54,8 @@ export class UnmappedReviewController {
   @RequirePermissions('face.unmapped.map')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @ApiOperation({
-    summary: 'Admin gán thủ công 1 person (verify chưa khớp) vào 1 user cho cuộc họp — tạo mapping synced, KHÔNG đẩy xuống thiết bị',
+    summary:
+      'Admin gán thủ công 1 person (verify chưa khớp) vào 1 user cho cuộc họp — tạo mapping synced, KHÔNG đẩy xuống thiết bị',
   })
   async map(@Body() dto: MapUnmappedDto, @Req() req: any) {
     const adminId = req.user?.userId || req.user?.sub || req.user?.id || null;

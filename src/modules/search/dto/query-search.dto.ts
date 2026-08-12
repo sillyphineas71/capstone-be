@@ -7,7 +7,10 @@ import { IsOptional, IsString, MinLength } from 'class-validator';
  * (spec §2.2 — không dùng decorator enum-array phức tạp cho 1 field đơn giản).
  */
 export class QuerySearchDto {
-  @ApiProperty({ description: 'Từ khóa tìm kiếm, tối thiểu 2 ký tự', minLength: 2 })
+  @ApiProperty({
+    description: 'Từ khóa tìm kiếm, tối thiểu 2 ký tự',
+    minLength: 2,
+  })
   @IsString()
   @MinLength(2)
   q: string;

@@ -18,9 +18,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * `config_key` KHÔNG có unique index/constraint trên RDS thật (chỉ PK trên `id`) — dùng
  * `WHERE NOT EXISTS` thay vì `ON CONFLICT`, mirror `20260723000001-SeedGateAccessClosingHourConfig.ts`.
  */
-export class SeedRoomBookingBufferConfig20260808000002
-  implements MigrationInterface
-{
+export class SeedRoomBookingBufferConfig20260808000002 implements MigrationInterface {
   name = 'SeedRoomBookingBufferConfig20260808000002';
 
   private readonly configKey = 'room_booking_buffer_minutes';
@@ -39,8 +37,9 @@ export class SeedRoomBookingBufferConfig20260808000002
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DELETE FROM system_configs WHERE config_key = $1;`, [
-      this.configKey,
-    ]);
+    await queryRunner.query(
+      `DELETE FROM system_configs WHERE config_key = $1;`,
+      [this.configKey],
+    );
   }
 }

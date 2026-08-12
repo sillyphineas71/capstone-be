@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { SecurityAlertAutoResolveService } from './security-alert-auto-resolve.service.js';
@@ -30,7 +30,9 @@ describe('SecurityAlertAutoResolveService (ASC-001 auto-resolve timeout)', () =>
   });
 
   it('alert không tái phát 15+ phút → resolved (count từ RETURNING)', async () => {
-    dsMock.manager.query.mockResolvedValueOnce(ret([{ id: 'a1' }, { id: 'a2' }]));
+    dsMock.manager.query.mockResolvedValueOnce(
+      ret([{ id: 'a1' }, { id: 'a2' }]),
+    );
     const r = await service.autoResolveExpired();
     expect(r).toEqual({ scanned: 2, resolved: 2 });
   });

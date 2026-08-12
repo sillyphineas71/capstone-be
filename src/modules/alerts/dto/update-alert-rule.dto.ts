@@ -27,25 +27,37 @@ import {
  * → service re-check conflict (2 nhánh); đổi field khác → KHÔNG re-check (spec §4).
  */
 export class UpdateAlertRuleDto {
-  @ApiPropertyOptional({ description: 'Loại sự kiện kích hoạt cảnh báo — đổi sẽ kích hoạt re-check conflict', enum: ALERT_TYPES })
+  @ApiPropertyOptional({
+    description:
+      'Loại sự kiện kích hoạt cảnh báo — đổi sẽ kích hoạt re-check conflict',
+    enum: ALERT_TYPES,
+  })
   @Expose({ name: 'alert_type' })
   @IsOptional()
   @IsIn(ALERT_TYPES)
   alertType?: AlertType;
 
-  @ApiPropertyOptional({ description: 'Khu vực áp dụng quy tắc — đổi sẽ kích hoạt re-check conflict' })
+  @ApiPropertyOptional({
+    description: 'Khu vực áp dụng quy tắc — đổi sẽ kích hoạt re-check conflict',
+  })
   @Expose({ name: 'zone_id' })
   @IsOptional()
   @IsUUID()
   zoneId?: string | null;
 
-  @ApiPropertyOptional({ description: 'Ngưỡng kích hoạt (áp dụng khi alertType=crowd)' })
+  @ApiPropertyOptional({
+    description: 'Ngưỡng kích hoạt (áp dụng khi alertType=crowd)',
+  })
   @IsOptional()
   @IsInt()
   @Min(1)
   threshold?: number;
 
-  @ApiPropertyOptional({ description: 'Danh sách kênh gửi thông báo', enum: ALERT_CHANNELS, isArray: true })
+  @ApiPropertyOptional({
+    description: 'Danh sách kênh gửi thông báo',
+    enum: ALERT_CHANNELS,
+    isArray: true,
+  })
   @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
@@ -57,7 +69,10 @@ export class UpdateAlertRuleDto {
   @IsBoolean()
   enabled?: boolean;
 
-  @ApiPropertyOptional({ description: 'Khung giờ hạn chế áp dụng quy tắc', type: RestrictedHoursDto })
+  @ApiPropertyOptional({
+    description: 'Khung giờ hạn chế áp dụng quy tắc',
+    type: RestrictedHoursDto,
+  })
   @Expose({ name: 'restricted_hours_json' })
   @IsOptional()
   @IsObject()
@@ -65,7 +80,10 @@ export class UpdateAlertRuleDto {
   @Type(() => RestrictedHoursDto)
   restrictedHoursJson?: RestrictedHoursDto;
 
-  @ApiPropertyOptional({ description: 'Danh sách person id được phép bỏ qua cảnh báo', type: [String] })
+  @ApiPropertyOptional({
+    description: 'Danh sách person id được phép bỏ qua cảnh báo',
+    type: [String],
+  })
   @Expose({ name: 'allowed_person_ids_json' })
   @IsOptional()
   @IsArray()

@@ -479,8 +479,7 @@ export class SchedulerService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES, { name: 'security-alert-auto-resolve' })
   async securityAlertAutoResolve(): Promise<void> {
-    if (!this.schedulerEnabled || !this.securityAlertAutoResolveEnabled)
-      return;
+    if (!this.schedulerEnabled || !this.securityAlertAutoResolveEnabled) return;
 
     try {
       const r = await this.securityAlertAutoResolveService.autoResolveExpired();

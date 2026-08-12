@@ -403,7 +403,12 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
                 ),
                 snapshot_file_id = COALESCE(snapshot_file_id, $2)
           WHERE id = $3`,
-        [JSON.stringify([plateNumber]), snapshotFileId, recent.id, MAX_RAW_READS],
+        [
+          JSON.stringify([plateNumber]),
+          snapshotFileId,
+          recent.id,
+          MAX_RAW_READS,
+        ],
       );
       return true;
     } catch (e) {

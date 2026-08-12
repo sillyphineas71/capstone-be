@@ -16,7 +16,10 @@ export class ListUnknownVehiclesQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -24,12 +27,16 @@ export class ListUnknownVehiclesQueryDto {
   @Max(100)
   limit: number = 20;
 
-  @ApiPropertyOptional({ description: 'Lọc từ thời điểm (theo event_time, ISO 8601)' })
+  @ApiPropertyOptional({
+    description: 'Lọc từ thời điểm (theo event_time, ISO 8601)',
+  })
   @IsOptional()
   @IsISO8601()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc đến thời điểm (theo event_time, ISO 8601)' })
+  @ApiPropertyOptional({
+    description: 'Lọc đến thời điểm (theo event_time, ISO 8601)',
+  })
   @IsOptional()
   @IsISO8601()
   to?: string;

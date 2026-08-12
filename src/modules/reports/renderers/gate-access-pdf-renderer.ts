@@ -50,7 +50,10 @@ export function renderGateAccessPdf(
       doc.fillColor('#000000');
       doc.moveDown(0.5);
 
-      doc.font(VN_FONT_REGULAR).fontSize(10).text(`Tổng số phiên: ${rows.length}`);
+      doc
+        .font(VN_FONT_REGULAR)
+        .fontSize(10)
+        .text(`Tổng số phiên: ${rows.length}`);
       doc.moveDown(0.5);
 
       if (rows.length === 0) {

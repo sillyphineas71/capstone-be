@@ -1117,16 +1117,18 @@ export class MeetingRequestReviewService {
     );
     const bufferedEnd = new Date(result.requestedEndTime.getTime() + bufferMs);
 
-    const bookings = await this.dataSource.getRepository(RoomBookingEntity).find({
-      where: {
-        roomId: result.targetRoomId,
-        id: Not(result.bookingId),
-        status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
-        reservedStartTime: LessThan(bufferedEnd),
-        reservedEndTime: MoreThan(bufferedStart),
-      },
-      relations: { room: true, meeting: true, bookedByUser: true },
-    });
+    const bookings = await this.dataSource
+      .getRepository(RoomBookingEntity)
+      .find({
+        where: {
+          roomId: result.targetRoomId,
+          id: Not(result.bookingId),
+          status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
+          reservedStartTime: LessThan(bufferedEnd),
+          reservedEndTime: MoreThan(bufferedStart),
+        },
+        relations: { room: true, meeting: true, bookedByUser: true },
+      });
     if (bookings.length === 0) return null;
 
     const conflictDetails: ConflictDetailDto[] = bookings.map((b) => ({
@@ -1151,7 +1153,11 @@ export class MeetingRequestReviewService {
       suggestedAlternatives = altRooms
         .filter((r) => r.id !== result.targetRoomId)
         .slice(0, 5)
-        .map((r) => ({ roomId: r.id, roomName: r.roomName, capacity: r.capacity }));
+        .map((r) => ({
+          roomId: r.id,
+          roomName: r.roomName,
+          capacity: r.capacity,
+        }));
     } catch (error) {
       this.logger.warn(
         `[Reject] Failed to build suggestedAlternatives: ${(error as Error).message}`,

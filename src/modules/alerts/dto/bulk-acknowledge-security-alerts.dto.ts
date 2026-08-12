@@ -8,7 +8,8 @@ import { IsArray, ArrayMinSize, ArrayMaxSize, IsUUID } from 'class-validator';
  */
 export class BulkAcknowledgeSecurityAlertsDto {
   @ApiProperty({
-    description: 'Danh sách ID cảnh báo cần xác nhận hàng loạt (tối đa 50 id/request)',
+    description:
+      'Danh sách ID cảnh báo cần xác nhận hàng loạt (tối đa 50 id/request)',
     type: [String],
   })
   @IsArray()

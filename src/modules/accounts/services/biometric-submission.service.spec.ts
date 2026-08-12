@@ -93,11 +93,9 @@ describe('BiometricSubmissionService', () => {
       { expiredAt: null, role: { roleCode: 'BUSINESS_ADMIN' } },
     ]);
 
-    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject(
-      {
-        response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
-      },
-    );
+    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject({
+      response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
+    });
     expect(cloudinary.uploadImage).not.toHaveBeenCalled();
   });
 
@@ -106,11 +104,9 @@ describe('BiometricSubmissionService', () => {
       { expiredAt: null, role: { roleCode: 'SYSTEM_ADMIN' } },
     ]);
 
-    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject(
-      {
-        response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
-      },
-    );
+    await expect(service.submit('u1', makeFile(), true)).rejects.toMatchObject({
+      response: { code: 'BIOMETRIC_NOT_APPLICABLE_FOR_ROLE' },
+    });
   });
 
   it('EMPLOYEE → không bị chặn, vẫn upload bình thường (BA 2026-08-03)', async () => {

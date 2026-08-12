@@ -9,22 +9,36 @@ export class PersonControlListResponseDto {
   @ApiProperty({ description: 'ID mục trong danh sách kiểm soát' })
   id: string;
 
-  @ApiPropertyOptional({ nullable: true, description: 'ID user hệ thống ứng với người này (nếu có)' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'ID user hệ thống ứng với người này (nếu có)',
+  })
   user_id: string | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'ID face profile dùng để so khớp trực tiếp' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'ID face profile dùng để so khớp trực tiếp',
+  })
   face_profile_id: string | null;
 
-  @ApiProperty({ description: 'Tên hiển thị của người trong danh sách kiểm soát' })
+  @ApiProperty({
+    description: 'Tên hiển thị của người trong danh sách kiểm soát',
+  })
   display_name: string;
 
-  @ApiPropertyOptional({ nullable: true, description: 'ID ảnh chân dung đính kèm' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'ID ảnh chân dung đính kèm',
+  })
   photo_media_file_id: string | null;
 
   @ApiProperty({ description: 'Phân loại danh sách (watchlist/blocklist)' })
   list_type: string;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Lý do đưa vào danh sách kiểm soát' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Lý do đưa vào danh sách kiểm soát',
+  })
   reason: string | null;
 
   @ApiProperty({ description: 'Mức độ ưu tiên' })

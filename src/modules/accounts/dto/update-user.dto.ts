@@ -60,6 +60,9 @@ export class UpdateUserDto {
   departmentId?: string;
 
   @IsOptional()
-  @IsDateString({}, { message: 'accountExpiresAt phải là thời điểm hợp lệ (ISO 8601)' })
+  @IsDateString(
+    {},
+    { message: 'accountExpiresAt phải là thời điểm hợp lệ (ISO 8601)' },
+  )
   accountExpiresAt?: string;
 }

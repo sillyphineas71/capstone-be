@@ -13,14 +13,22 @@ import { Expose } from 'class-transformer';
  * - field gửi = null → set null (xóa note). (@IsOptional cho phép null.)
  */
 export class UpdateVehicleRegistrationDto {
-  @ApiPropertyOptional({ description: 'Loại phương tiện; gửi null để xoá', nullable: true, maxLength: 50 })
+  @ApiPropertyOptional({
+    description: 'Loại phương tiện; gửi null để xoá',
+    nullable: true,
+    maxLength: 50,
+  })
   @Expose({ name: 'vehicle_type' })
   @IsOptional()
   @IsString()
   @MaxLength(50)
   vehicleType?: string | null;
 
-  @ApiPropertyOptional({ description: 'Ghi chú; gửi null để xoá', nullable: true, maxLength: 255 })
+  @ApiPropertyOptional({
+    description: 'Ghi chú; gửi null để xoá',
+    nullable: true,
+    maxLength: 255,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)

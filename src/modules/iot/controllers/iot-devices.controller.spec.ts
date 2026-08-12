@@ -141,8 +141,7 @@ describe('IotDevicesController — check-availability (A5)', () => {
           heartbeat_path: '/heartbeat',
           verify_path: '/verify',
           stranger_path: '/stranger',
-          callback_token_hash:
-            'abc123def456realhashvaluethatmustneverleak',
+          callback_token_hash: 'abc123def456realhashvaluethatmustneverleak',
           callback_token_last4: 'z9y8',
           configured_at: '2026-08-12T00:00:00.000Z',
         },
@@ -197,8 +196,7 @@ describe('IotDevicesController — check-availability (A5)', () => {
         res.data.device.metadata_json.face_server_config.callback_token_hash,
       ).toBe('***');
       expect(
-        res.data.device.metadata_json.face_server_config
-          .callback_token_last4,
+        res.data.device.metadata_json.face_server_config.callback_token_last4,
       ).toBe('***');
       expect(JSON.stringify(res.data.device)).not.toContain(
         'abc123def456realhashvaluethatmustneverleak',

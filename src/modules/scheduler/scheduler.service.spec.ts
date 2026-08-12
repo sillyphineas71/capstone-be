@@ -558,7 +558,9 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
 
       const [sql, params] = dataSourceMock.query.mock.calls[0];
       expect(sql).toContain("status IN ('recording','paused')");
-      expect(sql).toContain("started_at < NOW() - ($1::int * INTERVAL '1 hour')");
+      expect(sql).toContain(
+        "started_at < NOW() - ($1::int * INTERVAL '1 hour')",
+      );
       expect(params).toEqual([6]); // maxHours mặc định từ mock RecordingSystemConfigService
     });
 
@@ -616,9 +618,7 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
         SCHEDULER_RECORDING_MAX_DURATION_ENABLED: true,
       };
       const s = await build();
-      recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(
-        3,
-      );
+      recordingSystemConfigServiceMock.getMaxDurationHours.mockResolvedValue(3);
       await s.recordingMaxDurationEnforce();
 
       const [, params] = dataSourceMock.query.mock.calls[0];

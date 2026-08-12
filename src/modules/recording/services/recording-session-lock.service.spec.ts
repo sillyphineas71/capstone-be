@@ -42,7 +42,7 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
     process.env.RTSP_CRED_KEY = 'test_rtsp_cred_key_0123456789_abcdefghij';
     fsMock.existsSync.mockReturnValue(true);
     fsMock.statSync.mockReturnValue({ size: 1024 } as any);
-    fsMock.mkdirSync.mockReturnValue(undefined as any);
+    fsMock.mkdirSync.mockReturnValue(undefined);
   });
   afterEach(() => jest.clearAllMocks());
 
@@ -54,7 +54,8 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
     const manager = {
       query: jest.fn((sql: string) => {
         if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([{}]);
-        if (sql.includes('FROM meetings')) return Promise.resolve([{ id: 'm1' }]);
+        if (sql.includes('FROM meetings'))
+          return Promise.resolve([{ id: 'm1' }]);
         // [FIX 2026-08-11, R10] assertHostOrAdmin host check — 'u1' luôn là host, bypass
         // ngay (không cần role check) để KHÔNG đổi ý nghĩa test lock/race này.
         if (sql.includes('FROM meeting_participants'))
@@ -112,9 +113,7 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
     ]);
 
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected') as Array<
-      PromiseRejectedResult
-    >;
+    const rejected = results.filter((r) => r.status === 'rejected');
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0].reason).toBeInstanceOf(ConflictException);
@@ -187,9 +186,7 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
     ]);
 
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected') as Array<
-      PromiseRejectedResult
-    >;
+    const rejected = results.filter((r) => r.status === 'rejected');
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0].reason).toBeInstanceOf(ConflictException);
@@ -316,20 +313,19 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
     );
 
     // 2. pauseVideo() thành công, đúng như luồng bình thường.
-    expect((pauseResult as any).status).toBe('paused');
+    expect(pauseResult.status).toBe('paused');
 
     // 3. CRUX: snapshot mà stopVideo() dùng để build file concat PHẢI CÓ CẢ 2 segment —
     //    segment cũ (đã có từ trước) VÀ segment mới (do pauseVideo() vừa đóng+push).
     expect(capturedSessionAtStop).not.toBeNull();
-    const segmentsSeenByStop = (
-      capturedSessionAtStop.metadata_json.segments as string[]
-    );
+    const segmentsSeenByStop = capturedSessionAtStop.metadata_json
+      .segments as string[];
     expect(segmentsSeenByStop).toContain('/rec/s1_seg0.mp4'); // segment cũ
     expect(segmentsSeenByStop).toContain('/rec/s1_seg1.mp4'); // segment MỚI — đây là cái dễ bị mất nếu KHÔNG có lock
     expect(segmentsSeenByStop).toHaveLength(2);
 
     // 4. stopVideo() cũng thành công (status='stopped', dù captured=false do storagePath=null).
-    expect((stopResult as any).status).toBe('stopped');
+    expect(stopResult.status).toBe('stopped');
   });
 
   // ─── Namespace khoá KHÁC NHAU — start (meetingId) vs pause/resume/stop (sessionId) ──
@@ -341,7 +337,8 @@ describe('RecordingSessionService — advisory lock concurrency (FIX 2026-08-11)
           capturedLockCalls.push({ sql, params });
           return Promise.resolve([{}]);
         }
-        if (sql.includes('FROM meetings')) return Promise.resolve([{ id: 'X' }]);
+        if (sql.includes('FROM meetings'))
+          return Promise.resolve([{ id: 'X' }]);
         // [FIX 2026-08-11, R10] assertHostOrAdmin host check — PHẢI đứng TRƯỚC nhánh
         // "WHERE meeting_id" bên dưới vì câu SQL host check cũng chứa chuỗi con đó
         // ('...meeting_participants WHERE meeting_id = $1...') — nếu để sau sẽ bị nhánh đó

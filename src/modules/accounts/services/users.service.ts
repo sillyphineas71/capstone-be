@@ -26,7 +26,10 @@ import {
   EmploymentStatus,
   AccountStatus,
 } from '../entities/user.entity.js';
-import { buildAccountWelcomeEmail, buildPartnerAccountWelcomeEmail } from '../../mail/templates/builders.js';
+import {
+  buildAccountWelcomeEmail,
+  buildPartnerAccountWelcomeEmail,
+} from '../../mail/templates/builders.js';
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
@@ -39,7 +42,10 @@ import {
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
 import { BIOMETRIC_EXEMPT_ROLE_CODES } from '../../../common/utils/biometric-exempt-roles.util.js';
-import { PARTNER_DEPARTMENT_ID, isPartnerAccount } from '../../../common/utils/partner-account.util.js';
+import {
+  PARTNER_DEPARTMENT_ID,
+  isPartnerAccount,
+} from '../../../common/utils/partner-account.util.js';
 
 // UC-10 — READ-only cross-module entities (chỉ dùng để kiểm ràng buộc tham chiếu
 // và soft-delete quan hệ trong transaction xóa; KHÔNG gọi/sửa service module khác).
@@ -57,7 +63,10 @@ import { RedisService } from '../../redis/redis.service.js';
 import { AuthConfigService } from '../../auth/services/auth-config.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
-import { detectImageMimeType, AllowedImageMime } from '../utils/image-magic-bytes.util.js';
+import {
+  detectImageMimeType,
+  AllowedImageMime,
+} from '../utils/image-magic-bytes.util.js';
 import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
 import {
   MediaFileEntity,
@@ -143,7 +152,11 @@ export class UsersService {
     dto: CreateUserDto,
     creatorId: string,
     clientContext: UserClientContext,
-    avatarFile?: { buffer?: Buffer; size?: number; originalname?: string } | null,
+    avatarFile?: {
+      buffer?: Buffer;
+      size?: number;
+      originalname?: string;
+    } | null,
   ): Promise<UserResponseDto> {
     const email = dto.email.trim().toLowerCase();
     const employeeCode = dto.employeeCode ? dto.employeeCode.trim() : null;
@@ -201,7 +214,8 @@ export class UsersService {
         if (existingEmail) {
           throw new ConflictException({
             success: false,
-            message: 'Địa chỉ email này đã được sử dụng cho một tài khoản khác.',
+            message:
+              'Địa chỉ email này đã được sử dụng cho một tài khoản khác.',
             error: { code: 'ACCOUNT_EMAIL_ALREADY_EXISTS', details: { email } },
           });
         }
@@ -300,7 +314,8 @@ export class UsersService {
           ) {
             throw new UnprocessableEntityException({
               success: false,
-              message: 'Người quản lý trực tiếp đang bị khóa hoặc đã nghỉ việc.',
+              message:
+                'Người quản lý trực tiếp đang bị khóa hoặc đã nghỉ việc.',
               error: {
                 code: 'MANAGER_INACTIVE_OR_UNAVAILABLE',
                 details: { directManagerId: dto.directManagerId },
@@ -457,7 +472,10 @@ export class UsersService {
       });
     }
     const expiresAt = new Date(dto.accountExpiresAt);
-    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+    if (
+      Number.isNaN(expiresAt.getTime()) ||
+      expiresAt.getTime() <= Date.now()
+    ) {
       throw new BadRequestException({
         success: false,
         message: 'accountExpiresAt phải là thời điểm tương lai',
@@ -644,7 +662,7 @@ export class UsersService {
       });
     }
 
-// A.3 BR-08 — tài khoản phải đang active
+    // A.3 BR-08 — tài khoản phải đang active
     if (targetUser.accountStatus !== AccountStatus.ACTIVE) {
       throw new UnprocessableEntityException({
         success: false,
@@ -657,7 +675,7 @@ export class UsersService {
       });
     }
 
-// A.4 Validate từng role trong tập mong muốn (mirror createUser)
+    // A.4 Validate từng role trong tập mong muốn (mirror createUser)
     for (const roleId of desired) {
       const role = await em.findOne(RoleEntity, { where: { id: roleId } });
       if (!role) {
@@ -1507,7 +1525,7 @@ export class UsersService {
       });
     }
 
-        // PTA-001: accountExpiresAt chi admin co account.partner.manage moi duoc chinh,
+    // PTA-001: accountExpiresAt chi admin co account.partner.manage moi duoc chinh,
     // và chỉ áp dụng cho tài khoản thuộc department "Đối tác".
     if (dto.accountExpiresAt !== undefined) {
       const { permissions } =
@@ -1527,7 +1545,7 @@ export class UsersService {
         });
       }
     }
-// A.3 Xác định System Admin & department scope của target
+    // A.3 Xác định System Admin & department scope của target
     const actorRoles = await em.find(UserRoleEntity, {
       where: { userId: actorId, isActive: true },
       relations: { role: true },
@@ -1626,7 +1644,8 @@ export class UsersService {
         // "Khoá sớm" = hạn mới đã ở quá khứ/hiện tại, HOẶC hạn mới sớm hơn hạn cũ
         // (dù vẫn còn ở tương lai) — so với giá trị CŨ, không chỉ so với now().
         const isAlreadyExpired = next.getTime() <= Date.now();
-        const isEarlierThanBefore = current !== null && next.getTime() < current;
+        const isEarlierThanBefore =
+          current !== null && next.getTime() < current;
         ACTION_TYPE =
           isAlreadyExpired || isEarlierThanBefore
             ? 'account.partner.lock_early'

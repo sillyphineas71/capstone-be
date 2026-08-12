@@ -16,9 +16,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Mirror 20260729000006-GrantBusinessAdminIotDeviceReadPermission.ts — permission
  * KHONG moi, chi them dong role_permissions. Idempotent bang WHERE NOT EXISTS.
  */
-export class GrantEmployeeBusinessAdminRecordingPermissions20260731000002
-  implements MigrationInterface
-{
+export class GrantEmployeeBusinessAdminRecordingPermissions20260731000002 implements MigrationInterface {
   name = 'GrantEmployeeBusinessAdminRecordingPermissions20260731000002';
 
   private readonly roleCodes = ['EMPLOYEE', 'BUSINESS_ADMIN'];

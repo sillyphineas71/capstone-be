@@ -32,7 +32,8 @@ export class SearchController {
   @UseGuards(JwtAuthGuard)
   @UsePipes(SEARCH_PIPE)
   @ApiOperation({
-    summary: 'Tìm kiếm toàn cục theo từ khóa, lọc theo loại đối tượng (mỗi loại tự lọc theo permission của user)',
+    summary:
+      'Tìm kiếm toàn cục theo từ khóa, lọc theo loại đối tượng (mỗi loại tự lọc theo permission của user)',
   })
   async search(
     @CurrentUser() user: { userId: string },

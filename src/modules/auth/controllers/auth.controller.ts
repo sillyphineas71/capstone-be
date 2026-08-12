@@ -65,7 +65,8 @@ export class AuthController {
     }),
   )
   @ApiOperation({
-    summary: 'Đăng nhập bằng username/email + mật khẩu, trả về access/refresh token',
+    summary:
+      'Đăng nhập bằng username/email + mật khẩu, trả về access/refresh token',
   })
   async login(
     @Body() loginDto: LoginDto,

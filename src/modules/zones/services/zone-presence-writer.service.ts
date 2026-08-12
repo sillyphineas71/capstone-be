@@ -135,11 +135,10 @@ export class ZonePresenceWriterService {
   async writeCountEvent(
     input: WriteCountInput,
   ): Promise<{ presenceId: string }> {
-    const zoneRows: Array<{ id: string }> =
-      await this.dataSource.manager.query(
-        `SELECT id FROM zones WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
-        [input.zoneId],
-      );
+    const zoneRows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM zones WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [input.zoneId],
+    );
     if (zoneRows.length === 0) {
       throw new Error(
         `writeCountEvent: zone ${input.zoneId} không tồn tại hoặc đã xoá`,

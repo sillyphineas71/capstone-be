@@ -17,9 +17,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * Role code dùng đúng 4 mã thật trong 20260720000002-SeedCoreRoles.ts.
  */
-export class SeedIvssAccessLogReadPermission20260804000001
-  implements MigrationInterface
-{
+export class SeedIvssAccessLogReadPermission20260804000001 implements MigrationInterface {
   name = 'SeedIvssAccessLogReadPermission20260804000001';
 
   private readonly permission = {

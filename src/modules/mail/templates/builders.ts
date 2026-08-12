@@ -68,7 +68,6 @@ export function buildAccountWelcomeEmail(params: {
   });
 }
 
-
 export function buildPartnerAccountWelcomeEmail(params: {
   fullName: string;
   email: string;
@@ -526,5 +525,8 @@ export function buildGuestOtpEmail(params: {
     renderParagraph(
       'Nếu Quý khách không yêu cầu mã này, vui lòng bỏ qua email này.',
     );
-  return renderEmailLayout({ heading: 'Mã xác nhận tham dự cuộc họp', bodyHtml });
+  return renderEmailLayout({
+    heading: 'Mã xác nhận tham dự cuộc họp',
+    bodyHtml,
+  });
 }

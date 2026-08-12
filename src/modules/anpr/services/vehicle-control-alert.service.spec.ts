@@ -305,9 +305,7 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
       controlListMock.checkControlList.mockResolvedValue(blocklistMatch);
       dsMock.manager.query.mockImplementation(async (sql: string) => {
         if (sql.includes('FROM system_configs'))
-          return Promise.resolve([
-            { config_json: { '3': ZONE_UUID } },
-          ]);
+          return Promise.resolve([{ config_json: { '3': ZONE_UUID } }]);
         if (sql.includes('FROM vehicle_registrations'))
           return Promise.resolve([]);
         return Promise.resolve(adminRows);
@@ -342,9 +340,7 @@ describe('VehicleControlAlertService (VCC-001 / UC9)', () => {
           return Promise.resolve([]);
         return Promise.resolve(adminRows);
       });
-      await expect(
-        service.evaluate('ZONE03', ctx),
-      ).resolves.toBeUndefined();
+      await expect(service.evaluate('ZONE03', ctx)).resolves.toBeUndefined();
       const input = alertsMock.recordAlert.mock.calls[0]?.[0];
       expect(input.zoneId).toBeNull();
       expect(notifMock.createNotification).toHaveBeenCalledTimes(1);

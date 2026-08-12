@@ -7,9 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * con cap ca BUSINESS_ADMIN). Idempotent: dung WHERE NOT EXISTS de tranh
  * trung lap khi chay lai.
  */
-export class SeedSecurityAlertsConfigurePermission20260808000001
-  implements MigrationInterface
-{
+export class SeedSecurityAlertsConfigurePermission20260808000001 implements MigrationInterface {
   name = 'SeedSecurityAlertsConfigurePermission20260808000001';
 
   private readonly entries: Array<{

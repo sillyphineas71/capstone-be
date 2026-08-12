@@ -98,4 +98,3 @@ describe('toAdminVehicleRegistrationResponse (UC-101)', () => {
     expect(out.account_expires_at).toBeNull();
   });
 });
-

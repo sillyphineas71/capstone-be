@@ -9,7 +9,8 @@ import { Type } from 'class-transformer';
  */
 export class UpdateSecurityAlertConfigDto {
   @ApiPropertyOptional({
-    description: 'Thời gian (phút) trước khi tự động resolve cảnh báo không tái phát',
+    description:
+      'Thời gian (phút) trước khi tự động resolve cảnh báo không tái phát',
     minimum: 1,
     maximum: 1440,
   })

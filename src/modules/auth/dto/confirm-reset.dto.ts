@@ -21,7 +21,10 @@ export class ConfirmResetDto {
   )
   email!: string;
 
-  @ApiProperty({ description: 'Mã OTP 6 số đã gửi qua email', example: '123456' })
+  @ApiProperty({
+    description: 'Mã OTP 6 số đã gửi qua email',
+    example: '123456',
+  })
   @IsString()
   @IsNotEmpty()
   @Length(6, 6, { message: 'Mã OTP phải có độ dài đúng 6 số' })

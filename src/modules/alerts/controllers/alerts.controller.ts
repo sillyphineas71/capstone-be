@@ -42,7 +42,10 @@ export class AlertsController {
   @Get()
   @RequirePermissions('security_alert.read')
   @UsePipes(SECURITY_ALERT_PIPE)
-  @ApiOperation({ summary: 'Xem danh sách cảnh báo an ninh (Trung tâm cảnh báo), có phân trang + lọc' })
+  @ApiOperation({
+    summary:
+      'Xem danh sách cảnh báo an ninh (Trung tâm cảnh báo), có phân trang + lọc',
+  })
   async list(@Query() query: QuerySecurityAlertsDto) {
     const { items, meta } = await this.alertsService.list(query);
     return {
@@ -55,7 +58,10 @@ export class AlertsController {
 
   @Get(':id')
   @RequirePermissions('security_alert.read')
-  @ApiOperation({ summary: 'Xem chi tiết 1 cảnh báo an ninh, kèm thông tin zone + lịch sử cùng loại/cùng zone' })
+  @ApiOperation({
+    summary:
+      'Xem chi tiết 1 cảnh báo an ninh, kèm thông tin zone + lịch sử cùng loại/cùng zone',
+  })
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const { alert, zone, history } = await this.alertsService.findDetail(id);
     return {
@@ -71,7 +77,9 @@ export class AlertsController {
 
   @Post(':id/acknowledge')
   @RequirePermissions('security_alert.acknowledge')
-  @ApiOperation({ summary: 'Xác nhận đã tiếp nhận 1 cảnh báo an ninh (new → acknowledged)' })
+  @ApiOperation({
+    summary: 'Xác nhận đã tiếp nhận 1 cảnh báo an ninh (new → acknowledged)',
+  })
   async acknowledge(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -87,7 +95,10 @@ export class AlertsController {
   @Post(':id/resolve')
   @RequirePermissions('security_alert.resolve')
   @UsePipes(SECURITY_ALERT_PIPE)
-  @ApiOperation({ summary: 'Xử lý xong 1 cảnh báo an ninh (acknowledged → resolved), kèm ghi chú xử lý' })
+  @ApiOperation({
+    summary:
+      'Xử lý xong 1 cảnh báo an ninh (acknowledged → resolved), kèm ghi chú xử lý',
+  })
   async resolve(
     @CurrentUser() user: { userId: string },
     @Param('id', ParseUUIDPipe) id: string,
@@ -104,7 +115,10 @@ export class AlertsController {
   @Post('bulk-acknowledge')
   @RequirePermissions('security_alert.acknowledge')
   @UsePipes(SECURITY_ALERT_PIPE)
-  @ApiOperation({ summary: 'Xác nhận hàng loạt nhiều cảnh báo an ninh cùng lúc, xử lý độc lập từng id (1 lỗi không chặn id khác)' })
+  @ApiOperation({
+    summary:
+      'Xác nhận hàng loạt nhiều cảnh báo an ninh cùng lúc, xử lý độc lập từng id (1 lỗi không chặn id khác)',
+  })
   async bulkAcknowledge(
     @CurrentUser() user: { userId: string },
     @Body() dto: BulkAcknowledgeSecurityAlertsDto,
