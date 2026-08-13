@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { NoShowService } from './no-show.service.js';
-import { NoShowConfigService } from './no-show-config.service.js';
 
 interface CandidateRow {
   booking_id: string;
@@ -21,26 +20,41 @@ interface CandidateRow {
  * TRƯỚC khi `first_presence_at` được ghi — nếu người bước vào ĐÚNG lúc threshold hết hạn,
  * `first_presence_at` vẫn NULL trong vài giây trong lúc streak đang tích lũy, khiến detect()
  * quét đúng lúc đó tạo nhầm case no-show dù người đã thực sự có mặt. Loại trừ bằng
- * NOT EXISTS occupancy event count>0 trong vòng presenceConfirmSeconds giây gần nhất —
- * cho streak-confirm ở Phần 3 đủ thời gian xử lý trước khi detect() kết luận no-show.
+ * NOT EXISTS occupancy event count>0 trong vòng ngưỡng gần nhất — cho streak-confirm ở
+ * Phần 3 đủ thời gian xử lý trước khi detect() kết luận no-show.
+ *
+ * [FIX 2026-08-13, R14] Mốc guard đổi từ `presenceConfirmSeconds` (biến nghiệp vụ, người
+ * dùng chỉnh được, có thể để rất nhỏ) sang hằng số cố định `RECONCILE_GRACE_SECONDS`.
+ * Lý do: `OccupancyPersistenceService.reconcilePendingConfirmations()` (chạy TRƯỚC
+ * detect() trong CÙNG lần cron mỗi phút — xem scheduler.service.ts) giờ ĐÃ đảm bảo
+ * `room_booking_usages` luôn được tạo/cập nhật đúng (root cause thật của bug đêm nay,
+ * KHÔNG phải do mốc thời gian của guard này — xem occupancy-persistence.service.ts) —
+ * nên với ca ĐÃ đủ ngưỡng, `u.first_presence_at IS NULL` (điều kiện chính, dòng dưới) tự
+ * nó đã đủ tin cậy, KHÔNG cần guard phụ nữa. Guard này giờ CHỈ còn phòng hờ 1 tình huống
+ * hẹp: `reconcilePendingConfirmations()` lỗi transient RIÊNG cho đúng 1 booking ở đúng
+ * tick đó (hàm có try/catch từng booking, 1 lỗi không dừng cả batch nhưng booking đó thật
+ * sự chưa được xử lý) — tick sau (1 phút) sẽ tự sửa. Vì đây là vấn đề VẬN HÀNH (cron retry),
+ * KHÔNG phải vấn đề NGHIỆP VỤ (ngưỡng xác nhận có mặt), mốc đệm PHẢI độc lập với
+ * `presenceConfirmSeconds` — dùng lại biến đó chính là nguyên nhân gốc khiến guard "hết
+ * hạn bảo vệ" quá sớm khi người dùng cấu hình ngưỡng nhỏ (ca thực tế đêm nay).
  */
 @Injectable()
 export class NoShowDetectionService {
   private readonly logger = new Logger(NoShowDetectionService.name);
   private static readonly DEFAULT_THRESHOLD_MINUTES = 15;
+  // [FIX 2026-08-13, R14] Đệm cố định cho guard phụ — gấp đôi chu kỳ cron EVERY_MINUTE
+  // (scheduler.service.ts), đủ để tick sau retry nếu reconcile lỗi transient ở tick này.
+  // KHÔNG lấy từ NoShowConfigService — cố tình độc lập với ngưỡng nghiệp vụ người dùng cấu hình.
+  private static readonly RECONCILE_GRACE_SECONDS = 120;
 
   constructor(
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
     private readonly noShowService: NoShowService,
-    private readonly noShowConfigService: NoShowConfigService,
   ) {}
 
   async detect(): Promise<{ scanned: number; created: number }> {
     const threshold = await this.readThreshold();
-    // NC-2: đọc 1 lần/đợt, KHÔNG đọc lại trong vòng lặp bên dưới.
-    const { presenceConfirmSeconds } =
-      await this.noShowConfigService.getValues();
 
     const candidates = await this.dataSource.manager.query(
       `SELECT b.id AS booking_id, b.meeting_id, b.room_id
@@ -57,7 +71,7 @@ export class NoShowDetectionService {
               AND re.occupancy_count > 0
               AND re.event_time >= now() - ($2::int * interval '1 second')
          )`,
-      [threshold, presenceConfirmSeconds],
+      [threshold, NoShowDetectionService.RECONCILE_GRACE_SECONDS],
     );
 
     let created = 0;
