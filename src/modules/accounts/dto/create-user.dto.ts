@@ -39,6 +39,11 @@ export class CreateUserDto {
   @IsUUID('4', { message: 'ID phòng ban phải là định dạng UUID' })
   departmentId?: string;
 
+  // roleIds vẫn BẮT BUỘC cho tài khoản nhân viên thường. Bỏ qua khi tạo tài
+  // khoản đối tác (accountType='partner') — server luôn ép role EMPLOYEE bất
+  // kể client gửi gì (xem UsersService.createUser()), vì FE không (và không
+  // nên) hiển thị ô chọn role cho form tạo đối tác.
+  @ValidateIf((o: CreateUserDto) => o.accountType !== 'partner')
   @IsNotEmpty({ message: 'Danh sách vai trò không được để trống' })
   @IsArray({ message: 'Danh sách vai trò phải là mảng' })
   @ArrayNotEmpty({ message: 'Danh sách vai trò không được rỗng' })
@@ -46,7 +51,7 @@ export class CreateUserDto {
     each: true,
     message: 'Mỗi vai trò trong danh sách phải là định dạng UUID',
   })
-  roleIds: string[];
+  roleIds?: string[];
 
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim() : value,

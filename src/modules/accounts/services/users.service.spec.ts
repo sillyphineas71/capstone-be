@@ -3068,6 +3068,83 @@ describe('UsersService', () => {
       expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
     });
 
+    it('createUser: đối tác KHÔNG gửi roleIds (đúng luồng FE thật) → vẫn tạo được, tự ép role EMPLOYEE', async () => {
+      // Tái hiện bug thật đã phát hiện trên UI: form "Tạo tài khoản đối tác"
+      // không có ô chọn role, nên FE không gửi field roleIds — trước đây DTO
+      // bắt buộc roleIds cho MỌI accountType nên request luôn bị 400
+      // "Danh sách vai trò không được rỗng". roleIds giờ chỉ bắt buộc khi
+      // accountType !== 'partner' (xem create-user.dto.ts).
+      em.findOne.mockImplementation(
+        async (entityClass, options?: MockFindOneOptions) => {
+          if (entityClass === UserEntity) return null;
+          if (entityClass === DepartmentEntity) {
+            return { id: PARTNER_DEPARTMENT_ID, isActive: true };
+          }
+          if (entityClass === RoleEntity) {
+            if (options?.where?.roleCode === 'EMPLOYEE') {
+              return {
+                id: 'role-employee-id',
+                roleCode: 'EMPLOYEE',
+                roleName: 'Employee',
+                isActive: true,
+              };
+            }
+            return null;
+          }
+          return null;
+        },
+      );
+      const mockSavedUser = {
+        id: 'new-partner-id',
+        fullName: 'Doi Tac Test',
+        email: 'doitac.test@example.com',
+        departmentId: PARTNER_DEPARTMENT_ID,
+        accountStatus: 'active',
+        mustChangePassword: false,
+        accountExpiresAt: new Date(Date.now() + 86400000),
+        createdAt: new Date(),
+      };
+      em.create.mockImplementation(
+        <T>(_entityClass: unknown, plain: T): T => plain,
+      );
+      em.save.mockImplementation(
+        async <T>(entityClass: unknown, entity: T): Promise<T> => {
+          if (entityClass === UserEntity) return mockSavedUser as unknown as T;
+          return entity;
+        },
+      );
+      em.getRepository.mockReturnValue({
+        insert: jest.fn().mockResolvedValue(undefined),
+      } as any);
+
+      const dto: CreateUserDto = {
+        fullName: 'Doi Tac Test',
+        email: 'doitac.test@example.com',
+        accountType: 'partner',
+        accountExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+        // roleIds KHÔNG được gửi — đúng như FE thật không gửi field này
+      };
+
+      const result = await service.createUser(
+        dto,
+        'admin',
+        {},
+        {
+          buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00]),
+          size: 5,
+          originalname: 'face.jpg',
+        },
+      );
+
+      expect(result.roles).toEqual([
+        expect.objectContaining({ roleCode: 'EMPLOYEE' }),
+      ]);
+      expect(em.save).toHaveBeenCalledWith(
+        UserRoleEntity,
+        expect.objectContaining({ roleId: 'role-employee-id' }),
+      );
+    });
+
     it('keeps employee persist behavior unchanged', async () => {
       setupPersistMocks();
       const result = await service.persistAccount(
