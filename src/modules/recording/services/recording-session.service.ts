@@ -155,8 +155,7 @@ export class RecordingSessionService {
         if (activeRows && activeRows.length > 0) {
           throw new ConflictException({
             code: 'RECORDING_ALREADY_ACTIVE',
-            message:
-              'A recording session is already active for this meeting.',
+            message: 'A recording session is already active for this meeting.',
           });
         }
 
@@ -363,14 +362,11 @@ export class RecordingSessionService {
       const paused = session.paused_duration_seconds ?? 0;
       const durationSeconds = Math.max(
         0,
-        Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) -
-          paused,
+        Math.floor((stoppedAt.getTime() - startedAt.getTime()) / 1000) - paused,
       );
 
       const baseMeta = session.metadata_json ?? {};
-      const metadata = isOrphan
-        ? { ...baseMeta, orphan_stop: true }
-        : baseMeta;
+      const metadata = isOrphan ? { ...baseMeta, orphan_stop: true } : baseMeta;
 
       // UC-114/115: session có segment (đã pause/resume) → concat N segment → 1 file cuối.
       //   Session 0-pause (segments rỗng) → resolveStopFile trả storage_path cũ (LUỒNG CŨ Y HỆT — BR-06).

@@ -22,19 +22,28 @@ import {
  * ĐỘC LẬP (mirror create — spec §2.6).
  */
 export class UpdatePersonControlListDto {
-  @ApiPropertyOptional({ description: 'ID user hệ thống ứng với người này — đổi sẽ kích hoạt re-check dedup' })
+  @ApiPropertyOptional({
+    description:
+      'ID user hệ thống ứng với người này — đổi sẽ kích hoạt re-check dedup',
+  })
   @Expose({ name: 'user_id' })
   @IsOptional()
   @IsUUID()
   userId?: string | null;
 
-  @ApiPropertyOptional({ description: 'ID face profile dùng để so khớp trực tiếp — đổi sẽ kích hoạt re-check dedup' })
+  @ApiPropertyOptional({
+    description:
+      'ID face profile dùng để so khớp trực tiếp — đổi sẽ kích hoạt re-check dedup',
+  })
   @Expose({ name: 'face_profile_id' })
   @IsOptional()
   @IsUUID()
   faceProfileId?: string | null;
 
-  @ApiPropertyOptional({ description: 'Tên hiển thị của người trong danh sách kiểm soát', maxLength: 255 })
+  @ApiPropertyOptional({
+    description: 'Tên hiển thị của người trong danh sách kiểm soát',
+    maxLength: 255,
+  })
   @Expose({ name: 'display_name' })
   @IsOptional()
   @IsString()
@@ -47,19 +56,28 @@ export class UpdatePersonControlListDto {
   @IsUUID()
   photoMediaFileId?: string | null;
 
-  @ApiPropertyOptional({ description: 'Phân loại danh sách', enum: PERSON_CONTROL_LIST_TYPES })
+  @ApiPropertyOptional({
+    description: 'Phân loại danh sách',
+    enum: PERSON_CONTROL_LIST_TYPES,
+  })
   @Expose({ name: 'list_type' })
   @IsOptional()
   @IsIn(PERSON_CONTROL_LIST_TYPES)
   listType?: PersonControlListType;
 
-  @ApiPropertyOptional({ description: 'Lý do đưa vào danh sách kiểm soát', maxLength: 255 })
+  @ApiPropertyOptional({
+    description: 'Lý do đưa vào danh sách kiểm soát',
+    maxLength: 255,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)
   reason?: string;
 
-  @ApiPropertyOptional({ description: 'Mức độ ưu tiên', enum: PERSON_CONTROL_PRIORITIES })
+  @ApiPropertyOptional({
+    description: 'Mức độ ưu tiên',
+    enum: PERSON_CONTROL_PRIORITIES,
+  })
   @IsOptional()
   @IsIn(PERSON_CONTROL_PRIORITIES)
   priority?: PersonControlPriority;

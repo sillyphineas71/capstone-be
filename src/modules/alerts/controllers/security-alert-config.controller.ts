@@ -31,7 +31,10 @@ export class SecurityAlertConfigController {
 
   @Get()
   @RequirePermissions('security_alerts.configure')
-  @ApiOperation({ summary: 'SysAdmin xem toàn bộ ngưỡng cấu hình auto-resolve của security_alerts' })
+  @ApiOperation({
+    summary:
+      'SysAdmin xem toàn bộ ngưỡng cấu hình auto-resolve của security_alerts',
+  })
   async get() {
     const data = await this.securityAlertConfigService.getAll();
     return {
@@ -51,7 +54,10 @@ export class SecurityAlertConfigController {
       transform: true,
     }),
   )
-  @ApiOperation({ summary: 'SysAdmin cập nhật ngưỡng cấu hình auto-resolve của security_alerts (≥1 field)' })
+  @ApiOperation({
+    summary:
+      'SysAdmin cập nhật ngưỡng cấu hình auto-resolve của security_alerts (≥1 field)',
+  })
   async update(
     @Body() dto: UpdateSecurityAlertConfigDto,
     @CurrentUser() user: { userId: string },

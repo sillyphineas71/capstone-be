@@ -171,10 +171,7 @@ function sectionHeader(doc: PDFKit.PDFDocument, title: string): void {
 }
 
 function kvRow(doc: PDFKit.PDFDocument, label: string, value: string): void {
-  doc
-    .font(VN_FONT_BOLD)
-    .fontSize(10)
-    .text(`${label}: `, { continued: true });
+  doc.font(VN_FONT_BOLD).fontSize(10).text(`${label}: `, { continued: true });
   doc.font(VN_FONT_REGULAR).text(value ?? '—');
 }
 

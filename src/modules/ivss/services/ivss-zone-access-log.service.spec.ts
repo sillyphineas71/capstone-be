@@ -39,7 +39,9 @@ describe('IvssZoneAccessLogService (Zone Access Log — đường B, FIX 2026-08
     dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
       captured.push({ sql, params });
       if (sql.includes('FROM zones') && !sql.includes('iot_device_events'))
-        return Promise.resolve(over.zone ?? [{ zone_name: 'Hành lang tầng 2' }]);
+        return Promise.resolve(
+          over.zone ?? [{ zone_name: 'Hành lang tầng 2' }],
+        );
       if (isCountQuery(sql)) return Promise.resolve([counts]);
       if (isEventQuery(sql)) return Promise.resolve(events);
       return Promise.resolve([]);

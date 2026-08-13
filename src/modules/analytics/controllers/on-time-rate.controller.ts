@@ -24,9 +24,11 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { OnTimeRateService } from '../services/on-time-rate.service';
 import { QueryOnTimeRateDto } from '../dto/query-on-time-rate.dto';
 import { QueryLateHistoryDto } from '../dto/query-late-history.dto';
+import { UserLateStatsQueryDto } from '../dto/query-user-late-stats.dto';
 import {
   OnTimeRateResponseDto,
   LateHistoryResponseDto,
+  UserLateStatsResponseDto,
 } from '../dto/on-time-rate-response.dto';
 
 @ApiTags('Analytics Attendance')
@@ -78,6 +80,68 @@ export class OnTimeRateController {
         message,
         data,
         meta: {},
+      };
+    } catch (error: unknown) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new InternalServerErrorException({
+        success: false,
+        message: 'Internal server error',
+        error: { code: 'INTERNAL_ERROR', details: {} },
+      });
+    }
+  }
+
+  @Get('on-time-rate/users')
+  @ApiOperation({
+    summary: 'Thống kê tỷ lệ đúng giờ theo nhân sự (UC-AA-10 / UC-157)',
+    description:
+      'Trả về danh sách tỷ lệ đi trễ theo từng nhân sự có phân trang và tìm kiếm.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Thống kê tỷ lệ tham dự đúng giờ theo nhân sự được truy xuất thành công',
+    type: UserLateStatsResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
+  @ApiResponse({ status: 401, description: 'Chưa đăng nhập' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED / DEPARTMENT_OUT_OF_SCOPE',
+  })
+  @ApiResponse({ status: 404, description: 'DEPARTMENT_NOT_EXISTS' })
+  @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
+  async getOnTimeRateByUsers(
+    @Query(new ValidationPipe({ transform: true, whitelist: true }))
+    query: UserLateStatsQueryDto,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UserLateStatsResponseDto;
+    meta: Record<string, any>;
+  }> {
+    try {
+      const { data, message } = await this.service.getOnTimeRateByUsers(
+        currentUser,
+        query,
+      );
+      return {
+        success: true,
+        message,
+        data,
+        // FE đọc phân trang ở res.meta (be_required_endpoints.md); mirror từ data.
+        meta: {
+          total: data.total,
+          page: data.page,
+          limit: data.limit,
+          totalPages: data.totalPages,
+        },
       };
     } catch (error: unknown) {
       if (error instanceof HttpException) {

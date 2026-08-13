@@ -10,6 +10,7 @@ import {
 } from '../repositories/audit-log-query.repository.js';
 import { QueryAuditLogsDto } from '../dto/query-audit-logs.dto.js';
 import {
+  AuditActionTypeDto,
   AuditLogItemDto,
   AuditLogListResponseDto,
 } from '../dto/audit-log-response.dto.js';
@@ -118,21 +119,44 @@ export class AuditLogQueryService {
     entity_id: string | null;
     severity: string;
     user_full_name: string | null;
+    user_avatar_url?: string | null;
   }): AuditLogItemDto {
     const actorUserId = row.user_id ?? null;
     const actorName =
       actorUserId === null ? 'Hệ thống' : (row.user_full_name ?? 'Hệ thống');
+    // Hệ thống (user_id null) không có avatar; user có thể chưa upload → null.
+    const actorAvatarUrl =
+      actorUserId === null ? null : (row.user_avatar_url ?? null);
 
     return {
       id: row.id,
       createdAt: row.created_at,
       actorUserId,
       actorName,
+      actorAvatarUrl,
       actionType: row.action_type,
       entityType: row.entity_type,
       entityId: row.entity_id ?? null,
       severity: row.severity,
     };
+  }
+
+  /**
+   * listActionTypes — trả danh sách action_type có thật trong dữ liệu (kèm count),
+   * phục vụ FE dựng dropdown lọc "Loại hành động" từ giá trị thật thay vì hard-code.
+   */
+  async listActionTypes(): Promise<AuditActionTypeDto[]> {
+    try {
+      const rows = await this.auditLogQueryRepository.findDistinctActionTypes();
+      return rows.map((r) => ({
+        actionType: r.action_type,
+        count: r.count,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`[AuditLogQuery] listActionTypes error: ${message}`);
+      throw new InternalServerErrorException({ code: 'INTERNAL_ERROR' });
+    }
   }
 
   /**

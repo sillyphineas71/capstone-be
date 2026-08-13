@@ -1021,11 +1021,8 @@ describe('IotDevicesService', () => {
     it('device chưa cấu hình, đã gán room → 200, tạo face_server_config mới, trả oneTimeCallbackToken khớp hash', async () => {
       dataSourceMock.manager.findOne.mockResolvedValue(faceDeviceWithRoom());
 
-      const { device, oneTimeCallbackToken } = await service.configureFaceServer(
-        'admin1',
-        'dev1',
-        validDto,
-      );
+      const { device, oneTimeCallbackToken } =
+        await service.configureFaceServer('admin1', 'dev1', validDto);
 
       const fsc = device.metadataJson!.face_server_config as any;
       const expectHash = nodeCrypto

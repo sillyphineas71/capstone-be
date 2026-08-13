@@ -27,7 +27,8 @@ export class StrangerAlertController {
   @RequirePermissions('face.stranger.read')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @ApiOperation({
-    summary: 'Admin xem danh sách cảnh báo người lạ (stranger) gần đây, có phân trang',
+    summary:
+      'Admin xem danh sách cảnh báo người lạ (stranger) gần đây, có phân trang',
   })
   async list(@Query() query: ListStrangerAlertsQueryDto) {
     const result = await this.strangerAlertService.list(query);

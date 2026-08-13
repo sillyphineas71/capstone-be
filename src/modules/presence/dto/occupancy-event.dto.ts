@@ -23,7 +23,9 @@ export class OccupancyEventDto {
   @IsUUID()
   roomId: string;
 
-  @ApiPropertyOptional({ description: 'ID cuộc họp đang diễn ra tại phòng (nếu có)' })
+  @ApiPropertyOptional({
+    description: 'ID cuộc họp đang diễn ra tại phòng (nếu có)',
+  })
   @IsOptional()
   @IsUUID()
   meetingId?: string;
@@ -33,12 +35,17 @@ export class OccupancyEventDto {
   @IsString()
   eventType?: string;
 
-  @ApiProperty({ description: 'Số người đếm được trong phòng tại thời điểm sự kiện', minimum: 0 })
+  @ApiProperty({
+    description: 'Số người đếm được trong phòng tại thời điểm sự kiện',
+    minimum: 0,
+  })
   @IsInt()
   @Min(0)
   occupancyCount: number;
 
-  @ApiPropertyOptional({ description: 'Độ tin cậy của kết quả đếm người (model AI)' })
+  @ApiPropertyOptional({
+    description: 'Độ tin cậy của kết quả đếm người (model AI)',
+  })
   @IsOptional()
   @IsNumber()
   confidence?: number;

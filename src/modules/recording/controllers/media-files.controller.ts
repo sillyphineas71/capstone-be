@@ -217,7 +217,10 @@ export class MediaFilesController {
       m.mimeType.startsWith('audio/');
     res.setHeader(
       'Content-Disposition',
-      (isInlineViewable ? 'inline' : 'attachment') + '; filename="' + filename + '"',
+      (isInlineViewable ? 'inline' : 'attachment') +
+        '; filename="' +
+        filename +
+        '"',
     );
     res.writeHead(200, { 'Content-Length': m.size });
     const stream = await this.openMediaStream(m);

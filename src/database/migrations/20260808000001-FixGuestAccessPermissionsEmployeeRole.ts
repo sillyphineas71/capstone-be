@@ -18,9 +18,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * GET /live-meetings/:id/guests bi 403 FORBIDDEN, xac nhan qua GET /auth/me
  * permissions[] khong co bat ky quyen guest.* nao.
  */
-export class FixGuestAccessPermissionsEmployeeRole20260808000001
-  implements MigrationInterface
-{
+export class FixGuestAccessPermissionsEmployeeRole20260808000001 implements MigrationInterface {
   name = 'FixGuestAccessPermissionsEmployeeRole20260808000001';
 
   private readonly permissionCodes = [

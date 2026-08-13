@@ -12,13 +12,19 @@ export class VehicleControlListResponseDto {
   @ApiProperty({ description: 'Biển số đã chuẩn hoá' })
   plate_number: string;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Biển số dạng thô (chưa chuẩn hoá)' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Biển số dạng thô (chưa chuẩn hoá)',
+  })
   plate_raw: string | null;
 
   @ApiProperty({ description: 'Phân loại danh sách (blocklist/watchlist)' })
   list_type: string;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Lý do đưa vào danh sách kiểm soát' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Lý do đưa vào danh sách kiểm soát',
+  })
   reason: string | null;
 
   @ApiProperty({ description: 'Trạng thái kích hoạt' })

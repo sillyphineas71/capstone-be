@@ -15,9 +15,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * permission la dieu kien can, service con kiem tra ownership (meeting.hostId)
  * / Admin bypass.
  */
-export class SeedGuestAccessPermissions20260807000003
-  implements MigrationInterface
-{
+export class SeedGuestAccessPermissions20260807000003 implements MigrationInterface {
   name = 'SeedGuestAccessPermissions20260807000003';
 
   private readonly permissions = [

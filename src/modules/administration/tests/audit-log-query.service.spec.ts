@@ -33,6 +33,7 @@ describe('AuditLogQueryService', () => {
       entity_id: string | null;
       severity: string;
       user_full_name: string | null;
+      user_avatar_url: string | null;
     }> = {},
   ) => ({
     id: 'uuid-1',
@@ -43,6 +44,7 @@ describe('AuditLogQueryService', () => {
     entity_id: 'entity-uuid-1',
     severity: 'info',
     user_full_name: 'Nguyễn Văn A',
+    user_avatar_url: 'https://cdn.example.com/a.png',
     ...overrides,
   });
 
@@ -50,6 +52,7 @@ describe('AuditLogQueryService', () => {
     const mockRepo = {
       findPaginated: jest.fn(),
       countMatching: jest.fn(),
+      findDistinctActionTypes: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -217,6 +220,77 @@ describe('AuditLogQueryService', () => {
       // user_id is set → actorUserId not null, but fullName missing → fallback
       expect(result.data[0].actorUserId).toBe('user-uuid-2');
       expect(result.data[0].actorName).toBe('Hệ thống');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // actorAvatarUrl — avatar người thực hiện trong list response
+  // ---------------------------------------------------------------------------
+  describe('actorAvatarUrl mapping', () => {
+    it('should map avatar_url from the actor row', async () => {
+      const row = makeRow({
+        user_id: 'user-uuid-1',
+        user_avatar_url: 'https://cdn.example.com/x.png',
+      });
+      repositoryMock.findPaginated.mockResolvedValue([row]);
+      repositoryMock.countMatching.mockResolvedValue(1);
+
+      const result = await service.listAuditLogs({});
+
+      expect(result.data[0].actorAvatarUrl).toBe('https://cdn.example.com/x.png');
+    });
+
+    it('should be null when actor has no avatar', async () => {
+      const row = makeRow({ user_id: 'user-uuid-1', user_avatar_url: null });
+      repositoryMock.findPaginated.mockResolvedValue([row]);
+      repositoryMock.countMatching.mockResolvedValue(1);
+
+      const result = await service.listAuditLogs({});
+
+      expect(result.data[0].actorAvatarUrl).toBeNull();
+    });
+
+    it('should be null for system actor (user_id null) even if row has avatar', async () => {
+      const row = makeRow({
+        user_id: null,
+        user_full_name: null,
+        user_avatar_url: 'https://cdn.example.com/should-be-ignored.png',
+      });
+      repositoryMock.findPaginated.mockResolvedValue([row]);
+      repositoryMock.countMatching.mockResolvedValue(1);
+
+      const result = await service.listAuditLogs({});
+
+      expect(result.data[0].actorAvatarUrl).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // listActionTypes — nguồn dựng dropdown lọc từ dữ liệu thật
+  // ---------------------------------------------------------------------------
+  describe('listActionTypes', () => {
+    it('should map repository rows to { actionType, count }', async () => {
+      repositoryMock.findDistinctActionTypes.mockResolvedValue([
+        { action_type: 'login', count: 120 },
+        { action_type: 'ACCOUNT_LOCK', count: 3 },
+      ]);
+
+      const result = await service.listActionTypes();
+
+      expect(result).toEqual([
+        { actionType: 'login', count: 120 },
+        { actionType: 'ACCOUNT_LOCK', count: 3 },
+      ]);
+    });
+
+    it('should wrap repository errors in InternalServerErrorException', async () => {
+      repositoryMock.findDistinctActionTypes.mockRejectedValue(
+        new Error('DB down'),
+      );
+
+      await expect(service.listActionTypes()).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
   });
 

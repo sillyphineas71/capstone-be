@@ -16,9 +16,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * fallback SELECT). CHỈ SYSTEM_ADMIN — đây là thao tác quản trị thiết bị,
  * cùng mức nhạy cảm với access_log.read.
  */
-export class SeedIvssPortraitManagePermission20260807000002
-  implements MigrationInterface
-{
+export class SeedIvssPortraitManagePermission20260807000002 implements MigrationInterface {
   name = 'SeedIvssPortraitManagePermission20260807000002';
 
   private readonly permission = {

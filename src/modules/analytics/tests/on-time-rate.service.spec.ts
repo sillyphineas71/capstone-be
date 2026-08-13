@@ -35,6 +35,8 @@ describe('OnTimeRateService', () => {
       getLateByHourOfDay: jest.fn(),
       getLateByDepartment: jest.fn(),
       getLateHistory: jest.fn(),
+      checkDepartmentExists: jest.fn(),
+      getLateByUsers: jest.fn(),
     } as unknown as jest.Mocked<OnTimeRateRepository>;
 
     mockConfigService = {
@@ -346,6 +348,126 @@ describe('OnTimeRateService', () => {
       expect(result.data.lateMeetings.length).toBe(1);
       expect(result.data.lateMeetings[0].meetingTitle).toBe('Meeting 1');
       expect(result.data.lateMeetings[0].lateMinutes).toBe(10);
+    });
+  });
+
+  describe('getOnTimeRateByUsers', () => {
+    it('happy path for MANAGER viewing users in scope', async () => {
+      mockAuthzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['analytics.attendance.read'],
+      });
+      mockRepo.getManagerDepartmentIds.mockResolvedValue(['dept-1']);
+      mockRepo.checkDepartmentExists.mockResolvedValue(true);
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+      mockRepo.getLateByUsers.mockResolvedValue({
+        items: [
+          {
+            userId: 'u1',
+            fullName: 'Nguyen Van A',
+            email: 'a@co.com',
+            avatarUrl: null,
+            employeeCode: 'EMP001',
+            departmentId: 'dept-1',
+            departmentName: 'Phong IT',
+            lateCount: 2,
+            onTimeCount: 8,
+            absentCount: 0,
+            totalRequired: 10,
+            lateRate: 20.0,
+          },
+        ],
+        total: 1,
+      });
+
+      const query = {
+        preset: 'month',
+        departmentId: 'dept-1',
+        page: 1,
+        limit: 10,
+      };
+
+      const result = await service.getOnTimeRateByUsers(
+        { userId: mockUserId },
+        query,
+      );
+
+      expect(result.message).toBe(
+        'Thống kê tỷ lệ tham dự đúng giờ theo nhân sự được truy xuất thành công',
+      );
+      expect(result.data.items).toHaveLength(1);
+      expect(result.data.total).toBe(1);
+      expect(result.data.totalPages).toBe(1);
+      expect(result.data.items[0].fullName).toBe('Nguyen Van A');
+    });
+
+    it('throws NotFoundException (404) if departmentId does not exist', async () => {
+      mockAuthzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['analytics.attendance.read'],
+      });
+      mockRepo.getManagerDepartmentIds.mockResolvedValue(['dept-1']);
+      mockRepo.checkDepartmentExists.mockResolvedValue(false);
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+
+      const query = {
+        departmentId: '00000000-0000-0000-0000-000000000099',
+      };
+
+      await expect(
+        service.getOnTimeRateByUsers({ userId: mockUserId }, query),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException (403) if MANAGER passes departmentId outside scope', async () => {
+      mockAuthzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['analytics.attendance.read'],
+      });
+      mockRepo.getManagerDepartmentIds.mockResolvedValue(['dept-1']);
+      mockRepo.checkDepartmentExists.mockResolvedValue(true);
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+
+      const query = {
+        departmentId: 'dept-2', // outside scope
+      };
+
+      await expect(
+        service.getOnTimeRateByUsers({ userId: mockUserId }, query),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws ForbiddenException (403) if role is EMPLOYEE (no analytics permission)', async () => {
+      mockAuthzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['EMPLOYEE'],
+        permissions: [],
+      });
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+
+      await expect(
+        service.getOnTimeRateByUsers({ userId: mockUserId }, {}),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('MANAGER with 0 departments returns empty state short-circuit', async () => {
+      mockAuthzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['analytics.attendance.read'],
+      });
+      mockRepo.getManagerDepartmentIds.mockResolvedValue([]); // 0 departments
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+
+      const result = await service.getOnTimeRateByUsers(
+        { userId: mockUserId },
+        {},
+      );
+
+      expect(result.data.items).toEqual([]);
+      expect(result.data.total).toBe(0);
+      expect(result.data.totalPages).toBe(0);
+      expect(result.message).toBe(
+        'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.',
+      );
     });
   });
 });

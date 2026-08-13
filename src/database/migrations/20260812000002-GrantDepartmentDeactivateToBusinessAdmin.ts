@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * BUSINESS_ADMIN phải dùng được deactivate/reactivate như create/read/update.
  * Idempotent: WHERE NOT EXISTS, có down().
  */
-export class GrantDepartmentDeactivateToBusinessAdmin20260812000002
-  implements MigrationInterface
-{
+export class GrantDepartmentDeactivateToBusinessAdmin20260812000002 implements MigrationInterface {
   name = 'GrantDepartmentDeactivateToBusinessAdmin20260812000002';
 
   private readonly permissionCode = 'department.deactivate';

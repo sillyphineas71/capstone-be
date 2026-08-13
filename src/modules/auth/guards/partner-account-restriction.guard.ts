@@ -31,10 +31,7 @@ export class PartnerAccountRestrictionGuard implements CanActivate {
 
     let isPartner: boolean;
     try {
-      isPartner = await isPartnerAccountByUserId(
-        user.userId,
-        this.dataSource,
-      );
+      isPartner = await isPartnerAccountByUserId(user.userId, this.dataSource);
     } catch (error) {
       // Fail-closed có chủ đích: khác BiometricEnforcementGuard/MustChangePasswordGuard
       // (fail-open vì chỉ nới lỏng 1 yêu cầu tuân thủ), guard này là ranh giới phân quyền

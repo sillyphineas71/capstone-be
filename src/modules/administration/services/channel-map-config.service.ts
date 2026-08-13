@@ -197,13 +197,12 @@ export class ChannelMapConfigService {
   private async validateAndNormalize(
     entry: ChannelMapConfigEntry,
     value: unknown,
-  ): Promise<{ configValue: string | null; configJson: Record<string, string> | null }> {
+  ): Promise<{
+    configValue: string | null;
+    configJson: Record<string, string> | null;
+  }> {
     if (entry.kind === 'threshold') {
-      if (
-        typeof value !== 'number' ||
-        !Number.isInteger(value) ||
-        value <= 0
-      ) {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
         throw new BadRequestException({
           success: false,
           message: `Value cho key '${entry.key}' phải là số nguyên dương (>0).`,
@@ -217,11 +216,7 @@ export class ChannelMapConfigService {
     }
 
     // kind === 'map'
-    if (
-      value === null ||
-      typeof value !== 'object' ||
-      Array.isArray(value)
-    ) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       throw new BadRequestException({
         success: false,
         message: `Value cho key '${entry.key}' phải là object dạng {"<channelId số>": "<giá trị>"}.`,
@@ -284,7 +279,10 @@ export class ChannelMapConfigService {
       normalized[channelIdStr] = entryValue;
     }
 
-    if (entry.mapEntryKind === 'room_uuid' || entry.mapEntryKind === 'zone_uuid') {
+    if (
+      entry.mapEntryKind === 'room_uuid' ||
+      entry.mapEntryKind === 'zone_uuid'
+    ) {
       await this.validateEntitiesExist(entry, normalized);
     }
 

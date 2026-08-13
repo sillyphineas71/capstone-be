@@ -15,12 +15,17 @@ export class CreateNoShowDto {
   @IsUUID()
   roomId: string;
 
-  @ApiPropertyOptional({ description: 'Trạng thái phát hiện no-show', enum: ['risk', 'confirmed'] })
+  @ApiPropertyOptional({
+    description: 'Trạng thái phát hiện no-show',
+    enum: ['risk', 'confirmed'],
+  })
   @IsOptional()
   @IsIn(['risk', 'confirmed'])
   detectionStatus?: 'risk' | 'confirmed';
 
-  @ApiPropertyOptional({ description: 'Bằng chứng phát hiện đi kèm (JSON tự do)' })
+  @ApiPropertyOptional({
+    description: 'Bằng chứng phát hiện đi kèm (JSON tự do)',
+  })
   @IsOptional()
   @IsObject()
   evidenceJson?: Record<string, unknown>;

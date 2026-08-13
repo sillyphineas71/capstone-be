@@ -28,6 +28,14 @@ export class AuditLogItemDto {
   })
   actorName: string;
 
+  @ApiPropertyOptional({
+    description:
+      'URL ảnh đại diện của người thực hiện; null nếu chưa có avatar hoặc là hệ thống. ' +
+      'Có mặt ở response list (GET /audit-logs); không áp dụng cho file export.',
+    nullable: true,
+  })
+  actorAvatarUrl?: string | null;
+
   @ApiProperty({ description: 'Loại hành động (e.g. "meeting.create")' })
   actionType: string;
 
@@ -64,4 +72,16 @@ export class AuditLogListResponseDto {
     total: number;
     totalPages: number;
   };
+}
+
+/**
+ * AuditActionTypeDto — 1 giá trị action_type có thật trong dữ liệu kèm số lượng.
+ * Dùng cho GET /audit-logs/action-types (nguồn dựng dropdown lọc phía FE).
+ */
+export class AuditActionTypeDto {
+  @ApiProperty({ description: 'Giá trị action_type thật (e.g. "login")' })
+  actionType: string;
+
+  @ApiProperty({ description: 'Số bản ghi audit log có action_type này' })
+  count: number;
 }

@@ -160,10 +160,7 @@ function renderTrafficStatsSection(
   doc: PDFKit.PDFDocument,
   stats: VehicleTrafficStatsResponseDto,
 ): void {
-  doc
-    .font(VN_FONT_BOLD)
-    .fontSize(13)
-    .text('Thống kê lưu lượng phương tiện');
+  doc.font(VN_FONT_BOLD).fontSize(13).text('Thống kê lưu lượng phương tiện');
   doc.moveDown(0.3);
   doc.moveTo(40, doc.y).lineTo(800, doc.y).stroke('#aaaaaa');
   doc.moveDown(0.5);

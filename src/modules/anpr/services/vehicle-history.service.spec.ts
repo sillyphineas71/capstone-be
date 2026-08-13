@@ -66,9 +66,13 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     const r = await service.listAll(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain(
+      "iot_device_events.event_type = 'ivss_vehicle_event'",
+    );
     expect(sql).not.toContain("payload_json->>'userId' = $");
-    expect(sql).toContain("iot_device_events.payload_json->>'userId' AS user_id");
+    expect(sql).toContain(
+      "iot_device_events.payload_json->>'userId' AS user_id",
+    );
     expect(r.items[0].userId).toBe('u1');
   });
 
@@ -76,7 +80,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     await service.listAll(q());
     const sql = rowsCall()!.sql;
-    expect(sql).toContain("iot_device_events.event_type = 'ivss_vehicle_event'");
+    expect(sql).toContain(
+      "iot_device_events.event_type = 'ivss_vehicle_event'",
+    );
     expect(sql).not.toContain('face_verify');
     expect(sql).not.toContain('face_stranger');
   });
@@ -195,7 +201,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
       expect(sql).toContain(
         "LEFT JOIN users u ON u.id = (iot_device_events.payload_json->>'userId')::uuid",
       );
-      expect(sql).toContain('LEFT JOIN departments d ON d.id = u.department_id');
+      expect(sql).toContain(
+        'LEFT JOIN departments d ON d.id = u.department_id',
+      );
       expect(sql).toContain('u.full_name');
       expect(sql).toContain('u.avatar_url');
       expect(sql).toContain('u.email');
@@ -266,7 +274,10 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
 
     it('ownerName KHÔNG có tác dụng ở listForUser (DTO field bị bỏ qua, KHÔNG lỗi)', async () => {
       wire();
-      const r = await service.listForUser('u1', q({ ownerName: 'Nguyễn' } as any));
+      const r = await service.listForUser(
+        'u1',
+        q({ ownerName: 'Nguyễn' } as any),
+      );
       const sql = rowsCall()!.sql;
       expect(sql).not.toContain('full_name');
       expect(r.items[0]).not.toHaveProperty('owner');
@@ -278,7 +289,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     await service.listAll(q({ plateNumber: '30A-123.45' }));
     const c = rowsCall()!;
-    expect(c.sql).toContain("iot_device_events.payload_json->>'plateNumber' = $");
+    expect(c.sql).toContain(
+      "iot_device_events.payload_json->>'plateNumber' = $",
+    );
     expect(c.params).toContain('30A12345');
     expect(c.params).not.toContain('30A-123.45');
   });
@@ -287,7 +300,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     wire();
     await service.listAll(q({ matchState: 'unmatched' }));
     const c = rowsCall()!;
-    expect(c.sql).toContain("iot_device_events.payload_json->>'matchState' = $1");
+    expect(c.sql).toContain(
+      "iot_device_events.payload_json->>'matchState' = $1",
+    );
     expect(c.params[0]).toBe('unmatched');
   });
 
@@ -305,8 +320,12 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
     const c = rowsCall()!;
     expect(c.sql).toContain("iot_device_events.payload_json->>'userId' = $1");
     expect(c.sql).toContain('iot_device_events.event_time >= $2');
-    expect(c.sql).toContain("iot_device_events.payload_json->>'direction' = $3");
-    expect(c.sql).toContain("iot_device_events.payload_json->>'plateNumber' = $4");
+    expect(c.sql).toContain(
+      "iot_device_events.payload_json->>'direction' = $3",
+    );
+    expect(c.sql).toContain(
+      "iot_device_events.payload_json->>'plateNumber' = $4",
+    );
     expect(c.sql).toContain('LIMIT $5 OFFSET $6');
     expect(c.params).toEqual([
       'u1',
@@ -331,7 +350,9 @@ describe('VehicleHistoryService (VHI-001 / UC7)', () => {
       q({ matchState: 'matched', from: '2026-06-01T00:00:00.000Z' }),
     );
     const c = rowsCall()!;
-    expect(c.sql).toContain("iot_device_events.payload_json->>'matchState' = $1");
+    expect(c.sql).toContain(
+      "iot_device_events.payload_json->>'matchState' = $1",
+    );
     expect(c.sql).toContain('iot_device_events.event_time >= $2');
     expect(c.sql).toContain('LIMIT $3 OFFSET $4');
     expect(c.params).toEqual(['matched', '2026-06-01T00:00:00.000Z', 20, 0]);

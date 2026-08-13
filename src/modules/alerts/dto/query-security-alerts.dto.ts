@@ -28,7 +28,10 @@ export class QuerySecurityAlertsDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -36,7 +39,10 @@ export class QuerySecurityAlertsDto {
   @Max(100)
   limit: number = 20;
 
-  @ApiPropertyOptional({ description: 'Lọc theo loại sự kiện cảnh báo', enum: ALERT_TYPES })
+  @ApiPropertyOptional({
+    description: 'Lọc theo loại sự kiện cảnh báo',
+    enum: ALERT_TYPES,
+  })
   @Expose({ name: 'alert_type' })
   @IsOptional()
   @IsIn(ALERT_TYPES)
@@ -49,7 +55,8 @@ export class QuerySecurityAlertsDto {
   zoneId?: string;
 
   @ApiPropertyOptional({
-    description: 'Lọc theo trạng thái xử lý (bỏ trống = trả tất cả, cảnh báo không tự ẩn)',
+    description:
+      'Lọc theo trạng thái xử lý (bỏ trống = trả tất cả, cảnh báo không tự ẩn)',
     enum: SECURITY_ALERT_STATUSES,
   })
   @IsOptional()
@@ -66,13 +73,21 @@ export class QuerySecurityAlertsDto {
   @IsDateString()
   to?: string;
 
-  @ApiPropertyOptional({ description: 'Trường sắp xếp', enum: SORT_FIELDS, default: 'triggeredAt' })
+  @ApiPropertyOptional({
+    description: 'Trường sắp xếp',
+    enum: SORT_FIELDS,
+    default: 'triggeredAt',
+  })
   @Expose({ name: 'sort_by' })
   @IsOptional()
   @IsIn(SORT_FIELDS)
   sortBy: (typeof SORT_FIELDS)[number] = 'triggeredAt';
 
-  @ApiPropertyOptional({ description: 'Chiều sắp xếp', enum: ['asc', 'desc'], default: 'desc' })
+  @ApiPropertyOptional({
+    description: 'Chiều sắp xếp',
+    enum: ['asc', 'desc'],
+    default: 'desc',
+  })
   @Expose({ name: 'sort_order' })
   @IsOptional()
   @IsIn(['asc', 'desc'])

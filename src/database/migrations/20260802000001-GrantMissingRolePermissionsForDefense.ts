@@ -44,9 +44,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    vao khuon vien, phai qua Manager.
  *  - meeting.room.update cho EMPLOYEE — bypass luong duyet dat phong.
  */
-export class GrantMissingRolePermissionsForDefense20260802000001
-  implements MigrationInterface
-{
+export class GrantMissingRolePermissionsForDefense20260802000001 implements MigrationInterface {
   name = 'GrantMissingRolePermissionsForDefense20260802000001';
 
   private readonly grants: Array<[role: string, permission: string]> = [

@@ -1322,7 +1322,10 @@ describe('UsersService', () => {
     });
 
     it('[U10] BA 2026-08-03 — Promote lên BUSINESS_ADMIN: giữ nguyên face_profile ACTIVE, không revoke', async () => {
-      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      const activeProfile: any = {
+        id: 'fp-1',
+        status: FaceProfileStatus.ACTIVE,
+      };
       setup({
         roles: { 'role-ba': { isActive: true } },
         currentActiveRoleIds: ['role-employee'],
@@ -1349,7 +1352,10 @@ describe('UsersService', () => {
     });
 
     it('[U11] BA 2026-08-03 — Demote từ BUSINESS_ADMIN xuống EMPLOYEE: revoke face_profile ACTIVE + audit riêng', async () => {
-      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      const activeProfile: any = {
+        id: 'fp-1',
+        status: FaceProfileStatus.ACTIVE,
+      };
       setup({
         roles: { 'role-employee': { isActive: true } },
         currentActiveRoleIds: ['role-ba'],
@@ -1387,7 +1393,10 @@ describe('UsersService', () => {
     });
 
     it('[U12] BA 2026-08-03 — Đổi role trong nội bộ nhóm exempt (SYSTEM_ADMIN→BUSINESS_ADMIN): không revoke', async () => {
-      const activeProfile: any = { id: 'fp-1', status: FaceProfileStatus.ACTIVE };
+      const activeProfile: any = {
+        id: 'fp-1',
+        status: FaceProfileStatus.ACTIVE,
+      };
       setup({
         roles: { 'role-ba': { isActive: true } },
         currentActiveRoleIds: ['role-sa'],
@@ -2988,95 +2997,99 @@ describe('UsersService', () => {
   });
 
   describe('PTA partner provisioning', () => {
-  const setupPersistMocks = () => {
-    const repoMock = { insert: jest.fn().mockResolvedValue(undefined) };
-    (em.getRepository as jest.Mock).mockReturnValue(repoMock);
-    em.create.mockImplementation((_entity: unknown, plain: unknown) => plain);
-    em.save.mockImplementation(async (_entity: unknown, plain: unknown) => plain);
-    return repoMock;
-  };
-
-  it('persistAccount creates partner user with email password and active face profile', async () => {
-    const repoMock = setupPersistMocks();
-    const expiresAt = new Date(Date.now() + 86400000);
-    const result = await service.persistAccount(
-      em,
-      {
-        fullName: 'Partner',
-        email: 'partner@x.com',
-        departmentId: PARTNER_DEPARTMENT_ID,
-        roleIds: ['role-1'],
-        employeeCode: null,
-        phoneNumber: null,
-        positionTitle: null,
-        directManagerId: null,
-        partner: {
-          accountExpiresAt: expiresAt,
-          mediaFileId: 'media-1',
-          faceProfileId: 'face-1',
-          detectedMime: 'image/jpeg',
-          storageKey: 's1',
-          fileUrl: 'https://cdn/x.jpg',
-          fileName: 'x.jpg',
-          uploadedBy: 'admin',
-        },
-      } as any,
-      'admin',
-      {},
-    );
-
-    const created = result.user as any;
-    expect(result.tempPassword).toBe('partner@x.com');
-    expect(await bcrypt.compare('partner@x.com', created.passwordHash)).toBe(true);
-    expect(created.mustChangePassword).toBe(false);
-    expect(created.accountExpiresAt).toEqual(expiresAt);
-    expect(created.departmentId).toBe(PARTNER_DEPARTMENT_ID);
-    expect(repoMock.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ status: FaceProfileStatus.ACTIVE }),
-    );
-    expect(repoMock.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ relatedEntityType: 'face_profile' }),
-    );
-  });
-
-  it('rejects partner creation without avatar before creating users', async () => {
-    const dto: CreateUserDto = {
-      fullName: 'Partner',
-      email: 'partner@x.com',
-      roleIds: ['role-1'],
-      accountType: 'partner',
-      accountExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+    const setupPersistMocks = () => {
+      const repoMock = { insert: jest.fn().mockResolvedValue(undefined) };
+      (em.getRepository as jest.Mock).mockReturnValue(repoMock);
+      em.create.mockImplementation((_entity: unknown, plain: unknown) => plain);
+      em.save.mockImplementation(
+        async (_entity: unknown, plain: unknown) => plain,
+      );
+      return repoMock;
     };
 
-    await expect(service.createUser(dto, 'admin', {})).rejects.toMatchObject({
-      response: { error: { code: 'AVATAR_FILE_REQUIRED' } },
+    it('persistAccount creates partner user with email password and active face profile', async () => {
+      const repoMock = setupPersistMocks();
+      const expiresAt = new Date(Date.now() + 86400000);
+      const result = await service.persistAccount(
+        em,
+        {
+          fullName: 'Partner',
+          email: 'partner@x.com',
+          departmentId: PARTNER_DEPARTMENT_ID,
+          roleIds: ['role-1'],
+          employeeCode: null,
+          phoneNumber: null,
+          positionTitle: null,
+          directManagerId: null,
+          partner: {
+            accountExpiresAt: expiresAt,
+            mediaFileId: 'media-1',
+            faceProfileId: 'face-1',
+            detectedMime: 'image/jpeg',
+            storageKey: 's1',
+            fileUrl: 'https://cdn/x.jpg',
+            fileName: 'x.jpg',
+            uploadedBy: 'admin',
+          },
+        } as any,
+        'admin',
+        {},
+      );
+
+      const created = result.user as any;
+      expect(result.tempPassword).toBe('partner@x.com');
+      expect(await bcrypt.compare('partner@x.com', created.passwordHash)).toBe(
+        true,
+      );
+      expect(created.mustChangePassword).toBe(false);
+      expect(created.accountExpiresAt).toEqual(expiresAt);
+      expect(created.departmentId).toBe(PARTNER_DEPARTMENT_ID);
+      expect(repoMock.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ status: FaceProfileStatus.ACTIVE }),
+      );
+      expect(repoMock.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ relatedEntityType: 'face_profile' }),
+      );
     });
-    expect(dataSource.transaction).not.toHaveBeenCalled();
-    expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
-  });
 
-  it('keeps employee persist behavior unchanged', async () => {
-    setupPersistMocks();
-    const result = await service.persistAccount(
-      em,
-      {
-        fullName: 'Employee',
-        email: 'emp@x.com',
-        departmentId: 'dept-1',
+    it('rejects partner creation without avatar before creating users', async () => {
+      const dto: CreateUserDto = {
+        fullName: 'Partner',
+        email: 'partner@x.com',
         roleIds: ['role-1'],
-        employeeCode: null,
-        phoneNumber: null,
-        positionTitle: null,
-        directManagerId: null,
-      },
-      'admin',
-      {},
-    );
+        accountType: 'partner',
+        accountExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+      };
 
-    const created = result.user as any;
-    expect(result.tempPassword).toBe('tempPassword123!');
-    expect(created.mustChangePassword).toBe(true);
-    expect(created.accountExpiresAt).toBeNull();
-  });
+      await expect(service.createUser(dto, 'admin', {})).rejects.toMatchObject({
+        response: { error: { code: 'AVATAR_FILE_REQUIRED' } },
+      });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(cloudinaryService.uploadImage).not.toHaveBeenCalled();
+    });
+
+    it('keeps employee persist behavior unchanged', async () => {
+      setupPersistMocks();
+      const result = await service.persistAccount(
+        em,
+        {
+          fullName: 'Employee',
+          email: 'emp@x.com',
+          departmentId: 'dept-1',
+          roleIds: ['role-1'],
+          employeeCode: null,
+          phoneNumber: null,
+          positionTitle: null,
+          directManagerId: null,
+        },
+        'admin',
+        {},
+      );
+
+      const created = result.user as any;
+      expect(result.tempPassword).toBe('tempPassword123!');
+      expect(created.mustChangePassword).toBe(true);
+      expect(created.accountExpiresAt).toBeNull();
+    });
   });
 });

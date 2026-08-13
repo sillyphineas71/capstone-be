@@ -24,7 +24,10 @@ import { AuditLogQueryService } from '../services/audit-log-query.service.js';
 import { AuditLogExportService } from '../services/audit-log-export.service.js';
 import { QueryAuditLogsDto } from '../dto/query-audit-logs.dto.js';
 import { ExportAuditLogsDto } from '../dto/export-audit-logs.dto.js';
-import { AuditLogListResponseDto } from '../dto/audit-log-response.dto.js';
+import {
+  AuditActionTypeDto,
+  AuditLogListResponseDto,
+} from '../dto/audit-log-response.dto.js';
 
 const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -91,6 +94,42 @@ export class AuditLogsController {
       data: result.data,
       meta: result.meta,
     };
+  }
+
+  /**
+   * GET /api/v1/audit-logs/action-types
+   * Danh sách các giá trị action_type CÓ THẬT trong dữ liệu (kèm số lượng), để FE
+   * dựng dropdown lọc "Loại hành động" từ dữ liệu thật thay vì hard-code chuỗi.
+   *
+   * Bối cảnh: action_type là chuỗi tự do (varchar 80), được ghi với nhiều quy ước
+   * khác nhau (`login`, `ACCOUNT_LOCK`, `export_users`, `meeting.create`...) nên
+   * không có enum cố định — endpoint này là nguồn tra cứu chính xác duy nhất.
+   */
+  @Get('action-types')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Danh sách action_type có thật trong nhật ký (dựng dropdown lọc)',
+    description:
+      'Trả về các giá trị action_type xuất hiện trong bảng audit_logs kèm số ' +
+      'bản ghi, sắp xếp theo tần suất giảm dần. Chỉ SYSTEM_ADMIN (permission ' +
+      'audit.system.read, kế thừa từ class decorator).',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Danh sách action_type + count',
+    type: [AuditActionTypeDto],
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized — chưa đăng nhập' })
+  @ApiResponse({
+    status: 403,
+    description: 'PERMISSION_DENIED — thiếu quyền audit.system.read',
+  })
+  async listActionTypes(): Promise<{
+    success: boolean;
+    data: AuditActionTypeDto[];
+  }> {
+    const data = await this.auditLogQueryService.listActionTypes();
+    return { success: true, data };
   }
 
   /**

@@ -1,16 +1,13 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class SeedPartnerAccountManagePermission20260811000002
-  implements MigrationInterface
-{
+export class SeedPartnerAccountManagePermission20260811000002 implements MigrationInterface {
   name = 'SeedPartnerAccountManagePermission20260811000002';
 
   private readonly permission = {
     code: 'account.partner.manage',
     name: 'Quản lý tài khoản đối tác',
     action: 'partner.manage',
-    description:
-      'Cho phép tạo, gia hạn và khoá sớm tài khoản đối tác tạm thời',
+    description: 'Cho phép tạo, gia hạn và khoá sớm tài khoản đối tác tạm thời',
   };
 
   private readonly roles = ['MANAGER', 'BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
@@ -21,7 +18,12 @@ export class SeedPartnerAccountManagePermission20260811000002
        VALUES ($1, $2, 'accounts', $3, $4, true)
        ON CONFLICT (permission_code) DO NOTHING
        RETURNING id;`,
-      [this.permission.code, this.permission.name, this.permission.action, this.permission.description],
+      [
+        this.permission.code,
+        this.permission.name,
+        this.permission.action,
+        this.permission.description,
+      ],
     );
 
     let permissionId = inserted[0]?.id;

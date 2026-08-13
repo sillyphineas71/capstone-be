@@ -32,7 +32,10 @@ export class ListVehicleControlListQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @Type(() => Number)
   @IsOptional()
   @IsInt()
@@ -40,13 +43,19 @@ export class ListVehicleControlListQueryDto {
   @Max(100)
   limit: number = 20;
 
-  @ApiPropertyOptional({ description: 'Lọc theo biển số đã chuẩn hoá (khớp chính xác)', maxLength: 20 })
+  @ApiPropertyOptional({
+    description: 'Lọc theo biển số đã chuẩn hoá (khớp chính xác)',
+    maxLength: 20,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(20)
   plate?: string;
 
-  @ApiPropertyOptional({ description: 'Lọc theo phân loại danh sách', enum: CONTROL_LIST_TYPES })
+  @ApiPropertyOptional({
+    description: 'Lọc theo phân loại danh sách',
+    enum: CONTROL_LIST_TYPES,
+  })
   @Expose({ name: 'list_type' })
   @IsOptional()
   @IsIn(CONTROL_LIST_TYPES)

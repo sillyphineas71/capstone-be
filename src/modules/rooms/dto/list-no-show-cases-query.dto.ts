@@ -14,14 +14,20 @@ export class ListNoShowCasesQueryDto {
   @IsOptional()
   page?: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @Type(() => Number)
   @Min(1, { message: 'limit phải lớn hơn hoặc bằng 1' })
   @Max(100, { message: 'limit không được vượt quá 100' })
   @IsOptional()
   limit?: number = 20;
 
-  @ApiPropertyOptional({ description: 'Lọc theo trạng thái phát hiện no-show', enum: NoShowDetectionStatus })
+  @ApiPropertyOptional({
+    description: 'Lọc theo trạng thái phát hiện no-show',
+    enum: NoShowDetectionStatus,
+  })
   @IsOptional()
   @IsEnum(NoShowDetectionStatus, {
     message:

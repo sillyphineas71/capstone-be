@@ -21,12 +21,17 @@ export class OccupancyEventDto {
   @IsNotEmpty()
   type: string;
 
-  @ApiProperty({ description: 'ID kênh camera — resolve phòng qua system_configs[ivss.channel_room_map]' })
+  @ApiProperty({
+    description:
+      'ID kênh camera — resolve phòng qua system_configs[ivss.channel_room_map]',
+  })
   @Type(() => Number)
   @IsInt()
   channelId: number;
 
-  @ApiProperty({ description: 'Số người hiện tại trong phòng tại thời điểm sự kiện' })
+  @ApiProperty({
+    description: 'Số người hiện tại trong phòng tại thời điểm sự kiện',
+  })
   @Type(() => Number)
   @IsInt()
   number: number;
@@ -35,19 +40,25 @@ export class OccupancyEventDto {
   @IsISO8601()
   utc: string;
 
-  @ApiPropertyOptional({ description: 'Số người vào (raw payload, chưa dùng cho tính count)' })
+  @ApiPropertyOptional({
+    description: 'Số người vào (raw payload, chưa dùng cho tính count)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   enteredNumber?: number;
 
-  @ApiPropertyOptional({ description: 'Số người ra (raw payload, chưa dùng cho tính count)' })
+  @ApiPropertyOptional({
+    description: 'Số người ra (raw payload, chưa dùng cho tính count)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   exitedNumber?: number;
 
-  @ApiPropertyOptional({ description: 'Hành động sự kiện do bridge gửi (nếu có)' })
+  @ApiPropertyOptional({
+    description: 'Hành động sự kiện do bridge gửi (nếu có)',
+  })
   @IsOptional()
   @IsString()
   eventAction?: string;

@@ -34,7 +34,8 @@ export class IvssPresenceController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('ivss.presence.read')
   @ApiOperation({
-    summary: 'Admin tải báo cáo PDF hiện diện của toàn bộ cuộc họp (trả file nhị phân, không qua envelope JSON)',
+    summary:
+      'Admin tải báo cáo PDF hiện diện của toàn bộ cuộc họp (trả file nhị phân, không qua envelope JSON)',
   })
   async report(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
@@ -68,7 +69,8 @@ export class IvssPresenceController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('ivss.presence.read')
   @ApiOperation({
-    summary: 'Admin xem thời lượng + timeline hiện diện của 1 người trong 1 cuộc họp cụ thể',
+    summary:
+      'Admin xem thời lượng + timeline hiện diện của 1 người trong 1 cuộc họp cụ thể',
   })
   async userPresence(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
@@ -92,7 +94,8 @@ export class IvssPresenceController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions('ivss.presence.read')
   @ApiOperation({
-    summary: 'Admin xem tổng hợp hiện diện của tất cả người tham dự trong 1 cuộc họp',
+    summary:
+      'Admin xem tổng hợp hiện diện của tất cả người tham dự trong 1 cuộc họp',
   })
   async meetingPresence(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
     const data = await this.presenceQueryService.getMeetingPresence(meetingId);

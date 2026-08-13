@@ -30,7 +30,9 @@ export class UsersAuthRepository {
       fullName: row[0].full_name,
       avatarUrl: row[0].avatar_url ?? null,
       departmentId: row[0].department_id ?? null,
-      accountExpiresAt: row[0].account_expires_at ? new Date(row[0].account_expires_at) : null,
+      accountExpiresAt: row[0].account_expires_at
+        ? new Date(row[0].account_expires_at)
+        : null,
       accountStatus: row[0].account_status,
     };
   }
@@ -57,7 +59,9 @@ export class UsersAuthRepository {
       fullName: row[0].full_name,
       avatarUrl: row[0].avatar_url ?? null,
       departmentId: row[0].department_id ?? null,
-      accountExpiresAt: row[0].account_expires_at ? new Date(row[0].account_expires_at) : null,
+      accountExpiresAt: row[0].account_expires_at
+        ? new Date(row[0].account_expires_at)
+        : null,
       accountStatus: row[0].account_status,
     };
   }

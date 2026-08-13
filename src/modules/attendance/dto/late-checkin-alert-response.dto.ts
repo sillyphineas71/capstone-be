@@ -29,7 +29,9 @@ export class LateCheckinAlertResponseDto {
   @IsString()
   status: string;
 
-  @ApiProperty({ description: 'Tổng số người tham dự đã được kiểm tra điểm danh' })
+  @ApiProperty({
+    description: 'Tổng số người tham dự đã được kiểm tra điểm danh',
+  })
   @IsNumber()
   totalParticipantsChecked: number;
 

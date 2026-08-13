@@ -25,6 +25,12 @@ export class CreateNoteDto {
   pinned?: boolean;
 
   @IsOptional()
-  @IsIn(['private', 'participants', 'department', 'public_internal', 'guest_shared'])
+  @IsIn([
+    'private',
+    'participants',
+    'department',
+    'public_internal',
+    'guest_shared',
+  ])
   visibilityLevel?: string;
 }

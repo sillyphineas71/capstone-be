@@ -1,4 +1,4 @@
-﻿import { Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DepartmentEntity } from './entities/department.entity.js';
 import { UserEntity } from './entities/user.entity.js';
@@ -15,6 +15,7 @@ import { AdminBiometricReviewController } from './controllers/admin-biometric-re
 import { AvatarPhotoController } from './controllers/avatar-photo.controller.js';
 import { UsersService } from './services/users.service.js';
 import { AccountImportService } from './services/account-import.service.js';
+import { PartnerAccountImportService } from './services/partner-account-import.service.js';
 import { FaceProfileService } from './services/face-profile.service.js';
 import { PermissionsController } from './controllers/permissions.controller.js';
 import { RolePermissionsController } from './controllers/role-permissions.controller.js';
@@ -40,6 +41,11 @@ import { NotificationsModule } from '../notifications/notifications.module.js';
 // nen AccountsModule -> ReportsModule la an toan (T-5.1,
 // PLAN_THUC_THI_P1_CODE_VA_SPEC_2026-07-27.md).
 import { ReportsModule } from '../reports/reports.module.js';
+// VPT-IMPORT-001: import AnprModule để lấy VehicleRegistrationService (cột
+// license_plate tùy chọn trong import Excel). Chiều accounts -> anpr an toàn:
+// AnprModule chỉ import AuthModule/NotificationsModule/AlertsModule/ZonesModule,
+// không module nào trong chuỗi đó import ngược AccountsModule.
+import { AnprModule } from '../anpr/anpr.module.js';
 
 /**
  * AccountsModule quÃ¡ÂºÂ£n lÃƒÂ½ tÃ¡ÂºÂ¥t cÃ¡ÂºÂ£ entities thuÃ¡Â»â„¢c domain Identity & Access:
@@ -68,6 +74,7 @@ import { ReportsModule } from '../reports/reports.module.js';
     AuthModule,
     NotificationsModule,
     ReportsModule,
+    AnprModule,
   ],
   controllers: [
     UsersController,
@@ -83,6 +90,7 @@ import { ReportsModule } from '../reports/reports.module.js';
   providers: [
     UsersService,
     AccountImportService,
+    PartnerAccountImportService,
     FaceProfileService,
     BiometricStatusService,
     BiometricSubmissionService,

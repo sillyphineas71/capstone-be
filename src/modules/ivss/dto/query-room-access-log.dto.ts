@@ -31,7 +31,8 @@ import {
  */
 export class QueryRoomAccessLogDto {
   @ApiPropertyOptional({
-    description: 'Ngày cần xem nhật ký, định dạng YYYY-MM-DD — thiếu thì mặc định hôm nay',
+    description:
+      'Ngày cần xem nhật ký, định dạng YYYY-MM-DD — thiếu thì mặc định hôm nay',
   })
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
@@ -51,7 +52,10 @@ export class QueryRoomAccessLogDto {
   @Min(1, { message: 'page phải >= 1' })
   page?: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt({ message: 'limit phải là số nguyên' })
@@ -60,7 +64,8 @@ export class QueryRoomAccessLogDto {
   limit?: number = 20;
 
   @ApiPropertyOptional({
-    description: 'Tìm theo tên người (users.full_name, ILIKE) — event chưa khớp danh tính bị loại khi có search',
+    description:
+      'Tìm theo tên người (users.full_name, ILIKE) — event chưa khớp danh tính bị loại khi có search',
   })
   @IsOptional()
   @IsString()

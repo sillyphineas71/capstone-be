@@ -9,7 +9,10 @@ import { Expose } from 'class-transformer';
  * `whitelist:true` loại mọi field thừa (kể cả user_id nếu client lén truyền) — SEC-01.
  */
 export class CreateVehicleRegistrationDto {
-  @ApiProperty({ description: 'Biển số xe dạng thô (chưa chuẩn hoá), tối đa 20 ký tự', maxLength: 20 })
+  @ApiProperty({
+    description: 'Biển số xe dạng thô (chưa chuẩn hoá), tối đa 20 ký tự',
+    maxLength: 20,
+  })
   @Expose({ name: 'plate_raw' })
   @IsString()
   @IsNotEmpty()

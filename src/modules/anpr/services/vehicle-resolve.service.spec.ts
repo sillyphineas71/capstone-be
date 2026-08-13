@@ -84,7 +84,9 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     // (mirror ChannelMapConfigService.spec.ts) — callback nhận `manager`, ở đây dùng LẠI
     // dsMock.manager (cùng jest.fn `.query`) để mọi SQL-sniffing (`captured`/wire()/wireMerge())
     // của test hiện có tiếp tục hoạt động không đổi, không cần EntityManager mock riêng.
-    dsMock.transaction = jest.fn((cb: (m: any) => unknown) => cb(dsMock.manager));
+    dsMock.transaction = jest.fn((cb: (m: any) => unknown) =>
+      cb(dsMock.manager),
+    );
     alertMock = { evaluate: jest.fn().mockResolvedValue(undefined) };
     gateMock = {
       writeGateLog: jest
@@ -159,7 +161,9 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
     expect(String(q?.sql)).toContain('vr.deleted_at IS NULL');
     expect(String(q?.sql)).toContain('JOIN users u ON u.id = vr.user_id');
     expect(String(q?.sql)).toContain('u.deleted_at IS NULL');
-    expect(String(q?.sql)).toContain('u.account_expires_at IS NULL OR u.account_expires_at >= NOW()');
+    expect(String(q?.sql)).toContain(
+      'u.account_expires_at IS NULL OR u.account_expires_at >= NOW()',
+    );
     expect(q?.params).toEqual(['30A12345']); // DATA-03: dùng plateNumber đã chuẩn
   });
 
@@ -827,7 +831,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         null,
       );
       const upd = mergeUpdate();
-      expect(upd!.sql).toContain("jsonb_set(");
+      expect(upd!.sql).toContain('jsonb_set(');
       expect(upd!.sql).toContain("'{rawReads}'");
       expect(upd!.sql).toContain(
         "COALESCE(payload_json->'rawReads', '[]'::jsonb) || $1::jsonb",
@@ -1076,7 +1080,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(updateCount).toBe(1); // request thứ 2 bump vào row của request thứ nhất, KHÔNG tạo row riêng
     });
 
-    it('advisory lock bind đúng channelId qua hashtext (mirror hashtext(\'vehicle_channel_\' || channelId))', async () => {
+    it("advisory lock bind đúng channelId qua hashtext (mirror hashtext('vehicle_channel_' || channelId))", async () => {
       captured = [];
       dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
         captured.push({ sql, params });
@@ -1100,7 +1104,9 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         c.sql.includes('pg_advisory_xact_lock'),
       );
       expect(lockCall).toBeDefined();
-      expect(lockCall!.sql).toContain("hashtext('vehicle_channel_' || $1::text)");
+      expect(lockCall!.sql).toContain(
+        "hashtext('vehicle_channel_' || $1::text)",
+      );
       expect(lockCall!.params).toEqual(['7']);
     });
 

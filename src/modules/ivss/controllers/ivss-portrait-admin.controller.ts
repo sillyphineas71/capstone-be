@@ -26,9 +26,7 @@ import { IvssPortraitSyncService } from '../services/ivss-portrait-sync.service.
 @Controller('admin/ivss/portrait')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class IvssPortraitAdminController {
-  constructor(
-    private readonly portraitSyncService: IvssPortraitSyncService,
-  ) {}
+  constructor(private readonly portraitSyncService: IvssPortraitSyncService) {}
 
   @Post(':userId/resync')
   @HttpCode(HttpStatus.OK)

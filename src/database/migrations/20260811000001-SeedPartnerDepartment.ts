@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class SeedPartnerDepartment20260811000001
-  implements MigrationInterface
-{
+export class SeedPartnerDepartment20260811000001 implements MigrationInterface {
   name = 'SeedPartnerDepartment20260811000001';
 
   private readonly partnerDepartmentId = '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f';

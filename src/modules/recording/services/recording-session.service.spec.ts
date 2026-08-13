@@ -885,7 +885,7 @@ describe('RecordingSessionService.uploadAudioForTranscription', () => {
         .spyOn(ffmpegUtil, 'spawnFfmpegRemux')
         .mockImplementation(() => fakeFfmpegProc({ code: 0 }));
       fsMock.existsSync.mockReturnValue(true);
-      fsMock.readFileSync.mockReturnValue(remuxed as any);
+      fsMock.readFileSync.mockReturnValue(remuxed);
 
       const result = await service.uploadAudioForTranscription(
         'm1',

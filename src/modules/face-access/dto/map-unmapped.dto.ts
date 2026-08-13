@@ -13,7 +13,8 @@ export class MapUnmappedDto {
   deviceId: string;
 
   @ApiProperty({
-    description: 'device_person_id (uid) thiết bị báo trong verify — chuỗi thô, KHÔNG bắt buộc UUID',
+    description:
+      'device_person_id (uid) thiết bị báo trong verify — chuỗi thô, KHÔNG bắt buộc UUID',
   })
   @IsString()
   @IsNotEmpty()
@@ -24,7 +25,9 @@ export class MapUnmappedDto {
   @IsUUID()
   userId: string;
 
-  @ApiProperty({ description: 'ID cuộc họp — mapping chỉ áp dụng trong phạm vi cuộc họp này' })
+  @ApiProperty({
+    description: 'ID cuộc họp — mapping chỉ áp dụng trong phạm vi cuộc họp này',
+  })
   @IsUUID()
   meetingId: string;
 }

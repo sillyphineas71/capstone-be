@@ -46,6 +46,7 @@ describe('AuditLogsController', () => {
   beforeEach(async () => {
     const mockService = {
       listAuditLogs: jest.fn(),
+      listActionTypes: jest.fn(),
     };
     const mockExportService = {
       exportAuditLogsXlsx: jest.fn(),
@@ -105,6 +106,25 @@ describe('AuditLogsController', () => {
       await expect(controller.listAuditLogs({})).rejects.toThrow(
         'Unexpected DB failure',
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // GET /audit-logs/action-types — nguồn dựng dropdown lọc từ dữ liệu thật
+  // ---------------------------------------------------------------------------
+  describe('GET /audit-logs/action-types', () => {
+    it('should return {success: true, data} from service', async () => {
+      const data = [
+        { actionType: 'login', count: 120 },
+        { actionType: 'ACCOUNT_LOCK', count: 3 },
+      ];
+      serviceMock.listActionTypes.mockResolvedValue(data);
+
+      const result = await controller.listActionTypes();
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual(data);
+      expect(serviceMock.listActionTypes).toHaveBeenCalledTimes(1);
     });
   });
 

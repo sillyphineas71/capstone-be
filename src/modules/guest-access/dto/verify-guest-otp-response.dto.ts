@@ -8,7 +8,8 @@ export class VerifyGuestOtpResponseDto {
   guestToken: string;
 
   @ApiProperty({
-    description: 'true nếu khách phải chờ host duyệt vào phòng chờ trước khi vào họp',
+    description:
+      'true nếu khách phải chờ host duyệt vào phòng chờ trước khi vào họp',
   })
   lobbyRequired: boolean;
 

@@ -16,7 +16,10 @@ export class ListUnmappedQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ description: 'Số bản ghi mỗi trang (tối đa 100)', default: 20 })
+  @ApiPropertyOptional({
+    description: 'Số bản ghi mỗi trang (tối đa 100)',
+    default: 20,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -25,7 +28,8 @@ export class ListUnmappedQueryDto {
   limit: number = 20;
 
   @ApiPropertyOptional({
-    description: 'Override cửa sổ thời gian lấy verify gần đây (phút), mặc định FACE_UNMAPPED_WINDOW_MINUTES',
+    description:
+      'Override cửa sổ thời gian lấy verify gần đây (phút), mặc định FACE_UNMAPPED_WINDOW_MINUTES',
   })
   @IsOptional()
   @Type(() => Number)

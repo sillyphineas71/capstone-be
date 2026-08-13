@@ -266,7 +266,10 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
         PERMISSIONS_KEY,
         controller.listUnknown,
       );
-      expect(perms).toEqual(['anpr.vehicle.unknown_view', 'vehicle_alert.read']);
+      expect(perms).toEqual([
+        'anpr.vehicle.unknown_view',
+        'vehicle_alert.read',
+      ]);
     });
   });
 
@@ -348,7 +351,10 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
 
     it('registerForUser() KHÔNG có metadata ALLOW_PARTNER_ACCOUNT_KEY', () => {
       expect(
-        Reflect.getMetadata(ALLOW_PARTNER_ACCOUNT_KEY, controller.registerForUser),
+        Reflect.getMetadata(
+          ALLOW_PARTNER_ACCOUNT_KEY,
+          controller.registerForUser,
+        ),
       ).toBeFalsy();
     });
   });
@@ -376,9 +382,9 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
           message: 'Không tìm thấy biển số',
         }),
       );
-      await expect(controller.removeAsAdmin('not-exist')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        controller.removeAsAdmin('not-exist'),
+      ).rejects.toBeInstanceOf(NotFoundException);
       expect(service.adminSoftDelete).toHaveBeenCalledWith('not-exist');
     });
 
@@ -387,7 +393,10 @@ describe('VehicleRegistrationController (VPR-001 / UC1)', () => {
         Reflect.getMetadata('__guards__', controller.removeAsAdmin) ?? [];
       expect(guards).toContain(JwtAuthGuard);
       expect(guards).toContain(PermissionsGuard);
-      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.removeAsAdmin);
+      const perms = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        controller.removeAsAdmin,
+      );
       expect(perms).toEqual(['anpr.vehicle.admin_delete']);
     });
   });

@@ -8,7 +8,10 @@ import { Expose } from 'class-transformer';
  * không cần note) — đúng ý nghĩa cột `resolution_note` gắn với bước ĐÓNG cảnh báo.
  */
 export class ResolveSecurityAlertDto {
-  @ApiProperty({ description: 'Ghi chú xử lý khi đóng cảnh báo (bắt buộc)', maxLength: 1000 })
+  @ApiProperty({
+    description: 'Ghi chú xử lý khi đóng cảnh báo (bắt buộc)',
+    maxLength: 1000,
+  })
   @Expose({ name: 'resolution_note' })
   @IsString()
   @IsNotEmpty()

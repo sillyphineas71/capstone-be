@@ -22,7 +22,9 @@ describe('PartnerAccountRestrictionGuard', () => {
       getAllAndOverride: jest.fn().mockReturnValue(options.allowed),
     };
     const dataSource = {
-      query: jest.fn().mockResolvedValue([{ department_id: options.departmentId }]),
+      query: jest
+        .fn()
+        .mockResolvedValue([{ department_id: options.departmentId }]),
     } as any;
     return new PartnerAccountRestrictionGuard(reflector as any, dataSource);
   };
@@ -32,7 +34,10 @@ describe('PartnerAccountRestrictionGuard', () => {
     const dataSource = {
       query: jest.fn().mockResolvedValue([{ department_id: 'other-dept' }]),
     } as any;
-    const guard = new PartnerAccountRestrictionGuard(reflector as any, dataSource);
+    const guard = new PartnerAccountRestrictionGuard(
+      reflector as any,
+      dataSource,
+    );
     const result = await guard.canActivate(
       makeContext({ user: { userId: 'u1' } }),
     );
@@ -70,7 +75,10 @@ describe('PartnerAccountRestrictionGuard', () => {
     const dataSource = {
       query: jest.fn().mockRejectedValue(new Error('DB unavailable')),
     } as any;
-    const guard = new PartnerAccountRestrictionGuard(reflector as any, dataSource);
+    const guard = new PartnerAccountRestrictionGuard(
+      reflector as any,
+      dataSource,
+    );
 
     await expect(
       guard.canActivate(makeContext({ user: { userId: 'u1' } })),

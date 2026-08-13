@@ -24,7 +24,9 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
         .mockImplementation((cb: (m: any) => unknown) => cb(em)),
     };
 
-    auditLogsService = { logAction: jest.fn() } as unknown as jest.Mocked<AuditLogsService>;
+    auditLogsService = {
+      logAction: jest.fn(),
+    } as unknown as jest.Mocked<AuditLogsService>;
 
     service = new ChannelMapConfigService(dataSource, auditLogsService);
   });
@@ -183,7 +185,10 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
   });
 
   describe('upsert() — role conflict channel_room_map ↔ channel_presence_zone_map (FIX 2026-08-11)', () => {
-    const wireInsertSuccess = (configKey: string, configJson: Record<string, string>) => {
+    const wireInsertSuccess = (
+      configKey: string,
+      configJson: Record<string, string>,
+    ) => {
       em.query.mockImplementation((sql: string) => {
         if (sql.includes('SELECT id, updated_at')) return Promise.resolve([]);
         if (sql.includes('INSERT INTO system_configs'))
@@ -201,7 +206,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('channelId đã tồn tại trong channel_presence_zone_map → PATCH channel_room_map bị 400 CHANNEL_MAP_ROLE_CONFLICT', async () => {
       dataSource.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM rooms'))
+          return Promise.resolve([{ id: ROOM_UUID }]);
         if (sql.includes('FROM system_configs'))
           return Promise.resolve([{ config_json: { '5': ZONE_UUID } }]); // presence_zone_map đã có channel 5
         return Promise.resolve([]);
@@ -216,7 +222,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('đối xứng 2 chiều: channelId đã tồn tại trong channel_room_map → PATCH channel_presence_zone_map cũng bị 400', async () => {
       dataSource.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes('FROM zones')) return Promise.resolve([{ id: ZONE_UUID }]);
+        if (sql.includes('FROM zones'))
+          return Promise.resolve([{ id: ZONE_UUID }]);
         if (sql.includes('FROM system_configs'))
           return Promise.resolve([{ config_json: { '5': ROOM_UUID } }]); // room_map đã có channel 5
         return Promise.resolve([]);
@@ -235,7 +242,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('error liệt kê rõ channelIds xung đột + conflictsWithKey', async () => {
       dataSource.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM rooms'))
+          return Promise.resolve([{ id: ROOM_UUID }]);
         if (sql.includes('FROM system_configs'))
           return Promise.resolve([
             { config_json: { '5': ZONE_UUID, '6': ZONE_UUID } },
@@ -265,7 +273,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('channelId hoàn toàn mới, không trùng gì → thành công như cũ (regression)', async () => {
       dataSource.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM rooms'))
+          return Promise.resolve([{ id: ROOM_UUID }]);
         if (sql.includes('FROM system_configs'))
           return Promise.resolve([{ config_json: { '9': ZONE_UUID } }]); // channel khác, không trùng
         return Promise.resolve([]);
@@ -282,7 +291,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('map đối nghịch chưa từng được cấu hình (DB rỗng) → không lỗi, coi như không có gì để giao nhau', async () => {
       dataSource.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes('FROM rooms')) return Promise.resolve([{ id: ROOM_UUID }]);
+        if (sql.includes('FROM rooms'))
+          return Promise.resolve([{ id: ROOM_UUID }]);
         if (sql.includes('FROM system_configs')) return Promise.resolve([]); // chưa có row nào
         return Promise.resolve([]);
       });
@@ -300,7 +310,8 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
       const calls: string[] = [];
       dataSource.manager.query.mockImplementation((sql: string) => {
         calls.push(sql);
-        if (sql.includes('FROM zones')) return Promise.resolve([{ id: ZONE_UUID }]);
+        if (sql.includes('FROM zones'))
+          return Promise.resolve([{ id: ZONE_UUID }]);
         return Promise.resolve([]);
       });
       wireInsertSuccess('ivss.channel_zone_map', { '5': ZONE_UUID });
@@ -317,7 +328,7 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
     });
 
     it('key threshold (attendance.late_grace_minutes) → KHÔNG có conflictsWithKey, KHÔNG query gì (giữ nguyên hiệu năng)', async () => {
-      wireInsertSuccess('attendance.late_grace_minutes', {} as any);
+      wireInsertSuccess('attendance.late_grace_minutes', {});
       em.query.mockImplementation((sql: string) => {
         if (sql.includes('SELECT id, updated_at')) return Promise.resolve([]);
         if (sql.includes('INSERT INTO system_configs'))
@@ -365,11 +376,7 @@ describe('ChannelMapConfigService (F7, recon R4/R5)', () => {
 
     it('direction sai → 400', async () => {
       await expect(
-        service.upsert(
-          'ivss.channel_direction_map',
-          { '1': 'sideways' },
-          'u1',
-        ),
+        service.upsert('ivss.channel_direction_map', { '1': 'sideways' }, 'u1'),
       ).rejects.toThrow(BadRequestException);
     });
   });

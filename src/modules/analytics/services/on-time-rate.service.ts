@@ -11,13 +11,14 @@ import { OnTimeRateRepository } from '../repositories/on-time-rate.repository';
 import { DashboardOverviewConfigService } from './dashboard-overview-config.service';
 import { QueryOnTimeRateDto } from '../dto/query-on-time-rate.dto';
 import { QueryLateHistoryDto } from '../dto/query-late-history.dto';
+import { UserLateStatsQueryDto } from '../dto/query-user-late-stats.dto';
 import {
   OnTimeRateResponseDto,
   LateHistoryResponseDto,
+  UserLateStatsResponseDto,
   TrendPointDto,
   HourBucketDto,
   DepartmentLateItemDto,
-  LateMeetingItemDto,
 } from '../dto/on-time-rate-response.dto';
 
 interface ScopeResult {
@@ -229,6 +230,145 @@ export class OnTimeRateService {
   }
 
   /**
+   * Orchestrator for On-time Attendance Rate By Users (UC-AA-10 / UC-157)
+   */
+  async getOnTimeRateByUsers(
+    currentUser: { userId: string },
+    query: UserLateStatsQueryDto,
+  ): Promise<{ data: UserLateStatsResponseDto; message: string }> {
+    const graceMinutes = query.graceMinutes ?? 0;
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const sortBy = query.sortBy ?? 'lateRate';
+
+    // 1. Resolve date range
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
+
+    // 2. Validate max range days
+    await this.validateMaxRange(from, to);
+
+    // 3. Resolve department scope
+    const scope = await this.resolveScope(currentUser.userId);
+
+    // 4. If departmentId is specified, check existence (404) and ownership (403)
+    if (query.departmentId) {
+      const exists = await this.repo.checkDepartmentExists(query.departmentId);
+      if (!exists) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Department not found',
+          error: { code: 'DEPARTMENT_NOT_EXISTS', details: {} },
+        });
+      }
+      this.validateDepartmentOwnership(scope, query.departmentId);
+    }
+
+    // Audit log helper
+    const logAction = async (totalItems: number) => {
+      try {
+        await this.auditLogsService.logAction({
+          userId: currentUser.userId,
+          actionType: 'read_analytics_on_time_rate_users',
+          entityType: 'attendance_records',
+          metadataJson: {
+            viewerUserId: currentUser.userId,
+            viewerRole: scope.viewerRole,
+            from,
+            to,
+            departmentId: query.departmentId,
+            search: query.search,
+            graceMinutes,
+            page,
+            limit,
+            sortBy,
+            resolvedScopeDepartmentIds: scope.scopeDepartmentIds,
+            totalUsers: totalItems,
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          'Failed to write audit log for user on-time rate analytics',
+          err instanceof Error ? err.message : undefined,
+        );
+      }
+    };
+
+    // 5. Short-circuit if manager has no departments
+    if (
+      scope.scopeDepartmentIds !== null &&
+      scope.scopeDepartmentIds.length === 0
+    ) {
+      const emptyData: UserLateStatsResponseDto = {
+        items: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+        period: { from, to },
+        graceMinutes,
+      };
+      await logAction(0);
+      return {
+        data: emptyData,
+        message:
+          'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.',
+      };
+    }
+
+    const params = {
+      from,
+      to,
+      scopeDepartmentIds: scope.scopeDepartmentIds,
+      departmentId: query.departmentId,
+      search: query.search,
+      graceMinutes,
+    };
+
+    // 6. Query user late stats
+    const { items, total } = await this.repo.getLateByUsers(
+      params,
+      sortBy,
+      page,
+      limit,
+    );
+
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+
+    await logAction(total);
+
+    // Bổ sung alias tương thích FE: totalMeetings + onTimeRate (làm tròn 1 chữ số).
+    const enrichedItems = items.map((it) => ({
+      ...it,
+      totalMeetings: it.totalRequired,
+      onTimeRate:
+        it.totalRequired > 0
+          ? Math.round((it.onTimeCount / it.totalRequired) * 1000) / 10
+          : 0,
+    }));
+
+    const data: UserLateStatsResponseDto = {
+      items: enrichedItems,
+      total,
+      page,
+      limit,
+      totalPages,
+      period: { from, to },
+      graceMinutes,
+    };
+
+    const message =
+      total === 0
+        ? 'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.'
+        : 'Thống kê tỷ lệ tham dự đúng giờ theo nhân sự được truy xuất thành công';
+
+    return { data, message };
+  }
+
+  /**
    * Resolve user scope based on roles.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
@@ -277,7 +417,10 @@ export class OnTimeRateService {
     const currentMonth = localTime.getUTCMonth(); // 0-indexed
     const currentDay = localTime.getUTCDate();
 
-    const activePreset = preset || 'month';
+    // Nếu client không truyền preset nhưng đã cung cấp cả from & to
+    // (cách FE gọi /on-time-rate/users), coi như khoảng thời gian tùy chọn
+    // thay vì mặc định về tháng hiện tại.
+    const activePreset = preset || (from && to ? 'custom' : 'month');
 
     if (activePreset === 'day') {
       const todayStr = localTime.toISOString().split('T')[0];

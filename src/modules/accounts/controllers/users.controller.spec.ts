@@ -7,6 +7,7 @@ import { plainToInstance } from 'class-transformer';
 import { UsersController } from './users.controller.js';
 import { UsersService } from '../services/users.service.js';
 import { AccountImportService } from '../services/account-import.service.js';
+import { PartnerAccountImportService } from '../services/partner-account-import.service.js';
 import { UserExportService } from '../../reports/services/user-export.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
@@ -33,6 +34,10 @@ describe('UsersController', () => {
     listUsersForManagement: jest.Mock;
   };
   let userExportService: { exportUsersXlsx: jest.Mock };
+  let partnerAccountImportService: {
+    generateTemplate: jest.Mock;
+    importPartnerAccounts: jest.Mock;
+  };
 
   beforeEach(async () => {
     service = {
@@ -48,6 +53,10 @@ describe('UsersController', () => {
       listUsersForManagement: jest.fn(),
     };
     userExportService = { exportUsersXlsx: jest.fn() };
+    partnerAccountImportService = {
+      generateTemplate: jest.fn(),
+      importPartnerAccounts: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
@@ -62,6 +71,10 @@ describe('UsersController', () => {
             generateTemplate: jest.fn(),
             importAccounts: jest.fn(),
           },
+        },
+        {
+          provide: PartnerAccountImportService,
+          useValue: partnerAccountImportService,
         },
         {
           provide: UserExportService,
@@ -865,6 +878,92 @@ describe('UsersController', () => {
       ) as string[];
 
       expect(permissions).toEqual(['accounts.user.export']);
+    });
+  });
+
+  describe('importPartnerAccounts (PTA-IMPORT-001)', () => {
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const { downloadPartnerImportTemplate, importPartnerAccounts } =
+      UsersController.prototype;
+
+    it('downloadPartnerImportTemplate sets headers and sends xlsx buffer', async () => {
+      partnerAccountImportService.generateTemplate.mockResolvedValue(
+        Buffer.from('PARTNER_TEMPLATE'),
+      );
+
+      const res = {
+        setHeader: jest.fn(),
+        send: jest.fn(),
+      } as unknown as Response;
+
+      await controller.downloadPartnerImportTemplate(res);
+
+      expect(partnerAccountImportService.generateTemplate).toHaveBeenCalled();
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        'attachment; filename="partner-accounts-template.xlsx"',
+      );
+      expect(res.send).toHaveBeenCalledWith(Buffer.from('PARTNER_TEMPLATE'));
+    });
+
+    it('requires account.partner.import permission for download template', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        downloadPartnerImportTemplate,
+      ) as string[];
+
+      expect(permissions).toEqual(['account.partner.import']);
+    });
+
+    it('importPartnerAccounts passes options to service and returns standard response', async () => {
+      partnerAccountImportService.importPartnerAccounts.mockResolvedValue({
+        mode: 'preview',
+        totalRows: 1,
+        validCount: 1,
+        invalidCount: 0,
+        results: [{ row: 2, email: 'p1@doitac.com', status: 'valid' }],
+      });
+
+      const request = {
+        user: { userId: 'admin-uuid' },
+      } as unknown as Request;
+
+      const fileMock = { buffer: Buffer.from('xlsx'), originalname: 'p.xlsx' };
+      const dto = { commit: false, defaultExpiresInDays: 3 };
+
+      const res = await controller.importPartnerAccounts(
+        { file: [fileMock] },
+        dto,
+        request as any,
+        '127.0.0.1',
+      );
+
+      expect(
+        partnerAccountImportService.importPartnerAccounts,
+      ).toHaveBeenCalledWith(
+        fileMock,
+        [],
+        undefined,
+        dto,
+        { id: 'admin-uuid' },
+        { ipAddress: '127.0.0.1', userAgent: undefined, requestId: undefined },
+      );
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Kiểm tra hoàn tất');
+      expect(res.data.mode).toBe('preview');
+    });
+
+    it('requires account.partner.import permission for import endpoint', () => {
+      const permissions = Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        importPartnerAccounts,
+      ) as string[];
+
+      expect(permissions).toEqual(['account.partner.import']);
     });
   });
 });

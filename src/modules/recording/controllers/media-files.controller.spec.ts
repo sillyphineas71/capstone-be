@@ -174,7 +174,11 @@ describe('MediaFilesController.playback — file nằm trên s3/MinIO', () => {
 
   it('Range → 206 + getPartialObject theo đúng khoảng byte (seek không tải cả file)', async () => {
     const res = fakeRes();
-    await controller.playback('f1', { headers: { range: 'bytes=100-199' } }, res);
+    await controller.playback(
+      'f1',
+      { headers: { range: 'bytes=100-199' } },
+      res,
+    );
     expect(res.writeHead).toHaveBeenCalledWith(206, {
       'Content-Range': 'bytes 100-199/1000',
       'Content-Length': 100,
@@ -266,7 +270,9 @@ describe('MediaFilesController.secureDownload — Content-Disposition theo mimeT
       }),
     };
     storageServiceMock = {
-      verifySignedDownloadToken: jest.fn().mockReturnValue({ mediaFileId: 'f1' }),
+      verifySignedDownloadToken: jest
+        .fn()
+        .mockReturnValue({ mediaFileId: 'f1' }),
     };
     controller = new MediaFilesController(storageServiceMock, serviceMock);
     stream = new FakeStream();
@@ -275,44 +281,37 @@ describe('MediaFilesController.secureDownload — Content-Disposition theo mimeT
 
   afterEach(() => jest.clearAllMocks());
 
-  it.each([
-    ['application/pdf'],
-    ['image/png'],
-    ['video/mp4'],
-    ['audio/mpeg'],
-  ])('mimeType=%s → Content-Disposition: inline', async (mimeType) => {
-    setupResolved(mimeType);
-    const res = fakeRes();
-    await controller.secureDownload(
-      'tok',
-      'f1',
-      { url: '/x' } as any,
-      res,
-    );
-    expect(res.setHeader).toHaveBeenCalledWith(
-      'Content-Disposition',
-      expect.stringMatching(/^inline;/),
-    );
-  });
+  it.each([['application/pdf'], ['image/png'], ['video/mp4'], ['audio/mpeg']])(
+    'mimeType=%s → Content-Disposition: inline',
+    async (mimeType) => {
+      setupResolved(mimeType);
+      const res = fakeRes();
+      await controller.secureDownload('tok', 'f1', { url: '/x' } as any, res);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        expect.stringMatching(/^inline;/),
+      );
+    },
+  );
 
   it.each([
     ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-    ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    [
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ],
     ['application/zip'],
-  ])('mimeType=%s → Content-Disposition: attachment (giữ nguyên hành vi tải xuống cũ)', async (mimeType) => {
-    setupResolved(mimeType);
-    const res = fakeRes();
-    await controller.secureDownload(
-      'tok',
-      'f1',
-      { url: '/x' } as any,
-      res,
-    );
-    expect(res.setHeader).toHaveBeenCalledWith(
-      'Content-Disposition',
-      expect.stringMatching(/^attachment;/),
-    );
-  });
+  ])(
+    'mimeType=%s → Content-Disposition: attachment (giữ nguyên hành vi tải xuống cũ)',
+    async (mimeType) => {
+      setupResolved(mimeType);
+      const res = fakeRes();
+      await controller.secureDownload('tok', 'f1', { url: '/x' } as any, res);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        expect.stringMatching(/^attachment;/),
+      );
+    },
+  );
 
   it('token không hợp lệ → 403, không lộ nhánh Content-Disposition', async () => {
     setupResolved('application/pdf');

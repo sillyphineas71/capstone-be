@@ -47,7 +47,9 @@ export class PersonControlListController {
   @HttpCode(HttpStatus.CREATED)
   @RequirePermissions('person_control_list.create')
   @UsePipes(PERSON_CONTROL_LIST_PIPE)
-  @ApiOperation({ summary: 'Thêm 1 người vào danh sách kiểm soát (watchlist/blocklist)' })
+  @ApiOperation({
+    summary: 'Thêm 1 người vào danh sách kiểm soát (watchlist/blocklist)',
+  })
   async create(
     @CurrentUser() user: { userId: string },
     @Body() dto: CreatePersonControlListDto,
@@ -63,7 +65,10 @@ export class PersonControlListController {
   @Get()
   @RequirePermissions('person_control_list.read')
   @UsePipes(PERSON_CONTROL_LIST_PIPE)
-  @ApiOperation({ summary: 'Xem danh sách người trong danh sách kiểm soát, có phân trang + lọc' })
+  @ApiOperation({
+    summary:
+      'Xem danh sách người trong danh sách kiểm soát, có phân trang + lọc',
+  })
   async list(@Query() query: QueryPersonControlListDto) {
     const { items, meta } = await this.personControlListService.list(query);
     return {
@@ -76,7 +81,9 @@ export class PersonControlListController {
 
   @Get(':id')
   @RequirePermissions('person_control_list.read')
-  @ApiOperation({ summary: 'Xem chi tiết 1 mục trong danh sách kiểm soát người theo ID' })
+  @ApiOperation({
+    summary: 'Xem chi tiết 1 mục trong danh sách kiểm soát người theo ID',
+  })
   async detail(@Param('id', ParseUUIDPipe) id: string) {
     const entity = await this.personControlListService.findOne(id);
     return {

@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { DataSource, In, IsNull } from 'typeorm';
 import * as ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { randomUUID } from 'crypto';
 
 import {
@@ -38,11 +39,15 @@ import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { detectImageMimeType } from '../utils/image-magic-bytes.util.js';
 import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
 import { isBiometricExemptRole } from '../../../common/utils/biometric-exempt-roles.util.js';
+import { VehicleRegistrationService } from '../../anpr/services/vehicle-registration.service.js';
+import { normalizePlate } from '../../anpr/utils/normalize-plate.js';
 
 import {
   MAX_IMPORT_ROWS,
   MAX_IMPORT_FILE_BYTES,
   MAX_BIOMETRIC_PHOTO_BYTES,
+  MAX_PHOTOS_ZIP_BYTES,
+  MAX_PHOTOS_ZIP_TOTAL_UNCOMPRESSED_BYTES,
   XLSX_MIME,
   ROLE_CODES_SEPARATOR,
   IMPORT_ACCOUNTS_HEADERS,
@@ -51,6 +56,7 @@ import {
   ImportAccountRowReason,
   ImportAccountRequestError,
   ImportAccountBiometricStatus,
+  ImportAccountVehiclePlateStatus,
 } from '../constants/import-accounts.constants.js';
 import {
   ImportAccountReportDto,
@@ -75,6 +81,7 @@ interface ParsedAccountRow {
   phoneNumber: string;
   positionTitle: string;
   directManagerEmail: string;
+  licensePlate: string;
 }
 
 interface AccountRowState {
@@ -95,6 +102,7 @@ export class AccountImportService {
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly vehicleRegistrationService: VehicleRegistrationService,
   ) {}
 
   // ════════════════════════════════════════════════════════════════
@@ -132,6 +140,7 @@ export class AccountImportService {
       phone_number: '0900000001',
       position_title: 'Developer',
       direct_manager_email: 'lead@company.com',
+      license_plate: '30A12345',
     });
     sheet.addRow({
       full_name: 'Tran Thi B',
@@ -142,6 +151,7 @@ export class AccountImportService {
       phone_number: '',
       position_title: 'HR Lead',
       direct_manager_email: '',
+      license_plate: '',
     });
 
     const guide = workbook.addWorksheet('Huong dan');
@@ -159,6 +169,10 @@ export class AccountImportService {
       ['phone_number', 'Tùy chọn'],
       ['position_title', 'Tùy chọn: Chức danh'],
       ['direct_manager_email', 'Tùy chọn: Email người quản lý trực tiếp'],
+      [
+        'license_plate',
+        'Tùy chọn: Biển số xe (6-10 ký tự chữ-số, vd 30A12345). Không bắt buộc, không làm lỗi dòng nếu sai.',
+      ],
     ];
     guideRows.forEach((r, idx) => {
       const row = guide.addRow(r);
@@ -186,14 +200,25 @@ export class AccountImportService {
     actor: { userId: string },
     clientContext: UserClientContext,
     photos: UploadedAccountPhoto[] = [],
+    photosZipFile?: {
+      buffer: Buffer;
+      size?: number;
+      originalname?: string;
+    },
   ): Promise<ImportAccountReportDto> {
     // ── Step 0: File validation ──
     this.validateFile(file);
 
+    // ── Step 0a: Ảnh sinh trắc học kèm theo — có thể gửi rời (`photos[]`) và/hoặc
+    // gộp trong 1 file .zip (`photosZip`, mỗi entry khớp tên y hệt `photos[]`).
+    const allPhotos = photosZipFile
+      ? photos.concat(await this.extractPhotosFromZip(photosZipFile))
+      : photos;
+
     // ── Step 0b: Sinh trắc học kèm theo (tùy chọn) — bắt buộc xác nhận consent
     // khi commit thật, KHÔNG chặn ở preview vì preview chưa đụng gì tới ảnh.
     if (
-      photos.length > 0 &&
+      allPhotos.length > 0 &&
       options.commit === true &&
       options.biometricConsentConfirmed !== true
     ) {
@@ -207,7 +232,7 @@ export class AccountImportService {
         },
       });
     }
-    const photoMap = this.buildPhotoMap(photos);
+    const photoMap = this.buildPhotoMap(allPhotos);
 
     // ── Step 1: Parse ──
     const rows = await this.parseWorkbook(file!.buffer);
@@ -225,13 +250,14 @@ export class AccountImportService {
 
     // ── Step 5: Preview gate ──
     if (options.commit !== true) {
-      if (photos.length > 0) {
-        for (const s of states) {
-          if (s.isError) continue;
-          s.result.biometricStatus = this.previewBiometricStatus(
-            s,
-            photoMap,
-          );
+      for (const s of states) {
+        if (s.isError) continue;
+        if (allPhotos.length > 0) {
+          s.result.biometricStatus = this.previewBiometricStatus(s, photoMap);
+        }
+        const platePreview = this.previewVehiclePlateStatus(s);
+        if (platePreview) {
+          s.result.vehiclePlateStatus = platePreview;
         }
       }
       return new ImportAccountReportDto({
@@ -276,13 +302,20 @@ export class AccountImportService {
         // Đính ảnh sinh trắc học (nếu có gửi kèm) — KHÔNG được để lỗi ở đây
         // làm rớt xuống catch bên dưới và ghi đè trạng thái SUCCESS của tài
         // khoản vừa tạo thành công (attachBiometricPhoto tự bắt hết lỗi).
-        if (photos.length > 0) {
+        if (allPhotos.length > 0) {
           state.result.biometricStatus = await this.resolveBiometricForRow(
             state,
             persisted.user.id,
             photoMap,
             actor.userId,
           );
+        }
+
+        // Đăng ký hộ biển số xe (nếu dòng có điền `license_plate`) — best-effort
+        // giống ảnh sinh trắc học: KHÔNG bao giờ làm fail tài khoản vừa tạo.
+        if (state.parsed.licensePlate) {
+          state.result.vehiclePlateStatus =
+            await this.resolveVehiclePlateForRow(state, persisted.user.id);
         }
       } catch (error: unknown) {
         state.result.status = ImportAccountRowStatus.FAILED;
@@ -433,6 +466,7 @@ export class AccountImportService {
       const directManagerEmail = this.cellString(
         excelRow.getCell(8),
       ).toLowerCase();
+      const licensePlate = this.cellString(excelRow.getCell(9));
 
       if (
         !fullName &&
@@ -442,7 +476,8 @@ export class AccountImportService {
         !employeeCode &&
         !phoneNumber &&
         !positionTitle &&
-        !directManagerEmail
+        !directManagerEmail &&
+        !licensePlate
       ) {
         continue;
       }
@@ -457,6 +492,7 @@ export class AccountImportService {
         phoneNumber,
         positionTitle,
         directManagerEmail,
+        licensePlate,
       });
     }
 
@@ -723,6 +759,81 @@ export class AccountImportService {
   //  Sinh trắc học kèm import (tùy chọn) — khớp ảnh theo employee_code
   // ════════════════════════════════════════════════════════════════
 
+  /**
+   * Gộp .zip ảnh sinh trắc học thành `UploadedAccountPhoto[]` — mỗi entry xử lý
+   * y hệt 1 file trong `photos[]` (khớp theo basename ở `buildPhotoMap`).
+   * Chặn zip bomb bằng tổng dung lượng ĐÃ giải nén (KHÔNG chỉ dựa vào kích thước
+   * file .zip nén ban đầu). Bỏ qua thư mục con, file ẩn, và rác `__MACOSX/`.
+   */
+  private async extractPhotosFromZip(photosZipFile: {
+    buffer: Buffer;
+    size?: number;
+    originalname?: string;
+  }): Promise<UploadedAccountPhoto[]> {
+    const size = photosZipFile.size ?? photosZipFile.buffer.length;
+    if (size > MAX_PHOTOS_ZIP_BYTES) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Tệp .zip ảnh sinh trắc học vượt quá dung lượng cho phép.',
+        error: {
+          code: ImportAccountRequestError.INVALID_PHOTOS_ZIP,
+          details: { maxBytes: MAX_PHOTOS_ZIP_BYTES },
+        },
+      });
+    }
+
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(photosZipFile.buffer);
+    } catch {
+      throw new BadRequestException({
+        success: false,
+        message: 'Không đọc được tệp .zip ảnh sinh trắc học.',
+        error: {
+          code: ImportAccountRequestError.INVALID_PHOTOS_ZIP,
+          details: {},
+        },
+      });
+    }
+
+    const entries = Object.values(zip.files).filter((f) => !f.dir);
+    if (entries.length > MAX_IMPORT_ROWS) {
+      throw new BadRequestException({
+        success: false,
+        message: `Tệp .zip vượt quá số ảnh tối đa (${MAX_IMPORT_ROWS}).`,
+        error: {
+          code: ImportAccountRequestError.INVALID_PHOTOS_ZIP,
+          details: { maxEntries: MAX_IMPORT_ROWS },
+        },
+      });
+    }
+
+    const photos: UploadedAccountPhoto[] = [];
+    let totalUncompressed = 0;
+    for (const entry of entries) {
+      if (entry.name.startsWith('__MACOSX/')) continue;
+      const baseName = entry.name.split(/[\\/]/).pop() ?? '';
+      if (!baseName || baseName.startsWith('.')) continue;
+
+      const buffer = await entry.async('nodebuffer');
+      totalUncompressed += buffer.length;
+      if (totalUncompressed > MAX_PHOTOS_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
+        throw new BadRequestException({
+          success: false,
+          message:
+            'Tổng dung lượng ảnh trong tệp .zip vượt quá giới hạn cho phép.',
+          error: {
+            code: ImportAccountRequestError.INVALID_PHOTOS_ZIP,
+            details: { maxBytes: MAX_PHOTOS_ZIP_TOTAL_UNCOMPRESSED_BYTES },
+          },
+        });
+      }
+
+      photos.push({ buffer, originalname: baseName, size: buffer.length });
+    }
+    return photos;
+  }
+
   /** Key = tên file gốc, bỏ đuôi mở rộng, lowercase, trim. */
   private buildPhotoMap(
     photos: UploadedAccountPhoto[],
@@ -873,12 +984,84 @@ export class AccountImportService {
   private async cleanupCloudinary(publicId: string): Promise<void> {
     try {
       await this.cloudinaryService.deleteImage(publicId);
-      this.logger.log(`[AccountImport] Cleaned up orphan Cloudinary object: ${publicId}`);
+      this.logger.log(
+        `[AccountImport] Cleaned up orphan Cloudinary object: ${publicId}`,
+      );
     } catch (cleanupError) {
       this.logger.warn(
         `[AccountImport] Failed to clean up orphan Cloudinary object ${publicId}: ${(cleanupError as Error).message}`,
       );
     }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Biển số xe kèm import (tùy chọn) — cột `license_plate`
+  // ════════════════════════════════════════════════════════════════
+
+  // Mirror validation của VehicleRegistrationService.isValidPlate (pure, KHÔNG
+  // đụng DB) — chỉ dùng để báo trước ở preview, nguồn xác thực THẬT vẫn là
+  // VehicleRegistrationService.register() lúc commit.
+  private static readonly PLATE_FORMAT_RE = /^[0-9A-Z]+$/;
+  private static readonly PLATE_MIN = 6;
+  private static readonly PLATE_MAX = 10;
+
+  private isPreviewValidPlate(raw: string): boolean {
+    const plate = normalizePlate(raw);
+    if (
+      !AccountImportService.PLATE_FORMAT_RE.test(plate) ||
+      plate.length < AccountImportService.PLATE_MIN ||
+      plate.length > AccountImportService.PLATE_MAX
+    ) {
+      return false;
+    }
+    return /[A-Z]/.test(plate) && /[0-9]/.test(plate);
+  }
+
+  /** Preview mode: chỉ báo trước định dạng hợp lệ hay không, KHÔNG đụng DB. */
+  private previewVehiclePlateStatus(
+    state: AccountRowState,
+  ): ImportAccountVehiclePlateStatus | undefined {
+    const raw = state.parsed.licensePlate?.trim();
+    if (!raw) return undefined;
+    return this.isPreviewValidPlate(raw)
+      ? ImportAccountVehiclePlateStatus.PENDING_COMMIT
+      : ImportAccountVehiclePlateStatus.INVALID_PLATE;
+  }
+
+  /**
+   * Commit mode: đăng ký hộ biển số qua VehicleRegistrationService.register()
+   * (cùng logic normalize/validate/conflict với API admin thật). Best-effort —
+   * KHÔNG bao giờ throw ra ngoài, tài khoản đã tạo thành công không được phép
+   * bị đổi thành FAILED chỉ vì bước phụ này gặp lỗi.
+   */
+  private async resolveVehiclePlateForRow(
+    state: AccountRowState,
+    userId: string,
+  ): Promise<ImportAccountVehiclePlateStatus> {
+    const raw = state.parsed.licensePlate.trim();
+    try {
+      await this.vehicleRegistrationService.register(userId, {
+        plateRaw: raw,
+      });
+      return ImportAccountVehiclePlateStatus.ATTACHED;
+    } catch (error: unknown) {
+      const code = this.extractVehicleErrorCode(error);
+      if (code === 'PLATE_ALREADY_REGISTERED') {
+        return ImportAccountVehiclePlateStatus.DUPLICATE_PLATE;
+      }
+      if (code === 'INVALID_PLATE') {
+        return ImportAccountVehiclePlateStatus.INVALID_PLATE;
+      }
+      this.logger.error(
+        `[AccountImport] Vehicle plate attach failed for user ${userId}: ${(error as Error).message}`,
+      );
+      return ImportAccountVehiclePlateStatus.ATTACH_FAILED;
+    }
+  }
+
+  /** VehicleRegistrationService ném `{code, message}` trực tiếp trong response — khác format `{error:{code}}` của account import (xem extractErrorCode). */
+  private extractVehicleErrorCode(error: unknown): string | undefined {
+    return (error as { response?: { code?: string } })?.response?.code;
   }
 
   // ── Small utilities ──

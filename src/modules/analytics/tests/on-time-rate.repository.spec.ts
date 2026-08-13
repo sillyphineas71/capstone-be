@@ -240,4 +240,77 @@ describe('OnTimeRateRepository', () => {
       expect(sql).toContain('ORDER BY m.start_time DESC');
     });
   });
+
+  describe('checkDepartmentExists', () => {
+    it('returns true when department exists and is active', async () => {
+      mockQuery.mockResolvedValue([{ '?column?': 1 }]);
+      const result = await repo.checkDepartmentExists('d1');
+      expect(result).toBe(true);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'SELECT 1 FROM departments WHERE id = $1 AND is_active = true',
+        ),
+        ['d1'],
+      );
+    });
+
+    it('returns false when department does not exist', async () => {
+      mockQuery.mockResolvedValue([]);
+      const result = await repo.checkDepartmentExists('non-existent');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('getLateByUsers', () => {
+    it('queries user late stats with pagination and sorting', async () => {
+      mockQuery.mockResolvedValue([
+        {
+          userId: 'u1',
+          fullName: 'Nguyen Van A',
+          email: 'a@co.com',
+          avatarUrl: 'http://avatar.jpg',
+          employeeCode: 'EMP001',
+          departmentId: 'd1',
+          departmentName: 'Phong IT',
+          lateCount: 5,
+          onTimeCount: 15,
+          absentCount: 2,
+          totalRequired: 22,
+          lateRate: 22.7,
+          totalCount: 1,
+        },
+      ]);
+
+      const result = await repo.getLateByUsers(baseParams, 'lateRate', 1, 10);
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toEqual({
+        userId: 'u1',
+        fullName: 'Nguyen Van A',
+        email: 'a@co.com',
+        avatarUrl: 'http://avatar.jpg',
+        employeeCode: 'EMP001',
+        departmentId: 'd1',
+        departmentName: 'Phong IT',
+        lateCount: 5,
+        onTimeCount: 15,
+        absentCount: 2,
+        totalRequired: 22,
+        lateRate: 22.7,
+      });
+
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toContain('WITH classified AS');
+      expect(sql).toContain('aggregated AS');
+      expect(sql).toContain('ORDER BY late_rate DESC, full_name ASC');
+      expect(sql).toContain('LIMIT $4 OFFSET $5');
+    });
+
+    it('returns empty when scope is empty (FALSE clause)', async () => {
+      const params = { ...baseParams, scopeDepartmentIds: [] as string[] };
+      const result = await repo.getLateByUsers(params, 'lateRate', 1, 10);
+      expect(result).toEqual({ items: [], total: 0 });
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
 });

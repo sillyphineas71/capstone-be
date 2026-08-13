@@ -11,7 +11,10 @@ export const VEHICLE_STATUSES: VehicleStatus[] = ['active', 'disabled'];
  * VAL-01: `@IsIn(['active','disabled'])` — ngoài enum → 400.
  */
 export class UpdateVehicleStatusDto {
-  @ApiProperty({ description: 'Trạng thái mới của biển số', enum: VEHICLE_STATUSES })
+  @ApiProperty({
+    description: 'Trạng thái mới của biển số',
+    enum: VEHICLE_STATUSES,
+  })
   @IsIn(VEHICLE_STATUSES)
   status: VehicleStatus;
 }

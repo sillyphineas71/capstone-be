@@ -22,7 +22,10 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
+import {
+  FileInterceptor,
+  FileFieldsInterceptor,
+} from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -42,13 +45,21 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 
 import { UsersService } from '../services/users.service.js';
 import { AccountImportService } from '../services/account-import.service.js';
+import { PartnerAccountImportService } from '../services/partner-account-import.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { ImportAccountsDto } from '../dto/import-accounts.dto.js';
 import { ImportAccountReportDto } from '../dto/import-accounts-response.dto.js';
+import { ImportPartnerAccountsDto } from '../dto/import-partner-accounts.dto.js';
+import { ImportPartnerAccountReportDto } from '../dto/import-partner-accounts-response.dto.js';
 import {
   XLSX_MIME,
   MAX_IMPORT_ROWS,
+  ImportAccountMode,
 } from '../constants/import-accounts.constants.js';
+import {
+  MAX_PARTNER_IMPORT_ROWS,
+  ImportPartnerAccountMode,
+} from '../constants/import-partner-accounts.constants.js';
 import type { UploadedAccountPhoto } from '../services/account-import.service.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { UpdateUserStatusDto } from '../dto/update-user-status.dto.js';
@@ -73,6 +84,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly accountImportService: AccountImportService,
+    private readonly partnerAccountImportService: PartnerAccountImportService,
     private readonly userExportService: UserExportService,
   ) {}
 
@@ -142,7 +154,7 @@ export class UsersController {
   @ApiOperation({
     summary: 'Tải tệp Excel mẫu để import tài khoản nhân viên',
     description:
-      'Trả về file .xlsx chứa header chuẩn (full_name, email, department_code, role_codes, employee_code, phone_number, position_title, direct_manager_email), dòng ví dụ và sheet hướng dẫn.',
+      'Trả về file .xlsx chứa header chuẩn (full_name, email, department_code, role_codes, employee_code, phone_number, position_title, direct_manager_email, license_plate), dòng ví dụ và sheet hướng dẫn.',
   })
   async downloadImportTemplate(@Res() res: Response): Promise<void> {
     const buffer = await this.accountImportService.generateTemplate();
@@ -162,6 +174,7 @@ export class UsersController {
     FileFieldsInterceptor([
       { name: 'file', maxCount: 1 },
       { name: 'photos', maxCount: MAX_IMPORT_ROWS },
+      { name: 'photosZip', maxCount: 1 },
     ]),
   )
   @UsePipes(
@@ -175,8 +188,9 @@ export class UsersController {
   @ApiOperation({
     summary: 'Tạo tài khoản nhân viên bằng import Excel',
     description:
-      'Tải lên file .xlsx danh sách nhân viên. commit=false trả preview kiểm tra (không ghi DB); commit=true tạo tài khoản cho các dòng hợp lệ (bỏ dòng lỗi), sinh mật khẩu tạm và gửi email credentials cho từng người. ' +
-      'Có thể gửi kèm nhiều ảnh sinh trắc học (field `photos`, tùy chọn) — mỗi ảnh đặt tên file gốc = employee_code (vd EMP001.jpg) để hệ thống tự khớp; ảnh khớp được sẽ vào hàng chờ duyệt (pending_review) giống luồng tự nộp. Bắt buộc `biometricConsentConfirmed=true` nếu có gửi kèm ảnh và commit=true.',
+      'Tải lên file .xlsx danh sách nhân viên (có thêm cột `license_plate` tùy chọn — biển số xe). commit=false trả preview kiểm tra (không ghi DB); commit=true tạo tài khoản cho các dòng hợp lệ (bỏ dòng lỗi), sinh mật khẩu tạm và gửi email credentials cho từng người. ' +
+      'Có thể gửi kèm ảnh sinh trắc học qua field `photos` (nhiều file rời) và/hoặc `photosZip` (1 file .zip gộp nhiều ảnh) — mỗi ảnh/entry đặt tên file gốc = employee_code (vd EMP001.jpg) để hệ thống tự khớp; ảnh khớp được sẽ vào hàng chờ duyệt (pending_review) giống luồng tự nộp. Bắt buộc `biometricConsentConfirmed=true` nếu có gửi kèm ảnh (photos hoặc photosZip) và commit=true. ' +
+      'Nếu dòng có điền `license_plate`, hệ thống sẽ tự đăng ký hộ biển số cho tài khoản vừa tạo (best-effort — biển sai định dạng hoặc trùng KHÔNG làm fail dòng, xem `vehiclePlateStatus` trong kết quả).',
   })
   @ApiBody({
     schema: {
@@ -188,6 +202,7 @@ export class UsersController {
           type: 'array',
           items: { type: 'string', format: 'binary' },
         },
+        photosZip: { type: 'string', format: 'binary' },
         biometricConsentConfirmed: { type: 'boolean' },
       },
       required: ['file'],
@@ -207,6 +222,12 @@ export class UsersController {
             originalname?: string;
           }>;
           photos?: UploadedAccountPhoto[];
+          photosZip?: Array<{
+            buffer: Buffer;
+            mimetype?: string;
+            size?: number;
+            originalname?: string;
+          }>;
         }
       | undefined,
     @Body() dto: ImportAccountsDto,
@@ -224,16 +245,136 @@ export class UsersController {
 
     const result = await this.accountImportService.importAccounts(
       files?.file?.[0],
-      { commit: dto.commit, biometricConsentConfirmed: dto.biometricConsentConfirmed },
+      {
+        commit: dto.commit,
+        biometricConsentConfirmed: dto.biometricConsentConfirmed,
+      },
       { userId: actorId },
       { ipAddress, userAgent, requestId },
       files?.photos ?? [],
+      files?.photosZip?.[0],
     );
 
     return {
       success: true,
       message:
-        result.mode === 'commit'
+        result.mode === ImportAccountMode.COMMIT
+          ? 'Tạo tài khoản hoàn tất'
+          : 'Kiểm tra hoàn tất',
+      data: result,
+    };
+  }
+
+  @Get('import-partners/template')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('account.partner.import')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Tải tệp Excel mẫu để import tài khoản đối tác',
+    description:
+      'Trả về file .xlsx chứa header chuẩn (full_name, email, account_expires_at, phone_number, license_plate), dòng ví dụ và sheet hướng dẫn.',
+  })
+  async downloadPartnerImportTemplate(@Res() res: Response): Promise<void> {
+    const buffer = await this.partnerAccountImportService.generateTemplate();
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="partner-accounts-template.xlsx"',
+    );
+    res.send(buffer);
+  }
+
+  @Post('import-partners')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('account.partner.import')
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'file', maxCount: 1 },
+      { name: 'photos', maxCount: MAX_PARTNER_IMPORT_ROWS },
+      { name: 'photosZip', maxCount: 1 },
+    ]),
+  )
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  )
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Import Excel tạo tài khoản đối tác/khách hàng tạm thời',
+    description:
+      'Tải lên file .xlsx danh sách đối tác kèm ảnh sinh trắc học bắt buộc. commit=false trả preview kiểm tra; commit=true tạo tài khoản cho các dòng hợp lệ, mật khẩu = email, gửi email chào mừng.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        commit: { type: 'boolean' },
+        photos: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+        photosZip: { type: 'string', format: 'binary' },
+        defaultExpiresInDays: { type: 'number' },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiForbiddenResponse({
+    description:
+      'Không đủ quyền hạn (thiếu permission account.partner.import).',
+  })
+  async importPartnerAccounts(
+    @UploadedFiles()
+    files:
+      | {
+          file?: Array<{
+            buffer: Buffer;
+            mimetype?: string;
+            size?: number;
+            originalname?: string;
+          }>;
+          photos?: UploadedAccountPhoto[];
+          photosZip?: Array<{
+            buffer: Buffer;
+            mimetype?: string;
+            size?: number;
+            originalname?: string;
+          }>;
+        }
+      | undefined,
+    @Body() dto: ImportPartnerAccountsDto,
+    @Req() request: Request,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+    @Headers('x-request-id') requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: ImportPartnerAccountReportDto;
+  }> {
+    const user = request['user'] as { userId: string } | undefined;
+    const actorId = user?.userId || 'system';
+
+    const excelFile = files?.file?.[0] ?? { buffer: Buffer.alloc(0) };
+
+    const result = await this.partnerAccountImportService.importPartnerAccounts(
+      excelFile,
+      files?.photos ?? [],
+      files?.photosZip?.[0],
+      dto,
+      { id: actorId },
+      { ipAddress, userAgent, requestId },
+    );
+
+    return {
+      success: true,
+      message:
+        result.mode === ImportPartnerAccountMode.COMMIT
           ? 'Tạo tài khoản hoàn tất'
           : 'Kiểm tra hoàn tất',
       data: result,

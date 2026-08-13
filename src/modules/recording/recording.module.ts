@@ -56,6 +56,10 @@ import { RecordingSystemConfigService } from './services/recording-system-config
   // SchedulerModule inject được (cron recording-max-duration-enforce — Lớp 2). KHÔNG tạo
   // circular: RecordingModule không import LiveMeetingModule/SchedulerModule (trực tiếp lẫn
   // qua AuthModule/JwtModule/CacheModule).
-  exports: [TypeOrmModule, RecordingSessionService, RecordingSystemConfigService],
+  exports: [
+    TypeOrmModule,
+    RecordingSessionService,
+    RecordingSystemConfigService,
+  ],
 })
 export class RecordingModule {}

@@ -59,7 +59,10 @@ export function translateActionTypeToVn(raw: string): string {
   const mapped = ACTION_TYPE_VN_MAP[raw.toUpperCase()];
   if (mapped) return mapped;
 
-  let normalized = raw.toLowerCase().replace(/[_.-]+/g, ' ').trim();
+  let normalized = raw
+    .toLowerCase()
+    .replace(/[_.-]+/g, ' ')
+    .trim();
   for (const [pattern, replacement] of ACTION_TYPE_KEYWORD_FALLBACK) {
     normalized = normalized.replace(pattern, replacement);
   }

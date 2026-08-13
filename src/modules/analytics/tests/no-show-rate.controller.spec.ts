@@ -32,7 +32,12 @@ describe('NoShowRateController', () => {
           totalBookings: 20,
           noShowRate: 25.0,
           trend: [
-            { date: '2026-06-01', noShowCount: 1, totalBookings: 4, noShowRate: 25.0 },
+            {
+              date: '2026-06-01',
+              noShowCount: 1,
+              totalBookings: 4,
+              noShowRate: 25.0,
+            },
           ],
           ranking: {
             rankBy: 'room',
