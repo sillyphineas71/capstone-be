@@ -81,16 +81,19 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
         // đúng nhánh streak thay vì nhánh "đã confirmed" cũ.
         if (sql.includes('SELECT first_presence_at FROM room_booking_usages'))
           return Promise.resolve([{ first_presence_at: null }]);
-        // Streak "đủ ngưỡng" mặc định (31s trước eventTime của CHÍNH request đang test,
-        // presenceConfirmSeconds mock=30s) — giữ nguyên kỳ vọng "confirm ngay trong 1
-        // request" của các test cũ trong file này (không phải trọng tâm test streak chi
+        // Đoạn "đủ ngưỡng" mặc định (bắt đầu 31s trước boundEnd của CHÍNH request đang
+        // test, presenceConfirmSeconds mock=30s) — giữ nguyên kỳ vọng "confirm ngay trong
+        // 1 request" của các test cũ trong file này (không phải trọng tâm test streak chi
         // tiết — đã có occupancy-persistence.service.spec.ts riêng cho việc đó).
-        if (sql.includes('positive_events')) {
-          const eventTime = params?.[3] as Date | undefined;
-          const streakStart = eventTime
-            ? new Date(eventTime.getTime() - 31_000)
+        // [FIX 2026-08-13, R12b] params: [roomId, boundStart, boundEnd, tolerance,
+        // presenceConfirmSeconds] — boundEnd ở index 2 (không đổi). Kết quả trả về đổi
+        // shape { seg_start, is_active } (không còn { streak_start } của bản R12 đầu).
+        if (sql.includes('real_departures')) {
+          const boundEnd = params?.[2] as Date | undefined;
+          const segStart = boundEnd
+            ? new Date(boundEnd.getTime() - 31_000)
             : new Date(Date.now() - 31_000);
-          return Promise.resolve([{ streak_start: streakStart }]);
+          return Promise.resolve([{ seg_start: segStart, is_active: true }]);
         }
         if (sql.includes('UPDATE rooms'))
           return Promise.resolve(roomUpdateRows);
@@ -144,7 +147,9 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
     expect(rawInserted()).toBe(true);
     expect(qrCalled('INSERT INTO room_events')).toBe(true);
     expect(qrCalled('INSERT INTO presence_snapshots')).toBe(true);
-    expect(qrCalled('UPDATE room_booking_usages')).toBe(true);
+    // [FIX 2026-08-13, R13] Nhánh "chưa confirm" giờ dùng INSERT...ON CONFLICT (upsert),
+    // không còn UPDATE đơn thuần — xem occupancy-persistence.service.spec.ts cho test chi tiết.
+    expect(qrCalled('INSERT INTO room_booking_usages')).toBe(true);
     expect(qrCalled('UPDATE rooms')).toBe(true);
     expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
     expect(wsMock.emitToRoom).toHaveBeenCalledWith(

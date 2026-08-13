@@ -14,6 +14,11 @@ import { WebsocketModule } from '../websocket/websocket.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
 import { SchedulingModule } from '../scheduling/scheduling.module.js';
+// [FIX 2026-08-13] NoShowLifecycleService cần LiveMeetingService.endMeeting() để tự
+// động kết thúc meeting khi phòng bị no-show giải phóng (xem no-show-lifecycle.service.ts).
+// KHÔNG tạo vòng phụ thuộc: LiveMeetingModule chỉ import Auth/Websocket/GuestAccess/
+// Recording, KHÔNG import RoomsModule — an toàn 1 chiều, KHÔNG cần forwardRef (cấm dùng).
+import { LiveMeetingModule } from '../live-meeting/live-meeting.module.js';
 import { RoomsController } from './controllers/rooms.controller.js';
 import { RoomsService } from './services/rooms.service.js';
 import { RoomStatusService } from './services/room-status.service.js';
@@ -48,6 +53,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     NotificationsModule,
     AdministrationModule,
     SchedulingModule,
+    LiveMeetingModule,
     JwtModule.register({}),
     CacheModule.register(),
     TypeOrmModule.forFeature([

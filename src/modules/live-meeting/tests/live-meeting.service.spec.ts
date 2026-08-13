@@ -16,6 +16,7 @@ import {
   RoomBookingEntity,
   RoomBookingStatus,
 } from '../../rooms/entities/room-booking.entity.js';
+import { RoomEventEntity } from '../../rooms/entities/room-event.entity.js';
 import {
   RoomBookingUsageEntity,
   RoomUsageStatus,
@@ -95,6 +96,14 @@ describe('LiveMeetingService', () => {
   const mockTransactionalEm = {
     createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    // [FIX 2026-08-13, Fix A] executeEndMeetingInTransaction() giờ SELECT
+    // trước khi release room_bookings (để ghi đúng oldStatus vào room_events) —
+    // mặc định trả 1 booking 'active' để các test endMeeting() hiện có (không
+    // quan tâm chi tiết room booking) không vỡ; test riêng cho Fix A override.
+    findOne: jest.fn().mockResolvedValue({
+      id: 'booking-1',
+      status: RoomBookingStatus.ACTIVE,
+    }),
     create: jest.fn(),
     save: jest.fn().mockResolvedValue({}),
   } as unknown as EntityManager;
@@ -514,6 +523,135 @@ describe('LiveMeetingService', () => {
       expect(result.status).toBe(MeetingStatus.COMPLETED);
       expect(result.roomReleased).toBe(true);
       expect(result.duration).toBeGreaterThan(0);
+    });
+
+    // ────────────────────────────────────────
+    //  [FIX 2026-08-13, Fix A] room_bookings PHẢI được giải phóng dù kết
+    //  thúc ĐÚNG/TRỄ giờ (trước đây chỉ chạy khi isEarlyEnd=true, bug thật
+    //  đêm nay) — và WHERE chấp nhận cả 'approved' (tự phục hồi cho ca
+    //  Fix B chưa kịp chạy/lỗi transient), không chỉ 'active'.
+    //  Lưu ý: `result.roomReleased` (DTO) vẫn giữ nguyên nghĩa "kết thúc
+    //  SỚM" — KHÔNG đổi, đó là câu hỏi nghiệp vụ khác (có tái dùng được
+    //  phần giờ còn lại của booking không), độc lập với việc room_bookings
+    //  có được release trong DB hay không.
+    // ────────────────────────────────────────
+    it('[Fix A] kết thúc ĐÚNG giờ (không sớm) → room_bookings vẫn release thành completed', async () => {
+      jest.spyOn(meetingRepo, 'findOne').mockResolvedValue({
+        ...baseMeeting,
+        endTime: new Date(now.getTime() - 1000), // đã qua giờ → không phải "sớm"
+      } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({
+        ...baseMeeting,
+        endTime: new Date(now.getTime() - 1000),
+      });
+      (mockTransactionalEm.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'booking-1',
+        status: RoomBookingStatus.ACTIVE,
+      });
+
+      const result = await service.endMeeting(
+        'm-001',
+        { userId: 'host-1' },
+        {},
+      );
+
+      expect(result.roomReleased).toBe(false); // DTO field: nghĩa "sớm", KHÔNG đổi
+      expect(mockTransactionalEm.update).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        { id: 'booking-1' },
+        { status: RoomBookingStatus.COMPLETED },
+      );
+      const eventArg = (
+        mockTransactionalEm.create as jest.Mock
+      ).mock.calls.find((c) => c[0] === RoomEventEntity)?.[1];
+      expect(eventArg?.eventType).toBe('room_released_on_end');
+    });
+
+    it('[Fix A] kết thúc TRỄ giờ (mirror autoCompleteOverdueMeetings) → vẫn release room_bookings', async () => {
+      const overdueMeeting = {
+        ...baseMeeting,
+        endTime: new Date(now.getTime() - 60 * 60 * 1000), // trễ 1 tiếng
+      };
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue(overdueMeeting as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue(overdueMeeting);
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(mockTransactionalEm.update).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        { id: 'booking-1' },
+        { status: RoomBookingStatus.COMPLETED },
+      );
+    });
+
+    it('[Fix A] kết thúc SỚM → vẫn hoạt động đúng như cũ (release + roomReleased=true)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+
+      const result = await service.endMeeting(
+        'm-001',
+        { userId: 'host-1' },
+        {},
+      );
+
+      expect(result.roomReleased).toBe(true);
+      expect(mockTransactionalEm.update).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        { id: 'booking-1' },
+        { status: RoomBookingStatus.COMPLETED },
+      );
+    });
+
+    it('[Fix A] TÁI HIỆN bug thật: booking kẹt ở approved (autoStartDueMeetings tự-start, chưa qua Fix B) → endMeeting VẪN release đúng nhờ WHERE nới status IN (approved, active)', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+      (mockTransactionalEm.findOne as jest.Mock).mockResolvedValueOnce({
+        id: 'booking-stuck',
+        status: RoomBookingStatus.APPROVED, // đúng bug thật: chưa từng thành 'active'
+      });
+
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      expect(mockTransactionalEm.findOne).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        expect.objectContaining({
+          where: expect.objectContaining({ meetingId: 'm-001' }),
+        }),
+      );
+      expect(mockTransactionalEm.update).toHaveBeenCalledWith(
+        RoomBookingEntity,
+        { id: 'booking-stuck' },
+        { status: RoomBookingStatus.COMPLETED },
+      );
+      const eventArg = (
+        mockTransactionalEm.create as jest.Mock
+      ).mock.calls.find((c) => c[0] === RoomEventEntity)?.[1];
+      expect(eventArg?.oldStatus).toBe(RoomBookingStatus.APPROVED);
+    });
+
+    it('[Fix A] regression: không còn booking approved/active nào cho meeting này (đã cancelled/completed từ trước) → KHÔNG update, KHÔNG ghi đè', async () => {
+      jest
+        .spyOn(meetingRepo, 'findOne')
+        .mockResolvedValue({ ...baseMeeting } as MeetingEntity);
+      mockQueryBuilder.getOne.mockResolvedValue({ ...baseMeeting });
+      (mockTransactionalEm.findOne as jest.Mock).mockResolvedValueOnce(null);
+
+      const updateCallsBefore = (mockTransactionalEm.update as jest.Mock).mock
+        .calls.length;
+      await service.endMeeting('m-001', { userId: 'host-1' }, {});
+
+      const roomBookingUpdateCalls = (
+        mockTransactionalEm.update as jest.Mock
+      ).mock.calls
+        .slice(updateCallsBefore)
+        .filter((c) => c[0] === RoomBookingEntity);
+      expect(roomBookingUpdateCalls).toHaveLength(0);
     });
 
     // ────────────────────────────────────────

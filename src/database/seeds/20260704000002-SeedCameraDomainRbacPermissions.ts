@@ -96,7 +96,11 @@ const OWNED_PERMISSIONS: CameraPermissionSeed[] = [
     actionCode: 'presence_read',
     description:
       'Cho phép xem dữ liệu presence/occupancy do IVSS cung cấp. Read-only.',
-    roles: ['SYSTEM_ADMIN', 'MANAGER'],
+    // [FIX 2026-08-13] Thêm BUSINESS_ADMIN (thiếu bất thường so với 7 module analytics
+    // khác đều có SYSTEM_ADMIN/BUSINESS_ADMIN không giới hạn) + EMPLOYEE (chỉ được xem
+    // chính mình — scope-check thật nằm ở IvssPresenceQueryService.resolveScope(), không
+    // phải ở permission này).
+    roles: ['SYSTEM_ADMIN', 'BUSINESS_ADMIN', 'MANAGER', 'EMPLOYEE'],
   },
 
   // ── rooms — noshow.update/release: +BUSINESS_ADMIN | configure: SYSTEM_ADMIN |

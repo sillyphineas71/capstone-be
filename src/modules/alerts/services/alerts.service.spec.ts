@@ -163,31 +163,41 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
       sourceEventId: string | null;
       occurredAt: string;
     }
+    // [FIX 2026-08-13] mirror ĐÚNG SQL mới trong alerts.service.ts (đã verify riêng bằng
+    // psql thật, xem báo cáo recon — mock này chỉ để test hành vi qua nhiều lần gọi
+    // recordAlert() liên tiếp ở tầng JS, KHÔNG thay thế verify SQL thật):
+    // - latest_match: alertType='crowd' → so với entry CUỐI CÙNG bất kể userId (vì crowd
+    //   không gắn userId); alertType khác → so với entry CUỐI CÙNG userId (như cũ, KHÔNG đổi).
+    // - occurrence_count: CHỈ bị debounce chặn khi alertType='crowd' — mọi alertType khác
+    //   (kể cả Intrusion userId=null/người lạ) LUÔN +1 vô điều kiện, giữ100% hành vi cũ.
+    // - occurrences: gate debounce KHÔNG đổi cho mọi alertType (hành vi fix 2026-08-11).
+    // - last_seen_at: LUÔN cập nhật vô điều kiện, không phụ thuộc debounce (R3).
     const makeStatefulQueryMock = (row: {
       occurrenceCount: number;
       lastSeenAt: string | null;
       payloadJson: Record<string, unknown>;
     }) =>
       jest.fn((_sql: string, params: unknown[]) => {
-        const [, entryJson, max, debounceSeconds] = params as [
+        const [, entryJson, max, debounceSeconds, alertType] = params as [
           string,
           string,
           number,
           number,
+          string,
         ];
         const entry = JSON.parse(entryJson) as OccurrenceEntry;
         const prior = (row.payloadJson.occurrences as OccurrenceEntry[]) ?? [];
 
-        // mirror SQL: last_seen_at/occurrence_count LUÔN cập nhật vô điều kiện,
-        // KHÔNG phụ thuộc debounce (R3 — an toàn cho auto-resolve).
-        row.occurrenceCount += 1;
         row.lastSeenAt = new Date().toISOString();
 
-        const latestMatch = [...prior]
-          .reverse()
-          .find((e) => e.userId !== null && e.userId === entry.userId);
+        const latestMatch =
+          alertType === 'crowd'
+            ? prior[prior.length - 1]
+            : [...prior]
+                .reverse()
+                .find((e) => e.userId !== null && e.userId === entry.userId);
         const debounced =
-          entry.userId !== null &&
+          (alertType === 'crowd' || entry.userId !== null) &&
           latestMatch !== undefined &&
           Math.abs(
             (new Date(entry.occurredAt).getTime() -
@@ -195,6 +205,9 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
               1000,
           ) < debounceSeconds;
 
+        if (!(alertType === 'crowd' && debounced)) {
+          row.occurrenceCount += 1;
+        }
         if (!debounced) {
           row.payloadJson = {
             ...row.payloadJson,
@@ -398,7 +411,10 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         });
       });
 
-      it('crowd (userId null) gọi liên tiếp nhanh → KHÔNG bị debounce nhầm, mỗi lần đều append (regression 4 loại alert khác)', async () => {
+      // [FIX 2026-08-13] THAY THẾ test cũ ("crowd KHÔNG bị debounce nhầm") — chính đó là
+      // hành vi BUG đã fix (occurrence_count=73 sau vài phút). Test mới xác nhận NGƯỢC LẠI:
+      // Crowd giờ PHẢI được debounce khi bump liên tiếp gần nhau.
+      it('[FIX 73-bump] crowd (userId null) gọi liên tiếp nhanh (< debounceSeconds) → occurrence_count KHÔNG tăng lần 2, occurrences KHÔNG append thêm', async () => {
         securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
         const row = {
           id: 'alert-5',
@@ -413,7 +429,7 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         repo.save.mockRejectedValue({ driverError: { code: '23505' } });
         repo.query = makeStatefulQueryMock(row);
 
-        // 2 lần cách nhau 1s (< debounceSeconds=5) nhưng userId=null (crowd) → không debounce.
+        // 2 lần cách nhau 1s (< debounceSeconds=5), userId=null (crowd) → PHẢI debounce.
         await service.recordAlert({
           alertType: 'crowd',
           zoneId: 'zone-9',
@@ -427,8 +443,163 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
           payloadJson: { occurredAt: '2026-08-11T09:00:01.000Z' },
         });
 
+        expect(r2.alert.occurrenceCount).toBe(2); // 1 (insert) → 2 (lần 1) → GIỮ 2 (lần 2 bị debounce)
         const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
-        expect(occurrences).toHaveLength(2); // cả 2 đều append, không bị debounce nhầm
+        expect(occurrences).toHaveLength(1); // lần 2 KHÔNG append
+      });
+
+      it('[FIX 73-bump] crowd, 2 lần cách nhau >= debounceSeconds → occurrence_count vẫn tăng, occurrences append bình thường (không debounce nhầm đợt mới)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-5b',
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-1',
+          payloadJson: { occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        const r2 = await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-2',
+          // cách 6s — >= debounceSeconds=5 → KHÔNG debounce, đợt mới thật sự.
+          payloadJson: { occurredAt: '2026-08-11T09:00:06.000Z' },
+        });
+
+        expect(r2.alert.occurrenceCount).toBe(3); // cả 2 lần đều tăng
+        const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences).toHaveLength(2); // cả 2 đều append
+      });
+
+      // [FIX 2026-08-13] TÁI HIỆN CHÍNH XÁC kịch bản thật đêm nay: 1 zone vượt ngưỡng, count-
+      // event bắn liên tục cách nhau 3s (khớp ước tính "73 lần / vài phút" đã tính trong
+      // recon), debounceSeconds=5 (mặc định thật DEBOUNCE_CONFIG_DEFAULT). Đã verify NGUYÊN
+      // VĂN SQL này bằng psql thật trên Postgres (không chỉ mock JS) — kết quả giống hệt:
+      // occurrence_count=38, không còn leo thang tới 74 (1 insert + 73 bump vô điều kiện).
+      it('[FIX 73-bump] TÁI HIỆN thật: 73 count-event cách nhau 3s (~3.65 phút), debounce=5s → occurrence_count = 38 (KHÔNG còn 74)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-crowd-repro',
+          alertType: 'crowd',
+          zoneId: 'zone-real',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        const base = new Date('2026-08-13T10:00:00.000Z').getTime();
+        let last;
+        for (let i = 1; i <= 73; i++) {
+          last = await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-real',
+            sourceEventId: `evt-${i}`,
+            payloadJson: {
+              occurredAt: new Date(base + i * 3000).toISOString(),
+            },
+          });
+        }
+
+        expect(repo.query).toHaveBeenCalledTimes(73);
+        // TRƯỚC FIX: occurrenceCount = 1 + 73 = 74 (vô điều kiện). SAU FIX: 38 — khớp ĐÚNG
+        // số liệu đã verify bằng psql thật (xem báo cáo recon).
+        expect(last!.alert.occurrenceCount).toBe(38);
+        expect(last!.alert.occurrenceCount).toBeLessThan(74);
+        const occurrences = last!.alert.payloadJson!.occurrences as unknown[];
+        expect(occurrences.length).toBeLessThanOrEqual(20); // vẫn tôn trọng cap cũ
+      });
+
+      // [FIX 2026-08-13] Regression quan trọng nhất: last_seen_at PHẢI vẫn cập nhật ngay cả
+      // khi occurrence_count bị debounce chặn (crowd) — SecurityAlertAutoResolveService dựa
+      // last_seen_at để KHÔNG tự đóng nhầm alert đang diễn ra (R3, KHÔNG đổi).
+      it('[FIX 73-bump] crowd bị debounce chặn occurrence_count → last_seen_at VẪN cập nhật (auto-resolve không đóng nhầm)', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-5c',
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-1',
+          payloadJson: { occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        expect(row.lastSeenAt).not.toBeNull();
+
+        // lần 2: 1s sau — chắc chắn bị debounce (< 5s) → occurrence_count GIỮ nguyên,
+        // nhưng last_seen_at PHẢI vẫn đổi (mock luôn set lastSeenAt vô điều kiện mỗi lần
+        // gọi, mirror đúng `SET last_seen_at = NOW()` nằm NGOÀI mọi CASE debounce trong SQL
+        // thật — không so sánh 2 giá trị timestamp bằng string vì độ phân giải mili-giây có
+        // thể trùng nhau giữa 2 lệnh gọi liên tiếp trong cùng 1 test, gây flaky).
+        await service.recordAlert({
+          alertType: 'crowd',
+          zoneId: 'zone-9',
+          sourceEventId: 'evt-2',
+          payloadJson: { occurredAt: '2026-08-11T09:00:01.000Z' },
+        });
+
+        expect(row.occurrenceCount).toBe(2); // debounce chặn — KHÔNG tăng lần 2
+        expect(row.lastSeenAt).not.toBeNull();
+        expect(repo.query).toHaveBeenCalledTimes(2); // cả 2 lần đều thực sự chạy qua UPDATE (SET last_seen_at chạy cả 2 lần)
+      });
+
+      // [FIX 2026-08-13] Intrusion người lạ (userId=null, KHÁC crowd nhưng cùng giá trị
+      // null) — RÀNG BUỘC: KHÔNG được ảnh hưởng bởi fix crowd. Phân biệt bằng alertType,
+      // KHÔNG phải bằng userId nullability (xem doc bumpOccurrence()).
+      it('[FIX 73-bump] Intrusion người lạ (userId=null) gọi liên tiếp nhanh → occurrence_count VẪN tăng vô điều kiện, KHÔNG bị ảnh hưởng bởi fix crowd', async () => {
+        securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+        const row = {
+          id: 'alert-stranger',
+          alertType: 'intrusion',
+          zoneId: 'zone-restricted',
+          status: 'new',
+          occurrenceCount: 1,
+          lastSeenAt: null as string | null,
+          payloadJson: {} as Record<string, unknown>,
+        };
+        repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+        repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+        repo.query = makeStatefulQueryMock(row);
+
+        await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-restricted',
+          sourceEventId: 'evt-1',
+          payloadJson: { userId: null, occurredAt: '2026-08-11T09:00:00.000Z' },
+        });
+        const r2 = await service.recordAlert({
+          alertType: 'intrusion',
+          zoneId: 'zone-restricted',
+          sourceEventId: 'evt-2',
+          // cách 1s — < debounceSeconds=5 — nhưng KHÔNG phải crowd → KHÔNG debounce count.
+          payloadJson: { userId: null, occurredAt: '2026-08-11T09:00:01.000Z' },
+        });
+
+        expect(r2.alert.occurrenceCount).toBe(3); // vô điều kiện, giống hệt trước fix
       });
 
       it('last_seen_at LUÔN cập nhật dù bị debounce hay không (chống rủi ro R3 — auto-resolve không được đóng nhầm)', async () => {

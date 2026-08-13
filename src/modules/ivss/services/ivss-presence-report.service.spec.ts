@@ -1,8 +1,20 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
+import { ForbiddenException } from '@nestjs/common';
 import { IvssPresenceReportService } from './ivss-presence-report.service.js';
 import { IvssPresenceQueryService } from './ivss-presence-query.service.js';
+
+// [FIX 2026-08-13] buildMeetingReport() giờ bắt buộc callerId (chặn EMPLOYEE, scope Manager
+// qua getMeetingPresence()). Caller mặc định cho mọi test PDF-render (không liên quan scope)
+// luôn unrestricted, giữ nguyên hành vi các test này như trước fix.
+const ADMIN_CALLER = 'admin-1';
+const UNRESTRICTED_SCOPE = {
+  viewerRole: 'SYSTEM_ADMIN',
+  isUnrestricted: true,
+  scopeDepartmentIds: null,
+  selfUserId: null,
+};
 
 const HEADER = [
   {
@@ -27,7 +39,10 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
 
   beforeEach(async () => {
     dsMock = { manager: { query: jest.fn().mockResolvedValue(HEADER) } };
-    queryMock = { getMeetingPresence: jest.fn() };
+    queryMock = {
+      getMeetingPresence: jest.fn(),
+      resolveScope: jest.fn().mockResolvedValue(UNRESTRICTED_SCOPE),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IvssPresenceReportService,
@@ -52,7 +67,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
         },
       ]),
     );
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(r).not.toBeNull();
     expect(isPdf(r!.buffer)).toBe(true);
     expect(r!.filename).toMatch(/^ivss-presence-MTG-001-\d{8}\.pdf$/);
@@ -72,14 +87,14 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
         },
       ]),
     );
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(r!.buffer.length).toBeGreaterThan(0);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
   it('OQ-6: meeting rỗng (no participants) → vẫn xuất PDF', async () => {
     queryMock.getMeetingPresence.mockResolvedValue(summary([]));
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
@@ -97,13 +112,13 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
         },
       ]),
     );
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
   it('meeting không tồn tại (getMeetingPresence null) → null', async () => {
     queryMock.getMeetingPresence.mockResolvedValue(null);
-    expect(await service.buildMeetingReport('m1')).toBeNull();
+    expect(await service.buildMeetingReport('m1', ADMIN_CALLER)).toBeNull();
   });
 
   it('B3: meeting_code ký tự lạ → filename sanitized (chống header injection)', async () => {
@@ -111,7 +126,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
       { ...HEADER[0], meeting_code: 'MTG/001 #x"y' },
     ]);
     queryMock.getMeetingPresence.mockResolvedValue(summary([]));
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(r!.filename).not.toMatch(/[/#"' ]/);
     expect(r!.filename).toMatch(/^ivss-presence-MTG_001__x_y-\d{8}\.pdf$/);
   });
@@ -119,7 +134,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
   it('header rỗng (no row) → filename fallback meetingId', async () => {
     dsMock.manager.query.mockResolvedValue([]);
     queryMock.getMeetingPresence.mockResolvedValue(summary([]));
-    const r = await service.buildMeetingReport('abc-123-def');
+    const r = await service.buildMeetingReport('abc-123-def', ADMIN_CALLER);
     expect(r!.filename).toMatch(/^ivss-presence-abc-123-def-\d{8}\.pdf$/);
   });
 
@@ -134,7 +149,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
       unmatchedCount: 0,
     }));
     queryMock.getMeetingPresence.mockResolvedValue(summary(many, 3));
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
@@ -143,7 +158,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
       { ...HEADER[0], start_time: 'not-a-date' },
     ]);
     queryMock.getMeetingPresence.mockResolvedValue(summary([]));
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
@@ -161,7 +176,7 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
         },
       ]),
     );
-    const r = await service.buildMeetingReport('m1');
+    const r = await service.buildMeetingReport('m1', ADMIN_CALLER);
     expect(isPdf(r!.buffer)).toBe(true);
   });
 
@@ -169,5 +184,33 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
     expect(
       JSON.stringify(summary([{ fullName: 'X', durationMs: 1 }])),
     ).not.toContain('imageBase64');
+  });
+
+  // [FIX 2026-08-13] Report PDF: EMPLOYEE bị chặn hẳn (khác JSON endpoint chỉ lọc).
+  describe('scope-check (FIX 2026-08-13)', () => {
+    it('Employee gọi route report → 403, KHÔNG gọi getMeetingPresence/render PDF', async () => {
+      queryMock.resolveScope.mockResolvedValue({
+        viewerRole: 'EMPLOYEE',
+        isUnrestricted: false,
+        scopeDepartmentIds: null,
+        selfUserId: 'emp-1',
+      });
+      await expect(service.buildMeetingReport('m1', 'emp-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(queryMock.getMeetingPresence).not.toHaveBeenCalled();
+    });
+
+    it('Manager → getMeetingPresence() được gọi kèm đúng callerId (để tự lọc scope)', async () => {
+      queryMock.resolveScope.mockResolvedValue({
+        viewerRole: 'MANAGER',
+        isUnrestricted: false,
+        scopeDepartmentIds: ['dept-1'],
+        selfUserId: null,
+      });
+      queryMock.getMeetingPresence.mockResolvedValue(summary([]));
+      await service.buildMeetingReport('m1', 'mgr-1');
+      expect(queryMock.getMeetingPresence).toHaveBeenCalledWith('m1', 'mgr-1');
+    });
   });
 });

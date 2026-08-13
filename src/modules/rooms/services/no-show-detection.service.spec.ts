@@ -4,16 +4,17 @@ import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { NoShowDetectionService } from './no-show-detection.service.js';
 import { NoShowService } from './no-show.service.js';
-import { NoShowConfigService } from './no-show-config.service.js';
 
-const PRESENCE_CONFIRM_SECONDS = 30;
+// [FIX 2026-08-13, R14] Mốc guard KHÔNG còn lấy từ NoShowConfigService.presenceConfirmSeconds
+// (biến nghiệp vụ người dùng chỉnh được) — đổi sang hằng số cố định độc lập trong
+// NoShowDetectionService, gấp đôi chu kỳ cron EVERY_MINUTE (retry buffer thuần vận hành).
+const RECONCILE_GRACE_SECONDS = 120;
 
 describe('NoShowDetectionService (NSC-001)', () => {
   let service: NoShowDetectionService;
   let dsMock: any;
   let configMock: any;
   let noShowServiceMock: any;
-  let noShowConfigMock: any;
   let configRows: any[];
   let candidateRows: any[];
 
@@ -38,16 +39,6 @@ describe('NoShowDetectionService (NSC-001)', () => {
     noShowServiceMock = {
       create: jest.fn().mockResolvedValue({ case: { id: 'x' }, created: true }),
     };
-    noShowConfigMock = {
-      getValues: jest.fn().mockResolvedValue({
-        thresholdMinutes: 15,
-        warningGraceMinutes: 0,
-        autoReleaseGraceMinutes: 5,
-        presenceConfirmSeconds: PRESENCE_CONFIRM_SECONDS,
-        presenceNoiseToleranceSeconds: 3,
-        autoReleaseEnabled: true,
-      }),
-    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,7 +46,6 @@ describe('NoShowDetectionService (NSC-001)', () => {
         { provide: DataSource, useValue: dsMock },
         { provide: ConfigService, useValue: configMock },
         { provide: NoShowService, useValue: noShowServiceMock },
-        { provide: NoShowConfigService, useValue: noShowConfigMock },
       ],
     }).compile();
     service = module.get(NoShowDetectionService);
@@ -68,12 +58,12 @@ describe('NoShowDetectionService (NSC-001)', () => {
       String(c[0]).includes('FROM room_bookings'),
     );
 
-  it('threshold từ system_configs (10) → candidate query bind [10, presenceConfirmSeconds]; create mỗi candidate', async () => {
+  it('threshold từ system_configs (10) → candidate query bind [10, RECONCILE_GRACE_SECONDS]; create mỗi candidate', async () => {
     const r = await service.detect();
     expect(r.scanned).toBe(2);
     expect(r.created).toBe(2);
     expect(noShowServiceMock.create).toHaveBeenCalledTimes(2);
-    expect(candCall()[1]).toEqual([10, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([10, RECONCILE_GRACE_SECONDS]);
     // create detectionStatus='risk' + evidence threshold
     const arg = noShowServiceMock.create.mock.calls[0][0];
     expect(arg.detectionStatus).toBe('risk');
@@ -87,7 +77,7 @@ describe('NoShowDetectionService (NSC-001)', () => {
       'NO_SHOW_THRESHOLD_MINUTES',
       15,
     );
-    expect(candCall()[1]).toEqual([15, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
   });
 
   it('threshold config_value không hợp lệ → fallback env', async () => {
@@ -97,19 +87,19 @@ describe('NoShowDetectionService (NSC-001)', () => {
       'NO_SHOW_THRESHOLD_MINUTES',
       15,
     );
-    expect(candCall()[1]).toEqual([15, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
   });
 
   it('threshold config_value null → fallback env', async () => {
     configRows = [{ config_value: null }];
     await service.detect();
-    expect(candCall()[1]).toEqual([15, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
   });
 
   it('threshold config_value <= 0 → fallback env', async () => {
     configRows = [{ config_value: '0' }];
     await service.detect();
-    expect(candCall()[1]).toEqual([15, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
   });
 
   it('system_configs query lỗi → catch → fallback env (không throw)', async () => {
@@ -122,7 +112,7 @@ describe('NoShowDetectionService (NSC-001)', () => {
     });
     const r = await service.detect();
     expect(r.scanned).toBe(2);
-    expect(candCall()[1]).toEqual([15, PRESENCE_CONFIRM_SECONDS]);
+    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
   });
 
   it('candidate query: LEFT JOIN usage + NOT EXISTS + bind interval (SEC-03)', async () => {
@@ -160,14 +150,16 @@ describe('NoShowDetectionService (NSC-001)', () => {
     expect(r.created).toBe(1); // chỉ booking thứ 2 thành công
   });
 
-  // ══ Phần 4 (R11) — false-positive tại ranh giới threshold ══════════════════════
-  describe('Phần 4: loại trừ event count>0 vừa tới trong presenceConfirmSeconds giây', () => {
-    it('đọc presenceConfirmSeconds qua NoShowConfigService.getValues() đúng 1 lần/đợt (NC-2)', async () => {
-      await service.detect();
-      expect(noShowConfigMock.getValues).toHaveBeenCalledTimes(1);
+  // ══ Phần 2 (R14) — guard phụ đổi mốc cố định, KHÔNG còn tie theo presenceConfirmSeconds ══
+  describe('Phần 2 (R14): guard phụ dùng mốc cố định RECONCILE_GRACE_SECONDS, KHÔNG phụ thuộc NoShowConfigService', () => {
+    it('KHÔNG còn gọi NoShowConfigService.getValues() — dependency đã gỡ hoàn toàn (dead code sau R14)', async () => {
+      // NoShowConfigService không còn được inject (xem providers ở beforeEach) — nếu code
+      // cũ vô tình còn gọi tới, TestingModule sẽ throw lỗi "Nest can't resolve dependencies"
+      // ngay khi compile module, test này tự nhiên fail nếu quên gỡ.
+      await expect(service.detect()).resolves.toBeDefined();
     });
 
-    it('SQL candidate có thêm NOT EXISTS room_events count>0 trong vòng presenceConfirmSeconds giây, bind $2', async () => {
+    it('SQL candidate vẫn có NOT EXISTS room_events count>0 gần đây, bind $2 = 120 (hằng số cố định, KHÔNG phải giá trị đọc từ config)', async () => {
       await service.detect();
       const sql = String(candCall()[0]);
       expect(sql).toContain('FROM room_events re');
@@ -176,12 +168,48 @@ describe('NoShowDetectionService (NSC-001)', () => {
       expect(sql).toContain(
         "re.event_time >= now() - ($2::int * interval '1 second')",
       );
-      expect(candCall()[1][1]).toBe(PRESENCE_CONFIRM_SECONDS);
+      expect(candCall()[1][1]).toBe(120); // đúng hằng số cố định, không phải biến config.
     });
 
-    it('event count>0 vừa tới trong vòng presenceConfirmSeconds giây → detect() KHÔNG tạo case (SQL NOT EXISTS tự loại candidate, mock giả lập DB trả rỗng)', async () => {
-      // NOT EXISTS chạy Ở TẦNG SQL thật (đã xác nhận cấu trúc câu lệnh ở test trên) —
-      // ở tầng mock, mô phỏng hiệu ứng: candidate này bị DB tự loại khỏi kết quả trả về.
+    // [FIX 2026-08-13, R14] Test bắt buộc #1 — mô phỏng ĐÚNG root cause đã tìm: sự kiện
+    // dương cuối cách xa now() hơn ngưỡng cũ (presenceConfirmSeconds, có thể rất nhỏ, vd
+    // 30s), NHƯNG first_presence_at ĐÃ được set (nhờ Phần 1 — reconcilePendingConfirmations()
+    // chạy trước detect() trong cùng tick) → điều kiện CHÍNH "u.first_presence_at IS NULL"
+    // (không phải guard phụ) đã tự loại candidate này ra khỏi kết quả SQL — detect() KHÔNG
+    // tạo case oan. Guard phụ (NOT EXISTS) không cần "cứu" ca này nữa vì họ chưa từng lọt
+    // vào kết quả candidate để guard phụ phải xét tới.
+    it('root cause đã tìm: first_presence_at ĐÃ set (Phần 1) dù event dương cuối đã lâu → candidate KHÔNG xuất hiện, detect() KHÔNG tạo case oan', async () => {
+      // Mô phỏng: DB đã có first_presence_at (nhờ Phần 1) → điều kiện WHERE chính loại bỏ
+      // candidate này hoàn toàn — SQL thật sẽ không trả về nó, mock giả lập hiệu ứng đó.
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('system_configs')) return Promise.resolve(configRows);
+        if (sql.includes('FROM room_bookings')) return Promise.resolve([]); // bị "u.first_presence_at IS NULL" loại
+        return Promise.resolve([]);
+      });
+      const r = await service.detect();
+      expect(r.scanned).toBe(0);
+      expect(r.created).toBe(0);
+      expect(noShowServiceMock.create).not.toHaveBeenCalled();
+    });
+
+    // [FIX 2026-08-13, R14] Test bắt buộc #2 — regression: booking THẬT SỰ chưa có ai tới
+    // (first_presence_at vẫn NULL, KHÔNG có event dương nào gần đây để guard phụ bảo vệ) →
+    // detect() VẪN tạo case đúng như thiết kế — không bị guard mới chặn nhầm.
+    it('regression: booking thật sự chưa có ai tới (không event dương nào gần đây) → detect() VẪN tạo case đúng như cũ', async () => {
+      const r = await service.detect();
+      expect(r.scanned).toBe(2);
+      expect(r.created).toBe(2);
+      expect(noShowServiceMock.create).toHaveBeenCalledTimes(2);
+    });
+
+    // [FIX 2026-08-13, R14] Test bắt buộc #3 — giữ guard: kịch bản first_presence_at CHƯA
+    // kịp set (mô phỏng reconcilePendingConfirmations() lỗi transient đúng tick này cho
+    // booking đó — Phần 1 có try/catch riêng từng booking, không throw ra ngoài) NHƯNG vẫn
+    // có event dương gần đây (trong 120s) → guard phụ vẫn chặn đúng, không tạo case oan
+    // trong lúc chờ tick sau retry.
+    it('reconcile lỗi transient (mô phỏng): first_presence_at CHƯA kịp set nhưng có event dương trong 120s gần đây → guard phụ vẫn chặn (SQL NOT EXISTS tự loại, mock giả lập DB trả rỗng)', async () => {
+      // NOT EXISTS chạy Ở TẦNG SQL thật (đã xác nhận cấu trúc câu lệnh + bind=120 ở test
+      // trên) — ở tầng mock, mô phỏng hiệu ứng: candidate này bị DB tự loại khỏi kết quả.
       dsMock.manager.query.mockImplementation((sql: string) => {
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) return Promise.resolve([]); // rỗng — bị NOT EXISTS loại
@@ -191,15 +219,6 @@ describe('NoShowDetectionService (NSC-001)', () => {
       expect(r.scanned).toBe(0);
       expect(r.created).toBe(0);
       expect(noShowServiceMock.create).not.toHaveBeenCalled();
-    });
-
-    it('event count>0 đã lâu hơn presenceConfirmSeconds giây → detect() tạo case bình thường như cũ (SQL trả candidate, NOT EXISTS không loại)', async () => {
-      // Event cũ hơn ngưỡng → NOT EXISTS đúng nghĩa TRUE (không có event mới nào) → DB
-      // vẫn trả candidate như luồng cũ, không bị loại — mock giữ nguyên candidateRows mặc định.
-      const r = await service.detect();
-      expect(r.scanned).toBe(2);
-      expect(r.created).toBe(2);
-      expect(noShowServiceMock.create).toHaveBeenCalledTimes(2);
     });
   });
 });

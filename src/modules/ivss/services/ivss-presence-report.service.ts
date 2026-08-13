@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import PDFDocument from 'pdfkit';
 import { IvssPresenceQueryService } from './ivss-presence-query.service.js';
@@ -63,9 +63,26 @@ export class IvssPresenceReportService {
 
   async buildMeetingReport(
     meetingId: string,
+    callerId: string,
   ): Promise<{ buffer: Buffer; filename: string } | null> {
-    const presence =
-      await this.presenceQueryService.getMeetingPresence(meetingId);
+    // [FIX 2026-08-13] EMPLOYEE bị chặn hẳn ở route PDF (khác JSON endpoint chỉ lọc còn
+    // 1 dòng của chính họ) — báo cáo này là tài liệu quản lý/admin, không dành cho tự xem.
+    const scope = await this.presenceQueryService.resolveScope(callerId);
+    if (scope.selfUserId !== null) {
+      throw new ForbiddenException({
+        success: false,
+        message: 'You do not have permission to view this report',
+        error: { code: 'PERMISSION_DENIED', details: {} },
+      });
+    }
+
+    // MANAGER: getMeetingPresence() tự lọc còn participant trong scope (giống JSON
+    // endpoint) — PDF vì vậy tự nhiên chỉ liệt kê đúng phần thuộc phòng ban mình quản lý,
+    // rỗng nếu meeting không có ai thuộc phòng ban đó (đã có sẵn empty-state OQ-6 bên dưới).
+    const presence = await this.presenceQueryService.getMeetingPresence(
+      meetingId,
+      callerId,
+    );
     if (!presence) return null; // meeting không tồn tại → controller 404
 
     const headerRows: HeaderRow[] = await this.dataSource.manager.query(

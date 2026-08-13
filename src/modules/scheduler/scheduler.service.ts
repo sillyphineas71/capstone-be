@@ -18,6 +18,7 @@ import { LiveMeetingService } from '../live-meeting/services/live-meeting.servic
 import { MeetingRequestReviewService } from '../meetings/services/meeting-request-review.service.js';
 import { RecordingSessionService } from '../recording/services/recording-session.service.js';
 import { RecordingSystemConfigService } from '../recording/services/recording-system-config.service.js';
+import { OccupancyPersistenceService } from '../presence/services/occupancy-persistence.service.js';
 
 /**
  * SchedulerService — Skeleton cron jobs.
@@ -72,6 +73,7 @@ export class SchedulerService {
     private readonly securityAlertAutoResolveService: SecurityAlertAutoResolveService,
     private readonly recordingSessionService: RecordingSessionService,
     private readonly recordingSystemConfigService: RecordingSystemConfigService,
+    private readonly occupancyPersistenceService: OccupancyPersistenceService,
   ) {
     this.schedulerEnabled = this.configService.get<boolean>(
       'SCHEDULER_ENABLED',
@@ -218,19 +220,27 @@ export class SchedulerService {
    * với meeting-status-advance bên dưới. SCHEDULER_NO_SHOW_CHECK_CRON hiện KHÔNG
    * được đọc ở đâu (dead config) — @Cron() không thể nhận giá trị runtime từ
    * ConfigService, nên interval vẫn phải hardcode.
+   *
+   * [FIX 2026-08-13, R12] Gọi occupancyPersistenceService.reconcilePendingConfirmations()
+   * TRƯỚC detect() — xác nhận có mặt theo đồng hồ thực cho các booking chỉ có 1 event dương
+   * lúc vào (cảm biến báo-khi-chuyển-trạng-thái, không gửi liên tục), rồi detect() mới quét
+   * dựa trên first_presence_at đã được cập nhật tới thời điểm mới nhất trong CÙNG lần chạy.
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'no-show-check' })
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    // NSC-001 (#31) + NSL-001 (OQ-4): detect → reconcile-presence → warn.
-    // detect() commit case 'risk' trước; reconcile/warn re-query sau. KHÔNG ném ra cron.
+    // R12 → NSC-001 (#31) → NSL-001 (OQ-4): reconcile-presence-by-time → detect →
+    // reconcile-presence(no_show_cases) → warn. KHÔNG ném ra cron.
     try {
+      const p =
+        await this.occupancyPersistenceService.reconcilePendingConfirmations();
       const d = await this.noShowDetectionService.detect();
       const rec = await this.noShowLifecycleService.reconcilePresence();
       const w = await this.noShowLifecycleService.warnBatch();
       this.logger.log(
-        `[Scheduler] no-show-check: detected scanned=${d.scanned} created=${d.created}` +
+        `[Scheduler] no-show-check: presence-reconcile scanned=${p.scanned} confirmed=${p.confirmed}` +
+          ` | detected scanned=${d.scanned} created=${d.created}` +
           ` | reconcile resolved=${rec.resolved} | warn scanned=${w.scanned} warned=${w.warned}`,
       );
     } catch (e) {

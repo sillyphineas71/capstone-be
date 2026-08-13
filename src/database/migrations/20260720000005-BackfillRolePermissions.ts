@@ -350,10 +350,12 @@ export class BackfillRolePermissions20260720000005 implements MigrationInterface
       roles: ['SYSTEM_ADMIN'],
     },
     {
+      // [FIX 2026-08-13] Thêm BUSINESS_ADMIN + EMPLOYEE — xem
+      // 20260704000002-SeedCameraDomainRbacPermissions.ts.
       code: 'ivss.presence.read',
       module: 'ivss',
       name: 'Xem presence từ IVSS',
-      roles: ['MANAGER', 'SYSTEM_ADMIN'],
+      roles: ['MANAGER', 'SYSTEM_ADMIN', 'BUSINESS_ADMIN', 'EMPLOYEE'],
     },
     {
       code: 'meeting_request.approve',

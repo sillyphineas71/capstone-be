@@ -93,8 +93,10 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     });
     expect(r.created).toBe(true);
     expect(r.case.id).toBe('nsc-1');
+    // [FIX 2026-08-13] WS phải emit vào meeting:${meetingId} — room:${roomId} không có
+    // client nào từng join (host chỉ join meeting:<id>), event chết trên đường đi.
     expect(wsMock.emitToRoom).toHaveBeenCalledWith(
-      'room:rm-1',
+      'meeting:mt-1',
       'meeting.noshow.alert',
       expect.objectContaining({ noShowCaseId: 'nsc-1', roomId: 'rm-1' }),
     );

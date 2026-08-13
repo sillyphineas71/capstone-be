@@ -4,6 +4,7 @@ import {
   Param,
   ParseUUIDPipe,
   NotFoundException,
+  ForbiddenException,
   UseGuards,
   Res,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { IvssPresenceQueryService } from '../services/ivss-presence-query.service.js';
 import { IvssPresenceReportService } from '../services/ivss-presence-report.service.js';
 
@@ -39,12 +41,21 @@ export class IvssPresenceController {
   })
   async report(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @CurrentUser() currentUser: { userId: string },
     @Res() res: Response,
   ) {
     let report: { buffer: Buffer; filename: string } | null;
     try {
-      report = await this.presenceReportService.buildMeetingReport(meetingId);
-    } catch {
+      report = await this.presenceReportService.buildMeetingReport(
+        meetingId,
+        currentUser.userId,
+      );
+    } catch (e) {
+      // [FIX 2026-08-13] EMPLOYEE bị buildMeetingReport() ném ForbiddenException chủ đích —
+      // phải để Nest exception filter xử lý đúng 403, KHÔNG nuốt chung vào nhánh 500 dưới đây.
+      if (e instanceof ForbiddenException) {
+        throw e;
+      }
       // Lỗi render → 500, KHÔNG lộ path/chi tiết nội bộ.
       res.status(500).end();
       return;
@@ -75,10 +86,12 @@ export class IvssPresenceController {
   async userPresence(
     @Param('meetingId', ParseUUIDPipe) meetingId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() currentUser: { userId: string },
   ) {
     const data = await this.presenceQueryService.getUserPresence(
       meetingId,
       userId,
+      currentUser.userId,
     );
     if (!data) {
       throw new NotFoundException({
@@ -97,8 +110,14 @@ export class IvssPresenceController {
     summary:
       'Admin xem tổng hợp hiện diện của tất cả người tham dự trong 1 cuộc họp',
   })
-  async meetingPresence(@Param('meetingId', ParseUUIDPipe) meetingId: string) {
-    const data = await this.presenceQueryService.getMeetingPresence(meetingId);
+  async meetingPresence(
+    @Param('meetingId', ParseUUIDPipe) meetingId: string,
+    @CurrentUser() currentUser: { userId: string },
+  ) {
+    const data = await this.presenceQueryService.getMeetingPresence(
+      meetingId,
+      currentUser.userId,
+    );
     if (!data) {
       throw new NotFoundException({
         code: 'MEETING_NOT_FOUND',
