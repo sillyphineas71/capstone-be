@@ -11,6 +11,7 @@ import type { Response } from 'express';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard.js';
 import { JwtQueryOrHeaderAuthGuard } from '../../auth/guards/jwt-query-or-header-auth.guard.js';
 import { RequirePermissions } from '../../auth/decorators/require-permissions.decorator.js';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { DeviceEventSnapshotService } from '../services/device-event-snapshot.service.js';
 
 /**
@@ -41,9 +42,13 @@ export class IvssDeviceEventSnapshotController {
   })
   async snapshot(
     @Param('eventId', ParseUUIDPipe) eventId: string,
+    @CurrentUser() currentUser: { userId: string },
     @Res() res: Response,
   ) {
-    const snapshot = await this.deviceEventSnapshotService.getSnapshot(eventId);
+    const snapshot = await this.deviceEventSnapshotService.getSnapshot(
+      eventId,
+      currentUser.userId,
+    );
     res.setHeader('Content-Type', snapshot.mimeType);
     res.setHeader(
       'Content-Disposition',

@@ -9,7 +9,10 @@ const T = (hhmm: string) => `2026-06-23T${hhmm}:00.000Z`;
 const MIN = 60 * 1000;
 const GAP_MS = 120 * 1000; // default 120s
 
+// [FIX 2026-08-13] id thêm vào RawEvt (dùng chung route snapshot) — mỗi event 1 id
+// riêng biệt, suy ra từ hhmm+direction để dễ đối chiếu trong assertion.
 const ev = (hhmm: string, direction: string) => ({
+  id: `evt-${hhmm.replace(':', '')}-${direction}`,
   event_time: T(hhmm),
   direction,
   similarity: null,
@@ -227,6 +230,16 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
     expect(r.timeline.events[0]).toHaveProperty('direction');
   });
 
+  // [FIX 2026-08-13] timeline.events[].id — dùng chung route
+  // GET /ivss/device-events/:eventId/snapshot (Room Access Logs) cho cột ảnh vào/ra.
+  it('timeline.events[].id đúng giá trị iot_device_events.id thật, đủ cho CẢ 2 event', async () => {
+    wire({ events: [ev('09:00', 'enter'), ev('09:10', 'leave')] });
+    const r = await dur();
+    expect(r.timeline.events).toHaveLength(2);
+    expect(r.timeline.events[0].id).toBe('evt-0900-enter');
+    expect(r.timeline.events[1].id).toBe('evt-0910-leave');
+  });
+
   it('absentGaps = complement trong bound', async () => {
     wire({ events: [ev('09:10', 'enter'), ev('09:20', 'leave')] });
     const r = await dur();
@@ -262,6 +275,47 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
     expect(r.participants[0]).toHaveProperty('method'); // C2
     expect(r.participants[0].fullName).toBe('Alice');
     expect(r.meetingUnmatchedIdentityCount).toBe(7); // C4
+  });
+
+  // [FIX 2026-08-13] participants[] thêm email/avatarUrl/employeeCode/departmentName —
+  // cho modal thông tin cá nhân FE. JOIN users đã có sẵn (email/avatarUrl/employeeCode
+  // KHÔNG tốn JOIN mới), departmentName qua LEFT JOIN departments mới thêm.
+  it('getMeetingPresence: participants[] có đủ email/avatarUrl/employeeCode/departmentName đúng giá trị thật', async () => {
+    wire({
+      events: [ev('09:00', 'enter'), ev('09:10', 'leave')],
+      participants: [
+        {
+          user_id: 'u1',
+          full_name: 'Trần Đức Hải',
+          email: 'hai.tran@smartracking.io.vn',
+          avatar_url: 'https://cdn.example.com/avatars/u1.jpg',
+          employee_code: 'NV-0042',
+          department_name: 'Phòng Công nghệ thông tin',
+        },
+      ],
+    });
+    const r = (await service.getMeetingPresence('m1', ADMIN_CALLER))!;
+    expect(r.participants[0]).toMatchObject({
+      userId: 'u1',
+      fullName: 'Trần Đức Hải',
+      email: 'hai.tran@smartracking.io.vn',
+      avatarUrl: 'https://cdn.example.com/avatars/u1.jpg',
+      employeeCode: 'NV-0042',
+      departmentName: 'Phòng Công nghệ thông tin',
+    });
+  });
+
+  it('getMeetingPresence: loadParticipants() query có LEFT JOIN departments (không N+1, vẫn 1 query)', async () => {
+    wire({ events: [], participants: [] });
+    await service.getMeetingPresence('m1', ADMIN_CALLER);
+    const call = dsMock.manager.query.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('meeting_participants'),
+    );
+    expect(call[0]).toContain('LEFT JOIN departments');
+    expect(call[0]).toContain('u.email');
+    expect(call[0]).toContain('u.avatar_url');
+    expect(call[0]).toContain('u.employee_code');
+    expect(call[0]).toContain('d.department_name');
   });
 
   it('getMeetingPresence: meeting không tồn tại → null', async () => {

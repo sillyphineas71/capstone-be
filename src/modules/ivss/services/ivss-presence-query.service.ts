@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 
 interface RawEvt {
+  id: string;
   event_time: Date | string;
   direction: string | null;
   similarity: string | null;
@@ -16,6 +17,10 @@ interface BoundRow {
 interface ParticipantRow {
   user_id: string;
   full_name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  employee_code: string | null;
+  department_name: string | null;
 }
 interface CountRow {
   n: number;
@@ -219,6 +224,7 @@ export class IvssPresenceQueryService {
       segments: PresenceSegment[];
       absentGaps: Array<{ start: string; end: string }>;
       events: Array<{
+        id: string;
         at: string;
         direction: string | null;
         similarity: string | null;
@@ -253,6 +259,7 @@ export class IvssPresenceQueryService {
         segments: session.segments,
         absentGaps: this.absentGaps(session.segments, bound),
         events: events.map((e) => ({
+          id: e.id, // dùng chung GET /ivss/device-events/:eventId/snapshot (Room Access Logs)
           at: new Date(e.event_time).toISOString(),
           direction: e.direction,
           similarity: e.similarity, // SEC-01: metadata-only, KHÔNG ảnh
@@ -270,6 +277,10 @@ export class IvssPresenceQueryService {
     participants: Array<{
       userId: string;
       fullName: string | null;
+      email: string | null;
+      avatarUrl: string | null;
+      employeeCode: string | null;
+      departmentName: string | null;
       durationMs: number;
       method: PresenceMethod;
       segmentCount: number;
@@ -294,6 +305,10 @@ export class IvssPresenceQueryService {
     const rows: Array<{
       userId: string;
       fullName: string | null;
+      email: string | null;
+      avatarUrl: string | null;
+      employeeCode: string | null;
+      departmentName: string | null;
       durationMs: number;
       method: PresenceMethod;
       segmentCount: number;
@@ -310,6 +325,10 @@ export class IvssPresenceQueryService {
       rows.push({
         userId: p.user_id,
         fullName: p.full_name,
+        email: p.email,
+        avatarUrl: p.avatar_url,
+        employeeCode: p.employee_code,
+        departmentName: p.department_name,
         durationMs: session.durationMs,
         method: session.method, // C2
         segmentCount: session.segments.length,
@@ -530,7 +549,8 @@ export class IvssPresenceQueryService {
     userId: string,
   ): Promise<RawEvt[]> {
     return this.dataSource.manager.query(
-      `SELECT e.event_time,
+      `SELECT e.id,
+              e.event_time,
               e.payload_json->>'direction'  AS direction,
               e.payload_json->>'similarity' AS similarity,
               e.payload_json->>'szUid'      AS sz_uid
@@ -574,9 +594,11 @@ export class IvssPresenceQueryService {
 
   private async loadParticipants(meetingId: string): Promise<ParticipantRow[]> {
     return this.dataSource.manager.query(
-      `SELECT mp.user_id, u.full_name
+      `SELECT mp.user_id, u.full_name, u.email, u.avatar_url, u.employee_code,
+              d.department_name
          FROM meeting_participants mp
          JOIN users u ON u.id = mp.user_id
+         LEFT JOIN departments d ON d.id = u.department_id
         WHERE mp.meeting_id = $1`,
       [meetingId],
     );
