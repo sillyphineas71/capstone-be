@@ -45,6 +45,7 @@ import { BIOMETRIC_EXEMPT_ROLE_CODES } from '../../../common/utils/biometric-exe
 import {
   PARTNER_DEPARTMENT_ID,
   isPartnerAccount,
+  resolvePartnerDepartmentId,
 } from '../../../common/utils/partner-account.util.js';
 
 // UC-10 — READ-only cross-module entities (chỉ dùng để kiểm ràng buộc tham chiếu
@@ -161,7 +162,9 @@ export class UsersService {
     const email = dto.email.trim().toLowerCase();
     const employeeCode = dto.employeeCode ? dto.employeeCode.trim() : null;
     const isPartner = dto.accountType === 'partner';
-    const departmentId = isPartner ? PARTNER_DEPARTMENT_ID : dto.departmentId;
+    const departmentId = isPartner
+      ? await resolvePartnerDepartmentId(this.dataSource)
+      : dto.departmentId;
 
     if (!departmentId) {
       throw new BadRequestException({
@@ -604,7 +607,7 @@ export class UsersService {
         id: data.partner.faceProfileId,
         userId: createdUser.id,
         profileCode: generateFaceProfileCode(),
-        status: FaceProfileStatus.ACTIVE,
+        status: FaceProfileStatus.PENDING_REVIEW,
         primaryImageFileId: data.partner.mediaFileId,
         consentAt: null,
         enrolledBy: data.partner.uploadedBy,

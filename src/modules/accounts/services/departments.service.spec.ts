@@ -869,6 +869,18 @@ describe('DepartmentsService', () => {
 
   describe('PTA partner department protection', () => {
     it('blocks update of the fixed partner department for any actor', async () => {
+      em.findOne.mockResolvedValue({
+        id: '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f',
+        departmentCode: 'PARTNER',
+        departmentName: 'Đối tác',
+        parentDepartmentId: null,
+        managerUserId: null,
+        description: null,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
       await expect(
         service.updateDepartment(
           '7c3e2f1a-4b6a-4f2e-9d8c-1a2b3c4d5e6f',
@@ -880,7 +892,6 @@ describe('DepartmentsService', () => {
         response: { error: { code: 'PARTNER_DEPARTMENT_PROTECTED' } },
         status: 403,
       });
-      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('allows update of other departments', async () => {
@@ -1028,6 +1039,12 @@ describe('DepartmentsService', () => {
     });
 
     it('[BR-02] PARTNER_DEPARTMENT_ID → ném ForbiddenException PARTNER_DEPARTMENT_PROTECTED', async () => {
+      em.findOne.mockResolvedValue({
+        ...activeDept,
+        id: PARTNER_DEPARTMENT_ID,
+        departmentCode: 'PARTNER',
+      });
+
       await expect(
         service.deactivateDepartment(PARTNER_DEPARTMENT_ID, 'actor', {}),
       ).rejects.toThrow(ForbiddenException);

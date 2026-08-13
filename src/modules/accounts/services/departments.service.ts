@@ -10,7 +10,7 @@ import {
 import { DataSource, IsNull, ILike, In, Repository } from 'typeorm';
 
 import { DepartmentEntity } from '../entities/department.entity.js';
-import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
+import { PARTNER_DEPARTMENT_CODE } from '../../../common/utils/partner-account.util.js';
 import {
   UserEntity,
   AccountStatus,
@@ -258,13 +258,6 @@ export class DepartmentsService {
     updaterId: string,
     clientContext: ClientContext,
   ): Promise<DepartmentResponseDto> {
-    if (id === PARTNER_DEPARTMENT_ID) {
-      throw new ForbiddenException({
-        success: false,
-        message: 'Không thể sửa department cố định đánh dấu tài khoản đối tác.',
-        error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
-      });
-    }
     if (
       dto.departmentName === undefined &&
       dto.parentDepartmentId === undefined &&
@@ -287,6 +280,14 @@ export class DepartmentsService {
           success: false,
           message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
           error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+        });
+      }
+
+      if (dept.departmentCode === PARTNER_DEPARTMENT_CODE) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Không thể sửa department cố định đánh dấu tài khoản đối tác.',
+          error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
         });
       }
 
@@ -562,16 +563,6 @@ export class DepartmentsService {
     actorId: string,
     clientContext: ClientContext,
   ): Promise<DepartmentResponseDto> {
-    // BR-02
-    if (id === PARTNER_DEPARTMENT_ID) {
-      throw new ForbiddenException({
-        success: false,
-        message:
-          'Không thể vô hiệu hoá department cố định đánh dấu tài khoản đối tác.',
-        error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
-      });
-    }
-
     let updatedDept: DepartmentEntity;
 
     await this.dataSource.transaction(async (em) => {
@@ -584,6 +575,16 @@ export class DepartmentsService {
           success: false,
           message: 'Phòng ban không tồn tại hoặc đã bị xóa.',
           error: { code: 'DEPARTMENT_NOT_FOUND', details: { id } },
+        });
+      }
+
+      // BR-02
+      if (dept.departmentCode === PARTNER_DEPARTMENT_CODE) {
+        throw new ForbiddenException({
+          success: false,
+          message:
+            'Không thể vô hiệu hoá department cố định đánh dấu tài khoản đối tác.',
+          error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
         });
       }
 

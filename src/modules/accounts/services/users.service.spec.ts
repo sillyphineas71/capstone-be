@@ -16,7 +16,10 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { RedisService } from '../../redis/redis.service.js';
 import { AuthConfigService } from '../../auth/services/auth-config.service.js';
 import * as bcrypt from 'bcryptjs';
-import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
+import {
+  PARTNER_DEPARTMENT_ID,
+  clearPartnerDepartmentCache,
+} from '../../../common/utils/partner-account.util.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -59,6 +62,7 @@ describe('UsersService', () => {
   let em: jest.Mocked<EntityManager>;
 
   beforeEach(async () => {
+    clearPartnerDepartmentCache();
     // Mock EntityManager
     em = {
       findOne: jest.fn(),
@@ -81,6 +85,7 @@ describe('UsersService', () => {
         ),
       manager: em,
       getRepository: jest.fn(),
+      query: jest.fn().mockResolvedValue([{ id: PARTNER_DEPARTMENT_ID }]),
     } as unknown as jest.Mocked<DataSource>;
 
     // Mock PasswordGeneratorService
@@ -3007,7 +3012,7 @@ describe('UsersService', () => {
       return repoMock;
     };
 
-    it('persistAccount creates partner user with email password and active face profile', async () => {
+    it('persistAccount creates partner user with email password and pending-review face profile', async () => {
       const repoMock = setupPersistMocks();
       const expiresAt = new Date(Date.now() + 86400000);
       const result = await service.persistAccount(
@@ -3045,7 +3050,7 @@ describe('UsersService', () => {
       expect(created.accountExpiresAt).toEqual(expiresAt);
       expect(created.departmentId).toBe(PARTNER_DEPARTMENT_ID);
       expect(repoMock.insert).toHaveBeenCalledWith(
-        expect.objectContaining({ status: FaceProfileStatus.ACTIVE }),
+        expect.objectContaining({ status: FaceProfileStatus.PENDING_REVIEW }),
       );
       expect(repoMock.insert).toHaveBeenCalledWith(
         expect.objectContaining({ relatedEntityType: 'face_profile' }),

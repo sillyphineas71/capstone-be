@@ -1,5 +1,5 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { randomUUID } from 'crypto';
@@ -23,7 +23,7 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { detectImageMimeType } from '../utils/image-magic-bytes.util.js';
-import { PARTNER_DEPARTMENT_ID } from '../../../common/utils/partner-account.util.js';
+import { PARTNER_DEPARTMENT_CODE, resolvePartnerDepartmentId } from '../../../common/utils/partner-account.util.js';
 import { VehicleRegistrationService } from '../../anpr/services/vehicle-registration.service.js';
 import { normalizePlate } from '../../anpr/utils/normalize-plate.js';
 
@@ -307,6 +307,18 @@ export class PartnerAccountImportService {
       });
     }
 
+    const deptRepo = this.dataSource.getRepository(DepartmentEntity);
+    const partnerDept = await deptRepo.findOne({
+      where: { departmentCode: PARTNER_DEPARTMENT_CODE, isActive: true, deletedAt: IsNull() },
+    });
+    if (!partnerDept) {
+      throw new BadRequestException({
+        success: false,
+        message: 'Phòng ban Đối tác (department_code=PARTNER) không tồn tại hoặc đã bị khóa.',
+        error: { code: 'PARTNER_DEPARTMENT_NOT_FOUND' },
+      });
+    }
+
     for (const state of rowStates) {
       if (state.isError) {
         commitResults.push({
@@ -368,7 +380,7 @@ export class PartnerAccountImportService {
           fullName: state.parsed.fullName,
           email: state.parsed.email,
           employeeCode: null,
-          departmentId: PARTNER_DEPARTMENT_ID,
+          departmentId: partnerDept.id,
           roleIds: [employeeRole.id],
           phoneNumber: state.parsed.phoneNumber || null,
           positionTitle: null,
@@ -770,19 +782,6 @@ export class PartnerAccountImportService {
     }
 
     // 2. Batch DB Query
-    // Verify PARTNER_DEPARTMENT_ID exists and is active
-    const deptRepo = this.dataSource.getRepository(DepartmentEntity);
-    const partnerDept = await deptRepo.findOne({
-      where: { id: PARTNER_DEPARTMENT_ID, isActive: true },
-    });
-    if (!partnerDept) {
-      throw new BadRequestException({
-        success: false,
-        message:
-          'Phòng ban Đối tác (PARTNER_DEPARTMENT_ID) không tồn tại hoặc đã bị khóa.',
-        error: { code: 'PARTNER_DEPARTMENT_NOT_FOUND' },
-      });
-    }
 
     // Check existing users by email
     if (emailsToQuery.size > 0) {

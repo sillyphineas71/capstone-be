@@ -86,9 +86,17 @@ describe('PartnerAccountImportService', () => {
     const deptRepo = {
       findOne: jest.fn(({ where }: any) => {
         return Promise.resolve(
-          dbDepartments.find(
-            (d) => d.id === where.id && d.isActive === where.isActive,
-          ),
+          dbDepartments.find((d) => {
+            if (where.id !== undefined && d.id !== where.id) return false;
+            if (
+              where.departmentCode !== undefined &&
+              d.departmentCode !== where.departmentCode
+            )
+              return false;
+            if (where.isActive !== undefined && d.isActive !== where.isActive)
+              return false;
+            return true;
+          }),
         );
       }),
     };
