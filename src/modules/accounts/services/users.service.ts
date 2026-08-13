@@ -259,23 +259,46 @@ export class UsersService {
         }
 
         roles = [];
-        for (const roleId of dto.roleIds) {
-          const role = await em.findOne(RoleEntity, { where: { id: roleId } });
-          if (!role) {
+        if (isPartner) {
+          // Đối tác luôn ép role EMPLOYEE — không đọc dto.roleIds (form tạo
+          // đối tác không có ô chọn role, xem PTA-001). Resolve theo
+          // role_code vì role không có UUID cố định như PARTNER_DEPARTMENT_ID.
+          const employeeRole = await em.findOne(RoleEntity, {
+            where: { roleCode: 'EMPLOYEE', isActive: true },
+          });
+          if (!employeeRole) {
             throw new NotFoundException({
               success: false,
-              message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
-              error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
+              message: 'Vai trò EMPLOYEE không khả dụng trong hệ thống.',
+              error: {
+                code: 'ROLE_NOT_FOUND',
+                details: { roleCode: 'EMPLOYEE' },
+              },
             });
           }
-          if (!role.isActive) {
-            throw new UnprocessableEntityException({
-              success: false,
-              message: 'Một hoặc nhiều vai trò được chọn đang không hoạt động.',
-              error: { code: 'ROLE_INACTIVE', details: { roleId } },
+          roles.push(employeeRole);
+        } else {
+          for (const roleId of dto.roleIds!) {
+            const role = await em.findOne(RoleEntity, {
+              where: { id: roleId },
             });
+            if (!role) {
+              throw new NotFoundException({
+                success: false,
+                message: 'Một hoặc nhiều vai trò được chỉ định không tồn tại.',
+                error: { code: 'ROLE_NOT_FOUND', details: { roleId } },
+              });
+            }
+            if (!role.isActive) {
+              throw new UnprocessableEntityException({
+                success: false,
+                message:
+                  'Một hoặc nhiều vai trò được chọn đang không hoạt động.',
+                error: { code: 'ROLE_INACTIVE', details: { roleId } },
+              });
+            }
+            roles.push(role);
           }
-          roles.push(role);
         }
 
         if (employeeCode) {
@@ -330,7 +353,7 @@ export class UsersService {
             fullName: dto.fullName.trim(),
             email,
             departmentId,
-            roleIds: dto.roleIds,
+            roleIds: roles.map((role) => role.id),
             employeeCode,
             phoneNumber: dto.phoneNumber ? dto.phoneNumber.trim() : null,
             positionTitle: dto.positionTitle ? dto.positionTitle.trim() : null,
