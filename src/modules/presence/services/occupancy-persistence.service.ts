@@ -70,6 +70,15 @@ interface UsageRow {
  * event nào tới ĐÚNG lúc đủ ngưỡng để kích hoạt tính lại. `reconcilePendingConfirmations()`
  * bù cho khoảng trống này: được cron gọi định kỳ (KHÔNG phụ thuộc có event mới hay không),
  * tính lại tới thời điểm `now()` cho mọi booking chưa xác nhận có mặt.
+ *
+ * [FIX 2026-08-13, R13] Root cause thật (91.5% booking thật, 118/129 xác nhận trên
+ * production) — KHÔNG phải lỗi thuật toán streak: KHÔNG CÓ code nào trong vòng đời booking
+ * (tạo/duyệt/đổi phòng) từng tạo dòng `room_booking_usages`; mọi UPDATE trước đây (kể cả
+ * persist()/reconcilePendingConfirmations() bản R12/R12b) giả định dòng ĐÃ TỒN TẠI, âm thầm
+ * khớp 0 dòng nếu không. Sửa: `upsertPresenceConfirmation()` — `INSERT ... ON CONFLICT
+ * (booking_id) DO UPDATE`, tự tạo dòng nếu chưa có. `reconcilePendingConfirmations()` còn có
+ * lỗi RIÊNG: INNER JOIN room_booking_usages ở bước chọn ứng viên loại bỏ hẳn các booking
+ * thiếu dòng ngay từ đầu — đã đổi LEFT JOIN. Xem chi tiết ở comment của từng hàm.
  */
 @Injectable()
 export class OccupancyPersistenceService {
@@ -205,17 +214,19 @@ export class OccupancyPersistenceService {
           );
 
           if (confirmedSegment) {
-            await queryRunner.query(
-              `UPDATE room_booking_usages
-               SET first_presence_at = $2,
-                   last_presence_at = $3,
-                   occupancy_source = 'camera',
-                   usage_status = CASE
-                     WHEN usage_status = 'not_started' THEN 'in_use'
-                     ELSE usage_status END
-               WHERE booking_id = $1`,
-              [booking.booking_id, confirmedSegment.start, eventTime],
-            );
+            // [FIX 2026-08-13, R13] UPDATE đơn thuần giả định dòng room_booking_usages ĐÃ
+            // TỒN TẠI — không đúng cho MỌI booking thật (xem upsertPresenceConfirmation()).
+            // Dữ liệu booking/meeting/room/window đã có sẵn từ SELECT room_bookings phía
+            // trên (dòng ~141-148) — KHÔNG query thêm.
+            await this.upsertPresenceConfirmation(queryRunner, {
+              bookingId: booking.booking_id,
+              meetingId: booking.meeting_id,
+              roomId,
+              reservedStartTime: new Date(booking.reserved_start_time),
+              reservedEndTime: new Date(booking.reserved_end_time),
+              firstPresenceAt: confirmedSegment.start,
+              lastPresenceAt: eventTime,
+            });
             // Chỉ cho phép flip rooms.current_status='occupied' nếu đoạn vừa xác nhận
             // CÒN ĐANG MỞ (chưa rời đi) — xác nhận qua chính event=0 (đã rời) thì KHÔNG
             // được đánh dấu occupied (mâu thuẫn: vừa xác nhận có mặt đủ giờ, vừa nói đang
@@ -390,6 +401,76 @@ export class OccupancyPersistenceService {
   }
 
   /**
+   * [FIX 2026-08-13, R13] Ghi kết quả xác nhận có mặt — UPSERT, KHÔNG phải UPDATE đơn
+   * thuần. Root cause đêm nay (91.5% booking thật, 118/129 xác nhận trên production):
+   * KHÔNG CÓ code nào trong toàn bộ vòng đời booking (tạo cuộc họp, duyệt request, đổi
+   * phòng/giờ — grep hết `meetings.service.ts`/`meeting-request-review.service.ts`/
+   * `room-bookings.service.ts`) từng tạo dòng `room_booking_usages` — dòng này chỉ tồn
+   * tại nếu 1 migration seed demo (`20260720000009-SeedDemoAttendancePresenceUsage.ts`,
+   * CHỈ áp dụng data demo `MTG-2026-*`) đã tạo sẵn. Mọi UPDATE trước đây (kể cả bản R12/
+   * R12b) đều giả định dòng ĐÃ TỒN TẠI — nếu không, UPDATE khớp 0 dòng, KHÔNG lỗi, âm
+   * thầm không làm gì — first_presence_at vĩnh viễn NULL dù thuật toán streak tính đúng.
+   *
+   * `ON CONFLICT (booking_id)` dùng được ngay — xác nhận có UNIQUE constraint thật trên
+   * DB (`ux_room_booking_usages_booking`), dù KHÔNG khai báo trong entity TypeORM (bảng
+   * này không có migration tạo bảng trong repo — ngoài luồng migration thông thường).
+   *
+   * `first_presence_at` dùng COALESCE ở nhánh conflict — giữ ĐÚNG mốc lần đầu xác nhận
+   * thật, không bị dịch lại mỗi lần có event mới/mỗi lần reconcile chạy. `WHERE
+   * room_booking_usages.first_presence_at IS NULL` trên chính nhánh DO UPDATE — nếu dòng
+   * đã được xác nhận từ trước (bởi chính lần gọi khác, kể cả race 2 request đồng thời),
+   * KHÔNG update gì cả (Postgres tự xử lý — DO UPDATE với WHERE false = như DO NOTHING
+   * cho dòng đó), RETURNING trả 0 dòng → `confirmed=false`, không đếm trùng, không lỗi
+   * constraint (2 INSERT đồng thời cùng booking_id: 1 thắng INSERT thật, 1 rơi vào nhánh
+   * conflict — Postgres tự khoá row, không có race lộ ra ngoài).
+   *
+   * Dùng chung cho CẢ persist() (trong transaction đang mở của queryRunner) LẪN
+   * reconcilePendingConfirmations() (transaction riêng mở cho từng booking) — 1 nguồn
+   * ghi DUY NHẤT, tránh 2 câu SQL lệch nhau.
+   */
+  private async upsertPresenceConfirmation(
+    executor: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    params: {
+      bookingId: string;
+      meetingId: string;
+      roomId: string;
+      reservedStartTime: Date;
+      reservedEndTime: Date;
+      firstPresenceAt: Date;
+      lastPresenceAt: Date;
+    },
+  ): Promise<{ confirmed: boolean }> {
+    const result = await executor.query(
+      `INSERT INTO room_booking_usages
+         (booking_id, meeting_id, room_id, reserved_start_time, reserved_end_time,
+          first_presence_at, last_presence_at, occupancy_source, usage_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'camera', 'in_use')
+       ON CONFLICT (booking_id) DO UPDATE SET
+         first_presence_at = COALESCE(
+           room_booking_usages.first_presence_at, EXCLUDED.first_presence_at
+         ),
+         last_presence_at = EXCLUDED.last_presence_at,
+         occupancy_source = EXCLUDED.occupancy_source,
+         usage_status = CASE
+           WHEN room_booking_usages.usage_status = 'not_started' THEN 'in_use'
+           ELSE room_booking_usages.usage_status
+         END
+       WHERE room_booking_usages.first_presence_at IS NULL
+       RETURNING id`,
+      [
+        params.bookingId,
+        params.meetingId,
+        params.roomId,
+        params.reservedStartTime,
+        params.reservedEndTime,
+        params.firstPresenceAt,
+        params.lastPresenceAt,
+      ],
+    );
+    return { confirmed: this.rowsOf<{ id: string }>(result).length > 0 };
+  }
+
+  /**
    * [FIX 2026-08-13, R12 phần 2] Xác nhận có mặt theo ĐỒNG HỒ THỰC — KHÔNG chờ event mới.
    *
    * Bù lỗ hổng: `persist()` chỉ tính lại streak khi có event MỚI tới. Cảm biến báo-khi-
@@ -411,17 +492,22 @@ export class OccupancyPersistenceService {
       await this.noShowConfigService.getValues();
     const now = new Date();
 
+    // [FIX 2026-08-13, R13] JOIN thường (INNER) loại bỏ HẲN mọi booking CHƯA CÓ dòng
+    // room_booking_usages (đúng root cause đêm nay) — đổi LEFT JOIN + điều kiện
+    // "u.first_presence_at IS NULL OR u.id IS NULL" để KHÔNG bỏ sót các booking chưa từng
+    // được tạo dòng usages. Thêm b.meeting_id vào SELECT — cần cho upsertPresenceConfirmation().
     const candidates: Array<{
       booking_id: string;
+      meeting_id: string;
       room_id: string;
       reserved_start_time: Date | string;
       reserved_end_time: Date | string;
     }> = await this.dataSource.manager.query(
-      `SELECT b.id AS booking_id, b.room_id, b.reserved_start_time, b.reserved_end_time
+      `SELECT b.id AS booking_id, b.meeting_id, b.room_id, b.reserved_start_time, b.reserved_end_time
          FROM room_bookings b
-         JOIN room_booking_usages u ON u.booking_id = b.id
+         LEFT JOIN room_booking_usages u ON u.booking_id = b.id
         WHERE b.status IN ('approved','active')
-          AND u.first_presence_at IS NULL
+          AND (u.first_presence_at IS NULL OR u.id IS NULL)
           AND b.reserved_start_time <= $1
           AND b.reserved_end_time > $1
           AND EXISTS (
@@ -455,23 +541,24 @@ export class OccupancyPersistenceService {
         await queryRunner.startTransaction();
         let statusChanged = false;
         try {
-          const upd = (await queryRunner.query(
-            `UPDATE room_booking_usages
-                SET first_presence_at = $2,
-                    last_presence_at = $2,
-                    occupancy_source = 'camera',
-                    usage_status = CASE
-                      WHEN usage_status = 'not_started' THEN 'in_use'
-                      ELSE usage_status END
-              WHERE booking_id = $1 AND first_presence_at IS NULL
-              RETURNING id`,
-            [c.booking_id, confirmedSegment.start],
-          )) as unknown;
-          const updRows = this.rowsOf<{ id: string }>(upd);
+          // [FIX 2026-08-13, R13] UPSERT thay UPDATE đơn thuần — xem
+          // upsertPresenceConfirmation(). last_presence_at dùng confirmedSegment.start vì
+          // reconcile không có "eventTime" thật (không có event mới nào kích hoạt) — mốc
+          // hợp lý nhất hiện có là chính lúc xác nhận (đầu đoạn), KHÔNG suy đoán thêm.
+          const { confirmed: justConfirmed } =
+            await this.upsertPresenceConfirmation(queryRunner, {
+              bookingId: c.booking_id,
+              meetingId: c.meeting_id,
+              roomId: c.room_id,
+              reservedStartTime: new Date(c.reserved_start_time),
+              reservedEndTime: new Date(c.reserved_end_time),
+              firstPresenceAt: confirmedSegment.start,
+              lastPresenceAt: confirmedSegment.start,
+            });
           // Chỉ flip rooms.current_status='occupied' nếu đoạn vừa xác nhận CÒN ĐANG MỞ
           // (người vẫn còn trong phòng) — đoạn đã đóng (họ rời đi rồi mới được reconcile
           // xác nhận) thì KHÔNG được đánh dấu occupied.
-          if (updRows.length > 0 && confirmedSegment.isActive) {
+          if (justConfirmed && confirmedSegment.isActive) {
             const roomUpd = (await queryRunner.query(
               `UPDATE rooms SET current_status = 'occupied'
                WHERE id = $1 AND current_status IS DISTINCT FROM 'occupied'
@@ -480,7 +567,7 @@ export class OccupancyPersistenceService {
             )) as unknown;
             statusChanged = this.rowsOf<{ id: string }>(roomUpd).length > 0;
           }
-          if (updRows.length > 0) confirmed++;
+          if (justConfirmed) confirmed++;
           await queryRunner.commitTransaction();
         } catch (e) {
           await queryRunner.rollbackTransaction();

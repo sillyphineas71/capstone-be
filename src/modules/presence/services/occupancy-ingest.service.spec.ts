@@ -147,7 +147,9 @@ describe('OccupancyIngestService (OCC-001 / UC-75)', () => {
     expect(rawInserted()).toBe(true);
     expect(qrCalled('INSERT INTO room_events')).toBe(true);
     expect(qrCalled('INSERT INTO presence_snapshots')).toBe(true);
-    expect(qrCalled('UPDATE room_booking_usages')).toBe(true);
+    // [FIX 2026-08-13, R13] Nhánh "chưa confirm" giờ dùng INSERT...ON CONFLICT (upsert),
+    // không còn UPDATE đơn thuần — xem occupancy-persistence.service.spec.ts cho test chi tiết.
+    expect(qrCalled('INSERT INTO room_booking_usages')).toBe(true);
     expect(qrCalled('UPDATE rooms')).toBe(true);
     expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
     expect(wsMock.emitToRoom).toHaveBeenCalledWith(
