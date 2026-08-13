@@ -22,7 +22,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class AddUniqueIndexDeviceUserMappings20260721000007 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_device_user_mappings_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_device_user_mappings_active"
         ON "device_user_mappings" ("device_id", "user_id") WHERE "deleted_at" IS NULL
     `);
   }

@@ -11,7 +11,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateZonesTable20260721000001 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "zones" (
+      CREATE TABLE IF NOT EXISTS "zones" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "zone_code" varchar(80) NOT NULL,
         "zone_name" varchar(150) NOT NULL,
@@ -30,17 +30,17 @@ export class CreateZonesTable20260721000001 implements MigrationInterface {
 
     // Cột trap: chặn trùng zone_code ĐANG SỐNG; cho tái sử dụng code sau soft-delete.
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_zones_code_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_zones_code_active"
         ON "zones" ("zone_code") WHERE "deleted_at" IS NULL
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_zones_type"
+      CREATE INDEX IF NOT EXISTS "IDX_zones_type"
         ON "zones" ("zone_type") WHERE "deleted_at" IS NULL
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_zones_building_floor"
+      CREATE INDEX IF NOT EXISTS "IDX_zones_building_floor"
         ON "zones" ("building", "floor") WHERE "deleted_at" IS NULL
     `);
   }

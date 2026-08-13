@@ -5,6 +5,7 @@ import {
   HealthStatus,
 } from '../entities/equipment.entity.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 /**
  * UC-64 — EquipmentService.listEquipments: filter AND + Brackets search + SORT_MAP + phân trang.
@@ -41,7 +42,14 @@ describe('EquipmentService.listEquipments (UC-64)', () => {
     } as unknown as import('typeorm').Repository<never>;
     const dataSource = {} as unknown as import('typeorm').DataSource;
 
-    const service = new EquipmentService(equipmentRepo, dataSource);
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-noop' }),
+    } as unknown as NotificationsService;
+    const service = new EquipmentService(
+      equipmentRepo,
+      dataSource,
+      notificationsService,
+    );
     return { service, qb };
   }
 

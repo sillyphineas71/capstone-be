@@ -13,7 +13,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateMeetingMinutesSharesTable20260717100000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "meeting_minutes_shares" (
+      CREATE TABLE IF NOT EXISTS "meeting_minutes_shares" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "minutes_id" uuid NOT NULL,
         "user_id" uuid NOT NULL,
@@ -32,12 +32,12 @@ export class CreateMeetingMinutesSharesTable20260717100000 implements MigrationI
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "idx_meeting_minutes_shares_minutes_id"
+      CREATE INDEX IF NOT EXISTS "idx_meeting_minutes_shares_minutes_id"
         ON "meeting_minutes_shares" ("minutes_id")
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "idx_meeting_minutes_shares_user_id"
+      CREATE INDEX IF NOT EXISTS "idx_meeting_minutes_shares_user_id"
         ON "meeting_minutes_shares" ("user_id")
     `);
   }

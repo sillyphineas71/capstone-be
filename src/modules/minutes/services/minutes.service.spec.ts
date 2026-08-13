@@ -536,7 +536,7 @@ describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC
     getOne: jest.Mock;
   };
   let participantRepo: { count: jest.Mock };
-  let shareRepo: { count: jest.Mock };
+  let shareRepo: { count: jest.Mock; createQueryBuilder: jest.Mock };
   let authzRepo: { getEffectiveRolesAndPermissions: jest.Mock };
   let mediaFileRepo: { findAndCount: jest.Mock };
   const authUser = { userId: 'user-1' };
@@ -565,7 +565,17 @@ describe('listAttachments — quyền đọc (loadMinutesForReadCheck, UC-139/UC
     participantRepo = { count: jest.fn().mockResolvedValue(0) };
     // feat-share-meeting-minutes: canAccessMinutes now also queries shares.
     // Default 0 shares → không thay đổi kỳ vọng cũ (non-host/participant → denied).
-    shareRepo = { count: jest.fn().mockResolvedValue(0) };
+    // createQueryBuilder: findMinutesDetail cũng batch-load shares[] để embed vào response.
+    shareRepo = {
+      count: jest.fn().mockResolvedValue(0),
+      createQueryBuilder: jest.fn().mockReturnValue({
+        leftJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+      }),
+    };
     authzRepo = {
       getEffectiveRolesAndPermissions: jest
         .fn()
@@ -1437,6 +1447,17 @@ describe('findMinutesDetail service logic', () => {
         if (entity === TranscriptEntity) return { findOne: jest.fn() };
         if (entity === MediaFileEntity)
           return { find: jest.fn().mockResolvedValue([]), findOne: jest.fn() };
+        if (entity === MeetingMinutesShareEntity)
+          return {
+            count: jest.fn().mockResolvedValue(0),
+            createQueryBuilder: jest.fn().mockReturnValue({
+              leftJoin: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              select: jest.fn().mockReturnThis(),
+              orderBy: jest.fn().mockReturnThis(),
+              getRawMany: jest.fn().mockResolvedValue([]),
+            }),
+          };
         return { findOne: jest.fn(), count: jest.fn().mockResolvedValue(0) };
       }),
     };

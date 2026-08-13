@@ -30,7 +30,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateSecurityAlertsTable20260722000007 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "security_alerts" (
+      CREATE TABLE IF NOT EXISTS "security_alerts" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "alert_type" varchar(40) NOT NULL,
         "severity" varchar(20) NOT NULL DEFAULT 'medium',
@@ -65,30 +65,30 @@ export class CreateSecurityAlertsTable20260722000007 implements MigrationInterfa
 
     // Màn hình Trung tâm cảnh báo (UC-123): danh sách mới nhất theo trạng thái.
     await queryRunner.query(`
-      CREATE INDEX "IDX_security_alerts_status_time"
+      CREATE INDEX IF NOT EXISTS "IDX_security_alerts_status_time"
         ON "security_alerts" ("status", "triggered_at" DESC)
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_security_alerts_zone_time"
+      CREATE INDEX IF NOT EXISTS "IDX_security_alerts_zone_time"
         ON "security_alerts" ("zone_id", "triggered_at" DESC)
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_security_alerts_type_time"
+      CREATE INDEX IF NOT EXISTS "IDX_security_alerts_type_time"
         ON "security_alerts" ("alert_type", "triggered_at" DESC)
     `);
 
     // Dedup "đang tiếp diễn" — rule riêng zone (UNIQUE thật, chặn race ở tầng DB).
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_security_alerts_open_type_zone"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_security_alerts_open_type_zone"
         ON "security_alerts" ("alert_type", "zone_id")
         WHERE "status" <> 'resolved' AND "zone_id" IS NOT NULL
     `);
 
     // Dedup "đang tiếp diễn" — rule toàn khuôn viên (zone_id NULL, tách riêng vì NULL != NULL).
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_security_alerts_open_type_global"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_security_alerts_open_type_global"
         ON "security_alerts" ("alert_type")
         WHERE "status" <> 'resolved' AND "zone_id" IS NULL
     `);

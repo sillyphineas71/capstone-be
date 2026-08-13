@@ -1,4 +1,4 @@
-﻿import {
+import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
@@ -46,6 +46,10 @@ export enum NotificationType {
   VEHICLE_UNAUTHORIZED_ALERT = 'vehicle_unauthorized_alert',
   // UC-125 (PWL-001): nguoi khop person_control_list (watchlist/blocklist) khi nhan dien.
   PERSON_WATCHLIST_MATCH = 'person_watchlist_match',
+  // EQUIP-FAULT-LIFECYCLE-001
+  EQUIPMENT_FAULT_REPORTED = 'equipment_fault_reported',
+  EQUIPMENT_FAULT_CONFIRMED = 'equipment_fault_confirmed',
+  EQUIPMENT_FAULT_RESOLVED = 'equipment_fault_resolved',
 }
 
 export enum NotificationChannel {

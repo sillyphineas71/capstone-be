@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { NotFoundException } from '@nestjs/common';
 import * as path from 'path';
@@ -87,6 +88,16 @@ describe('MediaFilesService (REC-006)', () => {
           },
         },
         { provide: StorageService, useValue: storageServiceMock },
+        {
+          provide: DataSource,
+          useValue: {
+            manager: {
+              query: jest
+                .fn()
+                .mockResolvedValue([{ role_code: 'SYSTEM_ADMIN' }]),
+            },
+          },
+        },
       ],
     }).compile();
     service = module.get(MediaFilesService);
@@ -347,21 +358,25 @@ describe('MediaFilesService (REC-006)', () => {
   // ─── VISIBILITY ───
   it('visibility hide → is_active=false', async () => {
     repoMock.findOne.mockResolvedValue(baseRow());
-    const r = await service.setVisibility('f1', { action: 'hide' });
+    const r = await service.setVisibility(
+      'f1',
+      { action: 'hide' },
+      'user-admin',
+    );
     expect(repoMock.update).toHaveBeenCalledWith('f1', { isActive: false });
     expect(r.isActive).toBe(false);
   });
 
   it('visibility soft_delete → softDelete', async () => {
     repoMock.findOne.mockResolvedValue(baseRow());
-    await service.setVisibility('f1', { action: 'soft_delete' });
+    await service.setVisibility('f1', { action: 'soft_delete' }, 'user-admin');
     expect(repoMock.softDelete).toHaveBeenCalledWith('f1');
   });
 
   it('visibility 404 (đã xóa → idempotent)', async () => {
     repoMock.findOne.mockResolvedValue(null);
     await expect(
-      service.setVisibility('f1', { action: 'soft_delete' }),
+      service.setVisibility('f1', { action: 'soft_delete' }, 'user-admin'),
     ).rejects.toThrow(NotFoundException);
   });
 });

@@ -61,6 +61,10 @@ import {
   BookingType,
 } from '../../rooms/entities/room-booking.entity.js';
 import {
+  EquipmentEntity,
+  HealthStatus,
+} from '../../equipment/entities/equipment.entity.js';
+import {
   NotificationEntity,
   NotificationType,
   NotificationChannel,
@@ -771,6 +775,38 @@ export class MeetingsService {
         error: {
           code: 'ROOM_CONFLICT',
           details: { conflictingBookingId: roomConflict.conflictingBookingId },
+        },
+      });
+    }
+
+    const faultyEquipments = await this.dataSource
+      .getRepository(EquipmentEntity)
+      .find({
+        where: {
+          currentRoomId: dto.roomId,
+          healthStatus: In([HealthStatus.FAULTY, HealthStatus.OFFLINE]),
+        },
+        select: {
+          id: true,
+          equipmentName: true,
+          equipmentType: true,
+          healthStatus: true,
+          lastIssueNote: true,
+        },
+      });
+    const equipmentWarningConfirmed = dto.equipmentWarningConfirmed === true;
+    if (faultyEquipments.length > 0 && !equipmentWarningConfirmed) {
+      throw new UnprocessableEntityException({
+        success: false,
+        message:
+          'Phòng này đang có thiết bị hỏng, bạn có muốn tiếp tục đặt phòng không?',
+        error: {
+          code: 'ROOM_HAS_FAULTY_EQUIPMENT',
+          details: {
+            blocking: false,
+            requiresConfirmation: true,
+            faultyEquipments,
+          },
         },
       });
     }

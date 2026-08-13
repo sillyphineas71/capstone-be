@@ -53,6 +53,8 @@ import {
   MinutesAttachmentSummaryDto,
   MinutesPermissionsDto,
   MinutesAttendeeDto,
+  MinutesShareDto,
+  MinutesUserRefDto,
   RoomDetailDto,
   TranscriptSummaryDto,
   RecordingSummaryDto,
@@ -91,6 +93,10 @@ import {
   MinutesShareListItemDto,
   MinutesShareListResponseDto,
 } from '../dto/minutes-share-list-response.dto.js';
+import {
+  DepartmentSummaryDto,
+  UserProfileSummaryDto,
+} from '../dto/user-profile-summary.dto.js';
 
 const DEFAULT_MINUTES_CONTENT =
   '1. Thành phần tham dự\n2. Nội dung cuộc họp\n3. Kết luận\n4. Đầu việc (Action items)';
@@ -292,6 +298,117 @@ export class MinutesService {
     });
   }
 
+  /**
+   * Batch-load room + issuedBy/preparedBy profile (jobTitle/department/avatarUrl)
+   * và map các entity MeetingMinutes (đã leftJoin meeting.host + meeting.organizer)
+   * thành MinutesListItemDto. Dùng chung cho findMinutesList + searchMinutesByPerson
+   * (BE_REQUIREMENT_meeting_minutes_list_fields.md — tránh N+1 bằng batch-select).
+   */
+  private async buildMinutesListItems(
+    items: MeetingMinutesEntity[],
+  ): Promise<MinutesListItemDto[]> {
+    const roomIds = Array.from(
+      new Set(
+        items
+          .map((m) => m.meeting?.roomId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const rooms = roomIds.length
+      ? await this.dataSource
+          .getRepository(RoomEntity)
+          .find({ where: { id: In(roomIds) } })
+      : [];
+    const roomById = new Map(rooms.map((r) => [r.id, r]));
+
+    const profileUserIds = Array.from(
+      new Set(
+        items
+          .flatMap((m) => [m.preparedBy, m.issuedBy])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const profileUsers = profileUserIds.length
+      ? await this.dataSource.getRepository(UserEntity).find({
+          where: { id: In(profileUserIds) },
+          relations: { department: true },
+        })
+      : [];
+    const profileUserById = new Map(profileUsers.map((u) => [u.id, u]));
+
+    const toProfileDto = (
+      userId: string | null,
+    ): UserProfileSummaryDto | null => {
+      if (!userId) return null;
+      const u = profileUserById.get(userId);
+      if (!u) return null;
+      return new UserProfileSummaryDto({
+        id: u.id,
+        fullName: u.fullName,
+        email: u.email,
+        jobTitle: u.positionTitle,
+        department: u.department
+          ? new DepartmentSummaryDto(u.department.id, u.department.departmentName)
+          : null,
+        avatarUrl: u.avatarUrl,
+      });
+    };
+
+    return items.map((minutes) => {
+      const meeting = minutes.meeting;
+      const roomEntity = meeting?.roomId
+        ? roomById.get(meeting.roomId)
+        : undefined;
+      const room = roomEntity
+        ? new RoomSummaryDto(roomEntity.id, roomEntity.roomName)
+        : null;
+      const hostEntity = meeting?.host ?? null;
+      const host = hostEntity
+        ? new UserSummaryDto(
+            hostEntity.id,
+            hostEntity.fullName,
+            hostEntity.email,
+            hostEntity.avatarUrl ?? null,
+          )
+        : null;
+      const organizerEntity = meeting?.organizer ?? null;
+      const organizer = organizerEntity
+        ? new UserSummaryDto(
+            organizerEntity.id,
+            organizerEntity.fullName,
+            organizerEntity.email,
+            organizerEntity.avatarUrl ?? null,
+          )
+        : null;
+
+      return new MinutesListItemDto({
+        id: minutes.id,
+        title: minutes.title,
+        status: minutes.status,
+        versionNo: minutes.versionNo,
+        createdAt: minutes.createdAt,
+        updatedAt: minutes.updatedAt,
+        issuedAt: minutes.issuedAt,
+        meeting: new MinutesMeetingSummaryDto({
+          id: meeting.id,
+          title: meeting.title,
+          status: meeting.status,
+          startTime: meeting.actualStartTime ?? meeting.startTime,
+          endTime: meeting.actualEndTime ?? meeting.endTime,
+          actualStartTime: meeting.actualStartTime,
+          actualEndTime: meeting.actualEndTime,
+          meetingMode: meeting.meetingMode,
+          room,
+          organizer,
+        }),
+        host,
+        issuedBy: toProfileDto(minutes.issuedBy),
+        preparedBy: toProfileDto(minutes.preparedBy),
+        isAiGenerated: minutes.aiSummaryJson != null,
+      });
+    });
+  }
+
   async findMinutesList(
     queryDto: MinutesQueryDto,
     authUser: MinutesAuthUser,
@@ -309,24 +426,37 @@ export class MinutesService {
         .createQueryBuilder('minutes')
         .leftJoin('minutes.meeting', 'meeting')
         .leftJoin('meeting.host', 'host')
+        .leftJoin('meeting.organizer', 'organizer')
         .select([
           'minutes.id',
           'minutes.title',
           'minutes.status',
           'minutes.versionNo',
           'minutes.createdAt',
+          'minutes.updatedAt',
+          'minutes.issuedAt',
           'minutes.preparedBy',
+          'minutes.issuedBy',
           'minutes.aiSummaryJson',
           'meeting.id',
           'meeting.title',
+          'meeting.status',
+          'meeting.startTime',
+          'meeting.endTime',
           'meeting.actualStartTime',
           'meeting.actualEndTime',
           'meeting.meetingMode',
           'meeting.hostId',
           'meeting.roomId',
+          'meeting.organizerId',
           'host.id',
           'host.fullName',
           'host.email',
+          'host.avatarUrl',
+          'organizer.id',
+          'organizer.fullName',
+          'organizer.email',
+          'organizer.avatarUrl',
         ])
         .where('minutes.deletedAt IS NULL');
 
@@ -388,12 +518,20 @@ export class MinutesService {
         });
       }
 
-      // Date range filter (meeting.actualStartTime)
-      if (queryDto.from && queryDto.to) {
-        qb.andWhere('meeting.actualStartTime BETWEEN :from AND :to', {
-          from: new Date(queryDto.from),
-          to: new Date(queryDto.to),
-        });
+      // Date range filter — lọc theo actualStartTime, fallback về startTime dự
+      // kiến khi meeting chưa diễn ra (khớp field `meeting.startTime` FE hiển thị).
+      // Áp dụng from/to độc lập, không bắt buộc phải có cả hai.
+      if (queryDto.from) {
+        qb.andWhere(
+          'COALESCE(meeting.actualStartTime, meeting.startTime) >= :from',
+          { from: new Date(queryDto.from) },
+        );
+      }
+      if (queryDto.to) {
+        qb.andWhere(
+          'COALESCE(meeting.actualStartTime, meeting.startTime) <= :to',
+          { to: new Date(queryDto.to) },
+        );
       }
 
       // q search: minutes.title OR meeting.title OR host.fullName
@@ -416,58 +554,7 @@ export class MinutesService {
 
       const [items, total] = await qb.getManyAndCount();
 
-      // MeetingEntity khÃ´ng cÃ³ relation `room` (chá»‰ cÃ³ cá»™t roomId) â€” batch load
-      // riÃªng Ä‘á»ƒ trÃ¡nh N+1 vÃ  trÃ¡nh lá»—i hydrate cá»§a raw entity join (xem
-      // research.md má»¥c "Rá»§i ro & quyáº¿t Ä‘á»‹nh thiáº¿t káº¿").
-      const roomIds = Array.from(
-        new Set(
-          items
-            .map((m) => m.meeting?.roomId)
-            .filter((id): id is string => Boolean(id)),
-        ),
-      );
-      const rooms = roomIds.length
-        ? await this.dataSource
-            .getRepository(RoomEntity)
-            .find({ where: { id: In(roomIds) } })
-        : [];
-      const roomById = new Map(rooms.map((r) => [r.id, r]));
-
-      const listItems = items.map((minutes) => {
-        const meeting = minutes.meeting;
-        const roomEntity = meeting?.roomId
-          ? roomById.get(meeting.roomId)
-          : undefined;
-        const room = roomEntity
-          ? new RoomSummaryDto(roomEntity.id, roomEntity.roomName)
-          : null;
-        const hostEntity = meeting?.host ?? null;
-        const host = hostEntity
-          ? new UserSummaryDto(
-              hostEntity.id,
-              hostEntity.fullName,
-              hostEntity.email,
-            )
-          : null;
-
-        return new MinutesListItemDto(
-          minutes.id,
-          minutes.title,
-          minutes.status,
-          minutes.versionNo,
-          minutes.createdAt,
-          new MinutesMeetingSummaryDto(
-            meeting.id,
-            meeting.title,
-            meeting.actualStartTime,
-            meeting.actualEndTime,
-            meeting.meetingMode,
-            room,
-          ),
-          host,
-          minutes.aiSummaryJson != null,
-        );
-      });
+      const listItems = await this.buildMinutesListItems(items);
 
       return { items: listItems, total, page, limit };
     } catch (error) {
@@ -1028,6 +1115,7 @@ export class MinutesService {
     const attendeeUserIds = (attendeeSnapshots as any).map((a) => a.userId);
     const extraUserIds = [
       meeting.hostId,
+      meeting.organizerId,
       minutes.preparedBy,
       minutes.issuedBy,
       minutes.approvedBy,
@@ -1036,18 +1124,27 @@ export class MinutesService {
       new Set([...attendeeUserIds, ...extraUserIds]),
     );
 
-    let usersById = new Map<
-      string,
-      { id: string; fullName: string; email: string }
-    >();
+    let usersById = new Map<string, MinutesUserRefDto>();
     if (allUserIds.length > 0) {
       const userEntities = await this.dataSource
         .getRepository(UserEntity)
-        .find({ where: { id: In(allUserIds) } });
+        .find({ where: { id: In(allUserIds) }, relations: { department: true } });
       usersById = new Map(
         userEntities.map((u) => [
           u.id,
-          { id: u.id, fullName: u.fullName ?? '', email: u.email ?? '' },
+          {
+            id: u.id,
+            fullName: u.fullName ?? '',
+            email: u.email ?? '',
+            jobTitle: u.positionTitle,
+            department: u.department
+              ? new DepartmentSummaryDto(
+                  u.department.id,
+                  u.department.departmentName,
+                )
+              : null,
+            avatarUrl: u.avatarUrl,
+          },
         ]),
       );
     }
@@ -1104,9 +1201,33 @@ export class MinutesService {
           fileName: f.fileName,
           fileType: f.fileType,
           mimeType: f.mimeType,
+          fileUrl: f.fileUrl,
           fileSizeBytes: f.fileSizeBytes,
           uploadedBy: f.uploadedBy,
           uploadedAt: f.uploadedAt,
+        }),
+    );
+
+    const shareRows = await this.dataSource
+      .getRepository(MeetingMinutesShareEntity)
+      .createQueryBuilder('share')
+      .leftJoin('share.user', 'sharedUser')
+      .where('share.minutesId = :id', { id })
+      .select([
+        'share.userId',
+        'share.grantedAt',
+        'sharedUser.fullName',
+        'sharedUser.avatarUrl',
+      ])
+      .orderBy('share.grantedAt', 'DESC')
+      .getRawMany();
+    const shares = shareRows.map(
+      (row) =>
+        new MinutesShareDto({
+          userId: row.share_user_id,
+          fullName: row.sharedUser_full_name ?? '',
+          avatarUrl: row.sharedUser_avatar_url ?? null,
+          sharedAt: row.share_granted_at,
         }),
     );
 
@@ -1116,6 +1237,9 @@ export class MinutesService {
           userId: a.userId,
           fullName: usersById.get(a.userId)?.fullName ?? '',
           email: usersById.get(a.userId)?.email ?? '',
+          jobTitle: usersById.get(a.userId)?.jobTitle ?? null,
+          department: usersById.get(a.userId)?.department ?? null,
+          avatarUrl: usersById.get(a.userId)?.avatarUrl ?? null,
           participantRole: a.participantRole,
           attendanceStatus: a.attendanceStatus,
           joinedAt: a.joinedAt,
@@ -1125,6 +1249,9 @@ export class MinutesService {
 
     const hostUser = meeting.hostId
       ? (usersById.get(meeting.hostId) ?? null)
+      : null;
+    const organizerUser = meeting.organizerId
+      ? (usersById.get(meeting.organizerId) ?? null)
       : null;
     const preparedByUser = minutes.preparedBy
       ? (usersById.get(minutes.preparedBy) ?? null)
@@ -1171,24 +1298,14 @@ export class MinutesService {
       versionNo: minutes.versionNo,
       generalInfo: new MinutesGeneralInfoDto({
         meetingTitle: meeting.title,
+        meetingStatus: meeting.status,
         actualStartTime: meeting.actualStartTime,
         actualEndTime: meeting.actualEndTime,
         meetingMode: meeting.meetingMode,
         room,
-        host: hostUser
-          ? {
-              id: hostUser.id,
-              fullName: hostUser.fullName,
-              email: hostUser.email,
-            }
-          : null,
-        noteTaker: noteTakerUser
-          ? {
-              id: noteTakerUser.id,
-              fullName: noteTakerUser.fullName,
-              email: noteTakerUser.email,
-            }
-          : null,
+        organizer: organizerUser ?? null,
+        host: hostUser ?? null,
+        noteTaker: noteTakerUser ?? null,
         attendees,
       }),
       mainContent: new MinutesMainContentDto({
@@ -1203,28 +1320,11 @@ export class MinutesService {
         recording,
       }),
       attachments,
-      preparedBy: preparedByUser
-        ? {
-            id: preparedByUser.id,
-            fullName: preparedByUser.fullName,
-            email: preparedByUser.email,
-          }
-        : null,
-      issuedBy: issuedByUser
-        ? {
-            id: issuedByUser.id,
-            fullName: issuedByUser.fullName,
-            email: issuedByUser.email,
-          }
-        : null,
+      shares,
+      preparedBy: preparedByUser ?? null,
+      issuedBy: issuedByUser ?? null,
       issuedAt: minutes.issuedAt,
-      approvedBy: approvedByUser
-        ? {
-            id: approvedByUser.id,
-            fullName: approvedByUser.fullName,
-            email: approvedByUser.email,
-          }
-        : null,
+      approvedBy: approvedByUser ?? null,
       approvedAt: minutes.approvedAt,
       createdAt: minutes.createdAt,
       updatedAt: minutes.updatedAt,
@@ -2169,18 +2269,30 @@ export class MinutesService {
         'minutes.status',
         'minutes.versionNo',
         'minutes.createdAt',
+        'minutes.updatedAt',
+        'minutes.issuedAt',
         'minutes.preparedBy',
+        'minutes.issuedBy',
         'minutes.aiSummaryJson',
         'meeting.id',
         'meeting.title',
+        'meeting.status',
+        'meeting.startTime',
+        'meeting.endTime',
         'meeting.actualStartTime',
         'meeting.actualEndTime',
         'meeting.meetingMode',
         'meeting.hostId',
         'meeting.roomId',
+        'meeting.organizerId',
         'host.id',
         'host.fullName',
         'host.email',
+        'host.avatarUrl',
+        'organizer.id',
+        'organizer.fullName',
+        'organizer.email',
+        'organizer.avatarUrl',
       ])
       .where('minutes.deletedAt IS NULL')
       .andWhere(
@@ -2217,48 +2329,7 @@ export class MinutesService {
     qb.orderBy('meeting.actualStartTime', 'DESC').skip(skip).take(limit);
     const [items, total] = await qb.getManyAndCount();
 
-    const roomIds = Array.from(
-      new Set(items.map((m) => m.meeting?.roomId).filter(Boolean)),
-    ) as string[];
-    const rooms = roomIds.length
-      ? await this.dataSource
-          .getRepository(RoomEntity)
-          .find({ where: { id: In(roomIds) } })
-      : [];
-    const roomById = new Map(rooms.map((r) => [r.id, r]));
-
-    const listItems = items.map((minutes: MeetingMinutesEntity) => {
-      const meeting = minutes.meeting;
-      const roomEntity = meeting?.roomId
-        ? roomById.get(meeting.roomId)
-        : undefined;
-      const hostEntity = meeting?.host ?? null;
-      return new MinutesListItemDto(
-        minutes.id,
-        minutes.title,
-        minutes.status,
-        minutes.versionNo,
-        minutes.createdAt,
-        new MinutesMeetingSummaryDto(
-          meeting.id,
-          meeting.title,
-          meeting.actualStartTime,
-          meeting.actualEndTime,
-          meeting.meetingMode,
-          roomEntity
-            ? new RoomSummaryDto(roomEntity.id, roomEntity.roomName)
-            : null,
-        ),
-        hostEntity
-          ? new UserSummaryDto(
-              hostEntity.id,
-              hostEntity.fullName,
-              hostEntity.email,
-            )
-          : null,
-        minutes.aiSummaryJson != null,
-      );
-    });
+    const listItems = await this.buildMinutesListItems(items);
 
     return {
       items: listItems,

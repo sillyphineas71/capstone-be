@@ -11,7 +11,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateVehicleRegistrationsTable20260624000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "vehicle_registrations" (
+      CREATE TABLE IF NOT EXISTS "vehicle_registrations" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "user_id" uuid NOT NULL,
         "plate_number" varchar(16) NOT NULL,
@@ -30,12 +30,12 @@ export class CreateVehicleRegistrationsTable20260624000000 implements MigrationI
 
     // Cột trap: chặn trùng biển ĐANG SỐNG; cho đăng ký lại sau soft-delete.
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_vehicle_plate_number_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_vehicle_plate_number_active"
         ON "vehicle_registrations" ("plate_number") WHERE "deleted_at" IS NULL
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_vehicle_registrations_user_id"
+      CREATE INDEX IF NOT EXISTS "IDX_vehicle_registrations_user_id"
         ON "vehicle_registrations" ("user_id")
     `);
   }

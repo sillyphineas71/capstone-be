@@ -26,10 +26,10 @@ export class AddZoneCoordinates20260722000010 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `ALTER TABLE "zones" ADD COLUMN "latitude" numeric(9,6)`,
+      `ALTER TABLE "zones" ADD COLUMN IF NOT EXISTS "latitude" numeric(9,6)`,
     );
     await queryRunner.query(
-      `ALTER TABLE "zones" ADD COLUMN "longitude" numeric(9,6)`,
+      `ALTER TABLE "zones" ADD COLUMN IF NOT EXISTS "longitude" numeric(9,6)`,
     );
   }
 

@@ -7,6 +7,7 @@ import {
   HealthStatus,
 } from '../entities/equipment.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 /**
  * UC-63 — EquipmentService.deleteEquipment: soft-delete + gỡ tham chiếu phòng + audit ATOMIC.
@@ -82,7 +83,14 @@ describe('EquipmentService.deleteEquipment (UC-63)', () => {
       transaction,
     } as unknown as import('typeorm').DataSource;
 
-    const service = new EquipmentService(repo, dataSource);
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-noop' }),
+    } as unknown as NotificationsService;
+    const service = new EquipmentService(
+      repo,
+      dataSource,
+      notificationsService,
+    );
     return { service, findOne, fakeTem, transaction };
   }
 

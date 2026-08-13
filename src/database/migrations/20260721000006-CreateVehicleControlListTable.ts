@@ -13,7 +13,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateVehicleControlListTable20260721000006 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "vehicle_control_list" (
+      CREATE TABLE IF NOT EXISTS "vehicle_control_list" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "plate_number" varchar(16) NOT NULL,
         "plate_raw" varchar(20),
@@ -31,13 +31,13 @@ export class CreateVehicleControlListTable20260721000006 implements MigrationInt
     `);
 
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_vehicle_control_plate_type_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_vehicle_control_plate_type_active"
         ON "vehicle_control_list" ("plate_number", "list_type") WHERE "deleted_at" IS NULL
     `);
 
     // Hot path: tra biển đang bật kiểm soát tại thời điểm xe qua cổng.
     await queryRunner.query(`
-      CREATE INDEX "IDX_vehicle_control_lookup"
+      CREATE INDEX IF NOT EXISTS "IDX_vehicle_control_lookup"
         ON "vehicle_control_list" ("plate_number")
         WHERE "deleted_at" IS NULL AND "active" = true
     `);

@@ -15,12 +15,16 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class AddSnapshotFileIdToIotDeviceEvents20260805000001 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      ALTER TABLE "iot_device_events" ADD COLUMN "snapshot_file_id" uuid
+      ALTER TABLE "iot_device_events" ADD COLUMN IF NOT EXISTS "snapshot_file_id" uuid
     `);
 
     await queryRunner.query(`
-      ALTER TABLE "iot_device_events" ADD CONSTRAINT "FK_iot_device_events_snapshot_file"
-        FOREIGN KEY ("snapshot_file_id") REFERENCES "media_files" ("id") ON DELETE SET NULL
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_iot_device_events_snapshot_file') THEN
+          ALTER TABLE "iot_device_events" ADD CONSTRAINT "FK_iot_device_events_snapshot_file"
+            FOREIGN KEY ("snapshot_file_id") REFERENCES "media_files" ("id") ON DELETE SET NULL;
+        END IF;
+      END $$;
     `);
   }
 

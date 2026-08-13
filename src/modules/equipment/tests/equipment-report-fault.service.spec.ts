@@ -12,6 +12,7 @@ import {
 } from '../entities/equipment.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 /**
  * UC-62 — EquipmentService.reportFault: validate → transaction → audit fail-separate.
@@ -95,7 +96,14 @@ describe('EquipmentService.reportFault (UC-62)', () => {
       transaction,
     } as unknown as import('typeorm').DataSource;
 
-    const service = new EquipmentService(repo, dataSource);
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-noop' }),
+    } as unknown as NotificationsService;
+    const service = new EquipmentService(
+      repo,
+      dataSource,
+      notificationsService,
+    );
     return { service, findOne, fakeEm, transaction, equipment };
   }
 

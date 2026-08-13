@@ -17,6 +17,8 @@ interface RoomSearchRow {
   has_microphone: boolean;
   has_display: boolean;
   allow_recording: boolean;
+  faulty_count: string | number;
+  warning_count: string | number;
 }
 
 export interface RoomSearchResult {
@@ -78,8 +80,17 @@ export class RoomSearchService {
     const rows: RoomSearchRow[] = await this.dataSource.manager.query(
       `SELECT r.id, r.room_code, r.room_name, r.site_name, r.area_name,
               r.location_description, r.capacity, r.room_type, r.current_status,
-              r.has_camera, r.has_microphone, r.has_display, r.allow_recording
+              r.has_camera, r.has_microphone, r.has_display, r.allow_recording,
+              COALESCE(eq.faulty_count, 0) AS faulty_count,
+              COALESCE(eq.warning_count, 0) AS warning_count
        FROM rooms r
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*) FILTER (WHERE health_status IN ('faulty','offline')) AS faulty_count,
+           COUNT(*) FILTER (WHERE health_status = 'warning') AS warning_count
+         FROM equipments e
+         WHERE e.current_room_id = r.id AND e.deleted_at IS NULL
+       ) eq ON true
        ${whereClause}
        ORDER BY r.room_code ASC
        LIMIT $5 OFFSET $6`,
@@ -111,6 +122,8 @@ export class RoomSearchService {
   }
 
   private toItem(row: RoomSearchRow): RoomSearchItemDto {
+    const faultyCount = Number(row.faulty_count);
+    const warningCount = Number(row.warning_count);
     return {
       roomId: row.id,
       roomCode: row.room_code,
@@ -125,6 +138,9 @@ export class RoomSearchService {
       hasMicrophone: row.has_microphone,
       hasDisplay: row.has_display,
       allowRecording: row.allow_recording,
+      hasFaultyEquipment: faultyCount > 0,
+      faultyEquipmentCount: faultyCount,
+      hasEquipmentWarning: warningCount > 0,
     };
   }
 }

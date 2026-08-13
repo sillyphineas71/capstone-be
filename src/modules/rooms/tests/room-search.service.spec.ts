@@ -22,6 +22,8 @@ describe('RoomSearchService', () => {
     has_microphone: false,
     has_display: false,
     allow_recording: false,
+    faulty_count: '0',
+    warning_count: '0',
   };
 
   beforeEach(async () => {

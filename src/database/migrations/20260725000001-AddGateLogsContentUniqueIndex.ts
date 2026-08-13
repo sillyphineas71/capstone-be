@@ -27,7 +27,7 @@ export class AddGateLogsContentUniqueIndex20260725000001 implements MigrationInt
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_gate_logs_content"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_gate_logs_content"
         ON "gate_access_logs" ("zone_id", "plate_number", "direction", "access_time")
         WHERE "plate_number" IS NOT NULL
     `);

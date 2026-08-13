@@ -11,7 +11,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateZonePresenceEventsTable20260721000005 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "zone_presence_events" (
+      CREATE TABLE IF NOT EXISTS "zone_presence_events" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "zone_id" uuid NOT NULL,
         "device_id" uuid,
@@ -34,19 +34,19 @@ export class CreateZonePresenceEventsTable20260721000005 implements MigrationInt
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_zpe_zone_time"
+      CREATE INDEX IF NOT EXISTS "IDX_zpe_zone_time"
         ON "zone_presence_events" ("zone_id", "event_time" DESC)
     `);
 
     // Phần lớn event là room-level (user_id NULL) — partial index giữ index nhỏ.
     await queryRunner.query(`
-      CREATE INDEX "IDX_zpe_user_time"
+      CREATE INDEX IF NOT EXISTS "IDX_zpe_user_time"
         ON "zone_presence_events" ("user_id", "event_time" DESC) WHERE "user_id" IS NOT NULL
     `);
 
     // Truy vấn occupancy count mới nhất theo zone.
     await queryRunner.query(`
-      CREATE INDEX "IDX_zpe_count"
+      CREATE INDEX IF NOT EXISTS "IDX_zpe_count"
         ON "zone_presence_events" ("zone_id", "event_time" DESC) WHERE "event_type" = 'count'
     `);
   }

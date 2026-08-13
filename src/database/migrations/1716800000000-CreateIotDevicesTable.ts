@@ -3,7 +3,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateIotDevicesTable1716800000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "iot_devices" (
+      CREATE TABLE IF NOT EXISTS "iot_devices" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "device_code" varchar NOT NULL,
         "device_name" varchar(255) NOT NULL,
@@ -22,11 +22,15 @@ export class CreateIotDevicesTable1716800000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
-      ALTER TABLE "iot_devices" ADD CONSTRAINT "UQ_device_code" UNIQUE ("device_code")
+      DO $$ BEGIN
+        IF to_regclass('public."UQ_device_code"') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'UQ_device_code') THEN
+          ALTER TABLE "iot_devices" ADD CONSTRAINT "UQ_device_code" UNIQUE ("device_code");
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "IDX_mac_address_partial" ON "iot_devices" ("mac_address") WHERE "mac_address" IS NOT NULL
+      CREATE UNIQUE INDEX IF NOT EXISTS "IDX_mac_address_partial" ON "iot_devices" ("mac_address") WHERE "mac_address" IS NOT NULL
     `);
   }
 

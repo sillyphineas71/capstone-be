@@ -12,7 +12,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateGateAccessLogsTable20260721000004 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "gate_access_logs" (
+      CREATE TABLE IF NOT EXISTS "gate_access_logs" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "zone_id" uuid NOT NULL,
         "device_id" uuid,
@@ -43,23 +43,23 @@ export class CreateGateAccessLogsTable20260721000004 implements MigrationInterfa
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_gate_logs_user_time"
+      CREATE INDEX IF NOT EXISTS "IDX_gate_logs_user_time"
         ON "gate_access_logs" ("user_id", "access_time" DESC)
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_gate_logs_zone_time"
+      CREATE INDEX IF NOT EXISTS "IDX_gate_logs_zone_time"
         ON "gate_access_logs" ("zone_id", "access_time" DESC)
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_gate_logs_plate"
+      CREATE INDEX IF NOT EXISTS "IDX_gate_logs_plate"
         ON "gate_access_logs" ("plate_number")
     `);
 
     // Hot path: tìm bản ghi chưa được ghép cặp in/out của một user.
     await queryRunner.query(`
-      CREATE INDEX "IDX_gate_logs_unpaired"
+      CREATE INDEX IF NOT EXISTS "IDX_gate_logs_unpaired"
         ON "gate_access_logs" ("user_id", "direction") WHERE "paired_log_id" IS NULL
     `);
   }

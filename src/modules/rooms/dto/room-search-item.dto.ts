@@ -19,4 +19,7 @@ export class RoomSearchItemDto {
   hasMicrophone: boolean;
   hasDisplay: boolean;
   allowRecording: boolean;
+  hasFaultyEquipment: boolean;
+  faultyEquipmentCount: number;
+  hasEquipmentWarning: boolean;
 }

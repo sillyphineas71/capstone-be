@@ -17,14 +17,23 @@ import {
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import {
+  NotificationType,
+  NotificationChannel,
+  NotificationPriority,
+} from '../../notifications/entities/notification.entity.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import {
   ReportEquipmentFaultDto,
   ReportedAssetAction,
 } from '../dto/report-equipment-fault.dto.js';
+import { ConfirmEquipmentFaultDto } from '../dto/confirm-equipment-fault.dto.js';
+import { ResolveEquipmentFaultDto } from '../dto/resolve-equipment-fault.dto.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
+import { EquipmentFaultConfirmationResponseDto } from '../dto/equipment-fault-confirmation-response.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
 
@@ -41,6 +50,7 @@ export class EquipmentService {
     @InjectRepository(EquipmentEntity)
     private readonly equipmentRepo: Repository<EquipmentEntity>,
     private readonly dataSource: DataSource,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -333,7 +343,340 @@ export class EquipmentService {
       );
     }
 
+    // Phase D — notify SYSTEM_ADMIN (fail-separate, KHÔNG rollback nghiệp vụ)
+    try {
+      const adminIds = await this.resolveSystemAdminIds();
+      const room = saved.currentRoomId
+        ? await this.dataSource.getRepository(RoomEntity).findOne({
+            where: { id: saved.currentRoomId },
+            select: { id: true, roomName: true },
+          })
+        : null;
+      await this.notificationsService.createNotification({
+        notificationType: NotificationType.EQUIPMENT_FAULT_REPORTED,
+        channel: NotificationChannel.IN_APP,
+        subject: 'Thiết bị hỏng cần xử lý',
+        content: `Thiết bị ${saved.equipmentName} (${saved.equipmentCode})${
+          room ? ' tại phòng ' + room.roomName : ''
+        } vừa được báo lỗi: ${dto.issueNote}`,
+        relatedEntityType: 'equipment',
+        relatedEntityId: saved.id,
+        recipientScope: 'user_list',
+        recipientUserIds: adminIds,
+        priority: NotificationPriority.HIGH,
+        createdBy: userId,
+        payloadJson: {
+          healthStatus: saved.healthStatus,
+          assetStatus: saved.assetStatus,
+          roomId: saved.currentRoomId,
+          issueNote: dto.issueNote,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify SYSTEM_ADMIN for equipment fault ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
     // Map response — tái dùng EquipmentResponseDto (UC-61)
+    return new EquipmentResponseDto({
+      id: saved.id,
+      equipmentCode: saved.equipmentCode,
+      equipmentName: saved.equipmentName,
+      equipmentType: saved.equipmentType,
+      serialNumber: saved.serialNumber,
+      brand: saved.brand,
+      model: saved.model,
+      purchaseDate: saved.purchaseDate,
+      assetStatus: saved.assetStatus,
+      healthStatus: saved.healthStatus,
+      currentRoomId: saved.currentRoomId,
+      createdAt: saved.createdAt,
+    });
+  }
+
+  /**
+   * Helper Lấy danh sách ID của người dùng có role SYSTEM_ADMIN.
+   * Direct SQL query mirror stranger-alert.service.ts / vehicle-control-alert.service.ts.
+   */
+  private async resolveSystemAdminIds(): Promise<string[]> {
+    if (!this.dataSource.manager?.query) {
+      return [];
+    }
+    const rows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT DISTINCT u.id FROM users u
+         JOIN user_roles ur ON ur.user_id = u.id AND ur.is_active = true
+         JOIN roles r ON r.id = ur.role_id
+        WHERE r.role_code = 'SYSTEM_ADMIN' AND u.deleted_at IS NULL`,
+    );
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Helper tìm userId của người báo lỗi gần nhất từ audit_logs cho 1 thiết bị.
+   * Query (entityType='equipment', actionType='update', severity='WARNING') ORDER BY createdAt DESC LIMIT 1.
+   */
+  private async findLastFaultReportAuditLog(
+    equipmentId: string,
+  ): Promise<{ userId: string } | null> {
+    const rows = await this.dataSource.getRepository(AuditLogEntity).find({
+      where: {
+        entityType: 'equipment',
+        entityId: equipmentId,
+        actionType: 'update',
+        severity: AuditLogSeverity.WARNING,
+      },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    const userId = rows[0]?.userId;
+    return userId ? { userId } : null;
+  }
+
+  /**
+   * EQUIP-FAULT-LIFECYCLE-001 — Xác nhận lỗi thiết bị là thật (sysadmin confirm).
+   * Phase A: load equipment (404 neu khong tim thay) → healthy check (409).
+   * Phase B: ghi 1 dong audit_logs (actionType='confirm', severity=INFO) — KHÔNG đụng entity equipments.
+   * Phase C: notify reporter neu tim duoc qua audit_logs (fail-separate).
+   */
+  async confirmFault(
+    equipmentId: string,
+    dto: ConfirmEquipmentFaultDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<EquipmentFaultConfirmationResponseDto> {
+    // Phase A — validate
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault-confirmation`,
+      });
+    }
+
+    if (
+      equipment.healthStatus === HealthStatus.HEALTHY ||
+      equipment.healthStatus === HealthStatus.UNKNOWN
+    ) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Thiet bi dang o trang thai binh thuong, khong co loi active de xac nhan',
+        error: {
+          code: 'EQUIPMENT_NO_ACTIVE_FAULT',
+          details: { healthStatus: equipment.healthStatus },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault-confirmation`,
+      });
+    }
+
+    // Phase B — ghi audit log (KHÔNG update equipments, KHÔNG transaction entity)
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'confirm',
+          entityType: 'equipment',
+          entityId: equipment.id,
+          newValueJson: {
+            confirmationNote: dto.confirmationNote ?? null,
+            healthStatusAtConfirmation: equipment.healthStatus,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit log for equipment fault confirmation ${equipment.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    // Phase C — notify reporter (fail-separate)
+    try {
+      const reporter = await this.findLastFaultReportAuditLog(equipment.id);
+      if (reporter && reporter.userId !== userId) {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.EQUIPMENT_FAULT_CONFIRMED,
+          channel: NotificationChannel.IN_APP,
+          subject: 'Báo cáo lỗi thiết bị đã được xác nhận',
+          content: `Báo cáo lỗi cho thiết bị ${equipment.equipmentName} (${
+            equipment.equipmentCode
+          }) đã được quản trị viên xác nhận.${
+            dto.confirmationNote ? ' Ghi chú: ' + dto.confirmationNote : ''
+          }`,
+          relatedEntityType: 'equipment',
+          relatedEntityId: equipment.id,
+          recipientScope: 'user_list',
+          recipientUserIds: [reporter.userId],
+          priority: NotificationPriority.NORMAL,
+          createdBy: userId,
+          payloadJson: {
+            healthStatus: equipment.healthStatus,
+            confirmationNote: dto.confirmationNote ?? null,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify reporter for equipment fault confirmation ${equipment.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    return new EquipmentFaultConfirmationResponseDto({
+      equipmentId: equipment.id,
+      healthStatus: equipment.healthStatus,
+      confirmedBy: userId,
+      confirmedAt: new Date(),
+    });
+  }
+
+  /**
+   * EQUIP-FAULT-LIFECYCLE-001 — Cập nhật thiết bị sau khi sửa xong (sysadmin recovery).
+   * Phase A: load equipment → healthy/unknown check (409) → snapshot oldValue.
+   * Phase B: transaction cập nhật: healthStatus = dto.healthStatus, assetStatus qua resolveAssetAction (nếu có dto.assetStatus),
+   *          lastMaintenanceAt = now(), giữ nguyên lastIssueReportedAt / lastIssueNote.
+   * Phase C: audit fail-separate (actionType='update', severity=INFO).
+   * Phase D: notify reporter (fail-separate).
+   */
+  async resolveFault(
+    equipmentId: string,
+    dto: ResolveEquipmentFaultDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<EquipmentResponseDto> {
+    // Phase A — validate
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault-resolution`,
+      });
+    }
+
+    if (
+      equipment.healthStatus === HealthStatus.HEALTHY ||
+      equipment.healthStatus === HealthStatus.UNKNOWN
+    ) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Thiet bi dang o trang thai binh thuong, khong co loi active de khac phuc',
+        error: {
+          code: 'EQUIPMENT_NO_ACTIVE_FAULT',
+          details: { healthStatus: equipment.healthStatus },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault-resolution`,
+      });
+    }
+
+    const oldValue = {
+      healthStatus: equipment.healthStatus,
+      assetStatus: equipment.assetStatus,
+      lastMaintenanceAt: equipment.lastMaintenanceAt,
+    };
+
+    // Phase B — transaction cập nhật
+    const saved = await this.dataSource.transaction(async (em) => {
+      equipment.healthStatus = dto.healthStatus;
+      if (dto.assetStatus) {
+        equipment.assetStatus = this.resolveAssetAction(
+          dto.assetStatus,
+          equipment.currentRoomId,
+        );
+      }
+      equipment.lastMaintenanceAt = new Date();
+      // KHÔNG đổi lastIssueReportedAt / lastIssueNote (giữ lịch sử)
+      return em.save(EquipmentEntity, equipment);
+    });
+
+    // Phase C — audit log fail-separate (severity: INFO, khác WARNING của report)
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'equipment',
+          entityId: saved.id,
+          oldValueJson: oldValue,
+          newValueJson: {
+            healthStatus: saved.healthStatus,
+            assetStatus: saved.assetStatus,
+            lastMaintenanceAt: saved.lastMaintenanceAt,
+            resolutionNote: dto.resolutionNote,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit log for equipment fault resolution ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    // Phase D — notify reporter (fail-separate)
+    try {
+      const reporter = await this.findLastFaultReportAuditLog(saved.id);
+      if (reporter && reporter.userId !== userId) {
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.EQUIPMENT_FAULT_RESOLVED,
+          channel: NotificationChannel.IN_APP,
+          subject: 'Báo cáo lỗi thiết bị đã được xử lý xong',
+          content: `Báo cáo lỗi cho thiết bị ${saved.equipmentName} (${
+            saved.equipmentCode
+          }) đã được xử lý xong. Trạng thái hiện tại: ${
+            saved.healthStatus
+          }. Ghi chú xử lý: ${dto.resolutionNote}`,
+          relatedEntityType: 'equipment',
+          relatedEntityId: saved.id,
+          recipientScope: 'user_list',
+          recipientUserIds: [reporter.userId],
+          priority: NotificationPriority.NORMAL,
+          createdBy: userId,
+          payloadJson: {
+            healthStatus: saved.healthStatus,
+            assetStatus: saved.assetStatus,
+            resolutionNote: dto.resolutionNote,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to notify reporter for equipment fault resolution ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
     return new EquipmentResponseDto({
       id: saved.id,
       equipmentCode: saved.equipmentCode,

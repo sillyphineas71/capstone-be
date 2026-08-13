@@ -31,9 +31,12 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator.js';
 import { EquipmentService } from '../services/equipment.service.js';
 import { CreateEquipmentDto } from '../dto/create-equipment.dto.js';
 import { ReportEquipmentFaultDto } from '../dto/report-equipment-fault.dto.js';
+import { ConfirmEquipmentFaultDto } from '../dto/confirm-equipment-fault.dto.js';
+import { ResolveEquipmentFaultDto } from '../dto/resolve-equipment-fault.dto.js';
 import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
+import { EquipmentFaultConfirmationResponseDto } from '../dto/equipment-fault-confirmation-response.dto.js';
 
 @ApiTags('Equipment')
 @Controller('equipments')
@@ -264,6 +267,120 @@ export class EquipmentController {
     return {
       success: true,
       message: 'Phan bo thiet bi vao phong thanh cong',
+      data: result,
+    };
+  }
+
+  @Patch(':equipmentId/fault-confirmation')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.confirm_fault')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Xac nhan loi thiet bi la that' })
+  @ApiBody({ type: ConfirmEquipmentFaultDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Xac nhan loi thiet bi thanh cong',
+  })
+  @ApiResponse({ status: 400, description: 'Du lieu DTO khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({
+    status: 403,
+    description: 'Khong co quyen equipment.confirm_fault',
+  })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  @ApiResponse({
+    status: 409,
+    description: 'Thiet bi dang o trang thai binh thuong, khong co loi active',
+  })
+  async confirmFault(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Body() dto: ConfirmEquipmentFaultDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentFaultConfirmationResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.equipmentService.confirmFault(
+      equipmentId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Xac nhan loi thiet bi thanh cong',
+      data: result,
+    };
+  }
+
+  @Patch(':equipmentId/fault-resolution')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.resolve_fault')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Cap nhat thiet bi da sua xong' })
+  @ApiBody({ type: ResolveEquipmentFaultDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Cap nhat thiet bi da sua xong thanh cong',
+  })
+  @ApiResponse({ status: 400, description: 'Du lieu DTO khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({
+    status: 403,
+    description: 'Khong co quyen equipment.resolve_fault',
+  })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  @ApiResponse({
+    status: 409,
+    description: 'Thiet bi dang o trang thai binh thuong, khong co loi active',
+  })
+  async resolveFault(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Body() dto: ResolveEquipmentFaultDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.equipmentService.resolveFault(
+      equipmentId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Cap nhat thiet bi da sua xong thanh cong',
       data: result,
     };
   }

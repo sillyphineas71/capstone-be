@@ -9,7 +9,7 @@ export class SeedPartnerDepartment20260811000001 implements MigrationInterface {
     await queryRunner.query(
       `INSERT INTO departments (id, department_code, department_name, is_active)
        SELECT $1::uuid, 'PARTNER', '\u0110\u1ed1i t\u00e1c', true
-       WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = $1);`,
+       WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = $1 OR department_code = 'PARTNER');`,
       [this.partnerDepartmentId],
     );
   }

@@ -76,6 +76,10 @@ export class CreateMeetingDto {
   @IsOptional()
   capacityOverrideConfirmed?: boolean;
 
+  @IsBoolean({ message: 'equipment_warning_confirmed phải là boolean' })
+  @IsOptional()
+  equipmentWarningConfirmed?: boolean;
+
   @IsArray({ message: 'participant_user_ids phải là mảng' })
   @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
     each: true,

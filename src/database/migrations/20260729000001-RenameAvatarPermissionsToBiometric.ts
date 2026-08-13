@@ -40,6 +40,17 @@ export class RenameAvatarPermissionsToBiometric20260729000001 implements Migrati
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     for (const rename of this.renames) {
+      const existingTarget = await queryRunner.query(
+        `SELECT id FROM permissions WHERE permission_code = $1`,
+        [rename.to],
+      );
+      if (existingTarget.length > 0) {
+        await queryRunner.query(
+          `DELETE FROM permissions WHERE permission_code = $1`,
+          [rename.from],
+        );
+        continue;
+      }
       await queryRunner.query(
         `UPDATE permissions
             SET permission_code = $1, permission_name = $2

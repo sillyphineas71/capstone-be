@@ -32,7 +32,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreatePersonControlListTable20260722000008 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "person_control_list" (
+      CREATE TABLE IF NOT EXISTS "person_control_list" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "user_id" uuid,
         "face_profile_id" uuid,
@@ -60,28 +60,28 @@ export class CreatePersonControlListTable20260722000008 implements MigrationInte
 
     // Dedup theo user_id (chỉ áp dụng khi có link tài khoản).
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_person_control_user_type_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_person_control_user_type_active"
         ON "person_control_list" ("user_id", "list_type")
         WHERE "deleted_at" IS NULL AND "user_id" IS NOT NULL
     `);
 
     // Dedup theo face_profile_id (chỉ áp dụng khi có link hồ sơ khuôn mặt).
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_person_control_face_type_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_person_control_face_type_active"
         ON "person_control_list" ("face_profile_id", "list_type")
         WHERE "deleted_at" IS NULL AND "face_profile_id" IS NOT NULL
     `);
 
     // Hot path: đối chiếu khi có event nhận diện theo user.
     await queryRunner.query(`
-      CREATE INDEX "IDX_person_control_lookup_user"
+      CREATE INDEX IF NOT EXISTS "IDX_person_control_lookup_user"
         ON "person_control_list" ("user_id")
         WHERE "deleted_at" IS NULL AND "active" = true
     `);
 
     // Hot path: đối chiếu khi có event nhận diện theo face_profile.
     await queryRunner.query(`
-      CREATE INDEX "IDX_person_control_lookup_face"
+      CREATE INDEX IF NOT EXISTS "IDX_person_control_lookup_face"
         ON "person_control_list" ("face_profile_id")
         WHERE "deleted_at" IS NULL AND "active" = true
     `);

@@ -2,6 +2,7 @@ import { Expose, Type } from 'class-transformer';
 import { MeetingMinutesStatus } from '../entities/meeting-minutes.entity.js';
 import { UserSummaryDto } from '../../meetings/dto/user-summary.dto.js';
 import { MinutesMeetingSummaryDto } from './minutes-meeting-summary.dto.js';
+import { UserProfileSummaryDto } from './user-profile-summary.dto.js';
 
 export class MinutesListItemDto {
   @Expose()
@@ -20,6 +21,13 @@ export class MinutesListItemDto {
   createdAt: Date;
 
   @Expose()
+  updatedAt: Date;
+
+  /** null nếu biên bản chưa được ban hành (draft). */
+  @Expose()
+  issuedAt: Date | null;
+
+  @Expose()
   @Type(() => MinutesMeetingSummaryDto)
   meeting: MinutesMeetingSummaryDto;
 
@@ -27,27 +35,20 @@ export class MinutesListItemDto {
   @Type(() => UserSummaryDto)
   host: UserSummaryDto | null;
 
+  /** null nếu biên bản ở trạng thái draft (chưa ban hành). */
+  @Expose()
+  @Type(() => UserProfileSummaryDto)
+  issuedBy: UserProfileSummaryDto | null;
+
+  @Expose()
+  @Type(() => UserProfileSummaryDto)
+  preparedBy: UserProfileSummaryDto | null;
+
   /** true nếu biên bản có nguồn gốc AI (ai_summary_json khác NULL) — badge FE. */
   @Expose()
   isAiGenerated: boolean;
 
-  constructor(
-    id: string,
-    title: string,
-    status: MeetingMinutesStatus,
-    versionNo: number,
-    createdAt: Date,
-    meeting: MinutesMeetingSummaryDto,
-    host: UserSummaryDto | null,
-    isAiGenerated = false,
-  ) {
-    this.id = id;
-    this.title = title;
-    this.status = status;
-    this.versionNo = versionNo;
-    this.createdAt = createdAt;
-    this.meeting = meeting;
-    this.host = host;
-    this.isAiGenerated = isAiGenerated;
+  constructor(data: MinutesListItemDto) {
+    Object.assign(this, data);
   }
 }

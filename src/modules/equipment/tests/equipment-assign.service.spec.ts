@@ -9,6 +9,7 @@ import {
 import { RoomEntity, RoomStatus } from '../../rooms/entities/room.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
 
 /**
  * UC-65 — EquipmentService.assignToRoom: validate (equip 404→409→room 404→409)
@@ -105,7 +106,14 @@ describe('EquipmentService.assignToRoom (UC-65)', () => {
       transaction,
     } as unknown as import('typeorm').DataSource;
 
-    const service = new EquipmentService(repo, dataSource);
+    const notificationsService = {
+      createNotification: jest.fn().mockResolvedValue({ id: 'notif-noop' }),
+    } as unknown as NotificationsService;
+    const service = new EquipmentService(
+      repo,
+      dataSource,
+      notificationsService,
+    );
     return {
       service,
       equipmentFindOne,

@@ -30,7 +30,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class CreateAlertRulesTable20260722000006 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TABLE "alert_rules" (
+      CREATE TABLE IF NOT EXISTS "alert_rules" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "alert_type" varchar(40) NOT NULL,
         "zone_id" uuid,
@@ -56,21 +56,21 @@ export class CreateAlertRulesTable20260722000006 implements MigrationInterface {
 
     // Rule riêng theo zone: mỗi (loại, zone) chỉ 1 rule sống.
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_alert_rules_type_zone_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_alert_rules_type_zone_active"
         ON "alert_rules" ("alert_type", "zone_id")
         WHERE "deleted_at" IS NULL AND "zone_id" IS NOT NULL
     `);
 
     // Rule mặc định toàn khuôn viên: mỗi loại chỉ 1 rule sống.
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_alert_rules_type_global_active"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_alert_rules_type_global_active"
         ON "alert_rules" ("alert_type")
         WHERE "deleted_at" IS NULL AND "zone_id" IS NULL
     `);
 
     // Hot path: đánh giá rule đang bật theo loại sự kiện.
     await queryRunner.query(`
-      CREATE INDEX "IDX_alert_rules_lookup"
+      CREATE INDEX IF NOT EXISTS "IDX_alert_rules_lookup"
         ON "alert_rules" ("alert_type")
         WHERE "deleted_at" IS NULL AND "enabled" = true
     `);

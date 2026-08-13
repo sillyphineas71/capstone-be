@@ -1,4 +1,4 @@
-﻿import { Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MeetingRecurrenceRuleEntity } from './entities/meeting-recurrence-rule.entity.js';
 import { MeetingEntity } from './entities/meeting.entity.js';
@@ -10,6 +10,7 @@ import { MeetingEventEntity } from './entities/meeting-event.entity.js';
 import { MeetingNoteEntity } from './entities/meeting-note.entity.js';
 import { RoomEntity } from '../rooms/entities/room.entity.js';
 import { RoomBookingEntity } from '../rooms/entities/room-booking.entity.js';
+import { EquipmentEntity } from '../equipment/entities/equipment.entity.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { AdministrationModule } from '../administration/administration.module.js';
@@ -65,6 +66,7 @@ import { FromToConstraint } from './validators/from-to.constraint.js';
       MeetingNoteEntity,
       RoomEntity,
       RoomBookingEntity,
+      EquipmentEntity,
       MediaFileEntity,
       RecordingConfigEntity,
     ]),

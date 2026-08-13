@@ -11,16 +11,20 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class AddZoneIdToIotDevices20260721000002 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      ALTER TABLE "iot_devices" ADD COLUMN "zone_id" uuid
+      ALTER TABLE "iot_devices" ADD COLUMN IF NOT EXISTS "zone_id" uuid
     `);
 
     await queryRunner.query(`
-      ALTER TABLE "iot_devices" ADD CONSTRAINT "FK_iot_devices_zone"
-        FOREIGN KEY ("zone_id") REFERENCES "zones" ("id") ON DELETE SET NULL
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_iot_devices_zone') THEN
+          ALTER TABLE "iot_devices" ADD CONSTRAINT "FK_iot_devices_zone"
+            FOREIGN KEY ("zone_id") REFERENCES "zones" ("id") ON DELETE SET NULL;
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
-      CREATE INDEX "IDX_iot_devices_zone_id" ON "iot_devices" ("zone_id")
+      CREATE INDEX IF NOT EXISTS "IDX_iot_devices_zone_id" ON "iot_devices" ("zone_id")
     `);
   }
 

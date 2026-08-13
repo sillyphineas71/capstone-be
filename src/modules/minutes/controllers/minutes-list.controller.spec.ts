@@ -14,22 +14,31 @@ describe('MeetingMinutesListController', () => {
 
   const currentUser = { userId: 'user-1' };
 
-  const sampleItem = new MinutesListItemDto(
-    'minutes-1',
-    'Bien ban hop A',
-    MeetingMinutesStatus.PUBLISHED,
-    1,
-    new Date('2026-07-01T00:00:00Z'),
-    new MinutesMeetingSummaryDto(
-      'meeting-1',
-      'Sprint Planning',
-      new Date('2026-06-30T09:00:00Z'),
-      new Date('2026-06-30T10:00:00Z'),
-      MeetingMode.OFFLINE,
-      null,
-    ),
-    new UserSummaryDto('host-1', 'Nguyen Van A', 'a@company.com'),
-  );
+  const sampleItem = new MinutesListItemDto({
+    id: 'minutes-1',
+    title: 'Bien ban hop A',
+    status: MeetingMinutesStatus.PUBLISHED,
+    versionNo: 1,
+    createdAt: new Date('2026-07-01T00:00:00Z'),
+    updatedAt: new Date('2026-07-01T00:00:00Z'),
+    issuedAt: null,
+    meeting: new MinutesMeetingSummaryDto({
+      id: 'meeting-1',
+      title: 'Sprint Planning',
+      status: 'completed' as any,
+      startTime: new Date('2026-06-30T09:00:00Z'),
+      endTime: new Date('2026-06-30T10:00:00Z'),
+      actualStartTime: new Date('2026-06-30T09:00:00Z'),
+      actualEndTime: new Date('2026-06-30T10:00:00Z'),
+      meetingMode: MeetingMode.OFFLINE,
+      room: null,
+      organizer: null,
+    }),
+    host: new UserSummaryDto('host-1', 'Nguyen Van A', 'a@company.com'),
+    issuedBy: null,
+    preparedBy: null,
+    isAiGenerated: false,
+  });
 
   beforeEach(() => {
     minutesService = {

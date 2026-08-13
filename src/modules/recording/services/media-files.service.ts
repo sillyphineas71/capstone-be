@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -59,6 +64,7 @@ export class MediaFilesService {
     private readonly repo: Repository<MediaFileEntity>,
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /** UC-120: list theo meeting, phân trang, ẩn deleted. */
@@ -286,8 +292,11 @@ export class MediaFilesService {
   async setVisibility(
     fileId: string,
     dto: VisibilityDto,
+    userId: string,
   ): Promise<{ fileId: string; isActive: boolean; updatedAt: Date }> {
     const m = await this.loadActive(fileId);
+    await this.assertCanManageMediaFile(m, userId);
+
     const updatedAt = new Date();
     if (dto.action === 'hide') {
       await this.repo.update(fileId, { isActive: false });
@@ -296,6 +305,39 @@ export class MediaFilesService {
     // soft_delete
     await this.repo.softDelete(fileId);
     return { fileId, isActive: m.isActive, updatedAt };
+  }
+
+  private async assertCanManageMediaFile(
+    m: MediaFileEntity,
+    userId: string,
+  ): Promise<void> {
+    const roleRows: Array<{ role_code: string }> =
+      await this.dataSource.manager.query(
+        `SELECT r.role_code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1 AND r.is_active = true`,
+        [userId],
+      );
+    const isPrivileged = roleRows.some((r) =>
+      ['BUSINESS_ADMIN', 'MANAGER', 'SYSTEM_ADMIN'].includes(r.role_code),
+    );
+    if (isPrivileged) return;
+
+    if (!m.meetingId) {
+      throw new ForbiddenException({
+        code: 'PERMISSION_DENIED',
+        message: 'Chỉ Host của meeting mới được xóa audio này.',
+      });
+    }
+
+    const hostRows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM meeting_participants WHERE meeting_id = $1 AND user_id = $2 AND participant_role = 'host'`,
+      [m.meetingId, userId],
+    );
+    if (!hostRows || hostRows.length === 0) {
+      throw new ForbiddenException({
+        code: 'PERMISSION_DENIED',
+        message: 'Chỉ Host của meeting mới được xóa audio này.',
+      });
+    }
   }
 
   /** Load 1 media_file chưa xóa mềm; 404 nếu thiếu/đã xóa. */

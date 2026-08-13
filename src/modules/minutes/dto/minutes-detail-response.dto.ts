@@ -6,19 +6,43 @@ import {
   MinutesActionItem,
   MinutesDecisionItem,
 } from './minutes-content.dto.js';
+import { DepartmentSummaryDto } from './user-profile-summary.dto.js';
 
 /* ── Nested DTOs ── */
+
+export interface MinutesUserRefDto {
+  id: string;
+  fullName: string;
+  email: string;
+  jobTitle: string | null;
+  department: DepartmentSummaryDto | null;
+  avatarUrl: string | null;
+}
 
 export class MinutesAttendeeDto {
   userId: string;
   fullName: string;
   email: string;
+  jobTitle: string | null;
+  department: DepartmentSummaryDto | null;
+  avatarUrl: string | null;
   participantRole: string;
   attendanceStatus: string;
   joinedAt: Date | null;
   leftAt: Date | null;
 
   constructor(data: MinutesAttendeeDto) {
+    Object.assign(this, data);
+  }
+}
+
+export class MinutesShareDto {
+  userId: string;
+  fullName: string;
+  avatarUrl: string | null;
+  sharedAt: Date;
+
+  constructor(data: MinutesShareDto) {
     Object.assign(this, data);
   }
 }
@@ -37,12 +61,14 @@ export class RoomDetailDto {
 
 export class MinutesGeneralInfoDto {
   meetingTitle: string;
+  meetingStatus: string;
   actualStartTime: Date | null;
   actualEndTime: Date | null;
   meetingMode: string;
   room: RoomDetailDto | null;
-  host: { id: string; fullName: string; email: string } | null;
-  noteTaker: { id: string; fullName: string; email: string } | null;
+  organizer: MinutesUserRefDto | null;
+  host: MinutesUserRefDto | null;
+  noteTaker: MinutesUserRefDto | null;
   attendees: MinutesAttendeeDto[];
 
   constructor(data: MinutesGeneralInfoDto) {
@@ -112,6 +138,7 @@ export class MinutesAttachmentSummaryDto {
   fileName: string;
   fileType: string;
   mimeType: string;
+  fileUrl: string | null;
   fileSizeBytes: string | null;
   uploadedBy: string | null;
   uploadedAt: Date;
@@ -147,10 +174,11 @@ export class MinutesDetailResponseDto {
   isAiGenerated: boolean;
   relatedResources: MinutesRelatedResourcesDto;
   attachments: MinutesAttachmentSummaryDto[];
-  preparedBy: { id: string; fullName: string; email: string } | null;
-  issuedBy: { id: string; fullName: string; email: string } | null;
+  shares: MinutesShareDto[];
+  preparedBy: MinutesUserRefDto | null;
+  issuedBy: MinutesUserRefDto | null;
   issuedAt: Date | null;
-  approvedBy: { id: string; fullName: string; email: string } | null;
+  approvedBy: MinutesUserRefDto | null;
   approvedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

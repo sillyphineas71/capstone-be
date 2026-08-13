@@ -11,6 +11,7 @@ import {
 } from '../entities/meeting-minutes.entity.js';
 import { RoomEntity } from '../../rooms/entities/room.entity.js';
 import { MeetingMode } from '../../meetings/entities/meeting.entity.js';
+import { UserEntity } from '../../accounts/entities/user.entity.js';
 
 describe('MinutesService.findMinutesList', () => {
   let service: MinutesService;
@@ -29,6 +30,7 @@ describe('MinutesService.findMinutesList', () => {
   };
   let minutesRepo: { createQueryBuilder: jest.Mock };
   let roomRepo: { find: jest.Mock };
+  let userRepo: { find: jest.Mock };
 
   const authUser = { userId: 'user-1' };
 
@@ -69,12 +71,16 @@ describe('MinutesService.findMinutesList', () => {
     roomRepo = {
       find: jest.fn().mockResolvedValue([]),
     };
+    userRepo = {
+      find: jest.fn().mockResolvedValue([]),
+    };
 
     dataSource = {
       transaction: jest.fn(),
       getRepository: jest.fn((entity: unknown) => {
         if (entity === MeetingMinutesEntity) return minutesRepo;
         if (entity === RoomEntity) return roomRepo;
+        if (entity === UserEntity) return userRepo;
         throw new Error('Unexpected entity requested: ' + String(entity));
       }),
     };
@@ -163,11 +169,12 @@ describe('MinutesService.findMinutesList', () => {
       authUser,
     );
     expect(qb.andWhere).toHaveBeenCalledWith(
-      'meeting.actualStartTime BETWEEN :from AND :to',
-      expect.objectContaining({
-        from: new Date('2026-06-01T00:00:00Z'),
-        to: new Date('2026-06-30T23:59:59Z'),
-      }),
+      'COALESCE(meeting.actualStartTime, meeting.startTime) >= :from',
+      { from: new Date('2026-06-01T00:00:00Z') },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'COALESCE(meeting.actualStartTime, meeting.startTime) <= :to',
+      { to: new Date('2026-06-30T23:59:59Z') },
     );
   });
 

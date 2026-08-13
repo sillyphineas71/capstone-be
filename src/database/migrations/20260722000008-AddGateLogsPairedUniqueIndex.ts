@@ -26,7 +26,7 @@ export class AddGateLogsPairedUniqueIndex20260722000008 implements MigrationInte
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE UNIQUE INDEX "UQ_gate_logs_paired"
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_gate_logs_paired"
         ON "gate_access_logs" ("paired_log_id") WHERE "paired_log_id" IS NOT NULL
     `);
   }
