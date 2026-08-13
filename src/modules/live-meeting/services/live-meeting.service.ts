@@ -8,7 +8,7 @@ import {
   BadRequestException,
   HttpException,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 
 import {
   MeetingEntity,
@@ -2068,20 +2068,50 @@ export class LiveMeetingService {
    * Idempotent: `WHERE status='scheduled'` nên chạy lại không lật gì thêm.
    */
   async autoStartDueMeetings(): Promise<{ started: number }> {
-    const result: unknown = await this.dataSource.query(
-      `UPDATE meetings
-          SET status = $1,
-              actual_start_time = COALESCE(actual_start_time, start_time),
-              updated_at = now()
-        WHERE status = $2
-          AND start_time <= now()
-          AND deleted_at IS NULL`,
-      [MeetingStatus.IN_PROGRESS, MeetingStatus.SCHEDULED],
-    );
-    // node-postgres: UPDATE không RETURNING trả [rows, rowCount].
-    const started =
-      Array.isArray(result) && typeof result[1] === 'number' ? result[1] : 0;
-    return { started };
+    return this.dataSource.transaction(async (em) => {
+      const result: unknown = await em.query(
+        `UPDATE meetings
+            SET status = $1,
+                actual_start_time = COALESCE(actual_start_time, start_time),
+                updated_at = now()
+          WHERE status = $2
+            AND start_time <= now()
+            AND deleted_at IS NULL
+          RETURNING id`,
+        [MeetingStatus.IN_PROGRESS, MeetingStatus.SCHEDULED],
+      );
+      const startedIds = this.rowsOf<{ id: string }>(result).map((r) => r.id);
+
+      if (startedIds.length > 0) {
+        // [FIX 2026-08-13, Fix B] Mirror buoc 5 cua executeStartMeetingInTransaction()
+        // (approved → active) — cron tu-start truoc day KHONG dong bo buoc nay, khien
+        // room_bookings ket mai o 'approved' cho moi meeting khong ai bam nut "Start".
+        // Dong bo tai day de dong goc re tan noi, khong chi dua vao Fix A tu phuc hoi
+        // luc ket thuc.
+        await em.update(
+          RoomBookingEntity,
+          {
+            meetingId: In(startedIds),
+            status: RoomBookingStatus.APPROVED,
+          },
+          {
+            status: RoomBookingStatus.ACTIVE,
+          },
+        );
+      }
+
+      return { started: startedIds.length };
+    });
+  }
+
+  /** UPDATE…RETURNING qua TypeORM trả [rows,count]; SELECT/INSERT trả rows. */
+  private rowsOf<T>(result: unknown): T[] {
+    if (Array.isArray(result)) {
+      const head: unknown = result[0];
+      if (Array.isArray(head)) return head as T[];
+      return result as T[];
+    }
+    return [];
   }
 
   /**
@@ -2266,32 +2296,42 @@ export class LiveMeetingService {
           },
         );
 
-        // 6. IF early end: release room
-        if (isEarlyEnd) {
-          // Update room_bookings
+        // 6. Giai phong room_bookings — LUON chay khi meeting ket thuc.
+        // [FIX 2026-08-13, Fix A] Truoc day buoc nay chi chay khi isEarlyEnd
+        // (ket thuc SOM), khien meeting ket thuc DUNG gio hoac TRE gio
+        // (truong hop pho bien nhat, dac biet qua autoCompleteOverdueMeetings())
+        // KHONG BAO GIO giai phong duoc phong du status dang dung 'active'.
+        // WHERE noi them ca 'approved' (khong chi 'active') de tu phuc hoi
+        // duoc truong hop autoStartDueMeetings() (cron tu-start) chua kip
+        // dong bo room_bookings sang 'active' truoc do (Fix B) — buoc nay
+        // KHONG con phu thuoc buoc truoc co chay dung hay khong.
+        const bookingToRelease = await em.findOne(RoomBookingEntity, {
+          where: {
+            meetingId,
+            status: In([RoomBookingStatus.APPROVED, RoomBookingStatus.ACTIVE]),
+          },
+        });
+
+        if (bookingToRelease) {
           await em.update(
             RoomBookingEntity,
-            {
-              meetingId,
-              status: RoomBookingStatus.ACTIVE,
-            },
-            {
-              status: RoomBookingStatus.COMPLETED,
-            },
+            { id: bookingToRelease.id },
+            { status: RoomBookingStatus.COMPLETED },
           );
 
-          // Insert room_events
+          // Insert room_events — ten/mo ta phan anh dung: khong con chi rieng "som" nua
           const roomEvent = em.create(RoomEventEntity, {
             roomId: lockedMeeting.roomId!,
             meetingId,
-            eventType: 'room_released_early',
+            eventType: 'room_released_on_end',
             eventTime: now,
             sourceType: 'manual',
             actorUserId,
-            oldStatus: RoomBookingStatus.ACTIVE,
+            oldStatus: bookingToRelease.status,
             newStatus: RoomBookingStatus.COMPLETED,
-            description:
-              'Phong duoc giai phong som do cuoc hop ket thuc truoc gio',
+            description: isEarlyEnd
+              ? 'Phong duoc giai phong som do cuoc hop ket thuc truoc gio'
+              : 'Phong duoc giai phong khi cuoc hop ket thuc',
           });
           await em.save(RoomEventEntity, roomEvent);
         }

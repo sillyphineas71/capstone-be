@@ -3,6 +3,10 @@ import { ConflictException } from '@nestjs/common';
 import { LiveMeetingService } from '../services/live-meeting.service.js';
 import { MeetingStatus } from '../../meetings/entities/meeting.entity.js';
 import { MEETING_END_ERRORS } from '../constants/meeting-end-error.constant.js';
+import {
+  RoomBookingEntity,
+  RoomBookingStatus,
+} from '../../rooms/entities/room-booking.entity.js';
 
 /**
  * F-A (MST-001) — cron lật meetings.status theo thời gian.
@@ -46,15 +50,32 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
   });
 
   describe('autoStartDueMeetings()', () => {
+    // [FIX 2026-08-13, Fix B] autoStartDueMeetings() giờ chạy trong
+    // dataSource.transaction() (để đồng bộ room_bookings approved→active
+    // CÙNG transaction với UPDATE meetings) — mock dsMock.transaction thay
+    // vì gọi thẳng dsMock.query, mirror pattern "R9" bên dưới.
+    let emMock: { query: jest.Mock; update: jest.Mock };
+
+    beforeEach(() => {
+      emMock = {
+        query: jest.fn(),
+        update: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+      dsMock.transaction.mockImplementation((cb: (m: unknown) => unknown) =>
+        cb(emMock),
+      );
+    });
+
     it('UPDATE đúng: scheduled → in_progress, chỉ họp đã tới giờ, bỏ soft-delete', async () => {
-      dsMock.query.mockResolvedValue([[], 2]);
+      emMock.query.mockResolvedValue([[{ id: 'm1' }, { id: 'm2' }], 2]);
       const r = await service.autoStartDueMeetings();
 
       expect(r.started).toBe(2);
-      const [sql, params] = dsMock.query.mock.calls[0];
+      const [sql, params] = emMock.query.mock.calls[0];
       expect(sql).toContain('UPDATE meetings');
       expect(sql).toContain('start_time <= now()');
       expect(sql).toContain('deleted_at IS NULL');
+      expect(sql).toContain('RETURNING id');
       expect(params).toEqual([
         MeetingStatus.IN_PROGRESS,
         MeetingStatus.SCHEDULED,
@@ -62,10 +83,10 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
     });
 
     it('actual_start_time = start_time theo LỊCH (không phải now()), COALESCE giữ mốc đã có', async () => {
-      dsMock.query.mockResolvedValue([[], 0]);
+      emMock.query.mockResolvedValue([[], 0]);
       await service.autoStartDueMeetings();
 
-      const [sql] = dsMock.query.mock.calls[0];
+      const [sql] = emMock.query.mock.calls[0];
       expect(sql).toContain(
         'actual_start_time = COALESCE(actual_start_time, start_time)',
       );
@@ -75,10 +96,10 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
     });
 
     it('CHỈ đụng status=scheduled → cancelled/draft/pending_approval/completed nguyên vẹn', async () => {
-      dsMock.query.mockResolvedValue([[], 0]);
+      emMock.query.mockResolvedValue([[], 0]);
       await service.autoStartDueMeetings();
 
-      const [sql, params] = dsMock.query.mock.calls[0];
+      const [sql, params] = emMock.query.mock.calls[0];
       expect(sql).toContain('WHERE status = $2');
       expect(params[1]).toBe(MeetingStatus.SCHEDULED);
       for (const untouched of [
@@ -92,17 +113,43 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
     });
 
     it('không có họp nào tới giờ → started=0, KHÔNG lỗi (idempotent)', async () => {
-      dsMock.query.mockResolvedValue([[], 0]);
+      emMock.query.mockResolvedValue([[], 0]);
       await expect(service.autoStartDueMeetings()).resolves.toEqual({
         started: 0,
       });
     });
 
-    it('driver trả dạng lạ (không phải [rows, rowCount]) → started=0, KHÔNG crash', async () => {
-      dsMock.query.mockResolvedValue(undefined);
+    it('driver trả dạng lạ (không phải mảng) → started=0, KHÔNG crash', async () => {
+      emMock.query.mockResolvedValue(undefined);
       await expect(service.autoStartDueMeetings()).resolves.toEqual({
         started: 0,
       });
+    });
+
+    // ────────────────────────────────────────
+    //  [FIX 2026-08-13, Fix B] đóng gốc rễ tận nơi: đồng bộ room_bookings
+    //  NGAY khi cron tự-start, không chỉ dựa vào Fix A "tự phục hồi" lúc
+    //  kết thúc.
+    // ────────────────────────────────────────
+    it('[Fix B] có họp tự-start → đồng bộ room_bookings approved→active TRONG CÙNG transaction', async () => {
+      emMock.query.mockResolvedValue([[{ id: 'm1' }, { id: 'm2' }], 2]);
+      const r = await service.autoStartDueMeetings();
+
+      expect(r.started).toBe(2);
+      expect(dsMock.transaction).toHaveBeenCalledTimes(1);
+      expect(emMock.update).toHaveBeenCalledTimes(1);
+      const [entity, where, set] = emMock.update.mock.calls[0];
+      expect(entity).toBe(RoomBookingEntity);
+      expect(where.status).toBe(RoomBookingStatus.APPROVED);
+      expect(where.meetingId.value).toEqual(['m1', 'm2']);
+      expect(set).toEqual({ status: RoomBookingStatus.ACTIVE });
+    });
+
+    it('[Fix B] không có họp nào tự-start → KHÔNG gọi update room_bookings (tránh UPDATE rỗng vô nghĩa)', async () => {
+      emMock.query.mockResolvedValue([[], 0]);
+      await service.autoStartDueMeetings();
+
+      expect(emMock.update).not.toHaveBeenCalled();
     });
   });
 
@@ -226,6 +273,11 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
       const em = {
         createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
         update: jest.fn().mockResolvedValue({ affected: 1 }),
+        // [FIX 2026-08-13, Fix A] executeEndMeetingInTransaction() giờ
+        // SELECT booking (approved|active) trước khi release.
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'booking-1', status: RoomBookingStatus.ACTIVE }),
         create: jest.fn((_e: unknown, obj: any) => obj),
         save: jest.fn().mockResolvedValue({}),
       };
