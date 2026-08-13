@@ -164,19 +164,45 @@ export class AlertsService {
    * (intrusion/crowd/stranger/vehicle_control_match/person_watchlist_match) — cùng 1 bài
    * toán "mất dấu vết khi nhiều sự kiện bump vào 1 alert", không gate riêng theo loại.
    *
-   * [FIX 2026-08-11] Chống thổi phồng `occurrence_count`/`occurrences` khi CÙNG userId kích
-   * hoạt lặp lại trong thời gian ngắn (vd camera bắn nhiều `appear` gần-trùng-giờ cho 1 lần
-   * đứng yên — UC-124). `last_seen_at`/`occurrence_count` VẪN tăng VÔ ĐIỀU KIỆN mỗi lần gọi
-   * (KHÔNG đổi 2 dòng đó) — bắt buộc để `SecurityAlertAutoResolveService` (dựa
-   * `COALESCE(last_seen_at, triggered_at)`) không tự đóng nhầm alert trong lúc người đó vẫn
-   * đang vi phạm liên tục (xem recon R3 — phương án debounce ở tầng caller/skip hẳn
-   * `recordAlert()` bị loại vì đóng băng `last_seen_at`). CHỈ phần APPEND vào `occurrences`
-   * có điều kiện: nếu entry mới CÙNG `userId` với entry gần nhất (theo thứ tự mảng hiện có)
-   * VÀ cách nhau (`occurredAt`) dưới `occurrenceDebounceSeconds` giây → SKIP append, coi là
-   * cùng 1 lần hiện diện đang tiếp diễn. `userId` NULL (vd `crowd`, không gắn 1 người cụ
-   * thể) → điều kiện tự loại trừ, KHÔNG bao giờ debounce — không cần gate riêng theo
-   * `alertType`. `occurrenceDebounceSeconds=0` (min cấu hình) → điều kiện `ABS(...) < 0`
-   * không bao giờ đúng → tắt debounce hoàn toàn, hành vi y hệt trước fix.
+   * [FIX 2026-08-11] Chống thổi phồng `occurrences` khi CÙNG userId kích hoạt lặp lại
+   * trong thời gian ngắn (vd camera bắn nhiều `appear` gần-trùng-giờ cho 1 lần đứng yên —
+   * UC-124). `last_seen_at` VẪN tăng VÔ ĐIỀU KIỆN mỗi lần gọi (KHÔNG đổi dòng đó) — bắt
+   * buộc để `SecurityAlertAutoResolveService` (dựa `COALESCE(last_seen_at, triggered_at)`)
+   * không tự đóng nhầm alert trong lúc người/đám đông đó vẫn đang vi phạm liên tục (xem
+   * recon R3 — phương án debounce ở tầng caller/skip hẳn `recordAlert()` bị loại vì đóng
+   * băng `last_seen_at`).
+   *
+   * [FIX 2026-08-13] Root cause "occurrence_count=73 sau vài phút" (Crowd): trước đây
+   * `occurrence_count` tăng VÔ ĐIỀU KIỆN mỗi lần gọi, KHÔNG qua debounce nào — vì
+   * `alertType='crowd'` không gắn 1 người cụ thể (`payloadJson.userId` luôn null), điều
+   * kiện debounce cũ (`elem->>'userId' = $2->>'userId'`) tự loại trừ hoàn toàn, không bao
+   * giờ khớp. Trong khi đó Crowd bị bump ở tần suất RẤT cao: mỗi occupancy count-event từ
+   * camera (`evaluateZoneCountNow()`, ~2-4s/lần khi còn vượt ngưỡng) CỘNG THÊM cron quét
+   * lại đúng event đó 1 lần nữa (`evaluateCrowdAlerts()`, EVERY_MINUTE) — không có cờ
+   * dedupe per-event nào giữa 2 đường, mỗi count-event bump 2 lần.
+   *
+   * Mở rộng ĐIỀU KIỆN MATCH của `latest_match`: khi `$5 = 'crowd'` → so khớp với entry CUỐI
+   * CÙNG trong mảng `occurrences` BẤT KỂ userId (vì `userId` luôn null, không có gì để so).
+   * CHỈ `alertType='crowd'` mới đi nhánh này — KHÔNG dùng "userId IS NULL" làm điều kiện
+   * chung, vì Intrusion CŨNG có thể có `payloadJson.userId=null` (người lạ/chưa định danh —
+   * xem `restricted-zone-intrusion.service.ts` `isViolation()`: "userId NULL → LUÔN vi
+   * phạm") — nếu gate theo userId sẽ vô tình đổi luôn hành vi debounce của Intrusion cho ca
+   * người lạ, ngoài phạm vi fix này. Intrusion (`userId` có giá trị HOẶC null) đi đúng
+   * nhánh cũ 100% khi `$5 <> 'crowd'` — điều kiện match `occurrences` không đổi gì.
+   *
+   * `occurrence_count` CHỈ đưa vào khối debounce khi `alertType='crowd'` (`$5 = 'crowd' AND
+   * is_debounced`) — KHÔNG dùng chung điều kiện trần với `occurrences` cho MỌI alertType.
+   * Lý do: với Intrusion, `occurrences` VỐN ĐÃ được debounce theo userId từ fix 2026-08-11
+   * (hành vi cũ, đã test), nhưng `occurrence_count` của Intrusion CHƯA TỪNG bị debounce —
+   * nếu gate `occurrence_count` bằng ĐÚNG điều kiện debounce của `occurrences` (không phân
+   * biệt alertType), ca "cùng userId vi phạm Intrusion lặp lại trong debounceSeconds" (đã
+   * có test từ đêm trước, khẳng định `occurrence_count` vẫn tăng vô điều kiện) sẽ ĐỔI hành
+   * vi ngoài ý muốn — vi phạm thẳng ràng buộc "Intrusion giữ nguyên 100%". Vì vậy
+   * `occurrence_count` cố tình tách gate riêng theo `alertType`, `occurrences` giữ NGUYÊN
+   * gate chung cũ (không đổi gì, kể cả cho Intrusion).
+   *
+   * `occurrenceDebounceSeconds=0` (min cấu hình) → điều kiện `ABS(...) < 0` không bao giờ
+   * đúng → tắt debounce hoàn toàn cho Crowd, hành vi y hệt trước fix 2026-08-13.
    */
   private async bumpOccurrence(
     id: string,
@@ -200,21 +226,30 @@ export class AlertsService {
                 COALESCE(sa.payload_json -> 'occurrences', '[]'::jsonb)
               ) WITH ORDINALITY AS t(elem, ord)
          WHERE sa.id = $1
-           AND $2::jsonb ->> 'userId' IS NOT NULL
-           AND elem ->> 'userId' = $2::jsonb ->> 'userId'
+           AND (
+             ($2::jsonb ->> 'userId' IS NOT NULL AND elem ->> 'userId' = $2::jsonb ->> 'userId')
+             OR $5 = 'crowd'
+           )
          ORDER BY ord DESC
          LIMIT 1
+       ),
+       debounce_check AS (
+         SELECT EXISTS (
+           SELECT 1 FROM latest_match
+           WHERE ABS(EXTRACT(EPOCH FROM (
+             ($2::jsonb ->> 'occurredAt')::timestamptz - latest_match.occurred_at
+           ))) < $4::numeric
+         ) AS is_debounced
        )
        UPDATE security_alerts
           SET last_seen_at = NOW(),
-              occurrence_count = occurrence_count + 1,
+              occurrence_count = CASE
+                WHEN $5 = 'crowd' AND (SELECT is_debounced FROM debounce_check)
+                THEN occurrence_count
+                ELSE occurrence_count + 1
+              END,
               payload_json = CASE
-                WHEN EXISTS (
-                  SELECT 1 FROM latest_match
-                  WHERE ABS(EXTRACT(EPOCH FROM (
-                    ($2::jsonb ->> 'occurredAt')::timestamptz - latest_match.occurred_at
-                  ))) < $4::numeric
-                )
+                WHEN (SELECT is_debounced FROM debounce_check)
                 THEN payload_json
                 ELSE jsonb_set(
                        COALESCE(payload_json, '{}'::jsonb),
@@ -237,7 +272,13 @@ export class AlertsService {
                      )
               END
         WHERE id = $1`,
-      [id, JSON.stringify(entry), MAX_OCCURRENCES_PER_ALERT, debounceSeconds],
+      [
+        id,
+        JSON.stringify(entry),
+        MAX_OCCURRENCES_PER_ALERT,
+        debounceSeconds,
+        input.alertType,
+      ],
     );
     return this.getOrThrow(id);
   }
