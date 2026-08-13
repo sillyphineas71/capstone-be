@@ -20,6 +20,9 @@ export class DepartmentLateItemDto {
   lateCount: number;
   totalRequiredParticipants: number;
   lateRate: number;
+  // [FIX 2026-08-13] Tính riêng qua COUNT FILTER(status_bucket='on_time'), KHÔNG suy từ
+  // 100-lateRate (sẽ gộp nhầm absentCount vào phần "đúng giờ" — xem on-time-rate.repository.ts).
+  onTimeRate: number;
 }
 
 export class OnTimeRateResponseDto {
@@ -81,5 +84,39 @@ export class UserLateStatsResponseDto {
   totalPages: number;
   period: { from: string; to: string };
   graceMinutes: number;
+  message?: string;
+}
+
+// ── GET /analytics/attendance/on-time-rate/me (UC-AA-10 / thống kê chuyên cần cá nhân) ──
+
+export class DepartmentAvgDto {
+  departmentId: string;
+  departmentName: string;
+  onTimeRate: number;
+}
+
+export class PersonalStatsSummaryDto {
+  totalRequired: number;
+  onTimeCount: number;
+  lateCount: number;
+  absentCount: number;
+  // null khi totalRequired=0 (chưa có dữ liệu điểm danh trong kỳ, phân biệt với "0% đúng giờ").
+  onTimeRate: number | null;
+  lateRate: number | null;
+}
+
+export class PersonalStatsResponseDto {
+  userId: string;
+  fullName: string;
+  email: string;
+  employeeCode: string | null;
+  departmentName: string | null;
+  avatarUrl: string | null;
+  period: { from: string; to: string };
+  graceMinutes: number;
+  summary: PersonalStatsSummaryDto;
+  departmentAvg: DepartmentAvgDto | null;
+  trend: TrendPointDto[];
+  recentLate: LateMeetingItemDto[];
   message?: string;
 }

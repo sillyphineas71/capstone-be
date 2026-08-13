@@ -37,6 +37,9 @@ describe('OnTimeRateService', () => {
       getLateHistory: jest.fn(),
       checkDepartmentExists: jest.fn(),
       getLateByUsers: jest.fn(),
+      getUserProfileForStats: jest.fn(),
+      getPersonalKpiTotals: jest.fn(),
+      getPersonalTrendByWeek: jest.fn(),
     } as unknown as jest.Mocked<OnTimeRateRepository>;
 
     mockConfigService = {
@@ -246,6 +249,7 @@ describe('OnTimeRateService', () => {
           departmentId: 'd1',
           departmentName: 'Dept 1',
           lateCount: 10,
+          onTimeCount: 35,
           totalRequiredParticipants: 50,
         },
       ]);
@@ -266,6 +270,8 @@ describe('OnTimeRateService', () => {
       expect(result.data.trend[0].onTimeRate).toBe(82.4);
       expect(result.data.lateByHourOfDay[9].lateRate).toBe(5.0);
       expect(result.data.lateByDepartment[0].lateRate).toBe(20.0);
+      // [FIX 2026-08-13] onTimeRate per dept tính qua onTimeCount thật, không suy từ 100-lateRate.
+      expect(result.data.lateByDepartment[0].onTimeRate).toBe(70.0); // 35/50*100
     });
   });
 
@@ -468,6 +474,300 @@ describe('OnTimeRateService', () => {
       expect(result.message).toBe(
         'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.',
       );
+    });
+  });
+
+  describe('getPersonalStats (GET /analytics/attendance/on-time-rate/me)', () => {
+    const baseProfile = {
+      id: mockUserId,
+      fullName: 'Nguyen Van A',
+      email: 'a@co.com',
+      employeeCode: 'EMP001',
+      avatarUrl: null,
+      departmentId: 'd1',
+      departmentName: 'Phong IT',
+    };
+
+    beforeEach(() => {
+      mockConfigService.getMaxRangeDays.mockResolvedValue(366);
+    });
+
+    it('userId luôn lấy từ currentUser (JWT), không nhận từ query — gọi đúng userId cho mọi repo call', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 8,
+        lateCount: 2,
+        absentCount: 0,
+        totalRequiredParticipants: 10,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([
+        {
+          departmentId: 'd1',
+          departmentName: 'Phong IT',
+          lateCount: 5,
+          onTimeCount: 45,
+          totalRequiredParticipants: 60,
+        },
+      ]);
+
+      const query = { preset: 'month' as const };
+      await service.getPersonalStats({ userId: mockUserId }, query);
+
+      expect(mockRepo.getUserProfileForStats).toHaveBeenCalledWith(mockUserId);
+      expect(mockRepo.getPersonalKpiTotals).toHaveBeenCalledWith(
+        mockUserId,
+        expect.any(String),
+        expect.any(String),
+        5, // graceMinutes mặc định
+      );
+      expect(mockRepo.getLateHistory).toHaveBeenCalledWith(
+        mockUserId,
+        expect.any(String),
+        expect.any(String),
+        5,
+      );
+    });
+
+    it('graceMinutes mặc định = 5 khi không truyền (hardcode, không đọc config)', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.graceMinutes).toBe(5);
+      expect(mockConfigService.getMaxRangeDays).toHaveBeenCalled(); // validateMaxRange vẫn tái dùng
+    });
+
+    it('graceMinutes truyền vào query được tôn trọng (không bị ghi đè bởi default)', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        { graceMinutes: 0 },
+      );
+      expect(result.data.graceMinutes).toBe(0);
+    });
+
+    it('throws NotFoundException nếu user (từ JWT) không còn tồn tại', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(null);
+
+      await expect(
+        service.getPersonalStats({ userId: mockUserId }, {}),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('totalRequired=0 -> summary.onTimeRate=null và lateRate=null (không phải 0)', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.summary.totalRequired).toBe(0);
+      expect(result.data.summary.onTimeRate).toBeNull();
+      expect(result.data.summary.lateRate).toBeNull();
+    });
+
+    it('totalRequired>0 -> summary.onTimeRate tính đúng (không null)', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 8,
+        lateCount: 2,
+        absentCount: 0,
+        totalRequiredParticipants: 10,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.summary.onTimeRate).toBe(80.0);
+      expect(result.data.summary.lateRate).toBe(20.0);
+    });
+
+    it('user không có departmentId -> departmentAvg=null, KHÔNG gọi getLateByDepartment', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue({
+        ...baseProfile,
+        departmentId: null,
+        departmentName: null,
+      });
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.departmentAvg).toBeNull();
+      expect(mockRepo.getLateByDepartment).not.toHaveBeenCalled();
+    });
+
+    it('phòng ban chưa có dữ liệu điểm danh (totalRequiredParticipants=0) -> departmentAvg=null', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]); // không có dòng nào trả về
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.departmentAvg).toBeNull();
+    });
+
+    it('departmentAvg.onTimeRate tính qua onTimeCount thật — KHÔNG suy từ 100-lateRate (case có absent)', async () => {
+      // Phòng ban: 50 lượt bắt buộc, 30 late, 10 on_time, 10 absent.
+      // 100 - lateRate(=60%) = 40% -- SAI vì gộp nhầm 10 absent vào "đúng giờ".
+      // Đúng: onTimeRate = 10/50*100 = 20%.
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([
+        {
+          departmentId: 'd1',
+          departmentName: 'Phong IT',
+          lateCount: 30,
+          onTimeCount: 10,
+          totalRequiredParticipants: 50,
+        },
+      ]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.departmentAvg).toEqual({
+        departmentId: 'd1',
+        departmentName: 'Phong IT',
+        onTimeRate: 20.0,
+      });
+      // Xác nhận KHÔNG phải kết quả sai của công thức 100-lateRate (40%).
+      expect(result.data.departmentAvg?.onTimeRate).not.toBe(40.0);
+    });
+
+    it('departmentAvg query lọc đúng departmentId của user (không lộ department khác)', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      await service.getPersonalStats({ userId: mockUserId }, {});
+
+      expect(mockRepo.getLateByDepartment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          departmentId: 'd1',
+          scopeDepartmentIds: null,
+        }),
+      );
+    });
+
+    it('recentLate[] tái dùng nguyên vẹn getLateHistory() đã có', async () => {
+      const lateMeetings = [
+        {
+          meetingId: 'm1',
+          meetingTitle: 'Họp giao ban',
+          scheduledStartTime: new Date('2026-06-10T08:00:00+07:00'),
+          checkInTime: new Date('2026-06-10T08:10:00+07:00'),
+          lateMinutes: 10,
+        },
+      ];
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 1,
+        absentCount: 0,
+        totalRequiredParticipants: 1,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue(lateMeetings);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.recentLate).toEqual(lateMeetings);
+    });
+
+    it('response giữ đúng contract: userId/fullName/email/employeeCode/departmentName/avatarUrl từ profile', async () => {
+      mockRepo.getUserProfileForStats.mockResolvedValue(baseProfile);
+      mockRepo.getPersonalKpiTotals.mockResolvedValue({
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      });
+      mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
+      mockRepo.getLateHistory.mockResolvedValue([]);
+      mockRepo.getLateByDepartment.mockResolvedValue([]);
+
+      const result = await service.getPersonalStats(
+        { userId: mockUserId },
+        {},
+      );
+      expect(result.data.userId).toBe(mockUserId);
+      expect(result.data.fullName).toBe('Nguyen Van A');
+      expect(result.data.email).toBe('a@co.com');
+      expect(result.data.employeeCode).toBe('EMP001');
+      expect(result.data.departmentName).toBe('Phong IT');
+      expect(result.data.avatarUrl).toBeNull();
     });
   });
 });

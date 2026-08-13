@@ -190,12 +190,13 @@ describe('OnTimeRateRepository', () => {
   });
 
   describe('getLateByDepartment', () => {
-    it('queries breakdown joined with departments', async () => {
+    it('queries breakdown joined with departments, kèm on_time_count riêng (FIX 2026-08-13)', async () => {
       mockQuery.mockResolvedValue([
         {
           department_id: 'd1',
           department_name: 'Dept 1',
           late_count: 5,
+          on_time_count: 20,
           total_count: 30,
         },
       ]);
@@ -205,6 +206,7 @@ describe('OnTimeRateRepository', () => {
         departmentId: 'd1',
         departmentName: 'Dept 1',
         lateCount: 5,
+        onTimeCount: 20,
         totalRequiredParticipants: 30,
       });
 
@@ -213,6 +215,102 @@ describe('OnTimeRateRepository', () => {
         'INNER JOIN departments d ON d.id = c.department_id',
       );
       expect(sql).toContain('GROUP BY d.id, d.department_name');
+      expect(sql).toContain(
+        "COUNT(*) FILTER (WHERE c.status_bucket = 'on_time')::int AS on_time_count",
+      );
+    });
+  });
+
+  describe('getUserProfileForStats', () => {
+    it('queries user profile joined with department name', async () => {
+      mockQuery.mockResolvedValue([
+        {
+          id: 'u1',
+          fullName: 'Nguyen Van A',
+          email: 'a@co.com',
+          employeeCode: 'EMP001',
+          avatarUrl: null,
+          departmentId: 'd1',
+          departmentName: 'Phong IT',
+        },
+      ]);
+      const result = await repo.getUserProfileForStats('u1');
+      expect(result).toEqual({
+        id: 'u1',
+        fullName: 'Nguyen Van A',
+        email: 'a@co.com',
+        employeeCode: 'EMP001',
+        avatarUrl: null,
+        departmentId: 'd1',
+        departmentName: 'Phong IT',
+      });
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('LEFT JOIN departments d ON d.id = u.department_id'),
+        ['u1'],
+      );
+    });
+
+    it('returns null if user not found', async () => {
+      mockQuery.mockResolvedValue([]);
+      const result = await repo.getUserProfileForStats('missing');
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('getPersonalKpiTotals', () => {
+    it('lọc theo mp.user_id, KHÔNG dùng is_required/attendance_required', async () => {
+      mockQuery.mockResolvedValue([
+        { on_time_count: 8, late_count: 2, absent_count: 0, total_count: 10 },
+      ]);
+      const result = await repo.getPersonalKpiTotals(
+        'u1',
+        '2026-06-01',
+        '2026-06-30',
+        5,
+      );
+      expect(result).toEqual({
+        onTimeCount: 8,
+        lateCount: 2,
+        absentCount: 0,
+        totalRequiredParticipants: 10,
+      });
+
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toContain('mp.user_id = $1');
+      expect(sql).toContain("mp.invitation_status <> 'declined'");
+      expect(sql).not.toContain('is_required');
+      expect(sql).not.toContain('attendance_required');
+      expect(mockQuery).toHaveBeenCalledWith(sql, ['u1', 5, '2026-06-01', '2026-06-30']);
+    });
+  });
+
+  describe('getPersonalTrendByWeek', () => {
+    it('queries per-user weekly trend grouped by week', async () => {
+      mockQuery.mockResolvedValue([
+        {
+          week_key: '2026-06-01',
+          on_time_count: 3,
+          late_count: 1,
+          absent_count: 0,
+          total_count: 4,
+        },
+      ]);
+      const result = await repo.getPersonalTrendByWeek(
+        'u1',
+        '2026-06-01',
+        '2026-06-30',
+        5,
+      );
+      expect(result.get('2026-06-01')).toEqual({
+        onTimeCount: 3,
+        lateCount: 1,
+        absentCount: 0,
+        totalRequiredParticipants: 4,
+      });
+
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toContain('mp.user_id = $1');
+      expect(sql).toContain('GROUP BY week_start');
     });
   });
 

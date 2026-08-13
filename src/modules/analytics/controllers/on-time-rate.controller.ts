@@ -25,10 +25,12 @@ import { OnTimeRateService } from '../services/on-time-rate.service';
 import { QueryOnTimeRateDto } from '../dto/query-on-time-rate.dto';
 import { QueryLateHistoryDto } from '../dto/query-late-history.dto';
 import { UserLateStatsQueryDto } from '../dto/query-user-late-stats.dto';
+import { QueryPersonalStatsDto } from '../dto/query-personal-stats.dto';
 import {
   OnTimeRateResponseDto,
   LateHistoryResponseDto,
   UserLateStatsResponseDto,
+  PersonalStatsResponseDto,
 } from '../dto/on-time-rate-response.dto';
 
 @ApiTags('Analytics Attendance')
@@ -72,6 +74,64 @@ export class OnTimeRateController {
   }> {
     try {
       const { data, message } = await this.service.getOnTimeRate(
+        currentUser,
+        query,
+      );
+      return {
+        success: true,
+        message,
+        data,
+        meta: {},
+      };
+    } catch (error: unknown) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new InternalServerErrorException({
+        success: false,
+        message: 'Internal server error',
+        error: { code: 'INTERNAL_ERROR', details: {} },
+      });
+    }
+  }
+
+  @Get('on-time-rate/me')
+  // [FIX 2026-08-13, R2] Ghi đè metadata permission ở MỨC HANDLER (mảng rỗng) — Reflector
+  // dùng getAllAndOverride nên metadata handler ưu tiên hơn @RequirePermissions('analytics.
+  // attendance.read') ở class-level, khiến PermissionsGuard trả về true ngay (permissions.
+  // guard.ts:25-27) mà KHÔNG đụng 3 route còn lại trong controller này. Guard hiệu lực thật
+  // sự trên route này chỉ còn JwtAuthGuard — đúng yêu cầu "mọi role đều xem được chính mình".
+  @RequirePermissions()
+  @ApiOperation({
+    summary: 'Xem thong ke chuyen can ca nhan (thong ke cua chinh minh)',
+    description:
+      'Tra ve thong ke ty le dung gio/di tre/vang mat cua nguoi dung hien tai (tu JWT), ' +
+      'kem trung binh phong ban va lich su di tre gan day. Khong nhan userId tu URL/query.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Thong ke chuyen can ca nhan duoc truy xuat thanh cong',
+    type: PersonalStatsResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR / DATE_RANGE_TOO_LARGE',
+  })
+  @ApiResponse({ status: 401, description: 'Chua dang nhap' })
+  @ApiResponse({ status: 404, description: 'USER_NOT_FOUND' })
+  @ApiResponse({ status: 500, description: 'INTERNAL_ERROR' })
+  async getPersonalStats(
+    @Query(new ValidationPipe({ transform: true, whitelist: true }))
+    query: QueryPersonalStatsDto,
+    @CurrentUser() currentUser: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: PersonalStatsResponseDto;
+    meta: Record<string, any>;
+  }> {
+    try {
+      const { data, message } = await this.service.getPersonalStats(
         currentUser,
         query,
       );

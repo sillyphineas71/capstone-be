@@ -300,6 +300,7 @@ export class OnTimeRateRepository {
       departmentId: string;
       departmentName: string;
       lateCount: number;
+      onTimeCount: number;
       totalRequiredParticipants: number;
     }>
   > {
@@ -335,6 +336,7 @@ export class OnTimeRateRepository {
         d.id AS department_id,
         d.department_name AS department_name,
         COUNT(*) FILTER (WHERE c.status_bucket = 'late')::int AS late_count,
+        COUNT(*) FILTER (WHERE c.status_bucket = 'on_time')::int AS on_time_count,
         COUNT(*)::int AS total_count
       FROM classified c
       INNER JOIN departments d ON d.id = c.department_id
@@ -352,8 +354,176 @@ export class OnTimeRateRepository {
       departmentId: r.department_id,
       departmentName: r.department_name,
       lateCount: r.late_count,
+      onTimeCount: r.on_time_count,
       totalRequiredParticipants: r.total_count,
     }));
+  }
+
+  /**
+   * Hồ sơ user cho endpoint /me — khác getUserDetails() ở chỗ có thêm
+   * employeeCode/avatarUrl/departmentName (đúng contract PersonalStatsResponseDto).
+   */
+  async getUserProfileForStats(userId: string): Promise<{
+    id: string;
+    fullName: string;
+    email: string;
+    employeeCode: string | null;
+    avatarUrl: string | null;
+    departmentId: string | null;
+    departmentName: string | null;
+  } | null> {
+    const rows = await this.dataSource.query(
+      `SELECT
+         u.id,
+         u.full_name AS "fullName",
+         u.email,
+         u.employee_code AS "employeeCode",
+         u.avatar_url AS "avatarUrl",
+         u.department_id AS "departmentId",
+         d.department_name AS "departmentName"
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE u.id = $1
+       LIMIT 1`,
+      [userId],
+    );
+    if (!rows || rows.length === 0) return null;
+    return rows[0];
+  }
+
+  /**
+   * KPI totals cho 1 user cụ thể (endpoint /me) — cùng logic phân loại on_time/late/absent
+   * và cùng điều kiện "participant bắt buộc" (mp.invitation_status <> 'declined') như
+   * getKpiTotals(), chỉ khác WHERE mp.user_id = $1 thay vì lọc theo department scope.
+   */
+  async getPersonalKpiTotals(
+    userId: string,
+    from: string,
+    to: string,
+    graceMinutes: number,
+  ): Promise<{
+    onTimeCount: number;
+    lateCount: number;
+    absentCount: number;
+    totalRequiredParticipants: number;
+  }> {
+    const sql = `
+      WITH classified AS (
+        SELECT
+          CASE
+            WHEN ar.id IS NULL OR ar.attendance_status = 'absent' OR NOT ar.is_present THEN 'absent'
+            WHEN $2 = 0 THEN
+              CASE WHEN NOT ar.is_late THEN 'on_time' ELSE 'late' END
+            ELSE
+              CASE WHEN ar.late_minutes IS NULL OR ar.late_minutes <= $2 THEN 'on_time' ELSE 'late' END
+          END AS status_bucket
+        FROM meeting_participants mp
+        INNER JOIN meetings m ON m.id = mp.meeting_id
+        LEFT JOIN attendance_records ar ON ar.meeting_id = m.id AND ar.user_id = mp.user_id
+        WHERE m.status = 'completed'
+          AND m.deleted_at IS NULL
+          AND mp.invitation_status <> 'declined'
+          AND (ar.id IS NULL OR ar.attendance_status NOT IN ('invalidated', 'pending_review'))
+          AND mp.user_id = $1
+          AND m.start_time >= ($3 || ' 00:00:00+07')::timestamptz
+          AND m.start_time <= ($4 || ' 23:59:59.999+07')::timestamptz
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE status_bucket = 'on_time')::int AS on_time_count,
+        COUNT(*) FILTER (WHERE status_bucket = 'late')::int AS late_count,
+        COUNT(*) FILTER (WHERE status_bucket = 'absent')::int AS absent_count,
+        COUNT(*)::int AS total_count
+      FROM classified
+    `;
+
+    const rows = await this.dataSource.query(sql, [
+      userId,
+      graceMinutes,
+      from,
+      to,
+    ]);
+
+    return {
+      onTimeCount: rows?.[0]?.on_time_count ?? 0,
+      lateCount: rows?.[0]?.late_count ?? 0,
+      absentCount: rows?.[0]?.absent_count ?? 0,
+      totalRequiredParticipants: rows?.[0]?.total_count ?? 0,
+    };
+  }
+
+  /**
+   * Trend theo tuần cho 1 user cụ thể (endpoint /me) — mirror getTrendByWeek(),
+   * lọc theo mp.user_id thay vì department scope.
+   */
+  async getPersonalTrendByWeek(
+    userId: string,
+    from: string,
+    to: string,
+    graceMinutes: number,
+  ): Promise<
+    Map<
+      string,
+      {
+        onTimeCount: number;
+        lateCount: number;
+        absentCount: number;
+        totalRequiredParticipants: number;
+      }
+    >
+  > {
+    const sql = `
+      WITH classified AS (
+        SELECT
+          date_trunc('week', m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS week_start,
+          CASE
+            WHEN ar.id IS NULL OR ar.attendance_status = 'absent' OR NOT ar.is_present THEN 'absent'
+            WHEN $2 = 0 THEN
+              CASE WHEN NOT ar.is_late THEN 'on_time' ELSE 'late' END
+            ELSE
+              CASE WHEN ar.late_minutes IS NULL OR ar.late_minutes <= $2 THEN 'on_time' ELSE 'late' END
+          END AS status_bucket
+        FROM meeting_participants mp
+        INNER JOIN meetings m ON m.id = mp.meeting_id
+        LEFT JOIN attendance_records ar ON ar.meeting_id = m.id AND ar.user_id = mp.user_id
+        WHERE m.status = 'completed'
+          AND m.deleted_at IS NULL
+          AND mp.invitation_status <> 'declined'
+          AND (ar.id IS NULL OR ar.attendance_status NOT IN ('invalidated', 'pending_review'))
+          AND mp.user_id = $1
+          AND m.start_time >= ($3 || ' 00:00:00+07')::timestamptz
+          AND m.start_time <= ($4 || ' 23:59:59.999+07')::timestamptz
+      )
+      SELECT
+        week_start::text AS week_key,
+        COUNT(*) FILTER (WHERE status_bucket = 'on_time')::int AS on_time_count,
+        COUNT(*) FILTER (WHERE status_bucket = 'late')::int AS late_count,
+        COUNT(*) FILTER (WHERE status_bucket = 'absent')::int AS absent_count,
+        COUNT(*)::int AS total_count
+      FROM classified
+      GROUP BY week_start
+      ORDER BY week_start ASC
+    `;
+
+    const rows = await this.dataSource.query(sql, [userId, graceMinutes, from, to]);
+
+    const result = new Map<
+      string,
+      {
+        onTimeCount: number;
+        lateCount: number;
+        absentCount: number;
+        totalRequiredParticipants: number;
+      }
+    >();
+    for (const row of rows) {
+      result.set(row.week_key, {
+        onTimeCount: row.on_time_count,
+        lateCount: row.late_count,
+        absentCount: row.absent_count,
+        totalRequiredParticipants: row.total_count,
+      });
+    }
+    return result;
   }
 
   async getLateHistory(

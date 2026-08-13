@@ -18,6 +18,7 @@ describe('OnTimeRateController', () => {
       getOnTimeRate: jest.fn(),
       getLateHistory: jest.fn(),
       getOnTimeRateByUsers: jest.fn(),
+      getPersonalStats: jest.fn(),
     } as unknown as jest.Mocked<OnTimeRateService>;
 
     controller = new OnTimeRateController(mockService);
@@ -232,6 +233,73 @@ describe('OnTimeRateController', () => {
 
       await expect(
         controller.getOnTimeRateByUsers({} as any, { userId: mockUserId }),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
+  describe('getPersonalStats (GET /analytics/attendance/on-time-rate/me)', () => {
+    it('valid request -> 200, currentUser.userId truyền thẳng xuống service, không nhận userId từ query', async () => {
+      const mockResult = {
+        data: {
+          userId: mockUserId,
+          fullName: 'Nguyen Van A',
+          email: 'a@co.com',
+          employeeCode: 'EMP001',
+          departmentName: 'Phong IT',
+          avatarUrl: null,
+          period: { from: '2026-06-01', to: '2026-06-30' },
+          graceMinutes: 5,
+          summary: {
+            totalRequired: 10,
+            onTimeCount: 8,
+            lateCount: 2,
+            absentCount: 0,
+            onTimeRate: 80.0,
+            lateRate: 20.0,
+          },
+          departmentAvg: {
+            departmentId: 'd1',
+            departmentName: 'Phong IT',
+            onTimeRate: 70.0,
+          },
+          trend: [],
+          recentLate: [],
+        },
+        message: 'Thống kê chuyên cần cá nhân được truy xuất thành công',
+      };
+      mockService.getPersonalStats.mockResolvedValue(mockResult);
+
+      // Query cố tình chèn userId lạ để xác nhận controller/service bỏ qua nó hoàn toàn.
+      const query = { preset: 'month', userId: 'someone-else' } as any;
+      const result = await controller.getPersonalStats(query, {
+        userId: mockUserId,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.userId).toBe(mockUserId);
+      expect(mockService.getPersonalStats).toHaveBeenCalledWith(
+        { userId: mockUserId },
+        query,
+      );
+    });
+
+    it('service throws NotFoundException -> re-thrown as-is', async () => {
+      mockService.getPersonalStats.mockRejectedValue(
+        new NotFoundException({ success: false, message: 'User not found' }),
+      );
+
+      await expect(
+        controller.getPersonalStats({} as any, { userId: mockUserId }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('service throws unexpected error -> InternalServerErrorException', async () => {
+      mockService.getPersonalStats.mockRejectedValue(
+        new Error('DB failure'),
+      );
+
+      await expect(
+        controller.getPersonalStats({} as any, { userId: mockUserId }),
       ).rejects.toThrow(InternalServerErrorException);
     });
   });

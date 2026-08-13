@@ -12,6 +12,7 @@ import { DashboardOverviewConfigService } from './dashboard-overview-config.serv
 import { QueryOnTimeRateDto } from '../dto/query-on-time-rate.dto';
 import { QueryLateHistoryDto } from '../dto/query-late-history.dto';
 import { UserLateStatsQueryDto } from '../dto/query-user-late-stats.dto';
+import { QueryPersonalStatsDto } from '../dto/query-personal-stats.dto';
 import {
   OnTimeRateResponseDto,
   LateHistoryResponseDto,
@@ -19,6 +20,8 @@ import {
   TrendPointDto,
   HourBucketDto,
   DepartmentLateItemDto,
+  PersonalStatsResponseDto,
+  DepartmentAvgDto,
 } from '../dto/on-time-rate-response.dto';
 
 interface ScopeResult {
@@ -369,6 +372,120 @@ export class OnTimeRateService {
   }
 
   /**
+   * Orchestrator for Personal Attendance Stats (GET /analytics/attendance/on-time-rate/me).
+   * userId luôn lấy từ JWT (currentUser) — không nhận userId từ URL/query, không cần
+   * resolveScope()/permission riêng (guard: JwtAuthGuard only, xem OnTimeRateController).
+   */
+  async getPersonalStats(
+    currentUser: { userId: string },
+    query: QueryPersonalStatsDto,
+  ): Promise<{ data: PersonalStatsResponseDto; message: string }> {
+    const graceMinutes = query.graceMinutes ?? 5;
+
+    // 1. Resolve date range (tái dùng resolveDateRange() có sẵn)
+    const { from, to } = this.resolveDateRange(
+      query.preset,
+      query.from,
+      query.to,
+    );
+
+    // 2. Validate max range days
+    await this.validateMaxRange(from, to);
+
+    // 3. Load profile (self)
+    const profile = await this.repo.getUserProfileForStats(currentUser.userId);
+    if (!profile) {
+      throw new NotFoundException({
+        success: false,
+        message: 'User not found',
+        error: { code: 'USER_NOT_FOUND', details: {} },
+      });
+    }
+
+    // 4. Personal KPI + trend + recent late meetings
+    const kpi = await this.repo.getPersonalKpiTotals(
+      currentUser.userId,
+      from,
+      to,
+      graceMinutes,
+    );
+    const trendMap = await this.repo.getPersonalTrendByWeek(
+      currentUser.userId,
+      from,
+      to,
+      graceMinutes,
+    );
+    const recentLate = await this.repo.getLateHistory(
+      currentUser.userId,
+      from,
+      to,
+      graceMinutes,
+    );
+
+    // 5. Department average on-time rate (so sánh cá nhân vs phòng ban)
+    let departmentAvg: DepartmentAvgDto | null = null;
+    if (profile.departmentId) {
+      const deptRows = await this.repo.getLateByDepartment({
+        from,
+        to,
+        scopeDepartmentIds: null,
+        departmentId: profile.departmentId,
+        graceMinutes,
+      });
+      const deptRow = deptRows[0];
+      if (deptRow && deptRow.totalRequiredParticipants > 0) {
+        departmentAvg = {
+          departmentId: deptRow.departmentId,
+          departmentName: deptRow.departmentName,
+          onTimeRate:
+            Math.round(
+              (deptRow.onTimeCount / deptRow.totalRequiredParticipants) *
+                1000,
+            ) / 10,
+        };
+      }
+    }
+
+    const data = this.buildPersonalStatsResponse(
+      profile,
+      kpi,
+      trendMap,
+      recentLate,
+      departmentAvg,
+      from,
+      to,
+      graceMinutes,
+    );
+
+    try {
+      await this.auditLogsService.logAction({
+        userId: currentUser.userId,
+        actionType: 'read_analytics_on_time_rate_me',
+        entityType: 'attendance_records',
+        metadataJson: {
+          viewerUserId: currentUser.userId,
+          from,
+          to,
+          graceMinutes,
+          totalRequiredParticipants: kpi.totalRequiredParticipants,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        'Failed to write audit log for personal on-time rate analytics',
+        err instanceof Error ? err.message : undefined,
+      );
+    }
+
+    const message =
+      kpi.totalRequiredParticipants === 0
+        ? 'Không tìm thấy dữ liệu điểm danh hợp lệ cho các điều kiện lọc được chọn.'
+        : 'Thống kê chuyên cần cá nhân được truy xuất thành công';
+
+    return { data, message };
+  }
+
+  /**
    * Resolve user scope based on roles.
    */
   async resolveScope(userId: string): Promise<ScopeResult> {
@@ -589,6 +706,7 @@ export class OnTimeRateService {
       departmentId: string;
       departmentName: string;
       lateCount: number;
+      onTimeCount: number;
       totalRequiredParticipants: number;
     }>,
     from: string,
@@ -655,12 +773,21 @@ export class OnTimeRateService {
           ? Math.round((row.lateCount / row.totalRequiredParticipants) * 1000) /
             10
           : 0;
+      // [FIX 2026-08-13] onTimeRate tính riêng qua onTimeCount thật (COUNT FILTER trong
+      // repository), KHÔNG suy từ 100-lateRate — tránh gộp nhầm absentCount.
+      const onTimeRate =
+        row.totalRequiredParticipants > 0
+          ? Math.round(
+              (row.onTimeCount / row.totalRequiredParticipants) * 1000,
+            ) / 10
+          : 0;
       return {
         departmentId: row.departmentId,
         departmentName: row.departmentName,
         lateCount: row.lateCount,
         totalRequiredParticipants: row.totalRequiredParticipants,
         lateRate: rate,
+        onTimeRate,
       };
     });
 
@@ -677,6 +804,99 @@ export class OnTimeRateService {
       trend,
       lateByHourOfDay,
       lateByDepartment,
+    };
+  }
+
+  /**
+   * Build personal stats response (GET /analytics/attendance/on-time-rate/me).
+   */
+  private buildPersonalStatsResponse(
+    profile: {
+      id: string;
+      fullName: string;
+      email: string;
+      employeeCode: string | null;
+      avatarUrl: string | null;
+      departmentName: string | null;
+    },
+    kpi: {
+      onTimeCount: number;
+      lateCount: number;
+      absentCount: number;
+      totalRequiredParticipants: number;
+    },
+    trendMap: Map<
+      string,
+      {
+        onTimeCount: number;
+        lateCount: number;
+        absentCount: number;
+        totalRequiredParticipants: number;
+      }
+    >,
+    recentLate: Array<{
+      meetingId: string;
+      meetingTitle: string;
+      scheduledStartTime: Date;
+      checkInTime: Date;
+      lateMinutes: number;
+    }>,
+    departmentAvg: DepartmentAvgDto | null,
+    from: string,
+    to: string,
+    graceMinutes: number,
+  ): PersonalStatsResponseDto {
+    const totalRequired = kpi.totalRequiredParticipants;
+    // [FIX] null khi totalRequired=0 — phân biệt "chưa có dữ liệu" với "0% đúng giờ".
+    const onTimeRate =
+      totalRequired > 0
+        ? Math.round((kpi.onTimeCount / totalRequired) * 1000) / 10
+        : null;
+    const lateRate =
+      totalRequired > 0
+        ? Math.round((kpi.lateCount / totalRequired) * 1000) / 10
+        : null;
+
+    const weeks = this.getWeeksInPeriod(from, to);
+    const trend: TrendPointDto[] = weeks.map((w) => {
+      const pt = trendMap.get(w) || {
+        onTimeCount: 0,
+        lateCount: 0,
+        absentCount: 0,
+        totalRequiredParticipants: 0,
+      };
+      const rate =
+        pt.totalRequiredParticipants > 0
+          ? Math.round((pt.onTimeCount / pt.totalRequiredParticipants) * 1000) /
+            10
+          : 0;
+      return {
+        period: w,
+        ...pt,
+        onTimeRate: rate,
+      };
+    });
+
+    return {
+      userId: profile.id,
+      fullName: profile.fullName,
+      email: profile.email,
+      employeeCode: profile.employeeCode,
+      departmentName: profile.departmentName,
+      avatarUrl: profile.avatarUrl,
+      period: { from, to },
+      graceMinutes,
+      summary: {
+        totalRequired,
+        onTimeCount: kpi.onTimeCount,
+        lateCount: kpi.lateCount,
+        absentCount: kpi.absentCount,
+        onTimeRate,
+        lateRate,
+      },
+      departmentAvg,
+      trend,
+      recentLate,
     };
   }
 
