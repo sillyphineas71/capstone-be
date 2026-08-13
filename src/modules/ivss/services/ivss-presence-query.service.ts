@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 
 interface RawEvt {
   event_time: Date | string;
@@ -47,6 +48,21 @@ interface Bound {
 const DEFAULT_GAP_SECONDS = 120;
 
 /**
+ * [FIX 2026-08-13] Scope xem presence — mirror resolveScope() của
+ * on-time-rate.service.ts, thêm nhánh EMPLOYEE (không có ở template gốc, vì các
+ * route analytics khác chặn hẳn EMPLOYEE — route presence này cho tự xem chính mình).
+ * isUnrestricted=true (SYSTEM_ADMIN/BUSINESS_ADMIN) bỏ qua mọi field còn lại.
+ */
+export interface IvssPresenceScope {
+  viewerRole: 'SYSTEM_ADMIN' | 'BUSINESS_ADMIN' | 'MANAGER' | 'EMPLOYEE';
+  isUnrestricted: boolean;
+  /** Chỉ có giá trị khi viewerRole = MANAGER. */
+  scopeDepartmentIds: string[] | null;
+  /** Chỉ có giá trị khi viewerRole = EMPLOYEE — phải khớp đúng userId đang xem. */
+  selfUserId: string | null;
+}
+
+/**
  * IvssPresenceQueryService (IPD-001 #41+#42) — READ-ONLY: dựng present-segments per (meeting,user)
  * từ iot_device_events (ivss_face_event) → #41 duration + #42 timeline. 1 nguồn (buildSession), không lệch.
  *
@@ -59,12 +75,139 @@ const DEFAULT_GAP_SECONDS = 120;
 export class IvssPresenceQueryService {
   private readonly logger = new Logger(IvssPresenceQueryService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly authzRepo: AuthzReadRepository,
+  ) {}
+
+  /**
+   * [FIX 2026-08-13] Resolve scope người gọi — public vì
+   * IvssPresenceReportService cần gọi trước khi build PDF (chặn EMPLOYEE hẳn,
+   * khác JSON endpoint chỉ lọc).
+   */
+  async resolveScope(callerId: string): Promise<IvssPresenceScope> {
+    const { roles } =
+      await this.authzRepo.getEffectiveRolesAndPermissions(callerId);
+
+    if (roles.includes('SYSTEM_ADMIN')) {
+      return {
+        viewerRole: 'SYSTEM_ADMIN',
+        isUnrestricted: true,
+        scopeDepartmentIds: null,
+        selfUserId: null,
+      };
+    }
+    if (roles.includes('BUSINESS_ADMIN')) {
+      return {
+        viewerRole: 'BUSINESS_ADMIN',
+        isUnrestricted: true,
+        scopeDepartmentIds: null,
+        selfUserId: null,
+      };
+    }
+    if (roles.includes('MANAGER')) {
+      const scopeDepartmentIds = await this.getManagerDepartmentIds(callerId);
+      return {
+        viewerRole: 'MANAGER',
+        isUnrestricted: false,
+        scopeDepartmentIds,
+        selfUserId: null,
+      };
+    }
+    // EMPLOYEE (hoặc role khác lỡ được cấp quyền ngoài dự kiến) → chỉ tự xem chính mình.
+    return {
+      viewerRole: 'EMPLOYEE',
+      isUnrestricted: false,
+      scopeDepartmentIds: null,
+      selfUserId: callerId,
+    };
+  }
+
+  /** Chặn 403 khi xem 1 người cụ thể (userPresence) không nằm trong scope. */
+  private async assertCanViewUser(
+    scope: IvssPresenceScope,
+    targetUserId: string,
+  ): Promise<void> {
+    if (scope.isUnrestricted) return;
+
+    if (scope.selfUserId !== null) {
+      if (scope.selfUserId === targetUserId) return;
+      throw new ForbiddenException({
+        success: false,
+        message: 'You can only view your own presence data',
+        error: { code: 'SELF_ONLY', details: {} },
+      });
+    }
+
+    if (scope.scopeDepartmentIds !== null) {
+      const departmentId = await this.getUserDepartmentId(targetUserId);
+      if (departmentId && scope.scopeDepartmentIds.includes(departmentId)) {
+        return;
+      }
+      throw new ForbiddenException({
+        success: false,
+        message: 'Department is outside your scope',
+        error: { code: 'DEPARTMENT_OUT_OF_SCOPE', details: {} },
+      });
+    }
+
+    throw new ForbiddenException({
+      success: false,
+      message: 'You do not have permission to view this presence data',
+      error: { code: 'PERMISSION_DENIED', details: {} },
+    });
+  }
+
+  /** Lọc danh sách participant theo scope — dùng cho getMeetingPresence (im lặng, KHÔNG 403). */
+  private async filterParticipantsByScope(
+    participants: ParticipantRow[],
+    scope: IvssPresenceScope,
+  ): Promise<ParticipantRow[]> {
+    if (scope.isUnrestricted) return participants;
+
+    if (scope.selfUserId !== null) {
+      return participants.filter((p) => p.user_id === scope.selfUserId);
+    }
+
+    if (scope.scopeDepartmentIds !== null) {
+      if (scope.scopeDepartmentIds.length === 0 || participants.length === 0) {
+        return [];
+      }
+      const rows: Array<{ user_id: string }> =
+        await this.dataSource.manager.query(
+          `SELECT id AS user_id FROM users
+          WHERE id = ANY($1::uuid[]) AND department_id = ANY($2::uuid[])`,
+          [participants.map((p) => p.user_id), scope.scopeDepartmentIds],
+        );
+      const allowed = new Set(rows.map((r) => r.user_id));
+      return participants.filter((p) => allowed.has(p.user_id));
+    }
+
+    return [];
+  }
+
+  private async getManagerDepartmentIds(userId: string): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM departments WHERE manager_user_id = $1 AND is_active = true`,
+      [userId],
+    );
+    return rows.map((r) => r.id);
+  }
+
+  private async getUserDepartmentId(userId: string): Promise<string | null> {
+    const rows: Array<{ department_id: string | null }> =
+      await this.dataSource.manager.query(
+        `SELECT department_id FROM users WHERE id = $1 LIMIT 1`,
+        [userId],
+      );
+    return rows[0]?.department_id ?? null;
+  }
 
   // ── #41 + #42 per-user ──────────────────────────────────────────────────
   async getUserPresence(
     meetingId: string,
     userId: string,
+    callerId: string,
   ): Promise<{
     duration: {
       durationMs: number;
@@ -83,6 +226,9 @@ export class IvssPresenceQueryService {
       unmatchedCount: number;
     };
   } | null> {
+    const scope = await this.resolveScope(callerId);
+    await this.assertCanViewUser(scope, userId);
+
     const bound = await this.loadBound(meetingId);
     if (!bound) return null;
 
@@ -117,7 +263,10 @@ export class IvssPresenceQueryService {
   }
 
   // ── per-meeting summary ─────────────────────────────────────────────────
-  async getMeetingPresence(meetingId: string): Promise<{
+  async getMeetingPresence(
+    meetingId: string,
+    callerId: string,
+  ): Promise<{
     participants: Array<{
       userId: string;
       fullName: string | null;
@@ -132,8 +281,15 @@ export class IvssPresenceQueryService {
     const bound = await this.loadBound(meetingId);
     if (!bound) return null;
 
+    const scope = await this.resolveScope(callerId);
     const gapMs = (await this.getGapThresholdSeconds()) * 1000;
-    const participants = await this.loadParticipants(meetingId);
+    // [FIX 2026-08-13] Lọc participant theo scope người gọi — im lặng (KHÔNG 403), EMPLOYEE
+    // chỉ còn đúng 1 dòng của chính họ, MANAGER chỉ còn participant thuộc phòng ban mình quản
+    // lý (lỗ hổng cũ: trước đây KHÔNG có bước lọc này, Manager xem được MỌI meeting).
+    const participants = await this.filterParticipantsByScope(
+      await this.loadParticipants(meetingId),
+      scope,
+    );
 
     const rows: Array<{
       userId: string;

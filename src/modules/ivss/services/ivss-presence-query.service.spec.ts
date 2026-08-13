@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
+import { ForbiddenException } from '@nestjs/common';
 import { IvssPresenceQueryService } from './ivss-presence-query.service.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 
 const T = (hhmm: string) => `2026-06-23T${hhmm}:00.000Z`;
 const MIN = 60 * 1000;
@@ -14,9 +16,15 @@ const ev = (hhmm: string, direction: string) => ({
   sz_uid: 'SZ1',
 });
 
+// [FIX 2026-08-13] getUserPresence()/getMeetingPresence() giờ bắt buộc callerId (scope-check).
+// Caller mặc định cho toàn bộ test thuật toán streak/duration (không liên quan scope) — luôn
+// SYSTEM_ADMIN (unrestricted) để hành vi các test này giữ nguyên như trước fix.
+const ADMIN_CALLER = 'admin-1';
+
 describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
   let service: IvssPresenceQueryService;
   let dsMock: any;
+  let authzMock: any;
 
   const wire = (
     o: {
@@ -59,16 +67,23 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
 
   beforeEach(async () => {
     dsMock = { manager: { query: jest.fn() } };
+    authzMock = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: ['SYSTEM_ADMIN'], permissions: [] }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IvssPresenceQueryService,
         { provide: DataSource, useValue: dsMock },
+        { provide: AuthzReadRepository, useValue: authzMock },
       ],
     }).compile();
     service = module.get(IvssPresenceQueryService);
   });
 
-  const dur = async () => (await service.getUserPresence('m1', 'u1'))!;
+  const dur = async () =>
+    (await service.getUserPresence('m1', 'u1', ADMIN_CALLER))!;
 
   it('enter/leave sạch → 2 segment interval, duration = Σ', async () => {
     wire({
@@ -147,7 +162,7 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
       if (sql.includes('unmatched')) return Promise.resolve([{ n: 0 }]);
       return Promise.resolve([]);
     });
-    const r = (await service.getUserPresence('m1', 'u1'))!;
+    const r = (await service.getUserPresence('m1', 'u1', ADMIN_CALLER))!;
     expect(r.duration.durationMs).toBe(GAP_MS);
   });
 
@@ -229,7 +244,7 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
 
   it('meeting không tồn tại → null', async () => {
     wire({ noMeeting: true });
-    expect(await service.getUserPresence('m1', 'u1')).toBeNull();
+    expect(await service.getUserPresence('m1', 'u1', ADMIN_CALLER)).toBeNull();
   });
 
   // ── per-meeting summary ──
@@ -242,7 +257,7 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
       ],
       unmatchedIdentity: 7,
     });
-    const r = (await service.getMeetingPresence('m1'))!;
+    const r = (await service.getMeetingPresence('m1', ADMIN_CALLER))!;
     expect(r.participants.length).toBe(2);
     expect(r.participants[0]).toHaveProperty('method'); // C2
     expect(r.participants[0].fullName).toBe('Alice');
@@ -251,6 +266,149 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
 
   it('getMeetingPresence: meeting không tồn tại → null', async () => {
     wire({ noMeeting: true });
-    expect(await service.getMeetingPresence('m1')).toBeNull();
+    expect(await service.getMeetingPresence('m1', ADMIN_CALLER)).toBeNull();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // [FIX 2026-08-13] Scope-check — lỗ hổng đang tồn tại thật (Manager xem được
+  // MỌI meeting không giới hạn phòng ban), đã xác nhận qua recon, vá tại đây.
+  // ══════════════════════════════════════════════════════════════════════
+  describe('resolveScope() + scope-check (FIX 2026-08-13)', () => {
+    const targetUserId = 'target-u1';
+
+    const roleOf = (role: string): void => {
+      authzMock.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: [role],
+        permissions: [],
+      });
+    };
+
+    beforeEach(() => {
+      // Mọi test scope KHÔNG cần thuật toán streak đúng — chỉ cần loadBound() +
+      // loadEvents() không throw. Wire tối thiểu.
+      wire({ events: [] });
+    });
+
+    it('EMPLOYEE gọi getUserPresence cho CHÍNH MÌNH → thành công', async () => {
+      roleOf('EMPLOYEE');
+      const r = await service.getUserPresence('m1', 'self-1', 'self-1');
+      expect(r).not.toBeNull();
+    });
+
+    it('EMPLOYEE gọi getUserPresence cho NGƯỜI KHÁC → 403 SELF_ONLY', async () => {
+      roleOf('EMPLOYEE');
+      let caught: unknown;
+      try {
+        await service.getUserPresence('m1', targetUserId, 'self-1');
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      expect((caught as ForbiddenException).getResponse()).toMatchObject({
+        error: { code: 'SELF_ONLY' },
+      });
+    });
+
+    it('EMPLOYEE gọi getMeetingPresence → lọc CHỈ còn đúng 1 dòng của chính họ (im lặng, KHÔNG 403)', async () => {
+      roleOf('EMPLOYEE');
+      wire({
+        events: [],
+        participants: [
+          { user_id: 'self-1', full_name: 'Chính họ' },
+          { user_id: 'other-1', full_name: 'Người khác' },
+        ],
+      });
+      const r = (await service.getMeetingPresence('m1', 'self-1'))!;
+      expect(r.participants).toHaveLength(1);
+      expect(r.participants[0].userId).toBe('self-1');
+    });
+
+    it('MANAGER gọi cho participant TRONG phòng ban mình quản lý → thành công', async () => {
+      roleOf('MANAGER');
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM meetings WHERE id'))
+          return Promise.resolve([
+            {
+              start_time: T('09:00'),
+              end_time: T('10:00'),
+              status: 'completed',
+            },
+          ]);
+        if (sql.includes('FROM departments WHERE manager_user_id'))
+          return Promise.resolve([{ id: 'dept-1' }]);
+        if (sql.includes('SELECT department_id FROM users'))
+          return Promise.resolve([{ department_id: 'dept-1' }]);
+        if (sql.includes("'matched'")) return Promise.resolve([]);
+        if (sql.includes('unmatched')) return Promise.resolve([{ n: 0 }]);
+        return Promise.resolve([]);
+      });
+      const r = await service.getUserPresence('m1', targetUserId, 'mgr-1');
+      expect(r).not.toBeNull();
+    });
+
+    // [FIX 2026-08-13] TEST QUAN TRỌNG NHẤT — xác nhận lỗ hổng đang tồn tại thật
+    // (Manager xem được presence của MỌI meeting, không giới hạn phòng ban) đã được vá.
+    it('MANAGER gọi cho participant NGOÀI phòng ban mình quản lý → 403 DEPARTMENT_OUT_OF_SCOPE', async () => {
+      roleOf('MANAGER');
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM departments WHERE manager_user_id'))
+          return Promise.resolve([{ id: 'dept-1' }]); // Manager quản lý dept-1
+        if (sql.includes('SELECT department_id FROM users'))
+          return Promise.resolve([{ department_id: 'dept-2' }]); // target thuộc dept-2
+        return Promise.resolve([]);
+      });
+      let caught: unknown;
+      try {
+        await service.getUserPresence('m1', targetUserId, 'mgr-1');
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      expect((caught as ForbiddenException).getResponse()).toMatchObject({
+        error: { code: 'DEPARTMENT_OUT_OF_SCOPE' },
+      });
+    });
+
+    it('MANAGER gọi getMeetingPresence cho họp liên phòng ban → CHỈ còn participant thuộc phòng ban mình', async () => {
+      roleOf('MANAGER');
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM meetings WHERE id'))
+          return Promise.resolve([
+            {
+              start_time: T('09:00'),
+              end_time: T('10:00'),
+              status: 'completed',
+            },
+          ]);
+        if (sql.includes('FROM departments WHERE manager_user_id'))
+          return Promise.resolve([{ id: 'dept-1' }]);
+        if (sql.includes('meeting_participants'))
+          return Promise.resolve([
+            { user_id: 'in-scope-1', full_name: 'Trong phòng ban' },
+            { user_id: 'out-scope-1', full_name: 'Khác phòng ban' },
+          ]);
+        // filterParticipantsByScope: chỉ in-scope-1 thuộc dept-1.
+        if (sql.includes('WHERE id = ANY($1::uuid[])'))
+          return Promise.resolve([{ user_id: 'in-scope-1' }]);
+        if (sql.includes("'matched'")) return Promise.resolve([]);
+        if (sql.includes('unmatched')) return Promise.resolve([{ n: 0 }]);
+        return Promise.resolve([]);
+      });
+      const r = (await service.getMeetingPresence('m1', 'mgr-1'))!;
+      expect(r.participants).toHaveLength(1);
+      expect(r.participants[0].userId).toBe('in-scope-1');
+    });
+
+    it('BUSINESS_ADMIN → không giới hạn (trước đây 403 do thiếu permission)', async () => {
+      roleOf('BUSINESS_ADMIN');
+      const r = await service.getUserPresence('m1', targetUserId, 'ba-1');
+      expect(r).not.toBeNull();
+    });
+
+    it('SYSTEM_ADMIN → không giới hạn (regression)', async () => {
+      roleOf('SYSTEM_ADMIN');
+      const r = await service.getUserPresence('m1', targetUserId, 'sa-1');
+      expect(r).not.toBeNull();
+    });
   });
 });
