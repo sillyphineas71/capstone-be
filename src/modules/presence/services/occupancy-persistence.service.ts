@@ -79,6 +79,16 @@ interface UsageRow {
  * (booking_id) DO UPDATE`, tự tạo dòng nếu chưa có. `reconcilePendingConfirmations()` còn có
  * lỗi RIÊNG: INNER JOIN room_booking_usages ở bước chọn ứng viên loại bỏ hẳn các booking
  * thiếu dòng ngay từ đầu — đã đổi LEFT JOIN. Xem chi tiết ở comment của từng hàm.
+ *
+ * [FIX 2026-08-13, last_presence_at] `reconcilePendingConfirmations()` ghi
+ * `last_presence_at = confirmedSegment.start` — TRÙNG `first_presence_at`, sai với thực tế
+ * (đã xác nhận bằng dữ liệu production: booking có nhiều sự kiện trải dài hàng chục giây
+ * nhưng 2 cột đều = giờ sự kiện ĐẦU TIÊN). Ảnh hưởng: 6 nơi analytics/report dùng công thức
+ * `last_presence_at - first_presence_at` làm fallback tính thời lượng sử dụng phòng luôn ra
+ * 0 cho mọi booking chỉ dựa vào presence-detection. Root cause: `computeConfirmedSegment()`
+ * tính sẵn mốc quan sát cuối của đoạn nhưng không trả ra ngoài. Sửa: thêm field `lastSeenAt`
+ * vào kết quả trả về, dùng đúng giá trị đó thay vì `start`. `persist()`/nhánh
+ * `alreadyConfirmed` đã verify đúng bằng SQL thật, KHÔNG đụng tới.
  */
 @Injectable()
 export class OccupancyPersistenceService {
@@ -318,6 +328,13 @@ export class OccupancyPersistenceService {
    * Dùng chung cho cả 2 nơi: persist() (boundEnd = eventTime của event vừa nhận — chạy cho
    * CẢ event dương lẫn event=0, không chỉ event dương) và reconcilePendingConfirmations()
    * (boundEnd = now(), không phụ thuộc có event mới hay không) — 1 nguồn tính toán DUY NHẤT.
+   *
+   * [FIX 2026-08-13, last_presence_at] Trả thêm `lastSeenAt` = mốc quan sát cuối của đoạn
+   * (đã đóng: đúng lúc rời-đi-thật; còn mở: `boundEnd`) — trước đây giá trị này được tính
+   * ngay trong WHERE (`COALESCE(next_departure, boundEnd)`) nhưng không đưa ra ngoài, khiến
+   * `reconcilePendingConfirmations()` phải dùng tạm `start` cho cả `lastPresenceAt`, gây
+   * `first_presence_at`/`last_presence_at` luôn trùng nhau. `persist()` KHÔNG dùng field
+   * này (đã có `eventTime` thật, chính xác hơn) — không đổi hành vi.
    */
   private async computeConfirmedSegment(
     executor: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
@@ -326,7 +343,7 @@ export class OccupancyPersistenceService {
     boundEnd: Date,
     noiseToleranceSeconds: number,
     presenceConfirmSeconds: number,
-  ): Promise<{ start: Date; isActive: boolean } | null> {
+  ): Promise<{ start: Date; isActive: boolean; lastSeenAt: Date } | null> {
     const rows = (await executor.query(
       `WITH zero_events AS (
          SELECT event_time
@@ -381,7 +398,9 @@ export class OccupancyPersistenceService {
                   WHERE d.event_time > s.seg_last_positive) AS next_departure
            FROM segments s
        )
-       SELECT seg_start, (next_departure IS NULL) AS is_active
+       SELECT seg_start,
+              (next_departure IS NULL) AS is_active,
+              COALESCE(next_departure, $3::timestamptz) AS last_seen_at
          FROM segments_end
         WHERE COALESCE(next_departure, $3::timestamptz) - seg_start
               >= ($5::int * interval '1 second')
@@ -394,10 +413,18 @@ export class OccupancyPersistenceService {
         noiseToleranceSeconds,
         presenceConfirmSeconds,
       ],
-    )) as Array<{ seg_start: Date | string; is_active: boolean }>;
+    )) as Array<{
+      seg_start: Date | string;
+      is_active: boolean;
+      last_seen_at: Date | string;
+    }>;
     const row = rows?.[0];
     if (!row) return null;
-    return { start: new Date(row.seg_start), isActive: row.is_active };
+    return {
+      start: new Date(row.seg_start),
+      isActive: row.is_active,
+      lastSeenAt: new Date(row.last_seen_at),
+    };
   }
 
   /**
@@ -542,9 +569,15 @@ export class OccupancyPersistenceService {
         let statusChanged = false;
         try {
           // [FIX 2026-08-13, R13] UPSERT thay UPDATE đơn thuần — xem
-          // upsertPresenceConfirmation(). last_presence_at dùng confirmedSegment.start vì
-          // reconcile không có "eventTime" thật (không có event mới nào kích hoạt) — mốc
-          // hợp lý nhất hiện có là chính lúc xác nhận (đầu đoạn), KHÔNG suy đoán thêm.
+          // upsertPresenceConfirmation().
+          // [FIX 2026-08-13, last_presence_at] Trước đây dùng confirmedSegment.start cho
+          // CẢ firstPresenceAt lẫn lastPresenceAt (bug: 2 cột luôn trùng nhau, làm sai công
+          // thức actual_minutes = last_presence_at - first_presence_at ở 6 nơi
+          // analytics/report). reconcile không có "eventTime" thật (không có event mới nào
+          // kích hoạt) — nhưng computeConfirmedSegment() ĐÃ tính sẵn mốc quan sát cuối cùng
+          // của đoạn (COALESCE(next_departure, boundEnd) — đã đóng thì lấy đúng lúc rời đi
+          // thật, còn mở thì lấy boundEnd) qua field lastSeenAt, trước đây bị bỏ qua không
+          // trả ra ngoài. Dùng đúng giá trị đó, KHÔNG còn suy đoán.
           const { confirmed: justConfirmed } =
             await this.upsertPresenceConfirmation(queryRunner, {
               bookingId: c.booking_id,
@@ -553,7 +586,7 @@ export class OccupancyPersistenceService {
               reservedStartTime: new Date(c.reserved_start_time),
               reservedEndTime: new Date(c.reserved_end_time),
               firstPresenceAt: confirmedSegment.start,
-              lastPresenceAt: confirmedSegment.start,
+              lastPresenceAt: confirmedSegment.lastSeenAt,
             });
           // Chỉ flip rooms.current_status='occupied' nếu đoạn vừa xác nhận CÒN ĐANG MỞ
           // (người vẫn còn trong phòng) — đoạn đã đóng (họ rời đi rồi mới được reconcile

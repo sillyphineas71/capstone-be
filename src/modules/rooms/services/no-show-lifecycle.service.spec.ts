@@ -115,6 +115,36 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(dto.recipientUserIds).toEqual(['u1', 'u2']);
   });
 
+  // [FIX 2026-08-13] WS phải emit vào meeting:${meetingId} — client (host, InMeetingRoom.jsx)
+  // chỉ join meeting:<id>, KHÔNG bao giờ join room:${roomId} → event cũ chết trên đường đi.
+  it('warnBatch: emit WS meeting.noshow.alert vào ĐÚNG kênh meeting:${meetingId}, không phải room:${roomId}', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM no_show_cases nc') && sql.includes("'risk'"))
+        return Promise.resolve([
+          { id: 'c1', booking_id: 'b1', meeting_id: 'm1', room_id: 'r1' },
+        ]);
+      if (sql.includes('UPDATE no_show_cases'))
+        return Promise.resolve(ret([{ id: 'c1' }]));
+      if (sql.includes('FROM meetings')) return Promise.resolve(meetingRow);
+      return Promise.resolve([]);
+    });
+    await service.warnBatch();
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'meeting:m1',
+      'meeting.noshow.alert',
+      expect.objectContaining({
+        noShowCaseId: 'c1',
+        roomId: 'r1',
+        kind: 'warning',
+      }),
+    );
+    expect(wsMock.emitToRoom).not.toHaveBeenCalledWith(
+      'room:r1',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('warnBatch idempotent: UPDATE 0 row → KHÔNG notify', async () => {
     dsMock.manager.query.mockImplementation((sql: string) => {
       if (sql.includes('FROM no_show_cases nc') && sql.includes("'risk'"))
@@ -229,6 +259,28 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(
       sqls.some((s: string) => s.includes('INSERT INTO room_events')),
     ).toBe(true);
+  });
+
+  // [FIX 2026-08-13] release() cũng dùng chung notifyNoShow() → phải emit đúng
+  // meeting:${meetingId}, không phải room:${roomId} (mirror test warnBatch ở trên).
+  it('release: emit WS meeting.noshow.alert vào ĐÚNG kênh meeting:${meetingId}, kind=released', async () => {
+    wireRelease({});
+    await service.release({
+      caseId: 'c1',
+      actor: 'admin1',
+      reason: 'admin reason',
+      mode: 'manual',
+    });
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'meeting:m1',
+      'meeting.noshow.alert',
+      expect.objectContaining({ roomId: 'r1', kind: 'released' }),
+    );
+    expect(wsMock.emitToRoom).not.toHaveBeenCalledWith(
+      'room:r1',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('release auto → resolution released, KHÔNG audit (system)', async () => {

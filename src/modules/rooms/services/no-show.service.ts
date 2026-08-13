@@ -89,7 +89,7 @@ export class NoShowService {
       // WS best-effort — CHỈ khi thật sự insert (NC-5); lỗi WS KHÔNG fail create.
       try {
         this.websocketService.emitToRoom(
-          `room:${input.roomId}`,
+          `meeting:${input.meetingId}`,
           'meeting.noshow.alert',
           {
             meetingId: input.meetingId,

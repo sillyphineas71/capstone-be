@@ -434,11 +434,17 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
       };
       const segStart = new Date(Date.now() - 40_000); // 40s trước "now" thật của test
+      // [FIX 2026-08-13, last_presence_at] Đoạn CÒN MỞ (is_active=true) → next_departure
+      // NULL → computeConfirmedSegment() trả lastSeenAt = boundEnd (mô phỏng bằng 1 mốc
+      // khác segStart, để phân biệt rõ với bug cũ "cả 2 luôn trùng nhau").
+      const lastSeenAt = new Date(Date.now() - 2_000);
       dsManagerQueryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve([candidate]);
         if (sql.includes('real_departures'))
-          return Promise.resolve([{ seg_start: segStart, is_active: true }]);
+          return Promise.resolve([
+            { seg_start: segStart, is_active: true, last_seen_at: lastSeenAt },
+          ]);
         return Promise.resolve(undefined);
       });
       qr.query.mockImplementation((sql: string) => {
@@ -456,8 +462,10 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         String(c[0]).includes('INSERT INTO room_booking_usages'),
       );
       // params: [booking_id, meeting_id, room_id, reserved_start_time, reserved_end_time,
-      //          first_presence_at, last_presence_at] — reconcile không có "eventTime" thật
-      // nên last_presence_at = chính seg_start (mốc hợp lý nhất hiện có).
+      //          first_presence_at, last_presence_at].
+      // [FIX 2026-08-13, last_presence_at] last_presence_at giờ dùng đúng
+      // confirmedSegment.lastSeenAt (mốc quan sát cuối của đoạn) — KHÔNG còn dùng lại
+      // segStart cho cả 2 cột như bug cũ.
       expect(usageCall[1]).toEqual([
         'bk-9',
         'mt-9',
@@ -465,8 +473,9 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         candidate.reserved_start_time,
         candidate.reserved_end_time,
         segStart,
-        segStart,
+        lastSeenAt,
       ]);
+      expect(usageCall[1][6]).not.toEqual(usageCall[1][5]); // chặn hồi quy về bug cũ.
       expect(qrCalled('UPDATE rooms')).toBe(true);
     });
 
@@ -484,11 +493,14 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
       };
       const segStart = new Date(Date.now() - 45_000); // đứng im lặng 45s, không event mới nào tới thêm
+      const lastSeenAt = new Date(Date.now() - 1_000);
       dsManagerQueryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve([candidate]);
         if (sql.includes('real_departures'))
-          return Promise.resolve([{ seg_start: segStart, is_active: true }]);
+          return Promise.resolve([
+            { seg_start: segStart, is_active: true, last_seen_at: lastSeenAt },
+          ]);
         return Promise.resolve(undefined);
       });
       let insertCallCount = 0;
@@ -527,11 +539,21 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
       };
       const segStart = new Date(Date.now() - 60_000);
+      // [FIX 2026-08-13, last_presence_at] Đoạn ĐÃ ĐÓNG → next_departure có giá trị thật
+      // (lúc rời đi) — computeConfirmedSegment() trả lastSeenAt = đúng mốc đó, KHÔNG phải
+      // segStart. Đây chính là ca thật đêm nay (booking rời đi TRƯỚC khi cron kịp chạy).
+      const realDepartureTime = new Date(Date.now() - 8_000);
       dsManagerQueryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve([candidate]);
         if (sql.includes('real_departures'))
-          return Promise.resolve([{ seg_start: segStart, is_active: false }]);
+          return Promise.resolve([
+            {
+              seg_start: segStart,
+              is_active: false,
+              last_seen_at: realDepartureTime,
+            },
+          ]);
         return Promise.resolve(undefined);
       });
       qr.query.mockImplementation((sql: string) => {
@@ -543,6 +565,74 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
       const r = await service.reconcilePendingConfirmations();
       expect(r).toEqual({ scanned: 1, confirmed: 1 });
       expect(qrCalled('UPDATE rooms')).toBe(false); // isActive=false → không flip occupied.
+      const usageCall = qr.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO room_booking_usages'),
+      );
+      expect(usageCall[1][5]).toEqual(segStart); // first_presence_at = đầu đoạn.
+      expect(usageCall[1][6]).toEqual(realDepartureTime); // last_presence_at = lúc rời đi thật.
+      expect(usageCall[1][6]).not.toEqual(usageCall[1][5]);
+    });
+
+    // [FIX 2026-08-13, last_presence_at] TÁI HIỆN CHÍNH XÁC bug đã verify bằng SQL thật đêm
+    // nay: booking 8812c4b2 (cùng dữ liệu 6 event thật với describe "Tái hiện dữ liệu thật"
+    // bên dưới) — 19:28:44.027 count=1, 19:28:50.259 count=0, 19:28:51.259 count=0,
+    // 19:28:51.936 count=1, 19:29:36.876 count=0 (real_departure — không có event dương nào
+    // theo sau trong tolerance), 19:29:37.874 count=0. KHÔNG event nào trong 6 sự kiện này tự
+    // trigger persist() đủ ngưỡng lúc nó tới (đã xác nhận qua data thật) — chỉ reconcile chạy
+    // SAU đó (boundEnd=now(), không phải eventTime) mới xác nhận được, đúng kịch bản gây bug:
+    // reconcile dùng nhầm confirmedSegment.start cho CẢ 2 cột. Trước fix: first=last=19:28:44.027
+    // (SAI, đã verify bằng SQL thật trên Postgres). Sau fix: last phải = 19:29:36.876 (mốc rời đi
+    // thật của đoạn — computeConfirmedSegment() đã verify segment 19:28:44.027→19:29:36.876,
+    // 52.849s ≥ 30s, xem describe "Tái hiện dữ liệu thật").
+    it('TÁI HIỆN bug thật (booking 8812c4b2, reconcile xác nhận SAU khi mọi event đã tồn tại) → first_presence_at=19:28:44.027Z, last_presence_at=19:29:36.876Z (KHÔNG còn trùng nhau)', async () => {
+      const meetingId = 'bb163e69-1351-4dd5-b5c2-297fb8d9cdf3';
+      const bookingId = '8812c4b2-fd97-4b9b-8a98-3738511d6fa8';
+      const roomId = '097cf988-8976-42d9-a83d-e5a0013022d9';
+      const reservedStart = new Date('2026-08-12T19:28:00.000Z');
+      const reservedEnd = new Date('2026-08-12T20:28:00.000Z');
+      const segStart = new Date('2026-08-12T19:28:44.027Z');
+      const realDepartureTime = new Date('2026-08-12T19:29:36.876Z');
+
+      dsManagerQueryMock.mockImplementation((sql: string) => {
+        if (sql.includes('FROM room_bookings'))
+          return Promise.resolve([
+            {
+              booking_id: bookingId,
+              meeting_id: meetingId,
+              room_id: roomId,
+              reserved_start_time: reservedStart,
+              reserved_end_time: reservedEnd,
+            },
+          ]);
+        if (sql.includes('real_departures'))
+          return Promise.resolve([
+            {
+              seg_start: segStart,
+              is_active: false,
+              last_seen_at: realDepartureTime,
+            },
+          ]);
+        return Promise.resolve(undefined);
+      });
+      qr.query.mockImplementation((sql: string) => {
+        if (sql.includes('INSERT INTO room_booking_usages'))
+          return Promise.resolve([[{ id: 'usage-real' }], 1]);
+        return Promise.resolve(undefined);
+      });
+
+      const r = await service.reconcilePendingConfirmations();
+      expect(r).toEqual({ scanned: 1, confirmed: 1 });
+
+      const usageCall = qr.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO room_booking_usages'),
+      );
+      const [, , , , , firstPresenceAt, lastPresenceAt] = usageCall[1];
+      expect(firstPresenceAt).toEqual(segStart); // 2026-08-12T19:28:44.027Z — KHÔNG đổi.
+      expect(lastPresenceAt).toEqual(realDepartureTime); // 2026-08-12T19:29:36.876Z — ĐÚNG, không còn = firstPresenceAt.
+      expect(lastPresenceAt.getTime()).not.toBe(firstPresenceAt.getTime());
+      expect(lastPresenceAt.getTime()).toBeGreaterThan(
+        firstPresenceAt.getTime(),
+      );
     });
 
     it('chưa có đoạn nào đủ ngưỡng (SQL trả rỗng) → KHÔNG mở transaction, confirmed=0', async () => {
@@ -581,11 +671,14 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         reserved_end_time: new Date('2026-08-13T02:00:00.000Z'),
       };
       const segStart = new Date(Date.now() - 40_000);
+      const lastSeenAt = new Date(Date.now() - 1_000);
       dsManagerQueryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve([candidate]);
         if (sql.includes('real_departures'))
-          return Promise.resolve([{ seg_start: segStart, is_active: true }]);
+          return Promise.resolve([
+            { seg_start: segStart, is_active: true, last_seen_at: lastSeenAt },
+          ]);
         return Promise.resolve(undefined);
       });
       let insertAttempt = 0;
@@ -628,6 +721,7 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
         },
       ];
       const segStart = new Date(Date.now() - 40_000);
+      const lastSeenAt = new Date(Date.now() - 1_000);
       dsManagerQueryMock.mockImplementation((sql: string) => {
         if (sql.includes('FROM room_bookings'))
           return Promise.resolve(candidates);
@@ -636,7 +730,13 @@ describe('OccupancyPersistenceService (OCC-001 refactor)', () => {
             String(c[0]).includes('real_departures'),
           ).length === 1
             ? Promise.reject(new Error('db boom'))
-            : Promise.resolve([{ seg_start: segStart, is_active: true }]);
+            : Promise.resolve([
+                {
+                  seg_start: segStart,
+                  is_active: true,
+                  last_seen_at: lastSeenAt,
+                },
+              ]);
         }
         return Promise.resolve(undefined);
       });

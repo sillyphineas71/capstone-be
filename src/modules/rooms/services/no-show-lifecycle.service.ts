@@ -409,7 +409,7 @@ export class NoShowLifecycleService {
 
       try {
         this.websocketService.emitToRoom(
-          `room:${c.room_id}`,
+          `meeting:${c.meeting_id}`,
           'meeting.noshow.alert',
           meta,
         );
