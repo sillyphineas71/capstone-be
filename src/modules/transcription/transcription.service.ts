@@ -234,28 +234,45 @@ export class TranscriptionService {
       });
       const saved = await qr.manager.save(tx);
 
-      await this.queueService.addJob(
-        TRANSCRIPTION_QUEUE_NAME,
-        'transcription:' + bgJob.id,
-        {
-          backgroundJobId: bgJob.id,
-          transcriptId: saved.id,
-          meetingId,
-          recordingSessionId: dto.recordingSessionId,
-          sourceMediaFileId: primaryMedia.id,
-          storageBucket: primaryMedia.storageBucket,
-          storageKey: primaryMedia.storageKey,
-          language: dto.language || 'vi-VN',
-          speakerMappingMode: effectiveMode,
-          initialPrompt: dto.initialPrompt,
-          userId,
-          // Phase 2: channels array để AI Worker xử lý multi-channel.
-          ...(channels ? { channels } : {}),
-        },
-        { attempts: 3 },
-      );
-
       await qr.commitTransaction();
+
+      // QUAN TRỌNG: addJob() PHẢI đứng SAU commitTransaction(). Nếu enqueue
+      // trước khi commit, worker (BullMQ, chạy cùng process, đọc Redis gần
+      // như tức thời) có thể pick job và query transcriptRepo.findOne()
+      // TRƯỚC KHI transaction Postgres commit xong — transcriptRepo dùng
+      // connection/transaction khác nên không thấy row vừa insert, dẫn tới
+      // lỗi "Transcript ... not found" dù transcript đã được tạo thành công.
+      try {
+        await this.queueService.addJob(
+          TRANSCRIPTION_QUEUE_NAME,
+          'transcription:' + bgJob.id,
+          {
+            backgroundJobId: bgJob.id,
+            transcriptId: saved.id,
+            meetingId,
+            recordingSessionId: dto.recordingSessionId,
+            sourceMediaFileId: primaryMedia.id,
+            storageBucket: primaryMedia.storageBucket,
+            storageKey: primaryMedia.storageKey,
+            language: dto.language || 'vi-VN',
+            speakerMappingMode: effectiveMode,
+            initialPrompt: dto.initialPrompt,
+            userId,
+            // Phase 2: channels array để AI Worker xử lý multi-channel.
+            ...(channels ? { channels } : {}),
+          },
+          { attempts: 3 },
+        );
+      } catch (enqueueError) {
+        const errMsg =
+          enqueueError instanceof Error
+            ? enqueueError.message
+            : 'Unknown enqueue error';
+        await this.failTranscript(saved.id, errMsg);
+        await this.backgroundJobsService.markFailed(bgJob.id, errMsg);
+        throw enqueueError;
+      }
+
       this.logger.log(
         'Created job ' +
           bgJob.id +
@@ -274,7 +291,9 @@ export class TranscriptionService {
         transcriptStatus: TranscriptStatus.PROCESSING,
       };
     } catch (error) {
-      await qr.rollbackTransaction();
+      if (qr.isTransactionActive) {
+        await qr.rollbackTransaction();
+      }
       throw error;
     } finally {
       await qr.release();
