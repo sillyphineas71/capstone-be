@@ -84,6 +84,10 @@ import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
 
 import { MyScheduleDetailDto } from '../dto/my-schedule-detail.dto.js';
 
+import { MeetingHistoryQueryDto } from '../dto/meeting-history-query.dto.js';
+
+import { MeetingHistoryResponseDto } from '../dto/meeting-history-response.dto.js';
+
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
 
 import { RemoveParticipantBodyDto } from '../dto/remove-participant-body.dto.js';
@@ -886,6 +890,42 @@ export class MeetingsController {
       success: true,
 
       message: 'Lay lich thanh cong',
+
+      data: result,
+    };
+  }
+
+  @Get('me/meetings/history')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('schedule.read.self')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+
+      transform: true,
+
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async getMyMeetingHistory(
+    @CurrentUser() user: { userId: string },
+
+    @Query() dto: MeetingHistoryQueryDto,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: MeetingHistoryResponseDto;
+  }> {
+    const result = await this.meetingsService.getMyMeetingHistory(
+      user.userId,
+      dto,
+    );
+
+    return {
+      success: true,
+
+      message: 'Lay lich su cuoc hop thanh cong',
 
       data: result,
     };

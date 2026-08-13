@@ -133,6 +133,9 @@ import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
 import { ScheduleEventDto } from '../dto/schedule-event.dto.js';
 import { ScheduleRoomDto } from '../dto/schedule-room.dto.js';
 import { ScheduleRangeDto } from '../dto/schedule-range.dto.js';
+import { MeetingHistoryQueryDto } from '../dto/meeting-history-query.dto.js';
+import { MeetingHistoryResponseDto } from '../dto/meeting-history-response.dto.js';
+import { MeetingHistoryItemDto } from '../dto/meeting-history-item.dto.js';
 import {
   MyScheduleDetailDto,
   DetailMeetingDto,
@@ -3942,6 +3945,115 @@ export class MeetingsService {
           })
         : null,
       userRole,
+    });
+  }
+
+  async getMyMeetingHistory(
+    userId: string,
+    query: MeetingHistoryQueryDto,
+  ): Promise<MeetingHistoryResponseDto> {
+    const { page, limit, from, to, q } = query;
+    const status =
+      query.status && query.status.length > 0 ? query.status : ['completed'];
+
+    const qb = this.dataSource
+      .getRepository(MeetingEntity)
+      .createQueryBuilder('m')
+      .select(['m.id', 'm.title', 'm.startTime', 'm.endTime', 'm.status'])
+      .addSelect('r.id', 'room_id')
+      .addSelect('r.room_name', 'room_name')
+      .addSelect('r.room_code', 'room_code')
+      .addSelect(
+        `COALESCE(r.site_name || ', ' || r.area_name, r.location_description, '')`,
+        'room_location',
+      )
+      .addSelect('u.full_name', 'organizer_name')
+      .leftJoin(
+        'meeting_participants',
+        'mp',
+        'mp.meeting_id = m.id AND mp.user_id = :userId',
+        { userId },
+      )
+      .leftJoin('rooms', 'r', 'r.id = m.room_id')
+      .leftJoin('users', 'u', 'u.id = m.organizer_id')
+      .where(
+        '(m.organizer_id = :userId OR m.host_id = :userId OR mp.id IS NOT NULL)',
+        { userId },
+      )
+      .andWhere('m.status IN (:...status)', { status })
+      .andWhere('m.deleted_at IS NULL')
+      .orderBy('m.start_time', 'DESC');
+
+    if (from) {
+      qb.andWhere('m.start_time >= :from', { from: new Date(from) });
+    }
+    if (to) {
+      qb.andWhere('m.start_time <= :to', { to: new Date(to) });
+    }
+
+    const normalizedQ = this.normalizeSearchQuery(q);
+    if (normalizedQ) {
+      qb.andWhere('(m.title ILIKE :q OR m.meeting_code ILIKE :q)', {
+        q: normalizedQ,
+      });
+    }
+
+    const total = await qb.getCount();
+
+    qb.offset((page - 1) * limit).limit(limit);
+
+    let rawResults: any[];
+    try {
+      rawResults = await qb.getRawMany();
+    } catch (err) {
+      this.logger.error(
+        `getMyMeetingHistory query failed: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      throw err;
+    }
+
+    const items = rawResults.map((row) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const room: ScheduleRoomDto | null = row.room_id
+        ? new ScheduleRoomDto({
+            id: row.room_id,
+            roomName: row.room_name ?? '',
+            roomCode: row.room_code ?? '',
+            location: row.room_location ?? '',
+          })
+        : null;
+
+      const startTime: Date =
+        row.m_start_time instanceof Date
+          ? row.m_start_time
+          : new Date(row.m_start_time);
+      const endTime: Date =
+        row.m_end_time instanceof Date
+          ? row.m_end_time
+          : new Date(row.m_end_time);
+      const durationMinutes = Math.round(
+        (endTime.getTime() - startTime.getTime()) / 60000,
+      );
+
+      return new MeetingHistoryItemDto({
+        meetingId: row.m_id,
+        title: row.m_title,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        status: row.m_status,
+        room,
+        organizerName: row.organizer_name ?? '',
+        durationMinutes,
+      });
+    });
+
+    return new MeetingHistoryResponseDto({
+      items,
+      total,
+      page,
+      limit,
+      totalPages: limit > 0 ? Math.ceil(total / limit) : 0,
     });
   }
 
