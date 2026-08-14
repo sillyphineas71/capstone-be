@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
@@ -11,6 +11,14 @@ import {
 
 export class MeetingHistoryQueryDto {
   @IsOptional()
+  // Express/qs chi tra ve array khi query co >=2 gia tri cung key (vd
+  // status=a&status=b). Voi 1 gia tri (vd ?status=completed, cach FE luon
+  // gui), req.query.status la string thuan -> IN (:...status) crash o
+  // PostgresDriver.escapeQueryWithParameters (value.map is not a function).
+  // Chuan hoa ve array truoc khi validate/dua xuong service.
+  @Transform(({ value }) =>
+    value === undefined ? undefined : Array.isArray(value) ? value : [value],
+  )
   @IsEnum(
     [
       'draft',
