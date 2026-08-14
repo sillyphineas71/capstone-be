@@ -39,6 +39,8 @@ import { RealtimeStatusQueryDto } from '../dto/realtime-status-query.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
 import { UpdateRoomResponseDto } from '../dto/update-room-response.dto.js';
 import { SearchRoomsQueryDto } from '../dto/search-rooms-query.dto.js';
+import { AvailableRoomsQueryDto } from '../dto/available-rooms-query.dto.js';
+import { AvailableRoomItemDto } from '../dto/available-room-item.dto.js';
 import { DeletionImpactResponseDto } from '../dto/deletion-impact-response.dto.js';
 import { DeleteRoomResponseDto } from '../dto/delete-room-response.dto.js';
 import { RoomDetailResponseDto } from '../dto/room-detail-response.dto.js';
@@ -80,6 +82,23 @@ export class RoomsController {
       data: result.rooms,
       meta: result.meta,
     };
+  }
+
+  // Yeu cau FE (Docs/Nam_Sent/backend_api_requirements_available_rooms.md):
+  // loc phong trong theo khung gio (khong bi trung lich) + suc chua toi thieu.
+  // Khai TRUOC ':roomId' (cung 1 segment, giong 'search'/'realtime-status').
+  @Get('available')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiOperation({ summary: 'Tim phong hop trong theo khung gio' })
+  @ApiResponse({ status: 200, description: 'Danh sach phong trong' })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  async available(
+    @Query() query: AvailableRoomsQueryDto,
+  ): Promise<{ success: boolean; data: AvailableRoomItemDto[] }> {
+    const data = await this.roomSearchService.getAvailableRooms(query);
+    return { success: true, data };
   }
 
   @Post()
