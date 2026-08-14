@@ -2,6 +2,10 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { SearchRoomsQueryDto } from '../dto/search-rooms-query.dto.js';
 import { RoomSearchItemDto } from '../dto/room-search-item.dto.js';
+import { AvailableRoomsQueryDto } from '../dto/available-rooms-query.dto.js';
+import { AvailableRoomItemDto } from '../dto/available-room-item.dto.js';
+import { RoomStatus } from '../entities/room.entity.js';
+import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 
 interface RoomSearchRow {
   id: string;
@@ -19,6 +23,19 @@ interface RoomSearchRow {
   allow_recording: boolean;
   faulty_count: string | number;
   warning_count: string | number;
+}
+
+interface AvailableRoomRow {
+  id: string;
+  room_code: string;
+  room_name: string;
+  site_name: string | null;
+  area_name: string | null;
+  capacity: number;
+  current_status: RoomStatus;
+  has_camera: boolean;
+  has_microphone: boolean;
+  has_display: boolean;
 }
 
 export interface RoomSearchResult {
@@ -119,6 +136,110 @@ export class RoomSearchService {
         appliedFilters,
       },
     };
+  }
+
+  /**
+   * GET /rooms/available (yeu cau FE, xem
+   * Docs/Nam_Sent/backend_api_requirements_available_rooms.md). Loai tru
+   * phong dang co booking overlap khung gio yeu cau.
+   *
+   * Deviation so voi SQL de xuat trong tai lieu FE (da xac thuc voi code hien
+   * tai truoc khi sua, xem BAO_CAO_BE tuong ung):
+   * - Chi status approved/active moi tinh la "bung", KHONG loai tru theo
+   *   kieu "khac cancelled/released" (tuc la KHONG coi pending la bung) —
+   *   dung dung quy tac da chot o MeetingsService.getRoomAvailability va
+   *   SchedulingService.getRoomSuggestions (Nhom A, 2026-08-08), la quy tac
+   *   THAT SU duoc dung khi xac nhan dat phong o POST /meetings.
+   * - Co cong them buffer tu system_configs.room_booking_buffer_minutes,
+   *   giong POST /meetings, de tranh tinh trang phong hien "trong" o day
+   *   nhung van bi tu choi do dinh buffer khi bam xac nhan dat phong.
+   * - Bang du lieu that la `room_bookings` (reserved_start_time /
+   *   reserved_end_time), khong phai `meetings`/`bookings` chung chung.
+   */
+  async getAvailableRooms(
+    query: AvailableRoomsQueryDto,
+  ): Promise<AvailableRoomItemDto[]> {
+    const startTime = new Date(query.startTime);
+    const endTime = new Date(query.endTime);
+
+    if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
+      throw new BadRequestException({
+        success: false,
+        message: 'startTime hoac endTime khong dung dinh dang',
+        error: { code: 'VALIDATION_ERROR', details: {} },
+      });
+    }
+    if (endTime <= startTime) {
+      throw new BadRequestException({
+        success: false,
+        message: 'endTime phai sau startTime',
+        error: { code: 'VALIDATION_ERROR', details: {} },
+      });
+    }
+
+    const minCapacity = query.minCapacity ?? null;
+    const bufferMs = await this.getRoomBookingBufferMs();
+    const bufferedStart = new Date(startTime.getTime() - bufferMs);
+    const bufferedEnd = new Date(endTime.getTime() + bufferMs);
+
+    const rows: AvailableRoomRow[] = await this.dataSource.manager.query(
+      `SELECT r.id, r.room_code, r.room_name, r.site_name, r.area_name,
+              r.capacity, r.current_status, r.has_camera, r.has_microphone,
+              r.has_display
+       FROM rooms r
+       WHERE r.is_active = true
+         AND r.deleted_at IS NULL
+         AND ($1::int IS NULL OR r.capacity >= $1)
+         AND NOT EXISTS (
+           SELECT 1 FROM room_bookings rb
+           WHERE rb.room_id = r.id
+             AND rb.status IN ('approved', 'active')
+             AND rb.reserved_start_time < $3
+             AND rb.reserved_end_time > $2
+         )
+       ORDER BY r.room_code ASC`,
+      [minCapacity, bufferedStart, bufferedEnd],
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      roomName: row.room_name,
+      roomCode: row.room_code,
+      capacity: row.capacity,
+      status: row.current_status,
+      siteName: row.site_name,
+      areaName: row.area_name,
+      hasCamera: row.has_camera,
+      hasMicrophone: row.has_microphone,
+      hasScreen: row.has_display,
+    }));
+  }
+
+  /**
+   * Doc `system_configs.room_booking_buffer_minutes` (mac dinh 15 phut neu
+   * thieu config/gia tri khong hop le). ORDER BY updated_at DESC vi
+   * config_key khong co unique constraint tren RDS that. Sao chep tu
+   * SchedulingService/MeetingsService (khong tach shared helper — quy uoc da
+   * co san trong repo o 2 noi khac).
+   */
+  private async getRoomBookingBufferMs(): Promise<number> {
+    const DEFAULT_MINUTES = 15;
+    try {
+      const config = await this.dataSource
+        .getRepository(SystemConfigEntity)
+        .findOne({
+          where: { configKey: 'room_booking_buffer_minutes' },
+          order: { updatedAt: 'DESC' },
+        });
+      if (!config) return DEFAULT_MINUTES * 60_000;
+      const parsed = parseInt(config.configValue ?? '', 10);
+      if (isNaN(parsed) || parsed < 0) {
+        return DEFAULT_MINUTES * 60_000;
+      }
+      return parsed * 60_000;
+    } catch {
+      return DEFAULT_MINUTES * 60_000;
+    }
   }
 
   private toItem(row: RoomSearchRow): RoomSearchItemDto {

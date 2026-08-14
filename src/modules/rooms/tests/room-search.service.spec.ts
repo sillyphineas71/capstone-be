@@ -7,6 +7,7 @@ describe('RoomSearchService', () => {
   let service: RoomSearchService;
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let queryMock: jest.Mock;
+  let findOneMock: jest.Mock;
 
   const mockRoomRow = {
     id: 'r1',
@@ -28,8 +29,10 @@ describe('RoomSearchService', () => {
 
   beforeEach(async () => {
     queryMock = jest.fn();
+    findOneMock = jest.fn().mockResolvedValue(null);
     dataSource = {
       manager: { query: queryMock } as any,
+      getRepository: jest.fn().mockReturnValue({ findOne: findOneMock }) as any,
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -131,5 +134,112 @@ describe('RoomSearchService', () => {
     // offset = (page-1)*limit = 50
     const [, params] = queryMock.mock.calls[0];
     expect(params[5]).toBe(50);
+  });
+});
+
+describe('RoomSearchService.getAvailableRooms', () => {
+  let service: RoomSearchService;
+  let dataSource: jest.Mocked<Partial<DataSource>>;
+  let queryMock: jest.Mock;
+  let findOneMock: jest.Mock;
+
+  const mockAvailableRow = {
+    id: 'r1',
+    room_code: 'A101',
+    room_name: 'Phong hop A101',
+    site_name: 'Toa nha A',
+    area_name: 'Tang 1',
+    capacity: 8,
+    current_status: 'available',
+    has_camera: true,
+    has_microphone: true,
+    has_display: true,
+  };
+
+  beforeEach(async () => {
+    queryMock = jest.fn();
+    findOneMock = jest.fn().mockResolvedValue(null); // -> default buffer 15p
+    dataSource = {
+      manager: { query: queryMock } as any,
+      getRepository: jest.fn().mockReturnValue({ findOne: findOneMock }) as any,
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RoomSearchService,
+        { provide: DataSource, useValue: dataSource },
+      ],
+    }).compile();
+
+    service = module.get<RoomSearchService>(RoomSearchService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('tra ve danh sach phong trong, map dung field contract FE (hasScreen tu has_display)', async () => {
+    queryMock.mockResolvedValueOnce([mockAvailableRow]);
+
+    const result = await service.getAvailableRooms({
+      startTime: '2026-08-15T09:00:00.000Z',
+      endTime: '2026-08-15T10:30:00.000Z',
+      minCapacity: 5,
+    });
+
+    expect(result).toEqual([
+      {
+        id: 'r1',
+        roomName: 'Phong hop A101',
+        roomCode: 'A101',
+        capacity: 8,
+        status: 'available',
+        siteName: 'Toa nha A',
+        areaName: 'Tang 1',
+        hasCamera: true,
+        hasMicrophone: true,
+        hasScreen: true,
+      },
+    ]);
+
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toContain('NOT EXISTS');
+    expect(sql).toContain("rb.status IN ('approved', 'active')");
+    expect(params[0]).toBe(5);
+  });
+
+  it('cong buffer mac dinh 15 phut vao khung gio khi truy van overlap', async () => {
+    queryMock.mockResolvedValueOnce([]);
+
+    await service.getAvailableRooms({
+      startTime: '2026-08-15T09:00:00.000Z',
+      endTime: '2026-08-15T10:00:00.000Z',
+    });
+
+    const [, params] = queryMock.mock.calls[0];
+    const bufferedStart = params[1] as Date;
+    const bufferedEnd = params[2] as Date;
+    expect(bufferedStart.toISOString()).toBe('2026-08-15T08:45:00.000Z');
+    expect(bufferedEnd.toISOString()).toBe('2026-08-15T10:15:00.000Z');
+  });
+
+  it('throw BadRequestException khi endTime <= startTime', async () => {
+    await expect(
+      service.getAvailableRooms({
+        startTime: '2026-08-15T10:00:00.000Z',
+        endTime: '2026-08-15T09:00:00.000Z',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('throw BadRequestException khi startTime/endTime khong dung dinh dang', async () => {
+    await expect(
+      service.getAvailableRooms({
+        startTime: 'not-a-date',
+        endTime: '2026-08-15T09:00:00.000Z',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });
