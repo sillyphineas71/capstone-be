@@ -1000,6 +1000,128 @@ describe('IotDevicesService', () => {
         service.receiveVerifyEvent(callbackInput(TOKEN)),
       ).rejects.toThrow(ForbiddenException);
     });
+
+    // [FIX 2026-08-15] Incident thật: device 'a' bị chặn TOÀN BỘ verify callback nhiều giờ
+    // liền vì allowed_source_ip='0.0.0.0' — code cũ so sánh chuỗi trực tiếp, '0.0.0.0'
+    // không khớp bất kỳ IP thiết bị thật nào → luôn 403 SOURCE_IP_NOT_ALLOWED trước khi kịp
+    // ghi iot_device_events. assertAllowedSourceIp() giờ coi '0.0.0.0' như KHÔNG giới hạn.
+    describe('assertAllowedSourceIp — 0.0.0.0 phải coi là KHÔNG giới hạn (dùng chung 3 handler)', () => {
+      const REAL_DEVICE_IP = '192.168.1.6'; // IP thiết bị thật, KHÔNG phải loopback.
+
+      it('allowed_source_ip=0.0.0.0 + IP thiết bị thật (verify) → KHÔNG bị chặn (regression đúng incident hôm nay)', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({
+            callback_enabled: true,
+            callback_token_hash: HASH,
+            allowed_source_ip: '0.0.0.0',
+          }),
+        );
+        queryRunnerMock.manager.save.mockImplementation(
+          (_e: unknown, obj: any) => obj,
+        );
+        await expect(
+          service.receiveVerifyEvent({
+            ...callbackInput(TOKEN),
+            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('allowed_source_ip=0.0.0.0 + IP thiết bị thật (stranger) → KHÔNG bị chặn', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({
+            callback_enabled: true,
+            callback_token_hash: HASH,
+            allowed_source_ip: '0.0.0.0',
+          }),
+        );
+        queryRunnerMock.manager.save.mockImplementation(
+          (_e: unknown, obj: any) => obj,
+        );
+        await expect(
+          service.receiveStrangerEvent({
+            ...callbackInput(TOKEN),
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('allowed_source_ip=0.0.0.0 (heartbeat) → KHÔNG bị chặn', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({
+            callback_enabled: true,
+            callback_token_hash: HASH,
+            allowed_source_ip: '0.0.0.0',
+          }),
+        );
+        queryRunnerMock.manager.save.mockImplementation(
+          (_e: unknown, obj: any) => obj,
+        );
+        await expect(
+          service.receiveHeartbeat({
+            headers: { 'x-callback-token': TOKEN },
+            body: { status: 'ok' },
+            query: {},
+            params: { deviceCode: 'FACE-1' },
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('allowed_source_ip=1 IP CỤ THỂ khác + IP thiết bị không khớp → VẪN 403 (regression — chặn IP thật vẫn hoạt động, KHÔNG bị fix làm mất tác dụng)', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({
+            callback_enabled: true,
+            callback_token_hash: HASH,
+            allowed_source_ip: '10.0.0.99',
+          }),
+        );
+        await expect(
+          service.receiveVerifyEvent({
+            ...callbackInput(TOKEN),
+            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('allowed_source_ip=1 IP CỤ THỂ + IP thiết bị KHỚP đúng → PASS (regression)', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({
+            callback_enabled: true,
+            callback_token_hash: HASH,
+            allowed_source_ip: REAL_DEVICE_IP,
+          }),
+        );
+        queryRunnerMock.manager.save.mockImplementation(
+          (_e: unknown, obj: any) => obj,
+        );
+        await expect(
+          service.receiveVerifyEvent({
+            ...callbackInput(TOKEN),
+            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('allowed_source_ip rỗng/không set + IP bất kỳ → PASS (regression, hành vi "không giới hạn" cũ giữ nguyên)', async () => {
+        dataSourceMock.manager.findOne.mockResolvedValue(
+          faceDevice({ callback_enabled: true, callback_token_hash: HASH }),
+        );
+        queryRunnerMock.manager.save.mockImplementation(
+          (_e: unknown, obj: any) => obj,
+        );
+        await expect(
+          service.receiveVerifyEvent({
+            ...callbackInput(TOKEN),
+            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            clientIp: REAL_DEVICE_IP,
+          }),
+        ).resolves.toBeDefined();
+      });
+    });
   });
 
   describe('TKR-001 — configureFaceServer (route mới POST /face-server/configure)', () => {

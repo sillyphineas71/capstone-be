@@ -1598,25 +1598,11 @@ export class IotDevicesService {
     this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
-    if (faceConfig.allowed_source_ip) {
-      const normalizedClientIp = this.normalizeIp(clientIp);
-      if (
-        normalizedClientIp &&
-        normalizedClientIp !== '127.0.0.1' &&
-        normalizedClientIp !== '::1'
-      ) {
-        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
-          throw new ForbiddenException({
-            code: 'SOURCE_IP_NOT_ALLOWED',
-            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
-          });
-        }
-      } else {
-        this.logger.warn(
-          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
-        );
-      }
-    }
+    const normalizedClientIp = this.assertAllowedSourceIp(
+      faceConfig,
+      clientIp,
+      deviceCode,
+    );
 
     // 8. Process heartbeat
     const now = new Date();
@@ -1624,7 +1610,6 @@ export class IotDevicesService {
     device.status = IoTDeviceStatus.ONLINE;
     device.healthStatus = IoTDeviceHealthStatus.HEALTHY;
 
-    const normalizedClientIp = this.normalizeIp(clientIp);
     const rawSample = maskSensitiveMetadata(body || {}) || {};
 
     const currentMetadata = device.metadataJson || {};
@@ -1727,25 +1712,11 @@ export class IotDevicesService {
     this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
-    const normalizedClientIp = this.normalizeIp(clientIp);
-    if (faceConfig.allowed_source_ip) {
-      if (
-        normalizedClientIp &&
-        normalizedClientIp !== '127.0.0.1' &&
-        normalizedClientIp !== '::1'
-      ) {
-        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
-          throw new ForbiddenException({
-            code: 'SOURCE_IP_NOT_ALLOWED',
-            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
-          });
-        }
-      } else {
-        this.logger.warn(
-          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
-        );
-      }
-    }
+    const normalizedClientIp = this.assertAllowedSourceIp(
+      faceConfig,
+      clientIp,
+      deviceCode,
+    );
 
     // 8. Process payload tolerant ingestion
     // Danh tính verify ở body.info.* (payload thật FaceGate VerifyPush), KHÔNG ở body.person_id.
@@ -1981,25 +1952,11 @@ export class IotDevicesService {
     this.assertCallbackToken(faceConfig, callbackToken);
 
     // 7. Check allowed_source_ip (best-effort)
-    const normalizedClientIp = this.normalizeIp(clientIp);
-    if (faceConfig.allowed_source_ip) {
-      if (
-        normalizedClientIp &&
-        normalizedClientIp !== '127.0.0.1' &&
-        normalizedClientIp !== '::1'
-      ) {
-        if (normalizedClientIp !== faceConfig.allowed_source_ip) {
-          throw new ForbiddenException({
-            code: 'SOURCE_IP_NOT_ALLOWED',
-            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${faceConfig.allowed_source_ip}.`,
-          });
-        }
-      } else {
-        this.logger.warn(
-          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
-        );
-      }
-    }
+    const normalizedClientIp = this.assertAllowedSourceIp(
+      faceConfig,
+      clientIp,
+      deviceCode,
+    );
 
     // 8. Process payload tolerant ingestion
     const now = new Date();
@@ -2198,5 +2155,48 @@ export class IotDevicesService {
       return ip.substring(7);
     }
     return ip;
+  }
+
+  /**
+   * [FIX 2026-08-15] Check allowed_source_ip (best-effort), dùng chung cho cả 3 callback
+   * (verify/heartbeat/stranger) — trước đây lặp lại y hệt 3 nơi, dễ sửa sót 1 chỗ.
+   *
+   * '0.0.0.0' được coi là KHÔNG giới hạn (giống rỗng/null) — đây là quy ước phổ biến trong
+   * networking cho "chấp nhận mọi IP", nhưng code cũ so sánh chuỗi trực tiếp
+   * (normalizedClientIp !== allowed_source_ip) nên '0.0.0.0' KHÔNG khớp bất kỳ IP thiết bị
+   * thật nào → chặn TOÀN BỘ callback thay vì cho qua như ý định người cấu hình. Đã xác nhận
+   * đúng nguyên nhân qua incident thật 2026-08-15 (device 'a' bị chặn mọi verify callback
+   * nhiều giờ liền, allowed_source_ip='0.0.0.0').
+   *
+   * Trả về normalizedClientIp để caller dùng tiếp (ghi log/metadata) — tránh gọi
+   * normalizeIp() lặp lại lần 2.
+   */
+  private assertAllowedSourceIp(
+    faceConfig: { allowed_source_ip?: string },
+    clientIp: string | undefined,
+    deviceCode: string,
+  ): string | null {
+    const normalizedClientIp = this.normalizeIp(clientIp);
+    const allowedIp = faceConfig.allowed_source_ip;
+    const isUnrestricted = !allowedIp || allowedIp === '0.0.0.0';
+    if (!isUnrestricted) {
+      if (
+        normalizedClientIp &&
+        normalizedClientIp !== '127.0.0.1' &&
+        normalizedClientIp !== '::1'
+      ) {
+        if (normalizedClientIp !== allowedIp) {
+          throw new ForbiddenException({
+            code: 'SOURCE_IP_NOT_ALLOWED',
+            message: `Source IP ${normalizedClientIp} is not allowed. Expected: ${allowedIp}.`,
+          });
+        }
+      } else {
+        this.logger.warn(
+          `Skipping IP check for device ${deviceCode}: client IP not deterministic (${clientIp}).`,
+        );
+      }
+    }
+    return normalizedClientIp;
   }
 }
