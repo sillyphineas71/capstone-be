@@ -358,6 +358,20 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(dsMock.manager.query).not.toHaveBeenCalled();
   });
 
+  // Kịch bản Dismiss (regression, không thuộc phạm vi fix hôm nay — xác nhận vẫn đúng):
+  // case đã dismissed KHÔNG được auto chuyển sang released dù quá giờ. autoReleaseBatch's
+  // candidate SQL tự lọc "detection_status = 'warning_sent'" — dismissed không khớp điều
+  // kiện này nên KHÔNG BAO GIỜ xuất hiện trong candidate, dù đã quá auto_release_eligible_at.
+  it('Kịch bản Dismiss — autoReleaseBatch chỉ quét detection_status=warning_sent, case dismissed không lọt vào dù quá giờ', async () => {
+    dsMock.manager.query.mockResolvedValueOnce([]); // DB thật sẽ lọc dismissed ra, mock mô phỏng kết quả rỗng
+    const spy = jest.spyOn(service, 'release');
+    const r = await service.autoReleaseBatch();
+    expect(r).toEqual({ scanned: 0, released: 0, skipped: 0 });
+    expect(spy).not.toHaveBeenCalled();
+    const sql = String(dsMock.manager.query.mock.calls[0][0]);
+    expect(sql).toContain("nc.detection_status = 'warning_sent'");
+  });
+
   // ── #33b manualRelease mapping (A) ──
   const caseStatus = (s: string | null) =>
     dsMock.manager.query.mockResolvedValueOnce(

@@ -37,6 +37,15 @@ interface CandidateRow {
  * KHÔNG phải vấn đề NGHIỆP VỤ (ngưỡng xác nhận có mặt), mốc đệm PHẢI độc lập với
  * `presenceConfirmSeconds` — dùng lại biến đó chính là nguyên nhân gốc khiến guard "hết
  * hạn bảo vệ" quá sớm khi người dùng cấu hình ngưỡng nhỏ (ca thực tế đêm nay).
+ *
+ * [FIX 2026-08-15] R14 lọc `room_events` CHỈ theo `room_id` — không phân biệt đúng
+ * booking đang xét, nên nhiễu/occupancy event CŨ (từ 1 booking KHÁC trước đó, CÙNG
+ * phòng) trong 120s gần nhất vẫn chặn được no-show của booking hiện tại, dù phòng
+ * trống thật trong đúng cửa sổ của booking đó — có thể chặn vĩnh viễn nếu nhiễu lặp
+ * lại đều đặn dưới 120s/lần. Sửa: thêm `re.event_time >= b.reserved_start_time` —
+ * tái dùng đúng pattern đã có ở `reconcilePendingConfirmations()`
+ * (occupancy-persistence.service.ts) — chỉ tính occupancy event xảy ra SAU khi
+ * booking đang xét đã bắt đầu, loại event của phiên/booking khác trước đó.
  */
 @Injectable()
 export class NoShowDetectionService {
@@ -69,6 +78,7 @@ export class NoShowDetectionService {
             WHERE re.room_id = b.room_id
               AND re.event_type = 'occupancy_detected'
               AND re.occupancy_count > 0
+              AND re.event_time >= b.reserved_start_time
               AND re.event_time >= now() - ($2::int * interval '1 second')
          )`,
       [threshold, NoShowDetectionService.RECONCILE_GRACE_SECONDS],

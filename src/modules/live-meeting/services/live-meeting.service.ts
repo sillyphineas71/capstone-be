@@ -37,6 +37,7 @@ import {
   AttendanceRecordEntity,
   AttendanceRecordStatus,
 } from '../../attendance/entities/attendance-record.entity.js';
+import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import {
   PresenceSnapshotEntity,
   PresenceStatus as SnapshotPresenceStatus,
@@ -136,6 +137,7 @@ export class LiveMeetingService {
     private readonly configService: ConfigService,
     private readonly guestInviteService: GuestInviteService,
     private readonly recordingSessionService: RecordingSessionService,
+    private readonly faceProvisioningService: FaceProvisioningService,
   ) {
     this.schedulerQueueName = this.configService.get<string>(
       'QUEUE_SCHEDULER',
@@ -1953,6 +1955,25 @@ export class LiveMeetingService {
       authUser.userId,
       clientContext,
     );
+
+    // ── Step 5b: Gỡ face khỏi thiết bị NGAY khi meeting completed (best-effort,
+    // KHÔNG rollback/fail việc kết thúc họp đã commit). Trước đây chỉ trông cậy
+    // vào cron deprovisionEndedMeetings() chạy sau (trễ tối đa FACE_SYNC_GRACE_MINUTES).
+    try {
+      await this.faceProvisioningService.deprovisionMeeting({
+        id: meeting.id,
+        room_id: meeting.roomId,
+        start_time: meeting.startTime,
+        end_time: meeting.endTime,
+      });
+      this.logger.log(
+        `[endMeeting] deprovisionMeeting OK for meeting ${meetingId}.`,
+      );
+    } catch (deprovisionError: unknown) {
+      this.logger.error(
+        `[endMeeting] deprovisionMeeting failed for meeting ${meetingId}: ${(deprovisionError as Error).message}`,
+      );
+    }
 
     // ── Step 6: Calculate response ──
     const meetingAfter = await this.dataSource

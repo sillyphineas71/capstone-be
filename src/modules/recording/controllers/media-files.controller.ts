@@ -76,7 +76,22 @@ export class MediaFilesController {
     const m = await this.mediaFilesService.resolvePlayback(fileId);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', m.mimeType);
+    await this.streamWithRangeSupport(req, res, m);
+  }
 
+  /**
+   * [FIX 2026-08-15] Range/206 dùng chung cho /playback VÀ /secure-download — trước đây
+   * /secure-download quảng cáo `Accept-Ranges: bytes` nhưng luôn trả 200 full file, bỏ qua
+   * header Range thật (trình duyệt tưởng seek/partial-load được nhưng không), gây lỗi phát
+   * lại video. Tái dùng nguyên logic đã đúng của /playback — KHÔNG viết lại. Chỉ xử lý
+   * Range + stream; header xác thực/Content-Disposition/... vẫn do caller tự set trước khi
+   * gọi hàm này (KHÔNG đổi cơ chế xác thực riêng của từng route).
+   */
+  private async streamWithRangeSupport(
+    req: Request,
+    res: Response,
+    m: ResolvedMedia,
+  ): Promise<void> {
     const onError = () => {
       // KHÔNG lộ đường dẫn nội bộ.
       if (!res.headersSent) res.status(500).end();
@@ -228,12 +243,6 @@ export class MediaFilesController {
         filename +
         '"',
     );
-    res.writeHead(200, { 'Content-Length': m.size });
-    const stream = await this.openMediaStream(m);
-    stream.on('error', () => {
-      if (!res.headersSent) res.status(500).end();
-      else res.end();
-    });
-    stream.pipe(res);
+    await this.streamWithRangeSupport(req, res, m);
   }
 }
