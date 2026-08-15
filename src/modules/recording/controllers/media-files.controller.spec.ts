@@ -329,3 +329,84 @@ describe('MediaFilesController.secureDownload — Content-Disposition theo mimeT
     expect(serviceMock.resolveSecureDownload).not.toHaveBeenCalled();
   });
 });
+
+// [FIX 2026-08-15] secureDownload quảng cáo Accept-Ranges: bytes nhưng trước đây luôn
+// trả 200 full file, bỏ qua header Range — gây lỗi phát lại video (browser tưởng seek
+// được nhưng không). Tái dùng đúng logic Range/206 đã có ở playback qua
+// streamWithRangeSupport(), giữ nguyên cơ chế xác thực token (verifySignedDownloadToken)
+// không đổi.
+describe('MediaFilesController.secureDownload — Range/206 (FIX 2026-08-15)', () => {
+  let controller: MediaFilesController;
+  let serviceMock: any;
+  let storageServiceMock: any;
+  let stream: FakeStream;
+
+  beforeEach(() => {
+    serviceMock = {
+      resolveSecureDownload: jest.fn().mockResolvedValue({
+        kind: 'local',
+        path: '/rec/f1.mp4',
+        size: 1000,
+        mimeType: 'video/mp4',
+        fileName: 'meeting.mp4',
+      }),
+    };
+    storageServiceMock = {
+      verifySignedDownloadToken: jest
+        .fn()
+        .mockReturnValue({ mediaFileId: 'f1' }),
+    };
+    controller = new MediaFilesController(storageServiceMock, serviceMock);
+    stream = new FakeStream();
+    createReadStreamMock.mockReturnValue(stream);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('có Range header → 206 + Content-Range, KHÔNG phải 200 full file', async () => {
+    const res = fakeRes();
+    await controller.secureDownload(
+      'tok',
+      'f1',
+      { url: '/x', headers: { range: 'bytes=0-100' } } as any,
+      res,
+    );
+    expect(res.writeHead).toHaveBeenCalledWith(206, {
+      'Content-Range': 'bytes 0-100/1000',
+      'Content-Length': 101,
+    });
+    expect(res.writeHead).not.toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ 'Content-Length': 1000 }),
+    );
+    expect(createReadStreamMock).toHaveBeenCalledWith('/rec/f1.mp4', {
+      start: 0,
+      end: 100,
+    });
+    expect(stream.pipe).toHaveBeenCalledWith(res);
+  });
+
+  it('KHÔNG có Range header → vẫn 200 full file (regression, giữ hành vi cũ cho client không hỗ trợ Range)', async () => {
+    const res = fakeRes();
+    await controller.secureDownload(
+      'tok',
+      'f1',
+      { url: '/x', headers: {} } as any,
+      res,
+    );
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Length': 1000 });
+    expect(createReadStreamMock).toHaveBeenCalledWith('/rec/f1.mp4');
+    expect(stream.pipe).toHaveBeenCalledWith(res);
+  });
+
+  it('Accept-Ranges: bytes vẫn được set đúng như trước (không đổi header quảng cáo)', async () => {
+    const res = fakeRes();
+    await controller.secureDownload(
+      'tok',
+      'f1',
+      { url: '/x', headers: {} } as any,
+      res,
+    );
+    expect(res.setHeader).toHaveBeenCalledWith('Accept-Ranges', 'bytes');
+  });
+});
