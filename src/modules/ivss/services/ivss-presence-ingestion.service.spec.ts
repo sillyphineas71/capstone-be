@@ -198,6 +198,46 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     expect(payloadOf().matchState).toBe('unmatched_both');
   });
 
+  // [FIX 2026-08-15] Zone (roomId null vì camera map qua channel_presence_zone_map, KHÔNG
+  // phải channel_room_map) — matchStateOf() không còn áp nhầm yêu cầu roomId/isParticipant
+  // của Room. Bug gốc: người quen đi qua Zone luôn ra 'unmatched_location' dù nhận diện đúng.
+  describe('[FIX 2026-08-15] isZoneContext — Zone không đòi hỏi roomId/isParticipant', () => {
+    it('Zone, userId có (người quen, face_profile active) → matchState=matched (KHÔNG còn unmatched_location)', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA_UUID } }); // roomId null, presenceMap có entry → isZoneContext=true
+      await service.onFaceEvent(evt());
+      const p = payloadOf();
+      expect(p.matchState).toBe('matched');
+      expect(insert()!.params[5]).toBe('processed');
+      expect(p.userId).toBe('u1');
+      expect(p.roomId).toBeNull();
+    });
+
+    it('Zone, userId=null (người lạ thật) → matchState=unmatched_both (GIỮ NGUYÊN hành vi cũ, KHÔNG phải unmatched_identity)', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA_UUID }, user: [] });
+      await service.onFaceEvent(evt());
+      const p = payloadOf();
+      expect(p.matchState).toBe('unmatched_both');
+      expect(insert()!.params[5]).toBe('unmatched');
+    });
+
+    it('Dual-map (channel có CẢ room_map lẫn presence_zone_map) → isZoneContext=false tự động, ưu tiên hành vi Room (chặt hơn)', async () => {
+      // Mặc định wire() đã map channel '5' → ROOM_UUID; thêm presenceMap cho CÙNG channel đó
+      // → roomId resolve non-null trước → isZoneContext=false (roomId truthy loại điều kiện
+      // đầu tiên) → matched vẫn đòi hỏi isParticipant như Room, KHÔNG đơn giản hoá theo Zone.
+      wire({ presenceMap: { '5': AREA_UUID }, participant: [] }); // room OK nhưng KHÔNG phải participant
+      await service.onFaceEvent(evt());
+      const p = payloadOf();
+      expect(p.matchState).toBe('unmatched_identity'); // đúng hành vi Room khi không phải participant, KHÔNG phải 'matched'
+      expect(p.roomId).toBe(ROOM_UUID);
+    });
+
+    it('Dual-map + LÀ participant → vẫn matched theo đúng đường Room bình thường (không đổi)', async () => {
+      wire({ presenceMap: { '5': AREA_UUID } }); // dual-map, mặc định LÀ participant
+      await service.onFaceEvent(evt());
+      expect(payloadOf().matchState).toBe('matched');
+    });
+  });
+
   // ── OQ-3 direction ĐỘC LẬP matchState (C5) ──
   it('direction độc lập: unmatched vẫn giữ direction theo eventAction (KHÔNG bị "unknown")', async () => {
     wire({ user: [] }); // unmatched_identity nhưng eventAction='1'

@@ -130,6 +130,20 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       }
       const roomId = await this.resolveRoom(evt.channelId);
 
+      // [FIX 2026-08-15] Xác định sớm ngữ cảnh Zone (roomId null, nhưng channel có map zone
+      // qua channel_presence_zone_map — camera Zone không map qua channel_room_map nên
+      // roomId LUÔN null) để matchStateOf() không áp nhầm yêu cầu roomId/isParticipant
+      // (chỉ có ý nghĩa cho phòng họp — xem matchStateOf() bên dưới). Đọc thêm 1 lần
+      // channel_presence_zone_map ở đây (nhẹ, cùng kiểu query đã lặp lại nhiều lần trong
+      // hàm này) — KHÔNG tái cấu trúc khối ZPW-001 (presenceZoneId/presenceSkipped) phía
+      // dưới, vẫn giữ nguyên logic đó. Dual-map (channel có CẢ room_map lẫn presence_zone_
+      // map) → roomId đã resolve non-null từ room_map → isZoneContext=false tự động, ưu
+      // tiên hành vi Room (chặt hơn) khi cấu hình mơ hồ — khớp đúng cảnh báo "camera nên
+      // một vai" đã có sẵn ở khối ZPW-001.
+      const isZoneContext =
+        !roomId &&
+        !!(await this.getChannelPresenceZoneMap())[String(evt.channelId)];
+
       const { eventTime, utcFallback } = this.parseUtc(evt.utc);
       const meetingId = roomId
         ? await this.resolveMeeting(roomId, eventTime)
@@ -152,7 +166,12 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         );
         isParticipant = !!pr[0];
       }
-      const matchState = this.matchStateOf(userId, roomId, isParticipant);
+      const matchState = this.matchStateOf(
+        userId,
+        roomId,
+        isParticipant,
+        isZoneContext,
+      );
       const processedStatus =
         matchState === 'matched' ? 'processed' : 'unmatched';
 
@@ -355,16 +374,28 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
 
   /**
    * C5: 4 trạng thái khớp, tách khỏi direction.
-   * Nợ #3: `matched` YÊU CẦU thêm `isParticipant` — nhận ra người + có room vẫn chưa đủ.
-   * Người còn mặt trên IVSS (deprovision lỗi) nhưng KHÔNG thuộc meeting đang diễn ra
-   * → 'unmatched_identity' → processed_status='unmatched' → KHÔNG được điểm danh.
+   * Nợ #3: `matched` (Room) YÊU CẦU thêm `isParticipant` — nhận ra người + có room vẫn
+   * chưa đủ. Người còn mặt trên IVSS (deprovision lỗi) nhưng KHÔNG thuộc meeting đang
+   * diễn ra → 'unmatched_identity' → processed_status='unmatched' → KHÔNG được điểm danh.
+   *
+   * [FIX 2026-08-15] `isZoneContext` — Zone (lobby/hành lang/bãi xe...) KHÔNG có khái
+   * niệm phòng họp/participant; camera Zone map qua channel_presence_zone_map nên
+   * `roomId` LUÔN null (KHÔNG phải "chưa map được phòng" như Room) — áp nguyên yêu cầu
+   * `roomId && isParticipant` của Room khiến MỌI sự kiện Zone, kể cả người quen nhận diện
+   * đúng, không bao giờ ra được 'matched' (luôn rơi 'unmatched_location'). Ở Zone, chỉ
+   * cần `userId` khớp là đủ 'matched' — 4 nhánh còn lại GIỮ NGUYÊN không đổi (Room không
+   * bị ảnh hưởng, security fix c444853 vẫn nguyên vẹn khi isZoneContext=false).
    */
   private matchStateOf(
     userId: string | null,
     roomId: string | null,
     isParticipant: boolean,
+    isZoneContext: boolean,
   ): MatchState {
-    if (userId && roomId && isParticipant) return 'matched';
+    const matched = isZoneContext
+      ? !!userId
+      : !!(userId && roomId && isParticipant);
+    if (matched) return 'matched';
     // Nhận ra người nhưng không có trong họp (hoặc không map được meeting).
     if (userId && roomId && !isParticipant) return 'unmatched_identity';
     if (!userId && !roomId) return 'unmatched_both';

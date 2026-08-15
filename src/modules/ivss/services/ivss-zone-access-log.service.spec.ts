@@ -152,6 +152,24 @@ describe('IvssZoneAccessLogService (Zone Access Log — đường B, FIX 2026-08
     expect(r.unmatchedCount).toBe(2);
   });
 
+  // [FIX 2026-08-15] Trước fix ivss-presence-ingestion.service.ts (matchStateOf() luôn ra
+  // 'unmatched_location' cho Zone bất kể danh tính) — matchedCount ở đây LUÔN = 0 dù có bao
+  // nhiêu người quen đi qua, vì DB không bao giờ có dòng match_state='matched' cho Zone. Bản
+  // thân service này KHÔNG đổi code (chỉ đọc match_state đã lưu) — test này khoá lại đúng
+  // hành vi mong đợi SAU khi ingestion ghi đúng 'matched', tránh regression ở tầng đếm.
+  it('người quen đi qua Zone (sau fix, ingestion ghi matchState=matched) → matchedCount > 0, KHÔNG còn luôn = 0', async () => {
+    wire({
+      events: [
+        evt({ id: 'e1', match_state: 'matched', user_id: 'u1' }),
+        evt({ id: 'e2', match_state: 'matched', user_id: 'u2', direction: 'leave' }),
+      ],
+    });
+    const r = await service.getZoneAccessLog(ZONE_ID, { date: '2026-07-28' });
+    expect(r.matchedCount).toBeGreaterThan(0);
+    expect(r.matchedCount).toBe(2);
+    expect(r.unmatchedCount).toBe(0);
+  });
+
   // ── isStranger (userId==null) vs isUnmatched (matchState unmatched*) — mirror RAL-001 ──
   describe('isStranger (userId==null) vs isUnmatched (matchState unmatched*)', () => {
     it('matched → isStranger=false, isUnmatched=false', async () => {
