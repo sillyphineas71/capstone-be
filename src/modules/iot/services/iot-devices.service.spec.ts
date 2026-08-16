@@ -1411,6 +1411,48 @@ describe('IotDevicesService', () => {
       expect(fsc.allowed_source_ip).toBe('10.0.0.9');
       expect(fsc.callback_token_hash).not.toBe('old-hash');
     });
+
+    it('[FIX 2026-08-16] TÁI HIỆN edge case: config cũ có revoked_at (đã /revoke trước đó) → configure lại → revoked_at/revoked_reason KHÔNG còn trong config mới, token mới KHÔNG bị từ chối "revoked"', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({
+          deviceCode: 'FACE-X',
+          metadataJson: {
+            face_server_config: {
+              callback_enabled: true,
+              callback_token_hash: 'old-revoked-hash',
+              revoked_at: '2026-08-10T00:00:00.000Z',
+              revoked_reason: 'token leaked',
+            },
+          },
+        }),
+      );
+
+      const { device, oneTimeCallbackToken } =
+        await service.configureFaceServer('admin1', 'dev1', validDto);
+      const fsc = device.metadataJson!.face_server_config as any;
+
+      expect(fsc.revoked_at).toBeUndefined();
+      expect(fsc.revoked_reason).toBeUndefined();
+
+      // Token MỚI vừa sinh phải được assertCallbackToken() CHẤP NHẬN (qua
+      // receiveStrangerEvent thật, không giả lập assertCallbackToken riêng) — mock
+      // findOne tiếp theo trả về ĐÚNG device vừa lưu (mô phỏng callback kế tiếp đọc
+      // lại DB), clientIp loopback để không dính gate allowed_source_ip.
+      dataSourceMock.manager.findOne.mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        (_e: unknown, obj: any) => obj,
+      );
+      await expect(
+        service.receiveStrangerEvent({
+          headers: { 'x-callback-token': oneTimeCallbackToken },
+          body: { stranger_id: 's1' },
+          query: {},
+          params: { deviceCode: 'FACE-X' },
+          clientIp: '127.0.0.1',
+          files: [],
+        }),
+      ).resolves.toBeDefined();
+    });
   });
 
   describe('TKR-001 — revokeFaceServerToken (T2)', () => {

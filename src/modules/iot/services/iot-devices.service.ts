@@ -911,6 +911,13 @@ export class IotDevicesService {
     // ví dụ PATCH đổi IP ở update()) mỗi lần gọi lại /configure.
     const currentFaceConfig = (device.metadataJson?.['face_server_config'] ??
       {}) as Record<string, unknown>;
+    // [FIX 2026-08-16] Token MỚI sinh ra ở /configure KHÔNG được kế thừa
+    // revoked_at/revoked_reason từ lần /revoke trước đó — mirror đúng "delete" đã
+    // có sẵn ở rotateFaceServerToken() (dòng ~1128-1129). Xoá TRƯỚC khi merge field
+    // callback mới, nếu không assertCallbackToken() sẽ từ chối nhầm token mới vừa
+    // sinh là "đã revoked" (CALLBACK_TOKEN_REVOKED) dù token này chưa từng bị revoke.
+    delete currentFaceConfig.revoked_at;
+    delete currentFaceConfig.revoked_reason;
     const newFaceConfig = {
       ...currentFaceConfig,
       callback_enabled,
