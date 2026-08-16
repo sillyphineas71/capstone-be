@@ -57,6 +57,7 @@ export class FaceDeviceProviderFactory {
         'FACEGATE_UPLOAD_FIELD',
         'vfileselector',
       ),
+      debug: true,
     });
   }
 }
