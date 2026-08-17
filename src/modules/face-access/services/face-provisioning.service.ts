@@ -254,6 +254,52 @@ export class FaceProvisioningService {
     return { scanned };
   }
 
+  /**
+   * [FIX 2026-08-16] Lưới an toàn BỔ SUNG (safety net) — bắt các mapping "mồ côi" mà
+   * đường gọi trực tiếp deprovisionMeeting() (trong endMeeting()/cancelMeeting()) lỡ
+   * fail (mất kết nối DB/mạng đúng lúc đó, exception không lường trước...). KHÔNG
+   * thay thế deprovisionEndedMeetings() — chạy THÊM, ngay sau, trong cùng faceSync().
+   *
+   * Khác deprovisionEndedMeetings() ở đúng 1 điểm: điều kiện dựa THẲNG vào
+   * meeting.status (completed/cancelled), ĐỘC LẬP với end_time — KHÔNG áp
+   * FACE_SYNC_GRACE_MINUTES, KHÔNG "now() - interval" nào. Lý do: deprovisionEndedMeetings()
+   * gate theo end_time (giờ kết thúc THEO LỊCH) nên họp completed SỚM (bấm "Kết thúc"
+   * trước giờ) vẫn phải đợi end_time gốc + grace mới được quét lại; còn họp cancelled bị
+   * loại (me.status <> 'cancelled') nên KHÔNG BAO GIỜ được cron đó bắt lại nếu lần gọi
+   * trực tiếp lúc hủy thất bại. Bước này bắt cả 2 trường hợp ngay lượt cron kế tiếp
+   * (tối đa ~1 phút, đúng chu kỳ EVERY_MINUTE của faceSync()).
+   *
+   * Chỉ lọc sync_status='synced' (khác deprovisionEndedMeetings() gồm cả failed/pending)
+   * — mapping failed/pending không phải "mặt còn sống trên thiết bị" nên không thuộc
+   * phạm vi lưới an toàn này (đã được deprovisionEndedMeetings() xử lý theo end_time).
+   * Tái dùng removeMapping() (KHÔNG viết hàm xóa mới) + try/catch từng dòng (1 dòng lỗi
+   * mạng/thiết bị KHÔNG crash cả lượt quét, lượt cron sau tự retry).
+   */
+  async deprovisionByMeetingStatus(): Promise<{ scanned: number }> {
+    const maps: MappingRow[] = await this.dataSource.manager.query(
+      `SELECT mp.id, mp.device_id, mp.device_person_id, mp.sync_status, mp.metadata_json
+       FROM device_user_mappings mp
+       JOIN meetings me ON me.id = (mp.metadata_json->>'bookingId')::uuid
+       WHERE mp.deleted_at IS NULL
+         AND mp.sync_status = 'synced'
+         AND COALESCE(mp.metadata_json->>'source', '') <> 'ivss'
+         AND me.status IN ('completed', 'cancelled')
+       LIMIT 500`,
+    );
+    let scanned = 0;
+    for (const mp of maps) {
+      try {
+        await this.removeMapping(mp);
+        scanned++;
+      } catch (e) {
+        this.logger.error(
+          `safety-net deprovision mapping ${mp.id} failed: ${this.msg(e)}`,
+        );
+      }
+    }
+    return { scanned };
+  }
+
   async deprovisionMeeting(meeting: MeetingRow): Promise<void> {
     // F2 (recon B2/B4): lấy MỌI mapping còn sống (mọi sync_status:
     // failed/pending/synced) — khớp deprovisionEndedMeetings. Chỉ lọc

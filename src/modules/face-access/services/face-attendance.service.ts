@@ -5,6 +5,7 @@ import {
   FaceVerifyHook,
   FaceVerifyInput,
 } from '../../../common/ports/face-verify-hook.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 
 interface MappingRow {
   user_id: string;
@@ -37,6 +38,7 @@ export class FaceAttendanceService implements FaceVerifyHook {
   constructor(
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
+    private readonly websocketService: WebsocketService,
   ) {}
 
   async onVerify(input: FaceVerifyInput): Promise<void> {
@@ -141,6 +143,33 @@ export class FaceAttendanceService implements FaceVerifyHook {
     this.logger.log(
       `attendance ${eventType}: user=${userId} meeting=${meetingId} late=${isLate} (+${lateMinutes}m).`,
     );
+
+    // [FIX 2026-08-16] Emit WS ngay sau khi ghi attendance_records THÀNH CÔNG (KHÔNG
+    // đụng logic tính is_late/ghi record ở trên) — chỉ cho lần điểm danh MỚI (INSERT,
+    // eventType='check_in'), KHÔNG emit cho nhánh face_detected (chỉ cập nhật
+    // last_detected_at của record đã có, không phải điểm danh mới). Room/pattern mirror
+    // đúng `meeting:${meetingId}` đã dùng ở live-meeting.service.ts/no-show-lifecycle.service.ts
+    // — best-effort, try/catch riêng, KHÔNG throw làm hỏng luồng điểm danh chính.
+    if (eventType === 'check_in') {
+      try {
+        this.websocketService.emitToRoom(
+          `meeting:${meetingId}`,
+          'meeting.attendance.updated',
+          {
+            meetingId,
+            userId,
+            attendanceStatus: isLate ? 'late' : 'present',
+            checkInTime: verifyTime.toISOString(),
+          },
+        );
+      } catch (e) {
+        this.logger.warn(
+          `WS emit meeting.attendance.updated failed: ${
+            e instanceof Error ? e.message : 'unknown'
+          }`,
+        );
+      }
+    }
   }
 
   /**

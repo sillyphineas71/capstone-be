@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FaceAttendanceService } from './face-attendance.service.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 
 const START = '2026-06-17T09:00:00.000Z';
 const END = '2026-06-17T10:00:00.000Z';
@@ -31,6 +32,7 @@ const calls = (mock: jest.Mock, needle: string) =>
 describe('FaceAttendanceService (FAT-001)', () => {
   let service: FaceAttendanceService;
   let dsMock: any;
+  let wsMock: any;
 
   // router mặc định: mapping khớp person_id, meeting tồn tại, chưa có record
   const router =
@@ -69,6 +71,7 @@ describe('FaceAttendanceService (FAT-001)', () => {
 
   beforeEach(async () => {
     dsMock = { manager: { query: jest.fn() } };
+    wsMock = { emitToRoom: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FaceAttendanceService,
@@ -77,6 +80,7 @@ describe('FaceAttendanceService (FAT-001)', () => {
           provide: ConfigService,
           useValue: { get: (_k: string, d?: unknown) => d },
         },
+        { provide: WebsocketService, useValue: wsMock },
       ],
     }).compile();
     service = module.get(FaceAttendanceService);
@@ -103,6 +107,67 @@ describe('FaceAttendanceService (FAT-001)', () => {
     expect(ev[0][1]).toEqual(
       expect.arrayContaining(['m1', 'rec1', 'u1', 'room1', 'dev1', 'check_in']),
     );
+  });
+
+  // ── [FIX 2026-08-16] WS emit meeting.attendance.updated ──
+  it('[FIX 2026-08-16] check-in MỚI thành công → emit đúng sự kiện/room/payload', async () => {
+    dsMock.manager.query.mockImplementation(router());
+    await service.onVerify(input());
+    expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'meeting:m1',
+      'meeting.attendance.updated',
+      {
+        meetingId: 'm1',
+        userId: 'u1',
+        attendanceStatus: 'present',
+        checkInTime: input().verifyTime.toISOString(),
+      },
+    );
+  });
+
+  it('[FIX 2026-08-16] check-in MỚI nhưng trễ → payload attendanceStatus=late', async () => {
+    dsMock.manager.query.mockImplementation(router({ grace: '5' }));
+    const verifyTime = new Date('2026-06-17T09:20:00.000Z');
+    await service.onVerify(input({ verifyTime }));
+    expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+      'meeting:m1',
+      'meeting.attendance.updated',
+      expect.objectContaining({
+        attendanceStatus: 'late',
+        checkInTime: verifyTime.toISOString(),
+      }),
+    );
+  });
+
+  it('[FIX 2026-08-16] INSERT attendance_records thất bại (lỗi ghi) → KHÔNG emit gì cả', async () => {
+    dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('INSERT INTO attendance_records'))
+        return Promise.reject(new Error('db write failed'));
+      return router()(sql);
+    });
+    await expect(service.onVerify(input())).rejects.toThrow(
+      'db write failed',
+    );
+    expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+  });
+
+  it('[FIX 2026-08-16] verify lặp (face_detected, KHÔNG phải điểm danh mới) → KHÔNG emit', async () => {
+    dsMock.manager.query.mockImplementation(
+      router({ existing: [{ id: 'rec1' }] }),
+    );
+    await service.onVerify(input());
+    expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+  });
+
+  it('[FIX 2026-08-16] emitToRoom ném lỗi → onVerify KHÔNG throw, ghi attendance vẫn thành công (best-effort)', async () => {
+    dsMock.manager.query.mockImplementation(router());
+    wsMock.emitToRoom.mockImplementation(() => {
+      throw new Error('socket boom');
+    });
+    await expect(service.onVerify(input())).resolves.toBeUndefined();
+    const ins = calls(dsMock.manager.query, 'INSERT INTO attendance_records');
+    expect(ins.length).toBe(1);
   });
 
   it('AC-002 trễ quá grace: record late, is_late=true, late_minutes>0', async () => {

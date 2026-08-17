@@ -256,6 +256,29 @@ export class IotDevicesService {
 
     try {
       Object.assign(device, updates);
+
+      // [FIX 2026-08-16] IP đổi qua UI Device Management (route PATCH cơ bản này) chỉ
+      // cập nhật cột ip_address, KHÔNG đụng metadata_json — trong khi
+      // FaceDeviceProviderFactory.create() ưu tiên đọc face_server_config.base_url
+      // TRƯỚC ip_address (chỉ fallback khi base_url null/undefined, xem
+      // face-device-provider.factory.ts:36-37). Nếu base_url cũ còn đó (IP cũ), mọi
+      // lệnh gọi FaceGate sau khi đổi IP sẽ kết nối SAI địa chỉ → timeout.
+      // Null hoá base_url để factory tự fallback sang ip_address MỚI — CHỈ khi
+      // changes.ipAddress tồn tại (IP THỰC SỰ đổi giá trị, không phải chỉ có mặt
+      // trong payload — FE luôn gửi ip_address ở mọi lần submit Edit kể cả khi
+      // không đổi IP, nên KHÔNG được dùng dto.ipAddress !== undefined ở đây).
+      if (changes.ipAddress) {
+        const cfg = device.metadataJson?.['face_server_config'] as
+          | Record<string, unknown>
+          | undefined;
+        if (cfg?.base_url) {
+          device.metadataJson = {
+            ...device.metadataJson,
+            face_server_config: { ...cfg, base_url: null },
+          };
+        }
+      }
+
       const savedDevice = await queryRunner.manager.save(
         IoTDeviceEntity,
         device,
@@ -881,7 +904,22 @@ export class IotDevicesService {
     const tokenLast4 = plainToken.slice(-4);
     const configuredAt = new Date().toISOString();
 
+    // [FIX 2026-08-16] Mirror pattern đúng của revokeFaceServerToken/rotateFaceServerToken
+    // (dòng ~1043, ~1106): spread face_server_config CŨ trước, đè field callback/token mới
+    // SAU — KHÔNG gán object hoàn toàn mới. Trước fix, newFaceConfig là object mới tinh chỉ
+    // 9 field callback/token → mất base_url/username/password_encrypted (set qua đường khác,
+    // ví dụ PATCH đổi IP ở update()) mỗi lần gọi lại /configure.
+    const currentFaceConfig = (device.metadataJson?.['face_server_config'] ??
+      {}) as Record<string, unknown>;
+    // [FIX 2026-08-16] Token MỚI sinh ra ở /configure KHÔNG được kế thừa
+    // revoked_at/revoked_reason từ lần /revoke trước đó — mirror đúng "delete" đã
+    // có sẵn ở rotateFaceServerToken() (dòng ~1128-1129). Xoá TRƯỚC khi merge field
+    // callback mới, nếu không assertCallbackToken() sẽ từ chối nhầm token mới vừa
+    // sinh là "đã revoked" (CALLBACK_TOKEN_REVOKED) dù token này chưa từng bị revoke.
+    delete currentFaceConfig.revoked_at;
+    delete currentFaceConfig.revoked_reason;
     const newFaceConfig = {
+      ...currentFaceConfig,
       callback_enabled,
       callback_protocol: dto.callback_protocol,
       callback_base_url: dto.callback_base_url,

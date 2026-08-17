@@ -19,6 +19,8 @@ import {
 import { probeTcp } from '../utils/rtsp-probe.util.js';
 import { probeRtspRuntime } from '../utils/rtsp-runtime-probe.util.js';
 import * as nodeCrypto from 'crypto';
+import { FaceDeviceProviderFactory } from '../../face-access/face-device-provider.factory.js';
+import { FaceGateClient } from '../../face-access/clients/facegate.client.js';
 
 jest.mock('../utils/rtsp-probe.util.js', () => ({
   probeTcp: jest.fn(),
@@ -467,6 +469,155 @@ describe('IotDevicesService', () => {
 
       expect(queryRunnerMock.startTransaction).toHaveBeenCalled();
       expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
+    });
+
+    // ── [FIX 2026-08-16] Đồng bộ face_server_config.base_url khi IP đổi qua PATCH cơ bản ──
+    it('T9 IP đổi thật + có base_url cũ → base_url null hoá (field khác trong cfg giữ nguyên)', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Face A',
+        ipAddress: '192.168.1.12',
+        macAddress: null,
+        networkIdentifier: null,
+        metadataJson: {
+          face_server_config: {
+            base_url: 'http://192.168.1.12',
+            username: 'admin',
+          },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        ipAddress: '192.168.2.10',
+      });
+
+      expect(result.ipAddress).toBe('192.168.2.10');
+      expect(
+        (result.metadataJson as any).face_server_config.base_url,
+      ).toBeNull();
+      expect((result.metadataJson as any).face_server_config.username).toBe(
+        'admin',
+      );
+    });
+
+    it('T10 QUAN TRỌNG NHẤT: chỉ đổi device_name, ip_address gửi kèm y hệt giá trị cũ (đúng hành vi FE thật) → base_url GIỮ NGUYÊN', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Old Name',
+        ipAddress: '192.168.1.12',
+        macAddress: null,
+        networkIdentifier: null,
+        metadataJson: {
+          face_server_config: { base_url: 'http://192.168.1.12' },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      // Mô phỏng ĐÚNG DeviceManagement.jsx:234-237 — form luôn gửi kèm
+      // ip_address dù user chỉ sửa device_name trên modal Edit.
+      const result = await service.update('user-id', 'dev-1', {
+        deviceName: 'New Name',
+        ipAddress: '192.168.1.12',
+      });
+
+      expect(result.deviceName).toBe('New Name');
+      expect(
+        (result.metadataJson as any).face_server_config.base_url,
+      ).toBe('http://192.168.1.12');
+    });
+
+    it('T11 Device chưa từng cấu hình face server (metadataJson null) + đổi IP → không lỗi, không tạo cấu trúc thừa', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Face Rỗng',
+        ipAddress: null,
+        macAddress: null,
+        networkIdentifier: null,
+        metadataJson: null,
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        ipAddress: '192.168.3.1',
+      });
+
+      expect(result.ipAddress).toBe('192.168.3.1');
+      expect(result.metadataJson).toBeNull();
+    });
+
+    it('T12 Tích hợp thật: sau base_url=null, FaceDeviceProviderFactory.create() tự fallback đúng sang ip_address MỚI', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Face A',
+        ipAddress: '192.168.1.12',
+        macAddress: null,
+        networkIdentifier: null,
+        metadataJson: {
+          face_server_config: { base_url: 'http://192.168.1.12' },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        ipAddress: '192.168.2.10',
+      });
+
+      const factory = new FaceDeviceProviderFactory({
+        get: (_k: string, d?: unknown) => d,
+      } as any);
+      const provider = factory.create({
+        ipAddress: result.ipAddress,
+        metadataJson: result.metadataJson,
+      });
+
+      expect(provider).toBeInstanceOf(FaceGateClient);
+      expect((provider as any).deps.baseUrl).toBe('http://192.168.2.10');
+    });
+
+    it('T13 Regression: đổi mac_address/network_identifier (KHÔNG đụng ip_address) → base_url không bị đụng tới', async () => {
+      const device = {
+        id: 'dev-1',
+        deviceName: 'Old',
+        ipAddress: '192.168.1.12',
+        macAddress: 'AA:AA:AA:AA:AA:AA',
+        networkIdentifier: 'net-old',
+        metadataJson: {
+          face_server_config: { base_url: 'http://192.168.1.12' },
+        },
+      };
+      (dataSourceMock.manager.findOne as jest.Mock).mockImplementation(
+        async (_entity: unknown, options: any) => {
+          if (options.where?.macAddress !== undefined) return null; // không trùng
+          return device;
+        },
+      );
+      queryRunnerMock.manager.save.mockImplementation(
+        async (_entity: unknown, obj: any) => ({ ...obj }),
+      );
+
+      const result = await service.update('user-id', 'dev-1', {
+        macAddress: 'BB:BB:BB:BB:BB:BB',
+        networkIdentifier: 'net-new',
+      });
+
+      expect(result.macAddress).toBe('BB:BB:BB:BB:BB:BB');
+      expect(result.networkIdentifier).toBe('net-new');
+      expect(
+        (result.metadataJson as any).face_server_config.base_url,
+      ).toBe('http://192.168.1.12');
     });
   });
 
@@ -1229,6 +1380,78 @@ describe('IotDevicesService', () => {
       ).rejects.toThrow('db down');
       expect(queryRunnerMock.rollbackTransaction).toHaveBeenCalled();
       expect(queryRunnerMock.release).toHaveBeenCalled();
+    });
+
+    it('[FIX 2026-08-16] TÁI HIỆN bug: face_server_config đã có base_url/username/password_encrypted (set qua đường khác) → configure lại (đổi callback) → 3 field đó VẪN CÒN NGUYÊN, field callback vẫn được cập nhật giá trị mới', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({
+          metadataJson: {
+            face_server_config: {
+              base_url: 'http://192.168.1.12',
+              username: 'admin',
+              password_encrypted: 'enc:xyz',
+              callback_token_hash: 'old-hash',
+              allowed_source_ip: '10.0.0.1',
+            },
+          },
+        }),
+      );
+
+      const { device } = await service.configureFaceServer('admin1', 'dev1', {
+        ...validDto,
+        allowed_source_ip: '10.0.0.9',
+      });
+      const fsc = device.metadataJson!.face_server_config as any;
+
+      // Field KHÔNG thuộc ConfigureFaceServerDto — trước fix bị xoá trắng.
+      expect(fsc.base_url).toBe('http://192.168.1.12');
+      expect(fsc.username).toBe('admin');
+      expect(fsc.password_encrypted).toBe('enc:xyz');
+      // Field callback vẫn cập nhật đúng giá trị mới, KHÔNG bị "kẹt" giá trị cũ.
+      expect(fsc.allowed_source_ip).toBe('10.0.0.9');
+      expect(fsc.callback_token_hash).not.toBe('old-hash');
+    });
+
+    it('[FIX 2026-08-16] TÁI HIỆN edge case: config cũ có revoked_at (đã /revoke trước đó) → configure lại → revoked_at/revoked_reason KHÔNG còn trong config mới, token mới KHÔNG bị từ chối "revoked"', async () => {
+      dataSourceMock.manager.findOne.mockResolvedValue(
+        faceDeviceWithRoom({
+          deviceCode: 'FACE-X',
+          metadataJson: {
+            face_server_config: {
+              callback_enabled: true,
+              callback_token_hash: 'old-revoked-hash',
+              revoked_at: '2026-08-10T00:00:00.000Z',
+              revoked_reason: 'token leaked',
+            },
+          },
+        }),
+      );
+
+      const { device, oneTimeCallbackToken } =
+        await service.configureFaceServer('admin1', 'dev1', validDto);
+      const fsc = device.metadataJson!.face_server_config as any;
+
+      expect(fsc.revoked_at).toBeUndefined();
+      expect(fsc.revoked_reason).toBeUndefined();
+
+      // Token MỚI vừa sinh phải được assertCallbackToken() CHẤP NHẬN (qua
+      // receiveStrangerEvent thật, không giả lập assertCallbackToken riêng) — mock
+      // findOne tiếp theo trả về ĐÚNG device vừa lưu (mô phỏng callback kế tiếp đọc
+      // lại DB), clientIp loopback để không dính gate allowed_source_ip.
+      dataSourceMock.manager.findOne.mockResolvedValue(device);
+      queryRunnerMock.manager.save.mockImplementation(
+        (_e: unknown, obj: any) => obj,
+      );
+      await expect(
+        service.receiveStrangerEvent({
+          headers: { 'x-callback-token': oneTimeCallbackToken },
+          body: { stranger_id: 's1' },
+          query: {},
+          params: { deviceCode: 'FACE-X' },
+          clientIp: '127.0.0.1',
+          files: [],
+        }),
+      ).resolves.toBeDefined();
     });
   });
 
