@@ -172,8 +172,12 @@ export class SchedulerService {
     try {
       const p = await this.faceProvisioningService.provisionUpcomingMeetings();
       const d = await this.faceProvisioningService.deprovisionEndedMeetings();
+      // [FIX 2026-08-16] Lưới an toàn bổ sung — chạy SAU deprovisionEndedMeetings(),
+      // bắt mapping mồ côi theo meeting.status (completed/cancelled) ngay lượt cron
+      // kế tiếp, KHÔNG đợi end_time/grace như bước trên. Không thay thế bước trên.
+      const s = await this.faceProvisioningService.deprovisionByMeetingStatus();
       this.logger.log(
-        `[Scheduler] face-sync: provisioned-scan=${p.scanned} skipped=${p.skipped} deprovisioned-scan=${d.scanned}`,
+        `[Scheduler] face-sync: provisioned-scan=${p.scanned} skipped=${p.skipped} deprovisioned-scan=${d.scanned} safety-net-deprovisioned=${s.scanned}`,
       );
     } catch (e) {
       this.logger.error(

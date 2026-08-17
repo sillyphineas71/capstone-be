@@ -341,6 +341,126 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
   });
 
+  // ── [FIX 2026-08-16] SAFETY NET (deprovisionByMeetingStatus) ──
+  describe('deprovisionByMeetingStatus (safety net, độc lập end_time)', () => {
+    it('QUAN TRỌNG NHẤT: meeting status=cancelled + mapping synced → bắt và xoá NGAY (trước đây KHÔNG có lưới nào bắt được)', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([
+            { id: 'map-cancel', device_id: 'dev1', device_person_id: '77' },
+          ]);
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      const r = await service.deprovisionByMeetingStatus();
+      expect(r.scanned).toBe(1);
+      expect(provider.deletePerson).toHaveBeenCalledWith('77');
+      const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+      expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+    });
+
+    it('meeting status=completed SỚM (bấm Kết thúc trước giờ end_time theo lịch) → bắt và xoá NGAY, không cần đợi end_time trôi qua', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([
+            { id: 'map-completed-early', device_id: 'dev1', device_person_id: '88' },
+          ]);
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      const r = await service.deprovisionByMeetingStatus();
+      expect(r.scanned).toBe(1);
+      expect(provider.deletePerson).toHaveBeenCalledWith('88');
+    });
+
+    it('meeting status=in_progress (họp đang diễn ra thật) → WHERE loại trừ, KHÔNG đụng tới', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([]); // in_progress không khớp WHERE → DB trả rỗng
+        return Promise.resolve(undefined);
+      });
+      const r = await service.deprovisionByMeetingStatus();
+      expect(r.scanned).toBe(0);
+      expect(provider.deletePerson).not.toHaveBeenCalled();
+    });
+
+    it('mapping không JOIN được meeting nào (dữ liệu rác/test cũ) → INNER JOIN tự loại, bỏ qua an toàn', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([]); // không JOIN được → không có dòng nào trả về
+        return Promise.resolve(undefined);
+      });
+      await expect(service.deprovisionByMeetingStatus()).resolves.toEqual({
+        scanned: 0,
+      });
+      expect(provider.deletePerson).not.toHaveBeenCalled();
+    });
+
+    it('lỗi mạng/thiết bị khi xoá 1 dòng → KHÔNG crash cron, dòng khác trong cùng lượt vẫn xử lý, log lỗi rõ ràng', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([
+            { id: 'map-fail', device_id: 'dev1', device_person_id: '11' },
+            { id: 'map-ok', device_id: 'dev1', device_person_id: '22' },
+          ]);
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      provider.deletePerson
+        .mockRejectedValueOnce(new Error('network unreachable'))
+        .mockResolvedValueOnce({ ok: true });
+      const errSpy = jest.spyOn((service as any).logger, 'error');
+
+      const r = await service.deprovisionByMeetingStatus();
+
+      expect(r.scanned).toBe(1); // chỉ dòng thứ 2 thành công
+      expect(provider.deletePerson).toHaveBeenCalledTimes(2);
+      expect(
+        errSpy.mock.calls.some((c) =>
+          String(c[0]).includes('safety-net deprovision mapping map-fail failed'),
+        ),
+      ).toBe(true);
+    });
+
+    it('query KHÔNG có bất kỳ điều kiện thời gian nào (KHÔNG grace, KHÔNG now()/interval) — bắt ngay lượt cron kế tiếp, không đợi thêm', async () => {
+      let captured = '';
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')")) {
+          captured = sql;
+          return Promise.resolve([]);
+        }
+        return Promise.resolve(undefined);
+      });
+      await service.deprovisionByMeetingStatus();
+      expect(captured).not.toContain('now()');
+      expect(captured).not.toContain('interval');
+      expect(captured).toContain("mp.sync_status = 'synced'");
+      expect(captured).toContain("metadata_json->>'source', '') <> 'ivss'");
+      expect(captured).toContain('mp.deleted_at IS NULL');
+    });
+
+    it('Tích hợp thật: removeMapping() KHÔNG mock — factory.create()+provider.deletePerson() được gọi đúng device_person_id của mapping tìm được', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("me.status IN ('completed', 'cancelled')"))
+          return Promise.resolve([
+            { id: 'map-real', device_id: 'dev1', device_person_id: '999' },
+          ]);
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      await service.deprovisionByMeetingStatus();
+      expect(factoryMock.create).toHaveBeenCalledWith({
+        ipAddress: device.ip_address,
+        metadataJson: device.metadata_json,
+      });
+      expect(provider.deletePerson).toHaveBeenCalledWith('999');
+    });
+  });
+
   // ── RECONCILE ──
   it('reconcile stale: synced + meeting ended ≥ grace → deprovision (query có grace)', async () => {
     let staleSql = '';
