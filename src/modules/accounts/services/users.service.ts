@@ -2033,12 +2033,32 @@ export class UsersService {
         take: limit,
       });
 
+    // [FIX 2026-08-17] Batch hasFaceProfile (1 query cho cả trang — tránh N+1),
+    // mirror ĐÚNG pattern "Batch roles" ở listUsersForManagement bên dưới. Chỉ
+    // status=ACTIVE (ảnh đã duyệt, dùng được để enroll — khác hasFaceProfile ở
+    // UserDetailResponseDto, xem comment trong UserListItemDto).
+    const userIds = entities.map((u) => u.id);
+    const activeFaceProfileUserIds = new Set<string>();
+    if (userIds.length > 0) {
+      const activeProfiles = await this.dataSource
+        .getRepository(FaceProfileEntity)
+        .createQueryBuilder('fp')
+        .select('fp.userId', 'userId')
+        .where('fp.userId IN (:...userIds)', { userIds })
+        .andWhere('fp.status = :status', { status: FaceProfileStatus.ACTIVE })
+        .getRawMany<{ userId: string }>();
+      for (const row of activeProfiles) {
+        activeFaceProfileUserIds.add(row.userId);
+      }
+    }
+
     const data: UserListItemDto[] = entities.map((u) => ({
       id: u.id,
       fullName: u.fullName,
       email: u.email,
       employeeCode: u.employeeCode,
       avatarUrl: u.avatarUrl,
+      hasFaceProfile: activeFaceProfileUserIds.has(u.id),
     }));
 
     return { data, total };

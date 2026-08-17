@@ -2667,10 +2667,31 @@ describe('UsersService', () => {
 
   describe('listUsers (UC-13 search)', () => {
     let findAndCount: jest.Mock;
+    // [FIX 2026-08-17] batch hasFaceProfile — mock riêng FaceProfileEntity.createQueryBuilder,
+    // KHÔNG lẫn với findAndCount của UserEntity (getRepository trả khác nhau theo entity).
+    let getRawMany: jest.Mock;
+    let fpWhere: jest.Mock;
+    let fpAndWhere: jest.Mock;
 
     beforeEach(() => {
       findAndCount = jest.fn().mockResolvedValue([[], 0]);
-      (dataSource.getRepository as jest.Mock).mockReturnValue({ findAndCount });
+      getRawMany = jest.fn().mockResolvedValue([]); // mặc định: KHÔNG ai có active face profile
+      const fpQb: any = {};
+      fpQb.select = jest.fn().mockReturnValue(fpQb);
+      fpWhere = jest.fn().mockReturnValue(fpQb);
+      fpAndWhere = jest.fn().mockReturnValue(fpQb);
+      fpQb.where = fpWhere;
+      fpQb.andWhere = fpAndWhere;
+      fpQb.getRawMany = getRawMany;
+
+      (dataSource.getRepository as jest.Mock).mockImplementation(
+        (entityClass: unknown) => {
+          if (entityClass === FaceProfileEntity) {
+            return { createQueryBuilder: jest.fn().mockReturnValue(fpQb) };
+          }
+          return { findAndCount };
+        },
+      );
     });
 
     it('[T1/T2/T3/T4] search → where là mảng OR 3 nhánh (fullName/email/employeeCode), MỖI nhánh giữ baseWhere (ACTIVE + deletedAt)', async () => {
@@ -2726,6 +2747,7 @@ describe('UsersService', () => {
         email: 'a@x.com',
         employeeCode: 'EMP1',
         avatarUrl: 'https://cdn.example.com/avatars/u1.jpg',
+        hasFaceProfile: false, // [FIX 2026-08-17] getRawMany() mặc định [] → không ai active
       });
       expect(res.total).toBe(1);
     });
@@ -2748,6 +2770,7 @@ describe('UsersService', () => {
       const opts = findAndCount.mock.calls[0][0];
       expect(opts.select.avatarUrl).toBe(true);
       expect(res.data[0].avatarUrl).toBeNull();
+      expect(res.data[0].hasFaceProfile).toBe(false); // regression: field khác không đổi
     });
 
     it('[T7] phân trang & sort giữ nguyên (skip/take/order)', async () => {
@@ -2764,6 +2787,103 @@ describe('UsersService', () => {
       expect(Array.isArray(opts.where)).toBe(false);
       expect(opts.where.accountStatus).toBe(AccountStatus.ACTIVE);
       expect(opts.where.deletedAt).toBeDefined();
+    });
+
+    // [FIX 2026-08-17] hasFaceProfile — batch query (mirror pattern "Batch roles" của
+    // listUsersForManagement), chỉ tính status=ACTIVE.
+    describe('hasFaceProfile (chỉ status=active, batch query tránh N+1)', () => {
+      const userRow = (id: string) => ({
+        id,
+        fullName: `User ${id}`,
+        email: `${id}@x.com`,
+        employeeCode: null,
+        avatarUrl: null,
+      });
+
+      it('user có face_profile status=active → hasFaceProfile=true', async () => {
+        findAndCount.mockResolvedValue([[userRow('u1')], 1]);
+        getRawMany.mockResolvedValue([{ userId: 'u1' }]);
+
+        const res = await service.listUsers({ page: 1, limit: 20 });
+
+        expect(res.data[0].hasFaceProfile).toBe(true);
+      });
+
+      it.each(['pending_review', 'revoked', 'rejected', 'disabled'])(
+        'user có face_profile nhưng status=%s (KHÔNG active) → hasFaceProfile=false',
+        async (status) => {
+          findAndCount.mockResolvedValue([[userRow('u1')], 1]);
+          // Batch query CHỈ lọc status=ACTIVE ở tầng SQL (andWhere) — profile status
+          // khác sẽ không nằm trong kết quả getRawMany() dù có tồn tại trong DB thật.
+          getRawMany.mockResolvedValue([]);
+
+          const res = await service.listUsers({ page: 1, limit: 20 });
+
+          expect(res.data[0].hasFaceProfile).toBe(false);
+          expect(fpAndWhere).toHaveBeenCalledWith('fp.status = :status', {
+            status: FaceProfileStatus.ACTIVE,
+          });
+          void status; // tham số chỉ để đặt tên test rõ ràng, hành vi mock giống nhau
+        },
+      );
+
+      it('user hoàn toàn KHÔNG có face_profile nào → hasFaceProfile=false', async () => {
+        findAndCount.mockResolvedValue([[userRow('u1')], 1]);
+        getRawMany.mockResolvedValue([]); // batch query không trả row nào cho u1
+
+        const res = await service.listUsers({ page: 1, limit: 20 });
+
+        expect(res.data[0].hasFaceProfile).toBe(false);
+      });
+
+      it('trang trộn lẫn cả 3 trường hợp (active/status khác/không có profile) → batch query map ĐÚNG cho từng user, không lẫn lộn', async () => {
+        findAndCount.mockResolvedValue([
+          [userRow('u-active'), userRow('u-revoked'), userRow('u-none')],
+          3,
+        ]);
+        // Chỉ 'u-active' xuất hiện trong kết quả batch (status=active) — 'u-revoked'
+        // (có profile nhưng status khác) và 'u-none' (không có profile nào) đều
+        // KHÔNG xuất hiện, đúng semantics SQL WHERE status='active'.
+        getRawMany.mockResolvedValue([{ userId: 'u-active' }]);
+
+        const res = await service.listUsers({ page: 1, limit: 20 });
+
+        const byId = Object.fromEntries(
+          res.data.map((u) => [u.id, u.hasFaceProfile]),
+        );
+        expect(byId).toEqual({
+          'u-active': true,
+          'u-revoked': false,
+          'u-none': false,
+        });
+      });
+
+      it('KHÔNG N+1: đúng 1 lần createQueryBuilder/getRawMany cho CẢ trang, bất kể số user', async () => {
+        findAndCount.mockResolvedValue([
+          [userRow('u1'), userRow('u2'), userRow('u3'), userRow('u4')],
+          4,
+        ]);
+        getRawMany.mockResolvedValue([{ userId: 'u2' }]);
+
+        await service.listUsers({ page: 1, limit: 20 });
+
+        const fpRepoCalls = (dataSource.getRepository as jest.Mock).mock.calls.filter(
+          (c) => c[0] === FaceProfileEntity,
+        );
+        expect(fpRepoCalls.length).toBe(1); // 1 lần getRepository(FaceProfileEntity)
+        expect(getRawMany).toHaveBeenCalledTimes(1); // 1 query batch, KHÔNG phải 4 (per-row)
+        expect(fpWhere).toHaveBeenCalledWith('fp.userId IN (:...userIds)', {
+          userIds: ['u1', 'u2', 'u3', 'u4'],
+        });
+      });
+
+      it('trang rỗng (0 user) → KHÔNG gọi batch query (guard userIds.length > 0)', async () => {
+        findAndCount.mockResolvedValue([[], 0]);
+
+        await service.listUsers({ page: 1, limit: 20 });
+
+        expect(getRawMany).not.toHaveBeenCalled();
+      });
     });
   });
 
