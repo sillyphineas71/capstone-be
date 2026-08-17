@@ -26,10 +26,17 @@ export class FaceEventDto {
   @IsInt()
   channelId: number;
 
-  @ApiProperty({ description: 'UID của person do thiết bị IVSS nhận diện' })
+  // [FIX 2026-08-17] Optional: nCandidateNum<=0 (người lạ hoàn toàn, không khớp
+  // ai trong FaceDB) → bridge giờ VẪN forward type='face_recognition' nhưng
+  // KHÔNG có personUid (xem EventListener.java, handleRecognition() phía bridge).
+  // Trước đây bắt buộc @IsNotEmpty() khiến case này chưa từng tới được onFaceEvent().
+  @ApiPropertyOptional({
+    description:
+      'UID của person do thiết bị IVSS nhận diện — KHÔNG có nếu 0 candidate (người lạ hoàn toàn)',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  personUid: string;
+  personUid?: string;
 
   @ApiProperty({ description: 'Thời điểm sự kiện xảy ra (ISO 8601)' })
   @IsISO8601()

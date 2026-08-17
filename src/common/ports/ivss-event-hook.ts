@@ -11,8 +11,8 @@ export interface IvssFaceEvent {
   type: string;
   /** Channel camera trên IVSS (đã normalize về number — R4). */
   channelId: number;
-  /** Định danh person trên IVSS. */
-  personUid: string;
+  /** Định danh person trên IVSS — KHÔNG có nếu 0 candidate (người lạ hoàn toàn, [FIX 2026-08-17]). */
+  personUid?: string;
   /** Tên hiển thị (nếu có). */
   name?: string;
   /** Độ tương đồng (nếu có). */

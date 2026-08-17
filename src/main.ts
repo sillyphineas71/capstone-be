@@ -11,9 +11,13 @@ import { deviceCallbackTimeout } from './config/device-callback-timeout.middlewa
 // Nest mac dinh dung body-parser cua express voi limit 100kb — qua nho cho
 // payload device callback kem anh base64 (vd /internal/ivss/events: JPEG
 // snapshot ~100-500KB -> base64 ~150-700KB). Tat bodyParser tu dong cua Nest
-// (bodyParser: false) va tu dang ky json/urlencoded voi limit 5mb — du an
+// (bodyParser: false) va tu dang ky json/urlencoded voi limit 15mb — du an
 // toan cho snapshot, van co tran de tranh DoS qua payload khong lo.
-const BODY_LIMIT = '5mb';
+// [FIX 2026-08-17] 5mb (dat tu commit 8b7b6b2) van khong du: log that ghi
+// nhan 413 tren chinh event face_recognition co anh - ung dung/camera gui
+// anh lon hon uoc luong ban dau. Nang len 15mb (~11MB anh goc sau base64)
+// de du bien do, van giu tran cung chong DoS qua payload khong lo.
+const BODY_LIMIT = '15mb';
 
 // [FIX 2026-08-15] Timeout rieng cho 3 route callback thiet bi (/vf, /hb, /sf) — LAN noi
 // bo nen 15s la du du, khong qua dai gay cho vo ich khi that su treo.

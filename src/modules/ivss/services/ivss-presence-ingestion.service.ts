@@ -61,6 +61,10 @@ const UUID_RE =
 const BRIDGE_DEVICE_CODE = 'IVSS-BRIDGE';
 const BRIDGE_DEVICE_TYPE = 'ivss_bridge';
 const SKEW_MS = 60 * 60 * 1000; // 1h
+// [FIX 2026-08-17] Dedupe spam: camera bắn nhiều frame liên tục cho CÙNG 1 lần
+// xuất hiện (không phải regression — thiếu sót thiết kế từ đầu, event log
+// KHÔNG có time-window nào trước đây). 8s nằm giữa khoảng đề xuất 5-10s.
+const DEDUP_WINDOW_MS = 8000;
 // eventAction biết → direction. VERIFY-LIVE owed: tập giá trị thực bridge gửi.
 const ENTER_ACTIONS = new Set(['enter', 'in', '1']);
 const LEAVE_ACTIONS = new Set(['leave', 'out', 'exit', '2']);
@@ -227,6 +231,45 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
         // qua metadata_json.sourceEventId của zone_presence_events, KHÔNG cột event_id.
         presenceSkipped,
       };
+
+      // [FIX 2026-08-17] Dedupe spam TRƯỚC INSERT — camera bắn nhiều frame liên tục
+      // cho CÙNG 1 lần xuất hiện → nhiều row trùng trong RoomAccessLogs/ZoneManagement.
+      // Khóa: channelId + szUid (RAW evt.personUid — KHÔNG dùng userId đã resolve, vì
+      // userId có thể bị null-hoá bởi ngưỡng similarity dù szUid vẫn có giá trị thật,
+      // xem Phần B Case 5 ở trên — dùng userId sẽ trộn "người quen bị null do similarity
+      // thấp" lẫn "người lạ thật" không nhất quán). Người lạ (szUid null, sau fix Phần
+      // A/B trước) → so khớp NULL-safe (`IS NOT DISTINCT FROM`), gộp theo channelId
+      // trong cửa sổ — chấp nhận đánh đổi có thể gộp nhầm 2 người lạ khác nhau đứng sát
+      // giờ CÙNG 1 channel (ưu tiên chống spam hơn phân biệt tuyệt đối từng người lạ).
+      // SELECT-precheck (KHÔNG UNIQUE constraint/migration) — khác convention
+      // AlertsService.recordAlert() (unique index + bắt 23505) vì bài toán khác bản
+      // chất: đây là event log theo cửa sổ thời gian trôi (không phải "1 alert đang
+      // mở"), chỉ 1 nguồn ghi duy nhất (không có luồng thứ 2 nào ghi cùng bảng cho
+      // cùng sự kiện như cron+immediate của Alerts) → race window ở đây không đáng kể.
+      // iot_device_events cũng chưa từng có UNIQUE constraint nào (mọi migration trước
+      // giờ chỉ ADD COLUMN + index thường) — thêm retroactive lên bảng ĐANG có dữ liệu
+      // trùng thật (chính bug đang sửa) có rủi ro migration fail không cần thiết.
+      const dupRows: IdRow[] = await this.dataSource.manager.query(
+        `SELECT id FROM iot_device_events
+         WHERE device_id = $1
+           AND event_type = 'ivss_face_event'
+           AND payload_json->>'channelId' = $2
+           AND payload_json->>'szUid' IS NOT DISTINCT FROM $3
+           AND event_time >= $4
+         ORDER BY event_time DESC LIMIT 1`,
+        [
+          deviceId,
+          String(evt.channelId),
+          szUid ?? null,
+          new Date(eventTime.getTime() - DEDUP_WINDOW_MS),
+        ],
+      );
+      if (dupRows[0]) {
+        this.logger.debug(
+          `IVSS event dedupe: bỏ qua (channel=${evt.channelId} szUid=${szUid}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${dupRows[0].id}).`,
+        );
+        return;
+      }
 
       // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
       // F-B/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí các cột/tham
@@ -464,7 +507,10 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
    * ORDER BY để mapping mới nhất thắng khi 1 người có cả 2 nguồn (tránh phụ
    * thuộc thứ tự vật lý của bảng).
    */
-  private async resolveUser(szUid: string): Promise<string | null> {
+  private async resolveUser(szUid: string | undefined): Promise<string | null> {
+    // [FIX 2026-08-17] 0 candidate (người lạ hoàn toàn) → bridge gửi personUid
+    // rỗng — không có gì để resolve, tránh round-trip DB vô ích.
+    if (!szUid) return null;
     const rows: UserRow[] = await this.dataSource.manager.query(
       `SELECT user_id FROM device_user_mappings
        WHERE device_person_id = $1

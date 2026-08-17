@@ -47,6 +47,8 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       presenceMap?: Record<string, unknown> | null; // ZPW-001 channel_presence_zone_map
       mediaFileId?: string | null; // id RETURNING của INSERT INTO media_files (snapshot)
       mediaFileInsertThrows?: boolean;
+      // [FIX 2026-08-17] dedupe precheck: id row trùng "đã có" (mặc định undefined → [] → KHÔNG trùng).
+      dedupeHit?: string | null;
     } = {},
   ) => {
     captured = [];
@@ -93,6 +95,11 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         if (over.insertThrows) return Promise.reject(new Error('db boom'));
         return Promise.resolve([{ id: 'evt1' }]); // QĐ-4: RETURNING id
       }
+      // [FIX 2026-08-17] dedupe precheck (SELECT ... IS NOT DISTINCT FROM ...).
+      if (sql.includes('IS NOT DISTINCT FROM'))
+        return Promise.resolve(
+          over.dedupeHit ? [{ id: over.dedupeHit }] : [],
+        );
       return Promise.resolve(undefined);
     });
   };
@@ -868,6 +875,173 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       );
       // Xác định thứ tự khi 1 user có cả 2 nguồn (không phụ thuộc thứ tự vật lý).
       expect(q.sql).toContain('ORDER BY last_synced_at DESC NULLS LAST');
+    });
+  });
+
+  // ── [FIX 2026-08-17] personUid absent (0 candidate — người lạ hoàn toàn) ──
+  // Bridge (EventListener.java, handleRecognition()) giờ KHÔNG còn return sớm
+  // khi nCandidateNum<=0 — vẫn forward type='face_recognition' nhưng personUid
+  // để trống. FaceEventDto/IvssFaceEvent.personUid đổi thành optional (trước
+  // đây @IsNotEmpty() khiến case này bị 400 ngay từ ValidationPipe, chưa từng
+  // tới được onFaceEvent()) — đây là nguyên nhân gốc "người lạ hoàn toàn
+  // không có log gì". isStranger=true ở màn RoomAccessLogs/ZoneManagement suy
+  // ra TỰ ĐỘNG từ userId=null (ivss-room-access-log.service.ts:88-90,
+  // isStranger() KHÔNG đổi, generic cho mọi userId null) — không cần sửa gì
+  // thêm ở tầng đọc.
+  describe('personUid absent (0 candidate, người lạ hoàn toàn — [FIX 2026-08-17])', () => {
+    it('personUid hợp lệ (case cũ, người quen) → hành vi KHÔNG đổi, vẫn matched, vẫn tra DB device_user_mappings', async () => {
+      wire();
+      await service.onFaceEvent(evt({ personUid: 'SZ1' }));
+      const p = payloadOf();
+      expect(p.matchState).toBe('matched');
+      expect(p.userId).toBe('u1');
+      expect(
+        captured.some((c) => c.sql.includes('FROM device_user_mappings')),
+      ).toBe(true);
+    });
+
+    it('personUid=undefined (0 candidate, người lạ hoàn toàn) → userId resolve null, KHÔNG tốn round-trip DB, vẫn persist unmatched_identity (isStranger=true ở tầng đọc)', async () => {
+      wire();
+      await service.onFaceEvent(evt({ personUid: undefined }));
+      const p = payloadOf();
+      expect(p.userId).toBeNull();
+      expect(p.matchState).toBe('unmatched_identity');
+      expect(insert()!.params[5]).toBe('unmatched');
+      // resolveUser() early-return TRƯỚC khi query — không round-trip DB vô ích.
+      expect(
+        captured.some((c) => c.sql.includes('FROM device_user_mappings')),
+      ).toBe(false);
+    });
+
+    it('personUid=undefined → KHÔNG throw, webhook always-ack giữ nguyên, raw event vẫn persist', async () => {
+      wire();
+      await expect(
+        service.onFaceEvent(evt({ personUid: undefined })),
+      ).resolves.toBeUndefined();
+      expect(insert()).toBeDefined();
+    });
+  });
+
+  // ── [FIX 2026-08-17] Dedupe spam TRƯỚC INSERT — channelId+szUid, cửa sổ 8s ──
+  describe('dedupe spam (SELECT-precheck trước INSERT, channelId+szUid, 8s — [FIX 2026-08-17])', () => {
+    const captureDedupe = () =>
+      captured.filter((c) => c.sql.includes('IS NOT DISTINCT FROM'));
+    const captureInsert = () =>
+      captured.filter((c) => c.sql.includes('INSERT INTO iot_device_events'));
+
+    it('query dedupe đúng tham số: device_id, channelId (string), szUid, mốc cửa sổ = eventTime - 8000ms', async () => {
+      wire();
+      // utc phải trong ±1h (SKEW_MS) — dùng nowIso() như các test khác trong file, tránh
+      // rơi vào nhánh fallback utcFallback (eventTime=now() độc lập với utc truyền vào).
+      const iso = new Date().toISOString();
+      await service.onFaceEvent(evt({ utc: iso }));
+      const dq = captureDedupe()[0];
+      expect(dq).toBeDefined();
+      expect(dq.params[0]).toBe('bridge1'); // device_id
+      expect(dq.params[1]).toBe('5'); // channelId → string, khớp payload_json->>'channelId'
+      expect(dq.params[2]).toBe('SZ1'); // szUid raw (KHÔNG phải userId đã resolve)
+      const windowStartMs = (dq.params[3] as Date).getTime();
+      const expectedMs = new Date(iso).getTime() - 8000;
+      // Sai số nhỏ cho phép do thời gian thực thi test, KHÔNG so exact (tránh flaky).
+      expect(Math.abs(windowStartMs - expectedMs)).toBeLessThan(500);
+    });
+
+    it('2 event giống hệt nhau (cùng channelId+szUid) trong cửa sổ 8s → CHỈ 1 row được ghi', async () => {
+      wire();
+      let calls = 0;
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('IS NOT DISTINCT FROM')) {
+          calls++;
+          captured.push({ sql, params });
+          // Lần 1: chưa có gì trong DB → []. Lần 2: đã có row lần 1 vừa ghi (id='evt1') → trùng.
+          return Promise.resolve(calls === 1 ? [] : [{ id: 'evt1' }]);
+        }
+        return base(sql, params);
+      });
+
+      await service.onFaceEvent(evt());
+      await service.onFaceEvent(evt());
+
+      expect(captureInsert().length).toBe(1);
+    });
+
+    it('2 event cách nhau NGOÀI cửa sổ (DB không còn thấy trùng) → CẢ 2 đều được ghi', async () => {
+      wire(); // dedupeHit mặc định undefined → SELECT luôn trả [] → không bao giờ coi là trùng
+      await service.onFaceEvent(evt());
+      await service.onFaceEvent(evt());
+      expect(captureInsert().length).toBe(2);
+    });
+
+    it('người lạ (szUid null/undefined) — 2 event liên tiếp CÙNG channelId trong 8s → dedupe đúng (gộp lại, CHỈ 1 row)', async () => {
+      wire();
+      let calls = 0;
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('IS NOT DISTINCT FROM')) {
+          calls++;
+          captured.push({ sql, params });
+          expect(params[2]).toBeNull(); // szUid null → NULL-safe key, KHÔNG sentinel string
+          return Promise.resolve(calls === 1 ? [] : [{ id: 'evt1' }]);
+        }
+        return base(sql, params);
+      });
+
+      await service.onFaceEvent(evt({ personUid: undefined }));
+      await service.onFaceEvent(evt({ personUid: undefined }));
+
+      expect(captureInsert().length).toBe(1);
+    });
+
+    it('người lạ ở 2 channelId KHÁC nhau trong cùng 8s → KHÔNG bị dedupe nhầm (channelId là 1 phần khóa, CẢ 2 đều ghi)', async () => {
+      wire(); // mặc định KHÔNG dedupeHit → mọi SELECT trả [] (đúng vì channelId khác nhau, DB thật cũng sẽ không match)
+      await service.onFaceEvent(evt({ personUid: undefined, channelId: 5 }));
+      await service.onFaceEvent(evt({ personUid: undefined, channelId: 6 }));
+
+      expect(captureInsert().length).toBe(2);
+      const dqs = captureDedupe();
+      expect(dqs[0].params[1]).toBe('5');
+      expect(dqs[1].params[1]).toBe('6');
+    });
+
+    it('có event trùng bị dedupe → return SỚM, KHÔNG chạm broadcast/zone-presence/intrusion (chỉ 1 lần cho event gốc)', async () => {
+      const AREA = AREA_UUID;
+      wire({ presenceMap: { '5': AREA } });
+      service = await build(true); // realtime ON để chắc chắn broadcastPresence có cơ hội chạy nếu không bị chặn đúng
+      let calls = 0;
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('IS NOT DISTINCT FROM')) {
+          calls++;
+          captured.push({ sql, params });
+          return Promise.resolve(calls === 1 ? [] : [{ id: 'evt1' }]);
+        }
+        return base(sql, params);
+      });
+
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+
+      expect(captureInsert().length).toBe(1);
+      expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(intrusionMock.evaluateZoneEventNow).toHaveBeenCalledTimes(1);
+    });
+
+    it('KHÔNG trùng (case bình thường, mọi test cũ) → broadcast/zone-presence vẫn chạy y hệt trước, KHÔNG bị ảnh hưởng bởi lớp dedupe mới', async () => {
+      const AREA = AREA_UUID;
+      wire({ presenceMap: { '5': AREA } });
+      service = await build(true);
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+      expect(captureInsert().length).toBe(1);
+      expect(wsMock.emitToRoom).toHaveBeenCalledTimes(1);
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('dedupe TRƯỚC INSERT KHÔNG đụng logic phân loại: bị dedupe rồi thì matchStateOf() vốn dĩ không còn được gọi lại, nhưng lần ĐẦU (không trùng) matchState vẫn đúng như cũ', async () => {
+      wire();
+      await service.onFaceEvent(evt());
+      expect(payloadOf().matchState).toBe('matched');
     });
   });
 
