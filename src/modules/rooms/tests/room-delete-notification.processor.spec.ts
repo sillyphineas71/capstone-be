@@ -24,11 +24,17 @@ describe('RoomDeleteNotificationProcessor', () => {
     id: meetingId1,
     title: 'Họp kế hoạch Q3',
     organizerId: 'user-1',
+    hostId: null,
+    status: 'pending_approval',
     startTime: new Date(Date.now() + 3600_000),
     endTime: new Date(Date.now() + 7200_000),
   };
 
-  const mockOrganizer = { id: 'user-1', email: 'organizer@example.com' };
+  const mockOrganizer = {
+    id: 'user-1',
+    email: 'organizer@example.com',
+    directManagerId: null,
+  };
 
   function repoFor(entity: unknown) {
     if (entity === MeetingEntity) {
@@ -38,7 +44,7 @@ describe('RoomDeleteNotificationProcessor', () => {
     }
     if (entity === UserEntity) {
       return {
-        findOne: jest.fn().mockResolvedValue(mockOrganizer),
+        find: jest.fn().mockResolvedValue([mockOrganizer]),
       };
     }
     if (
@@ -200,12 +206,16 @@ describe('RoomDeleteNotificationProcessor', () => {
     // Job status is still 'completed' — partial failure does NOT mark the whole job failed (FR-027)
   });
 
-  it('should skip (not error) when organizer has no email', async () => {
+  it('should skip (not error) when organizer (and no host/manager) has no email', async () => {
     (dataSource.getRepository as jest.Mock).mockImplementation(
       (entity: unknown) => {
         if (entity === UserEntity) {
           return {
-            findOne: jest.fn().mockResolvedValue({ id: 'user-1', email: null }),
+            find: jest
+              .fn()
+              .mockResolvedValue([
+                { id: 'user-1', email: null, directManagerId: null },
+              ]),
           };
         }
         return repoFor(entity);
@@ -221,6 +231,69 @@ describe('RoomDeleteNotificationProcessor', () => {
       successCount: 1,
       failedMeetingIds: [],
     });
+  });
+
+  it('should notify organizer + host + their direct manager (deduped)', async () => {
+    const meetingWithHost = {
+      ...mockMeeting,
+      organizerId: 'user-1',
+      hostId: 'user-2',
+    };
+    (dataSource.getRepository as jest.Mock).mockImplementation(
+      (entity: unknown) => {
+        if (entity === MeetingEntity) {
+          return { findOne: jest.fn().mockResolvedValue(meetingWithHost) };
+        }
+        if (entity === UserEntity) {
+          return {
+            find: jest.fn((opts: any) => {
+              const ids: string[] = opts.where.id.value;
+              const pool = [
+                {
+                  id: 'user-1',
+                  email: 'organizer@example.com',
+                  directManagerId: 'manager-1',
+                },
+                {
+                  id: 'user-2',
+                  email: 'host@example.com',
+                  directManagerId: 'manager-1',
+                },
+                { id: 'manager-1', email: 'manager@example.com' },
+              ];
+              return Promise.resolve(
+                pool.filter((u) => ids.includes(u.id)),
+              );
+            }),
+          };
+        }
+        return repoFor(entity);
+      },
+    );
+
+    await processor.process(jobId, [meetingId1]);
+
+    expect(notificationsService.enqueueEmailNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toEmails: expect.arrayContaining([
+          'organizer@example.com',
+          'host@example.com',
+          'manager@example.com',
+        ]),
+      }),
+    );
+    const call = (notificationsService.enqueueEmailNotification as jest.Mock)
+      .mock.calls[0][0];
+    // Deduped: exactly 3 recipients, not 4 (organizer+host share the same manager)
+    expect(call.toEmails).toHaveLength(3);
+  });
+
+  it('should mention the approval-block note when the meeting is pending_approval', async () => {
+    await processor.process(jobId, [meetingId1]);
+
+    const call = (notificationsService.enqueueEmailNotification as jest.Mock)
+      .mock.calls[0][0];
+    expect(call.content).toContain('KHÔNG thể được duyệt');
   });
 
   it('should skip gracefully (not error) when meeting was deleted/cancelled mid-flight', async () => {

@@ -3,6 +3,7 @@
 ## 📝 CHANGELOG & REVISION HISTORY
 | Ngày cập nhật | Tóm tắt thay đổi | Các dòng thay đổi |
 | :--- | :--- | :--- |
+| 2026-08-16 | **[ĐẢO NGƯỢC BR2 CŨ]** Phát hiện bug nghiệp vụ nghiêm trọng: xóa phòng đang âm thầm gỡ địa điểm khỏi cả cuộc họp TƯƠNG LAI ĐÃ DUYỆT (status=SCHEDULED), khiến người tham dự chỉ biết mất phòng khi đến nơi. Chốt lại cùng người dùng: (1) THÊM EX2 — chặn xóa hoàn toàn nếu còn ≥1 cuộc họp tương lai đã duyệt, không có ngoại lệ force-delete; (2) BR2 cũ (null roomId + báo organizer) CHỈ còn áp dụng cho DRAFT/PENDING_APPROVAL (chưa duyệt); (3) THÊM chặn phê duyệt (`MEETING_ROOM_REMOVED`, 409) tại `MeetingRequestReviewService.approve()` khi phòng đã bị xóa và request chưa chọn phòng mới; (4) mở rộng notify sang CẢ direct manager của organizer/host (không chỉ organizer); (5) `deletion-impact` trả thêm `canDelete`/`blockingMeetings[]`/`pendingMeetingCount` thay vì chỉ đếm số. Xem §0.10. | §0.10 (mới), §1.2, §3.1 (FR-002/FR-003), §3.3 (FR-009a mới, FR-010, FR-013), §3.4 (FR-014), §3.8 (FR-022), §5.3, §6.3 (ERR-005a mới), §7 (AC-002 sửa, AC-009/AC-010/AC-011 mới) |
 | 2026-07-09 | Đánh giá chéo với `feat-update-room-info`/`feat-search-room-list` phát hiện thiếu WebSocket broadcast cho POST-1 (lưới lịch phòng). Bổ sung §0.9, FR-030, AC-008. | §0.9, §3.3 (FR-030), §7.1 (AC-008), §3.11, §7.3 |
 | 2026-07-09 | Tạo spec lần đầu cho UC-ROOM-03. Đã chốt 2 điểm mơ hồ cốt lõi (biểu diễn "Cần đổi phòng", tín hiệu chặn EX1) cùng người dùng trước khi viết — xem §0. Phát hiện rủi ro kỹ thuật quan trọng về soft-delete + JOIN mặc định (§0.7), ghi rõ để không phá BR1. | Toàn bộ file |
 
@@ -69,6 +70,20 @@ BR1 yêu cầu cuộc họp quá khứ vẫn hiển thị đúng tên phòng. Nh
 
 Đánh giá chéo với `feat-update-room-info` (đã có event `room.updated` qua `WebsocketService.broadcast()` cho yêu cầu tương tự POST-2 của UC-ROOM-02) phát hiện: spec bản đầu của feature này **chưa có yêu cầu broadcast WebSocket** cho POST-1 ("Phòng họp bị gỡ bỏ hoàn toàn khỏi... giao diện lưới lịch phòng của tất cả nhân viên"). Nếu thiếu, FE chỉ biết phòng đã bị xóa ở lần gọi `GET /rooms/search` tiếp theo, không phải ngay lập tức. **Quyết định bổ sung**: phát 1 event mới `room.deleted` (KHÔNG tái dùng `room.updated` để tránh FE hiểu nhầm là phòng chỉ đổi thông tin, không phải đã biến mất), payload tối thiểu `{roomId, deletedAt}`, broadcast toàn cục ngay sau khi transaction FR-010 + audit FR-010f hoàn tất — cùng thời điểm với việc enqueue background job (FR-011), không chờ job đó chạy xong.
 
+### 0.10. REVISION 2026-08-16 — Đảo ngược BR2 cũ: chặn xóa nếu còn cuộc họp đã duyệt
+
+**Vấn đề phát hiện**: thiết kế ban đầu (§0.2) coi `roomId = NULL` là đủ để báo "cần đổi phòng" cho MỌI cuộc họp tương lai, kể cả cuộc họp đã `SCHEDULED` (đã duyệt, người tham dự đã lên lịch). Trên thực tế production, admin xóa phòng khiến các cuộc họp đã duyệt "mất phòng" một cách âm thầm — chỉ có email thông báo (best-effort, có thể vào spam/bị bỏ qua), không có gì NGĂN cuộc họp đó tiếp tục hiển thị như bình thường cho tới sát giờ họp. Đây là lỗi nghiệp vụ nghiêm trọng, không phải bug kỹ thuật.
+
+**Quyết định mới (đã chốt cùng người dùng)**:
+
+1. **EX2 (mới)** — chặn xóa **hoàn toàn** nếu còn ≥1 cuộc họp tương lai `status = SCHEDULED`. Không có flag "force delete" — admin bắt buộc phải tự đổi phòng/hủy các cuộc họp đó trước (qua UC-MM-03 cập nhật phòng họp có sẵn), tương tự cách EX1 chặn cuộc họp đang diễn ra.
+2. **BR2 cũ được thu hẹp phạm vi**: chỉ còn áp dụng cho cuộc họp `DRAFT`/`PENDING_APPROVAL` (chưa được duyệt chính thức) — các cuộc họp này vẫn được phép "mất phòng" (null hóa `roomId`, giữ status, release booking) vì chưa ai chính thức dựa vào lịch đó.
+3. **Chặn phê duyệt (mới)**: với cuộc họp `PENDING_APPROVAL` bị mất phòng theo (2), nếu Manager cố `POST .../approve` trong khi request KHÔNG mang theo phòng mới (không phải `UPDATE_ROOM` với `targetRoomId` đã chọn), hệ thống trả 409 `MEETING_ROOM_REMOVED` — chặn duyệt tới khi host chọn lại phòng. Đặt guard tại [`MeetingRequestReviewService.approve()`](../../../../src/modules/meetings/services/meeting-request-review.service.ts) (module `meetings`, không phải `rooms` — đây là điểm phối hợp chéo module). CHỈ áp dụng cho `approve()`, KHÔNG áp dụng cho `reject()` (từ chối một yêu cầu không cần phòng còn tồn tại).
+4. **Người nhận thông báo mở rộng**: ngoài organizer, còn thông báo `host` (nếu khác organizer) và **direct manager** (`UserEntity.directManagerId`) của cả hai — dùng field có sẵn, không thêm cột "assigned approver" (hệ thống hiện tại duyệt theo permission `meeting_request.approve`, không có approver gán cứng theo từng request — xác nhận qua code, không suy đoán).
+5. **`GET /deletion-impact` đổi shape response**: `affectedMeetingCount` (đếm gộp, mơ hồ) → tách thành `canDelete` (boolean, để FE biết có nên hiện nút xóa hay không), `blockingMeetings[]` (danh sách đầy đủ id/title/startTime/endTime của các cuộc họp ĐÃ DUYỆT đang chặn — để FE hiển thị cho admin biết chính xác cuộc họp nào), `pendingMeetingCount` (số DRAFT/PENDING_APPROVAL sẽ bị ảnh hưởng nếu xóa — thông tin phụ, không chặn).
+
+**Không đổi**: BR1 (dữ liệu quá khứ không đụng tới), EX1 (chặn cuộc họp đang diễn ra), soft-delete, atomicity transaction, pattern audit fail-safe.
+
 ### 0.8. Field/entity xác nhận tồn tại thật
 
 - `RoomEntity`: `deletedAt` (soft-delete), `isActive` — cả 2 đã có sẵn.
@@ -92,7 +107,7 @@ Tính năng thuộc module `rooms`, nhưng có tác động cascade sang `meetin
 
 ### 1.2 Mục tiêu
 
-Cho phép Business Admin/System Admin gỡ bỏ 1 phòng họp khỏi danh mục không gian khả dụng, đồng thời đảm bảo: (a) các cuộc họp tương lai bị ảnh hưởng KHÔNG bị hủy, chỉ mất địa điểm và được gắn cờ cần cập nhật; (b) người tổ chức các cuộc họp đó nhận thông báo kèm gợi ý phòng thay thế; (c) lịch sử quá khứ không bị ảnh hưởng; (d) không cho xóa nếu phòng đang có cuộc họp diễn ra ngay lúc đó.
+Cho phép Business Admin/System Admin gỡ bỏ 1 phòng họp khỏi danh mục không gian khả dụng, đồng thời đảm bảo (sửa 2026-08-16 — xem §0.10): (a) cuộc họp tương lai ĐÃ DUYỆT (`SCHEDULED`) chặn xóa hoàn toàn, admin phải tự đổi phòng/hủy trước; (a') cuộc họp tương lai CHƯA DUYỆT (`DRAFT`/`PENDING_APPROVAL`) KHÔNG bị hủy, chỉ mất địa điểm và được gắn cờ cần cập nhật, đồng thời Manager bị chặn không cho duyệt cho tới khi phòng được chọn lại; (b) người tổ chức, host VÀ direct manager của họ nhận thông báo kèm gợi ý phòng thay thế; (c) lịch sử quá khứ không bị ảnh hưởng; (d) không cho xóa nếu phòng đang có cuộc họp diễn ra ngay lúc đó.
 
 ### 1.3 Giá trị mang lại
 
@@ -140,7 +155,7 @@ Tổng hợp tại §0.2, §0.3 (đã chốt qua trao đổi trực tiếp với
 
 FR-001: THE system SHALL thực hiện xóa phòng dưới dạng **soft-delete** (`rooms.deleted_at`), KHÔNG hard-delete bản ghi `rooms`.
 
-FR-002: THE system SHALL KHÔNG hủy (`CANCELLED`) bất kỳ `MeetingEntity` nào bị ảnh hưởng — chỉ set `roomId = NULL` (BR2).
+FR-002: THE system SHALL KHÔNG hủy (`CANCELLED`) bất kỳ `MeetingEntity` `DRAFT`/`PENDING_APPROVAL` nào bị ảnh hưởng — chỉ set `roomId = NULL` (BR2, **thu hẹp phạm vi 2026-08-16 — xem §0.10**: KHÔNG còn áp dụng cho `SCHEDULED`, xem FR-009a).
 
 FR-003: THE system SHALL KHÔNG thay đổi bất kỳ `MeetingEntity`/`RoomBookingEntity` nào đã `COMPLETED` hoặc có `startTime <= now()` (BR1 — chỉ ảnh hưởng tương lai).
 
@@ -150,7 +165,7 @@ FR-004: WHEN người dùng gửi `GET /api/v1/rooms/:roomId/deletion-impact`, T
 
 FR-005: WHEN `roomId` không tồn tại/soft-deleted, THE system SHALL trả về 404, error code `ROOM_NOT_FOUND`.
 
-FR-006: WHEN yêu cầu hợp lệ, THE system SHALL trả về `affectedMeetingCount` (số cuộc họp tương lai tại phòng đó) và `blockedByInProgressMeeting` (boolean, theo §0.3), **không thay đổi bất kỳ dữ liệu nào** (read-only).
+FR-006 (sửa 2026-08-16): WHEN yêu cầu hợp lệ, THE system SHALL trả về `canDelete` (boolean — `true` khi không có `blockingMeetings` và không `blockedByInProgressMeeting`), `blockingMeetings[]` (id/title/startTime/endTime của cuộc họp `SCHEDULED` tương lai — xem FR-009a), `pendingMeetingCount` (số `DRAFT`/`PENDING_APPROVAL` tương lai, không chặn) và `blockedByInProgressMeeting` (boolean, theo §0.3), **không thay đổi bất kỳ dữ liệu nào** (read-only).
 
 ### 3.3 Event-driven Requirements — Endpoint xóa thật
 
@@ -160,19 +175,23 @@ FR-008: WHEN `roomId` không tồn tại/soft-deleted, THE system SHALL trả v�
 
 FR-009: WHEN phòng đang có cuộc họp thỏa điều kiện EX1 (§0.3), THE system SHALL từ chối với 409, error code `ROOM_IN_USE`, message: "Phòng họp đang được sử dụng ở thời điểm hiện tại. Vui lòng chờ cuộc họp kết thúc trước khi thực hiện thao tác xóa." — **tính lại tại đúng thời điểm xóa**, không tin kết quả preview cũ (§0.4).
 
-FR-010: WHEN mọi kiểm tra hợp lệ, THE system SHALL trong 1 transaction: (a) soft-delete `rooms`; (b) với mỗi `room_bookings` tương lai liên quan có status hợp lệ (`pending|approved|active`), chuyển sang `RELEASED`; (c) với mỗi `meetings` tương lai liên quan, set `roomId = NULL`; (d) ghi `MeetingEventEntity` (loại `ROOM_CHANGED` hoặc `ROOM_UNASSIGNED`) cho từng meeting bị ảnh hưởng; (e) ghi `RoomEventEntity` (`eventType='room_deleted'`) 1 lần cho phòng; (f) ghi `AuditLogEntity`.
+FR-009a (mới 2026-08-16, EX2 — xem §0.10): WHEN phòng có ≥1 cuộc họp tương lai `status = SCHEDULED` (`startTime > now()`), THE system SHALL từ chối với 409, error code `ROOM_HAS_SCHEDULED_MEETINGS`, message nêu rõ số lượng cuộc họp, `error.details.meetings[]` chứa id/title/startTime/endTime của TỪNG cuộc họp chặn — **tính lại tại đúng thời điểm xóa**, không tin kết quả preview cũ, cùng nguyên tắc §0.4 với EX1. KHÔNG có ngoại lệ "force delete".
 
-FR-011: WHEN transaction FR-010 commit thành công, THE system SHALL enqueue 1 `background_jobs` mới (loại mới, §0.5) chứa danh sách `meetingId` bị ảnh hưởng, để xử lý gợi ý phòng thay thế + gửi notification bất đồng bộ.
+FR-010 (sửa 2026-08-16): WHEN mọi kiểm tra hợp lệ (bao gồm FR-009a không chặn), THE system SHALL trong 1 transaction: (a) soft-delete `rooms`; (b) với mỗi `room_bookings` tương lai liên quan **của cuộc họp `DRAFT`/`PENDING_APPROVAL`** có status hợp lệ (`pending|approved|active`), chuyển sang `RELEASED`; (c) với mỗi `meetings` tương lai **`DRAFT`/`PENDING_APPROVAL`** liên quan, set `roomId = NULL`; (d) ghi `MeetingEventEntity` (loại `ROOM_CHANGED` hoặc `ROOM_UNASSIGNED`) cho từng meeting bị ảnh hưởng; (e) ghi `RoomEventEntity` (`eventType='room_deleted'`) 1 lần cho phòng; (f) ghi `AuditLogEntity`. Cuộc họp `SCHEDULED` KHÔNG BAO GIỜ xuất hiện ở bước này vì FR-009a đã chặn từ trước.
 
-FR-012: WHEN transaction FR-010 commit thành công, THE system SHALL trả về response 200 chứa `affectedMeetingCount` và message: "Xóa phòng họp thành công".
+FR-011: WHEN transaction FR-010 commit thành công, THE system SHALL enqueue 1 `background_jobs` mới (loại mới, §0.5) chứa danh sách `meetingId` bị ảnh hưởng (chỉ `DRAFT`/`PENDING_APPROVAL`), để xử lý gợi ý phòng thay thế + gửi notification bất đồng bộ.
 
-FR-013: WHEN background job (FR-011) chạy, THE system SHALL với mỗi meeting bị ảnh hưởng: gọi `scheduling/room-suggestions` (capacity + khung giờ của đúng meeting đó) để lấy tối đa 2-3 phòng thay thế, rồi enqueue notification (`NotificationType.MEETING_ROOM_REMOVED`, channel `EMAIL`) tới `organizerId` của meeting đó, kèm danh sách gợi ý.
+FR-012: WHEN transaction FR-010 commit thành công, THE system SHALL trả về response 200 chứa `affectedMeetingCount` (số `DRAFT`/`PENDING_APPROVAL` bị ảnh hưởng) và message: "Xóa phòng họp thành công".
+
+FR-013 (sửa 2026-08-16): WHEN background job (FR-011) chạy, THE system SHALL với mỗi meeting bị ảnh hưởng: gọi `scheduling/room-suggestions` (capacity + khung giờ của đúng meeting đó) để lấy tối đa 2-3 phòng thay thế, rồi enqueue notification (`NotificationType.MEETING_ROOM_REMOVED`, channel `EMAIL`) tới TẬP HỢP đã dedupe gồm `organizerId`, `hostId` (nếu khác organizer) VÀ `directManagerId` (`UserEntity.directManagerId`) của cả hai người đó (nếu có + có email) — mở rộng từ "chỉ organizer" để manager biết và không cố duyệt yêu cầu đã mất phòng (xem FR-013a). Nếu meeting đang `PENDING_APPROVAL`, nội dung email PHẢI nêu rõ yêu cầu duyệt sẽ bị chặn cho tới khi chọn lại phòng.
+
+FR-013a (mới 2026-08-16, cross-module — module `meetings`): WHEN Manager gọi `POST /meeting-requests/:requestId/approve` cho 1 request mà `meeting.roomId IS NULL` VÀ `request.targetRoomId IS NULL` (phòng đã bị xóa theo FR-010c, host chưa chọn phòng mới), THE system SHALL từ chối với 409, error code `MEETING_ROOM_REMOVED`, TRƯỚC khi kiểm tra booking. KHÔNG áp dụng cho `reject()`. Request `UPDATE_ROOM` đã tự chọn `targetRoomId` mới thì KHÔNG bị chặn (host đã tự khắc phục).
 
 FR-030: WHEN transaction FR-010 và audit FR-010f hoàn tất thành công, THE system SHALL phát WebSocket event `room.deleted` (broadcast toàn cục, không chờ background job FR-011) chứa `{roomId, deletedAt}`, đáp ứng POST-1 (§0.9).
 
 ### 3.4 State-driven Requirements
 
-FR-014: WHILE phòng không có bất kỳ cuộc họp tương lai nào, THE system SHALL cho phép xóa bình thường, `affectedMeetingCount = 0`, KHÔNG enqueue background job thông báo (không có gì để gửi).
+FR-014 (sửa 2026-08-16): WHILE phòng không có bất kỳ cuộc họp `DRAFT`/`PENDING_APPROVAL`/`SCHEDULED` tương lai nào, THE system SHALL cho phép xóa bình thường, `affectedMeetingCount = 0`, KHÔNG enqueue background job thông báo (không có gì để gửi).
 
 ### 3.5 Optional Feature Requirements
 
@@ -188,6 +207,8 @@ FR-018: IF `roomId` không tồn tại/soft-deleted, THEN THE system SHALL trả
 
 FR-019: IF phòng thỏa điều kiện EX1 tại thời điểm gọi `DELETE`, THEN THE system SHALL trả về 409 `ROOM_IN_USE`, KHÔNG thực hiện bất kỳ thay đổi nào (toàn bộ transaction FR-010 không chạy).
 
+FR-019a (mới 2026-08-16): IF phòng thỏa điều kiện EX2 (FR-009a) tại thời điểm gọi `DELETE`, THEN THE system SHALL trả về 409 `ROOM_HAS_SCHEDULED_MEETINGS`, KHÔNG thực hiện bất kỳ thay đổi nào (toàn bộ transaction FR-010 không chạy, kể cả với các cuộc họp `DRAFT`/`PENDING_APPROVAL` khác cùng phòng — xóa vẫn atomic, hoặc xóa được hết hoặc không xóa gì cả).
+
 FR-020: IF phòng đã bị soft-delete từ trước (gọi `DELETE` 2 lần), THEN THE system SHALL trả về 404 `ROOM_NOT_FOUND` (soft-delete khiến phòng không còn "tồn tại" theo query mặc định) — không có lỗi 409 trùng lặp riêng.
 
 ### 3.7 Authorization Requirements
@@ -196,7 +217,9 @@ FR-021: WHEN người dùng thực hiện xem trước tác động hoặc xóa 
 
 ### 3.8 Data & State Requirements
 
-FR-022: WHEN xác định "cuộc họp tương lai bị ảnh hưởng" (FR-006, FR-010), THE system SHALL lọc `meetings.room_id = :roomId AND meetings.start_time > now() AND meetings.status NOT IN ('cancelled','completed')`.
+FR-022 (sửa 2026-08-16 — tách 1 query thành 2): WHEN xác định "cuộc họp tương lai bị ảnh hưởng", THE system SHALL dùng 2 truy vấn riêng biệt, dùng chung cho cả preview (FR-006) và xóa thật (FR-010):
+- **Chặn (EX2, FR-009a)**: `meetings.room_id = :roomId AND meetings.start_time > now() AND meetings.status = 'scheduled'`.
+- **Không chặn, bị null hóa (FR-010)**: `meetings.room_id = :roomId AND meetings.start_time > now() AND meetings.status IN ('draft','pending_approval')`.
 
 FR-023: WHEN xác định điều kiện chặn EX1 (FR-009), THE system SHALL kiểm tra `EXISTS (meeting WHERE room_id=:roomId AND (status='in_progress' OR (status='scheduled' AND now() BETWEEN start_time AND end_time)))`.
 
@@ -216,19 +239,21 @@ FR-028: WHILE đang trong transaction FR-010, IF bất kỳ bước con nào (re
 
 FR-029: WHERE phòng có cả cuộc họp tương lai bị ảnh hưởng VÀ đồng thời thỏa điều kiện EX1 (hiếm nhưng có thể — 1 cuộc họp đang diễn ra + N cuộc khác trong tương lai), THE system SHALL ưu tiên chặn EX1 (FR-009) — không xóa được cho tới khi cuộc họp đang diễn ra kết thúc, bất kể có bao nhiêu cuộc họp tương lai khác.
 
+FR-029a (mới 2026-08-16): WHERE phòng thỏa cả EX1 VÀ EX2, THE system SHALL vẫn ưu tiên chặn EX1 trước (kiểm tra theo đúng thứ tự trong `deleteRoom()`: EX1 → EX2 → transaction) — thông báo lỗi cho admin luôn là "đang được dùng ngay bây giờ" trước, dù về sau (sau khi cuộc họp hiện tại kết thúc) EX2 vẫn có thể tiếp tục chặn nếu còn cuộc họp `SCHEDULED` khác trong tương lai.
+
 ### 3.11 Traceability
 
 | Requirement ID | EARS Pattern | Nguồn / Use Case liên quan |
 |---|---|---|
-| FR-001–FR-003 | Ubiquitous | UC-ROOM-03 POST-1, BR1, BR2 |
-| FR-004–FR-013 | Event-driven | UC-ROOM-03 Normal Flow bước 1-8 |
+| FR-001–FR-003 | Ubiquitous | UC-ROOM-03 POST-1, BR1, BR2 (BR2 thu hẹp — §0.10) |
+| FR-004–FR-013a | Event-driven | UC-ROOM-03 Normal Flow bước 1-8; FR-009a/FR-013a mới (EX2, §0.10) |
 | FR-014 | State-driven | Trường hợp phòng không có meeting nào |
 | FR-015 | Optional Feature | Other Information (gợi ý phòng) |
-| FR-016–FR-020 | Unwanted Behavior | EX1, validation |
+| FR-016–FR-020, FR-019a | Unwanted Behavior | EX1, EX2 (mới), validation |
 | FR-021 | Authorization | PRE-1 |
-| FR-022–FR-025 | Data & State | BR2, EX1, audit convention |
+| FR-022–FR-025 | Data & State | BR2 (thu hẹp), EX1, EX2, audit convention |
 | FR-026, FR-027 | Notification/Audit | POST-3, Other Information |
-| FR-028, FR-029 | Complex | Atomicity, EX1 ưu tiên |
+| FR-028, FR-029, FR-029a | Complex | Atomicity, EX1 ưu tiên hơn EX2 |
 | FR-030 | Event-driven (bổ sung) | POST-1 — WebSocket broadcast (§0.9) |
 
 ---
@@ -288,12 +313,14 @@ NFR-008: THE system SHALL trả về `affectedMeetingCount` chính xác ở bư�
 
 ### 5.3 Dữ liệu đầu ra
 
-**Preview:**
+**Preview (sửa 2026-08-16 — xem §0.10):**
 
 | Field | Type | Mô tả |
 |---|---:|---|
 | roomId, roomName | uuid/string | |
-| affectedMeetingCount | number | FR-006, FR-022 |
+| canDelete | boolean | FR-006 — `true` khi `blockingMeetings=[]` và `blockedByInProgressMeeting=false` |
+| blockingMeetings | `{id,title,startTime,endTime}[]` | FR-006, FR-009a, FR-022 — cuộc họp `SCHEDULED` tương lai đang chặn xóa |
+| pendingMeetingCount | number | FR-006, FR-022 — số `DRAFT`/`PENDING_APPROVAL` tương lai, KHÔNG chặn |
 | blockedByInProgressMeeting | boolean | FR-006, FR-023 |
 
 **Xóa thật:**
@@ -302,7 +329,7 @@ NFR-008: THE system SHALL trả về `affectedMeetingCount` chính xác ở bư�
 |---|---:|---|
 | roomId | uuid | |
 | deletedAt | datetime | |
-| affectedMeetingCount | number | Số meeting đã được null hóa roomId |
+| affectedMeetingCount | number | Số meeting `DRAFT`/`PENDING_APPROVAL` đã được null hóa roomId (KHÔNG bao giờ gồm `SCHEDULED` — bị FR-009a chặn từ trước) |
 | notificationJobId | uuid | id của background job đã enqueue (FR-011), để FE có thể theo dõi nếu cần |
 
 ### 5.4 Data Constraints
@@ -320,7 +347,7 @@ FR-DATA-002: WHEN gọi `scheduling/room-suggestions` cho từng meeting (FR-013
 ### 5.6 Cần làm rõ
 
 - **CL-1 (quan trọng)**: Rủi ro §0.7 — cần audit các read-path hiển thị tên phòng cho cuộc họp quá khứ (đặc biệt feature `feat-view-room-usage-history` vừa đặc tả) để đảm bảo dùng `withDeleted: true` hoặc JOIN không lọc `deleted_at`. Đây là dependency chéo feature, **không sửa trong phạm vi feature này** nhưng phải có task theo dõi riêng trước khi release.
-- **CL-2**: Cuộc họp `DRAFT`/`PENDING_APPROVAL` tại phòng bị xóa — giả định vẫn coi là "bị ảnh hưởng" (đưa vào `affectedMeetingCount`, null hóa `roomId`) dù chưa được duyệt chính thức. Cần xác nhận nếu nghiệp vụ muốn loại trừ 2 trạng thái này.
+- **CL-2 (đã chốt 2026-08-16 — xem §0.10)**: Cuộc họp `DRAFT`/`PENDING_APPROVAL` tại phòng bị xóa vẫn coi là "bị ảnh hưởng" (null hóa `roomId`, không chặn xóa) — CHỈ khác với `SCHEDULED` là KHÔNG chặn xóa phòng (EX2, FR-009a chỉ áp dụng cho `SCHEDULED`). Không loại trừ.
 - **CL-3**: Giới hạn "tối đa 2-3 phòng gợi ý" trong email — chưa rõ con số chính xác là 2 hay 3 hay để `min(3, số phòng tìm được)`. Đề xuất mặc định `top 3`.
 
 ---
@@ -340,6 +367,8 @@ ERR-003: IF không có permission `room.delete`, THEN 403 `PERMISSION_DENIED`.
 
 ERR-004: IF `roomId` không tồn tại/soft-deleted, THEN 404 `ROOM_NOT_FOUND`.
 ERR-005: IF phòng thỏa điều kiện EX1, THEN 409 `ROOM_IN_USE`.
+ERR-005a (mới 2026-08-16): IF phòng thỏa điều kiện EX2 (còn cuộc họp `SCHEDULED` tương lai), THEN 409 `ROOM_HAS_SCHEDULED_MEETINGS` (FR-009a).
+ERR-008 (mới 2026-08-16, module `meetings` — FR-013a): IF Manager gọi `approve()` cho request mà `meeting.roomId IS NULL` và `request.targetRoomId IS NULL`, THEN 409 `MEETING_ROOM_REMOVED`.
 
 ### 6.4 System Errors
 
@@ -352,24 +381,39 @@ ERR-007: IF background job xử lý notification lỗi từng phần, THEN KHÔN
 
 ### 7.1 Happy Path
 
-AC-001:
-Given phòng "P101" có 3 cuộc họp tương lai (status scheduled, chưa diễn ra) và không có cuộc họp nào đang diễn ra,
+AC-001 (sửa 2026-08-16):
+Given phòng "P101" có 3 cuộc họp tương lai `status=pending_approval` (chưa duyệt) và không có cuộc họp nào đang diễn ra hay đã `scheduled`,
 When Business Admin gọi `GET .../deletion-impact`,
-Then trả về `affectedMeetingCount=3`, `blockedByInProgressMeeting=false`.
+Then trả về `canDelete=true`, `blockingMeetings=[]`, `pendingMeetingCount=3`, `blockedByInProgressMeeting=false`.
 
-AC-002:
+AC-002 (sửa 2026-08-16):
 Given tình huống AC-001, Business Admin xác nhận gọi `DELETE`,
-Then phòng "P101" bị soft-delete, cả 3 meeting có `roomId=NULL` nhưng `status` vẫn `scheduled`, response trả `affectedMeetingCount=3` + `notificationJobId`.
+Then phòng "P101" bị soft-delete, cả 3 meeting có `roomId=NULL` nhưng `status` vẫn `pending_approval`, response trả `affectedMeetingCount=3` + `notificationJobId`.
 
 AC-008:
 Given tình huống AC-002 vừa xóa thành công,
 When kiểm tra WebSocket ngay sau khi API trả về (không chờ background job),
 Then mọi client đang kết nối nhận đúng 1 event `room.deleted` với `roomId` khớp phòng "P101" (FR-030, §0.9).
 
-AC-003:
-Given background job (từ AC-002) đã chạy xong,
+AC-003 (sửa 2026-08-16):
+Given background job (từ AC-002) đã chạy xong, mỗi trong 3 meeting có organizer với `directManagerId` khác nhau,
 When kiểm tra `notifications`,
-Then mỗi organizer của 3 meeting nhận đúng 1 notification `MEETING_ROOM_REMOVED` kèm tối đa 3 phòng gợi ý đúng khung giờ + sức chứa của meeting đó.
+Then mỗi organizer VÀ direct manager tương ứng của 3 meeting nhận đúng 1 notification `MEETING_ROOM_REMOVED` (dedupe theo user id) kèm tối đa 3 phòng gợi ý đúng khung giờ + sức chứa của meeting đó, nội dung nêu rõ yêu cầu duyệt sẽ bị chặn (FR-013).
+
+AC-009 (mới 2026-08-16, EX2):
+Given phòng "P105" có 1 cuộc họp tương lai `status=scheduled` (đã duyệt) và 2 cuộc họp `pending_approval` khác,
+When Business Admin gọi `GET .../deletion-impact` rồi `DELETE`,
+Then preview trả `canDelete=false`, `blockingMeetings` chứa đúng 1 phần tử (cuộc họp `scheduled`); `DELETE` trả 409 `ROOM_HAS_SCHEDULED_MEETINGS`, phòng KHÔNG bị xóa, KHÔNG có meeting nào (kể cả 2 `pending_approval`) bị đụng tới (atomic, FR-019a).
+
+AC-010 (mới 2026-08-16, FR-013a):
+Given phòng của meeting "M1" (`status=pending_approval`) đã bị xóa (roomId=NULL) theo kịch bản AC-002, request liên quan chưa có `targetRoomId` mới,
+When Manager gọi `POST /meeting-requests/:requestId/approve`,
+Then hệ thống trả 409 `MEETING_ROOM_REMOVED`, request KHÔNG được duyệt, `meeting.status` vẫn `pending_approval`.
+
+AC-011 (mới 2026-08-16, FR-013a):
+Given tình huống AC-010, nhưng host đã gửi 1 request `UPDATE_ROOM` mới với `targetRoomId` hợp lệ,
+When Manager gọi `approve()` cho request `UPDATE_ROOM` đó,
+Then hệ thống KHÔNG bị chặn bởi FR-013a (có targetRoomId), tiếp tục xử lý bình thường theo luồng approve có sẵn (UC-MM-03).
 
 ### 7.2 Validation & Business Rule Cases
 
@@ -397,7 +441,7 @@ Then hệ thống trả 403 `PERMISSION_DENIED`.
 
 | AC ID | Requirement ID liên quan |
 |---|---|
-| AC-001 | FR-004–FR-006, FR-022, FR-023 |
+| AC-001 | FR-004–FR-006, FR-022 |
 | AC-002 | FR-010–FR-012 |
 | AC-003 | FR-011, FR-013, FR-DATA-002 |
 | AC-004 | FR-009, FR-019, FR-023 |
@@ -405,6 +449,9 @@ Then hệ thống trả 403 `PERMISSION_DENIED`.
 | AC-006 | FR-003, FR-014 |
 | AC-007 | FR-017, ERR-003 |
 | AC-008 | FR-030 |
+| AC-009 | FR-006, FR-009a, FR-019a, ERR-005a |
+| AC-010 | FR-013a, ERR-008 |
+| AC-011 | FR-013a |
 
 ---
 

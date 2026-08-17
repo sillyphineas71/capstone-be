@@ -114,6 +114,7 @@ describe('UsersService', () => {
         secureUrl: 'https://cdn/pub',
       }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
+      resolveMediaStorageProvider: jest.fn().mockReturnValue('cloud_provider'),
     } as unknown as jest.Mocked<CloudinaryService>;
     authzReadRepository = {
       getEffectiveRolesAndPermissions: jest

@@ -217,6 +217,24 @@ export class MeetingRequestReviewService {
         });
       }
 
+      // (2026-08-16) Phòng của meeting đã bị System/Business Admin xóa khỏi hệ
+      // thống (roomId nulled bởi RoomsService.deleteRoom() — UC-ROOM-03) và
+      // request này KHÔNG mang theo phòng mới (UPDATE_ROOM tự chọn
+      // targetRoomId thì vẫn cho qua) — chặn duyệt tới khi host chọn lại
+      // phòng và gửi yêu cầu mới. Chỉ áp dụng cho approve(), KHÔNG áp dụng
+      // cho reject() — từ chối một yêu cầu không cần phòng còn tồn tại.
+      if (!meeting.roomId && !request.targetRoomId) {
+        throw new ConflictException({
+          success: false,
+          message:
+            'Phòng họp của cuộc họp này đã bị xóa khỏi hệ thống. Vui lòng yêu cầu người tổ chức chọn lại phòng trước khi duyệt.',
+          error: {
+            code: 'MEETING_ROOM_REMOVED',
+            details: { meetingId: meeting.id },
+          },
+        });
+      }
+
       // Loại RELEASED/CANCELLED — 1 meeting có thể có nhiều dòng booking lịch
       // sử (vd đổi phòng khi còn PENDING_APPROVAL tạo booking mới, release
       // booking cũ). orderBy createdAt DESC để lấy booking đang hiệu lực gần

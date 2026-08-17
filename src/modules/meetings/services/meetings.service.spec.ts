@@ -3714,5 +3714,80 @@ describe('MeetingsService', () => {
       expect(item.newStartTime).toEqual(new Date('2026-07-15T14:00:00Z'));
       expect(item.newRoomId).toBe('room-1');
     });
+
+    // Nhóm F (2026-08-16): 2 request PENDING trùng phòng/giờ phải lộ ra
+    // pendingConflictDetails (cảnh báo vàng/cam), tách biệt với conflictDetails
+    // (đỏ, chỉ dành cho booking đã APPROVED/ACTIVE) — trước đây danh sách này
+    // luôn coi 2 request cùng pending là "Không trùng" vì chỉ gọi
+    // findRoomConflictDetails.
+    it('[Nhóm F] 2 request PENDING trùng phòng/giờ → pendingConflictDetails có dữ liệu, conflictDetails vẫn null', async () => {
+      const listQb = mockRequestListQb();
+      listQb.getManyAndCount.mockResolvedValue([
+        [
+          {
+            id: 'req-1',
+            requestCode: 'MT-001',
+            requestType: MeetingRequestType.CREATE_MEETING,
+            approvalStatus: ApprovalStatus.PENDING,
+            requestedAt: new Date('2026-08-16T00:00:00Z'),
+            requestedStartTime: new Date('2026-08-16T01:27:00Z'),
+            requestedEndTime: new Date('2026-08-16T02:27:00Z'),
+            conflictCheckStatus: ConflictCheckStatus.CLEAR,
+            conflictSummaryJson: null,
+            decisionAt: null,
+            rejectionReason: null,
+            requestedByUser: { id: 'u1', fullName: 'A', email: 'a@x.com' },
+            targetRoom: { id: 'room-1', roomName: 'P.A201' },
+            decisionByUser: null,
+            meeting: {
+              id: 'm1',
+              title: 'Xung đột phòng họp',
+              roomId: 'room-1',
+              hostId: 'u1',
+              startTime: new Date('2026-08-16T01:27:00Z'),
+              endTime: new Date('2026-08-16T02:27:00Z'),
+            },
+          },
+        ],
+        1,
+      ]);
+
+      const approvedConflictQb = mockRequestListQb();
+      approvedConflictQb.getMany.mockResolvedValue([]);
+
+      const pendingConflictQb = mockRequestListQb();
+      pendingConflictQb.getMany.mockResolvedValue([
+        {
+          id: 'booking-2',
+          room: { roomName: 'P.A201' },
+          meeting: { title: 'Xung đột phòng họp' },
+          reservedStartTime: new Date('2026-08-16T01:27:00Z'),
+          reservedEndTime: new Date('2026-08-16T02:27:00Z'),
+          bookedByUser: { fullName: 'Bui Van Long' },
+        },
+      ]);
+
+      // findPendingRoomConflictDetails không await gì trước khi gọi
+      // createQueryBuilder(), còn findRoomConflictDetails await
+      // getRoomBookingBufferMs() trước — nên dù đứng sau trong Promise.all([...]),
+      // nó tới createQueryBuilder() trước (thứ tự thật khi chạy, không phải
+      // thứ tự khai báo).
+      mockRepo.createQueryBuilder
+        .mockReturnValueOnce(listQb)
+        .mockReturnValueOnce(pendingConflictQb)
+        .mockReturnValueOnce(approvedConflictQb);
+
+      const result = await service.findMeetingRequests({}, { userId: 'u1' });
+
+      const item = result.items[0];
+      expect(item.conflictDetails).toBeNull();
+      expect(item.pendingConflictDetails).toHaveLength(1);
+      expect(item.pendingConflictDetails![0]).toMatchObject({
+        bookingId: 'booking-2',
+        roomName: 'P.A201',
+        meetingTitle: 'Xung đột phòng họp',
+        hostName: 'Bui Van Long',
+      });
+    });
   });
 });

@@ -64,26 +64,30 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ─── PostgreSQL (OPTIONAL — uncomment if not running PG locally) ────────────
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: capstone-postgres
-  #   ports:
-  #     - "5432:5432"
-  #   environment:
-  #     POSTGRES_USER: postgres
-  #     POSTGRES_PASSWORD: "123456"
-  #     POSTGRES_DB: capstone_db
-  #   volumes:
-  #     - pg-data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-  #   restart: unless-stopped
+  # ─── PostgreSQL (OPTIONAL — không dùng nếu máy đã có Postgres native trên 5432) ──
+  # NOTE: máy dev hiện tại dùng Postgres NATIVE (D:\PostgreSQL\18) thay vì container
+  # này — xem .env mục B. Container này đang STOPPED, giữ lại cho máy khác không có
+  # sẵn Postgres native. Port map 5433 (không phải 5432) để tránh đụng cổng khi
+  # cả 2 cùng chạy song song trên cùng máy.
+  postgres:
+    image: postgres:16-alpine
+    container_name: capstone-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "123456"
+      POSTGRES_DB: capstone_db
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   redis-data:
   minio-data:
-  # pg-data:
+  pg-data:
