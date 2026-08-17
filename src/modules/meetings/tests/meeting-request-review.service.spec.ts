@@ -578,6 +578,41 @@ describe('MeetingRequestReviewService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('[2026-08-16] should throw 409 MEETING_ROOM_REMOVED when room was deleted and request has no targetRoomId', async () => {
+      em.findOne
+        .mockResolvedValueOnce(mockRequest({ targetRoomId: null }))
+        .mockResolvedValueOnce(mockMeeting({ roomId: null }));
+
+      await expect(
+        service.approve('request-uuid', approveDto, authUser, clientContext),
+      ).rejects.toThrow(ConflictException);
+      // Booking lookup (em.findOne 3rd call) must never happen — guard fires first
+      expect(em.findOne).toHaveBeenCalledTimes(2);
+    });
+
+    it('[2026-08-16] should allow approve when room was deleted BUT the UPDATE_ROOM request already picked a new targetRoomId', async () => {
+      em.findOne
+        .mockResolvedValueOnce(
+          mockRequest({
+            requestType: MeetingRequestType.UPDATE_ROOM,
+            targetRoomId: 'new-room-uuid',
+          }),
+        )
+        .mockResolvedValueOnce(mockMeeting({ roomId: null }))
+        .mockResolvedValueOnce(
+          mockBooking({ status: RoomBookingStatus.APPROVED }),
+        );
+      em.find = jest.fn().mockResolvedValue([]);
+
+      const result = await service.approve(
+        'request-uuid',
+        approveDto,
+        authUser,
+        clientContext,
+      );
+      expect(result.requestId).toBe('request-uuid');
+    });
+
     it('should throw 409 when booking status is not pending', async () => {
       em.findOne
         .mockResolvedValueOnce(mockRequest())

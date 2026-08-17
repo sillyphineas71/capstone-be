@@ -74,7 +74,6 @@ export class MediaFilesController {
     @Res() res: Response,
   ) {
     const m = await this.mediaFilesService.resolvePlayback(fileId);
-    res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', m.mimeType);
     await this.streamWithRangeSupport(req, res, m);
   }
@@ -220,7 +219,6 @@ export class MediaFilesController {
       return;
     }
     const m = resolved;
-    res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', m.mimeType);
     // fileName lấy từ DB — nhánh remote không có đường dẫn đĩa để cắt lấy tên.
     const filename =

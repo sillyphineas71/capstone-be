@@ -327,11 +327,11 @@ export class RoomsService {
   }
 
   /**
-   * Danh sach cuoc hop tuong lai bi anh huong boi viec xoa phong (UC-ROOM-03).
-   * Dung chung cho ca preview (getDeletionImpact) va xoa that (deleteRoom) —
-   * NEN tinh lai tai dung thoi diem, khong tai su dung ket qua preview cu.
+   * Cuoc hop TUONG LAI DA DUYET (status=SCHEDULED) tai phong nay (2026-08-16,
+   * dao nguoc BR2 cu). Cac cuoc hop nay CHAN xoa phong hoan toan — admin phai
+   * tu doi phong/huy truoc khi xoa duoc (khong con null-hoa roomId ngam nua).
    */
-  private async findFutureAffectedMeetings(
+  private async findFutureScheduledMeetings(
     roomId: string,
     manager?: EntityManager,
   ): Promise<MeetingEntity[]> {
@@ -340,8 +340,28 @@ export class RoomsService {
       .createQueryBuilder(MeetingEntity, 'meeting')
       .where('meeting.roomId = :roomId', { roomId })
       .andWhere('meeting.startTime > :now', { now: new Date() })
-      .andWhere('meeting.status NOT IN (:...excluded)', {
-        excluded: [MeetingStatus.CANCELLED, MeetingStatus.COMPLETED],
+      .andWhere('meeting.status = :scheduled', {
+        scheduled: MeetingStatus.SCHEDULED,
+      })
+      .getMany();
+  }
+
+  /**
+   * Cuoc hop TUONG LAI CHUA DUYET (DRAFT/PENDING_APPROVAL) tai phong nay.
+   * Cac cuoc hop nay KHONG chan xoa phong — van null hoa roomId + gui thong
+   * bao cho host/manager (BR2 cu chi con ap dung cho nhom nay).
+   */
+  private async findFuturePendingMeetings(
+    roomId: string,
+    manager?: EntityManager,
+  ): Promise<MeetingEntity[]> {
+    const em = manager ?? this.dataSource.manager;
+    return em
+      .createQueryBuilder(MeetingEntity, 'meeting')
+      .where('meeting.roomId = :roomId', { roomId })
+      .andWhere('meeting.startTime > :now', { now: new Date() })
+      .andWhere('meeting.status IN (:...statuses)', {
+        statuses: [MeetingStatus.DRAFT, MeetingStatus.PENDING_APPROVAL],
       })
       .getMany();
   }
@@ -386,23 +406,36 @@ export class RoomsService {
       });
     }
 
-    const [affectedMeetings, blockedByInProgressMeeting] = await Promise.all([
-      this.findFutureAffectedMeetings(roomId),
-      this.hasBlockingInProgressMeeting(roomId),
-    ]);
+    const [scheduledMeetings, pendingMeetings, blockedByInProgressMeeting] =
+      await Promise.all([
+        this.findFutureScheduledMeetings(roomId),
+        this.findFuturePendingMeetings(roomId),
+        this.hasBlockingInProgressMeeting(roomId),
+      ]);
 
     return new DeletionImpactResponseDto({
       roomId: room.id,
       roomName: room.roomName,
-      affectedMeetingCount: affectedMeetings.length,
+      canDelete: scheduledMeetings.length === 0 && !blockedByInProgressMeeting,
       blockedByInProgressMeeting,
+      blockingMeetings: scheduledMeetings.map((m) => ({
+        id: m.id,
+        title: m.title,
+        startTime: m.startTime,
+        endTime: m.endTime,
+      })),
+      pendingMeetingCount: pendingMeetings.length,
     });
   }
 
   /**
-   * Xoa phong hop (soft-delete, UC-ROOM-03). Khong huy meeting (BR2), khong dung
-   * du lieu qua khu (BR1). Transaction dong bo cho phan DB write; goi y phong
-   * thay the + gui email chay bat dong bo qua background job (khong block response).
+   * Xoa phong hop (soft-delete, UC-ROOM-03 — sua 2026-08-16). Khong dung du
+   * lieu qua khu (BR1). CHAN HOAN TOAN neu con cuoc hop TUONG LAI DA DUYET
+   * (status=SCHEDULED) tai phong nay — admin phai tu doi phong/huy cac cuoc
+   * hop do truoc (qua UC-MM-03), khong con am tham null-hoa roomId cua meeting
+   * da duyet nua (dao nguoc BR2 cu, thay bang EX2 moi). Cuoc hop DRAFT/
+   * PENDING_APPROVAL van duoc phep "mat phong" nhu cu (null hoa + thong bao
+   * host/manager), vi chua ai chinh thuc dua vao lich.
    */
   async deleteRoom(
     roomId: string,
@@ -429,8 +462,30 @@ export class RoomsService {
       });
     }
 
+    // EX2 (moi, 2026-08-16): tinh lai tai dung thoi diem xoa, KHONG tin ket
+    // qua preview cu — chan hoan toan neu con cuoc hop tuong lai DA DUYET.
+    const scheduledMeetings = await this.findFutureScheduledMeetings(roomId);
+    if (scheduledMeetings.length > 0) {
+      throw new ConflictException({
+        success: false,
+        message: `Phòng họp đang được đặt cho ${scheduledMeetings.length} cuộc họp đã duyệt trong tương lai. Vui lòng đổi phòng hoặc hủy các cuộc họp này trước khi xóa.`,
+        error: {
+          code: 'ROOM_HAS_SCHEDULED_MEETINGS',
+          details: {
+            roomId,
+            meetings: scheduledMeetings.map((m) => ({
+              id: m.id,
+              title: m.title,
+              startTime: m.startTime,
+              endTime: m.endTime,
+            })),
+          },
+        },
+      });
+    }
+
     const affectedMeetingIds = await this.dataSource.transaction(async (em) => {
-      const affectedMeetings = await this.findFutureAffectedMeetings(
+      const affectedMeetings = await this.findFuturePendingMeetings(
         roomId,
         em,
       );

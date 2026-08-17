@@ -439,19 +439,49 @@ describe('RoomsService', () => {
   });
 
   describe('getDeletionImpact', () => {
-    it('should return affectedMeetingCount and blockedByInProgressMeeting', async () => {
+    it('should return canDelete=true with pendingMeetingCount when only draft/pending meetings exist', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
       managerCreateQueryBuilder
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [] })) // findFutureScheduledMeetings
         .mockReturnValueOnce(
           mockQueryBuilder({ getMany: [{ id: 'm1' }, { id: 'm2' }] }),
-        )
-        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 }));
+        ) // findFuturePendingMeetings
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 })); // hasBlockingInProgressMeeting
 
       const result = await service.getDeletionImpact(mockRoomId);
 
       expect(result).toBeInstanceOf(DeletionImpactResponseDto);
-      expect(result.affectedMeetingCount).toBe(2);
+      expect(result.canDelete).toBe(true);
+      expect(result.blockingMeetings).toEqual([]);
+      expect(result.pendingMeetingCount).toBe(2);
       expect(result.blockedByInProgressMeeting).toBe(false);
+    });
+
+    it('should return canDelete=false with blockingMeetings when a future scheduled meeting exists', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      const scheduled = {
+        id: 'm-sched',
+        title: 'Sync tuần',
+        startTime: new Date(Date.now() + 3600_000),
+        endTime: new Date(Date.now() + 7200_000),
+      };
+      managerCreateQueryBuilder
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [scheduled] })) // findFutureScheduledMeetings
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [] })) // findFuturePendingMeetings
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 })); // hasBlockingInProgressMeeting
+
+      const result = await service.getDeletionImpact(mockRoomId);
+
+      expect(result.canDelete).toBe(false);
+      expect(result.blockingMeetings).toEqual([
+        {
+          id: 'm-sched',
+          title: 'Sync tuần',
+          startTime: scheduled.startTime,
+          endTime: scheduled.endTime,
+        },
+      ]);
+      expect(result.pendingMeetingCount).toBe(0);
     });
 
     it('should throw NotFoundException when room does not exist', async () => {
@@ -486,10 +516,10 @@ describe('RoomsService', () => {
       return em;
     }
 
-    function mockNotBlocked() {
-      managerCreateQueryBuilder.mockReturnValueOnce(
-        mockQueryBuilder({ getCount: 0 }),
-      );
+    function mockNotBlockedAndNoScheduledMeetings() {
+      managerCreateQueryBuilder
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 })) // EX1: hasBlockingInProgressMeeting
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [] })); // EX2: findFutureScheduledMeetings
     }
 
     function mockAuditTransactionSucceeds() {
@@ -506,7 +536,7 @@ describe('RoomsService', () => {
 
     it('should delete a room with no affected meetings — no job enqueued', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
-      mockNotBlocked();
+      mockNotBlockedAndNoScheduledMeetings();
       (dataSource.transaction as jest.Mock).mockImplementationOnce(
         async (cb: any) => cb(buildMockEm([])),
       );
@@ -525,11 +555,11 @@ describe('RoomsService', () => {
       );
     });
 
-    it('should delete a room with affected meetings — release bookings, null roomId, keep status, enqueue job', async () => {
+    it('should delete a room with pending/draft meetings — release bookings, null roomId, keep status, enqueue job', async () => {
       const affectedMeeting = {
         id: 'meeting-1',
         roomId: mockRoomId,
-        status: MeetingStatus.SCHEDULED,
+        status: MeetingStatus.PENDING_APPROVAL,
         startTime: new Date(Date.now() + 3600_000),
         endTime: new Date(Date.now() + 7200_000),
       };
@@ -541,7 +571,7 @@ describe('RoomsService', () => {
       };
 
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
-      mockNotBlocked();
+      mockNotBlockedAndNoScheduledMeetings();
       const em = buildMockEm([affectedMeeting], [booking]);
       (dataSource.transaction as jest.Mock).mockImplementationOnce(
         async (cb: any) => cb(em),
@@ -552,9 +582,9 @@ describe('RoomsService', () => {
 
       expect(result.affectedMeetingCount).toBe(1);
       expect(result.notificationJobId).toBe('job-1');
-      // Meeting roomId nulled, status NOT touched (BR2)
+      // Meeting roomId nulled, status NOT touched (BR2 — chi con ap dung cho DRAFT/PENDING_APPROVAL)
       expect(affectedMeeting.roomId).toBeNull();
-      expect(affectedMeeting.status).toBe(MeetingStatus.SCHEDULED);
+      expect(affectedMeeting.status).toBe(MeetingStatus.PENDING_APPROVAL);
       // Booking released
       expect(booking.status).toBe(RoomBookingStatus.RELEASED);
       expect(backgroundJobsService.createQueuedJob).toHaveBeenCalledWith(
@@ -572,6 +602,26 @@ describe('RoomsService', () => {
         'room.deleted',
         expect.objectContaining({ roomId: mockRoomId }),
       );
+    });
+
+    it('should throw ConflictException (ROOM_HAS_SCHEDULED_MEETINGS) when a future SCHEDULED meeting exists — re-checked at delete time, does not touch draft/pending', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      const scheduled = {
+        id: 'meeting-sched-1',
+        title: 'Sprint Review',
+        startTime: new Date(Date.now() + 3600_000),
+        endTime: new Date(Date.now() + 7200_000),
+      };
+      managerCreateQueryBuilder
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 })) // EX1 not blocked
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [scheduled] })); // EX2 blocked
+
+      await expect(service.deleteRoom(mockRoomId, mockUserId)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(websocketService.broadcast).not.toHaveBeenCalled();
+      expect(backgroundJobsService.createQueuedJob).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException when room does not exist', async () => {
@@ -598,7 +648,7 @@ describe('RoomsService', () => {
 
     it('should propagate error and skip audit/broadcast/job when the main transaction fails (atomicity)', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
-      mockNotBlocked();
+      mockNotBlockedAndNoScheduledMeetings();
       (dataSource.transaction as jest.Mock).mockImplementationOnce(async () => {
         throw new Error('DB write failed mid-transaction');
       });
@@ -612,7 +662,7 @@ describe('RoomsService', () => {
 
     it('should still succeed when audit log fails', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
-      mockNotBlocked();
+      mockNotBlockedAndNoScheduledMeetings();
       (dataSource.transaction as jest.Mock).mockImplementationOnce(
         async (cb: any) => cb(buildMockEm([])),
       );

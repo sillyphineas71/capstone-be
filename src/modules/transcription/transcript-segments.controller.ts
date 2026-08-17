@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Param,
@@ -145,6 +146,35 @@ export class TranscriptSegmentsController {
     const data = await this.transcriptionService.updateTranscriptStatus(
       transcriptId,
       dto,
+      user.userId,
+    );
+    return { success: true, data };
+  }
+
+  // Xóa (ẩn) transcript chưa được đánh dấu "đã xem" — dọn kết quả STT cũ
+  // (draft/failed) trước khi chạy lại. Không cho xóa reviewed/approved.
+  @Delete(':transcriptId')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('transcript.update')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Xóa (ẩn) transcript chưa đánh dấu đã xem (Host/Admin)',
+  })
+  @ApiResponse({ status: 200, description: 'Đã xóa transcript' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Không phải Host/Admin' })
+  @ApiResponse({ status: 404, description: 'Transcript không tồn tại' })
+  @ApiResponse({
+    status: 409,
+    description: 'Transcript đã được xem/duyệt, không thể xóa',
+  })
+  async remove(
+    @Param('transcriptId', ParseUUIDPipe) transcriptId: string,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{ success: boolean; data: unknown }> {
+    const data = await this.transcriptionService.hideTranscript(
+      transcriptId,
       user.userId,
     );
     return { success: true, data };

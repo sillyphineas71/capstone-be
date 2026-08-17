@@ -21,7 +21,6 @@ import {
 import {
   MediaFileEntity,
   MediaFileType,
-  StorageProvider,
 } from '../../recording/entities/media-file.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
@@ -191,7 +190,7 @@ export class BiometricSubmissionService {
           fileName: upload.publicId.split('/').pop() ?? upload.publicId,
           fileType: MediaFileType.IMAGE,
           mimeType: detectedMime,
-          storageProvider: StorageProvider.CLOUD_PROVIDER,
+          storageProvider: this.cloudinaryService.resolveMediaStorageProvider(),
           storageKey: upload.publicId,
           fileUrl: upload.secureUrl,
           relatedEntityType: 'face_profile',

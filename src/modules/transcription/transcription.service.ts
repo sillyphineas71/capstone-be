@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull } from 'typeorm';
+import { Repository, DataSource, IsNull, Not } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
 import {
@@ -338,7 +338,7 @@ export class TranscriptionService {
     // cùng versionNo=1. Sắp theo createdAt mới phản ánh đúng "mới nhất" của cả
     // meeting; versionNo chỉ dùng làm tiebreaker phụ khi createdAt trùng.
     const transcript = await this.transcriptRepo.findOne({
-      where: { meetingId },
+      where: { meetingId, status: Not(TranscriptStatus.HIDDEN) },
       order: { createdAt: 'DESC', versionNo: 'DESC' },
     });
     if (!transcript) {
@@ -829,6 +829,83 @@ export class TranscriptionService {
     return { transcriptId, status: target, updatedAt };
   }
 
+  /**
+   * Ẩn transcript chưa được đánh dấu "đã xem" (DRAFT/FAILED) để dọn kết quả
+   * STT cũ trước khi chạy lại. Soft-hide (status=HIDDEN) chứ không xóa cứng —
+   * giữ dấu vết audit, đúng với enum TranscriptStatus.HIDDEN vốn đã có sẵn
+   * trong schema nhưng chưa từng được set ở đâu.
+   */
+  async hideTranscript(
+    transcriptId: string,
+    userId: string,
+  ): Promise<{
+    transcriptId: string;
+    status: TranscriptStatus;
+    updatedAt: Date;
+  }> {
+    const transcript = await this.transcriptRepo.findOne({
+      where: { id: transcriptId },
+    });
+    if (!transcript) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay transcript.',
+        error: {
+          code: TRANSCRIPTION_ERROR_CODES.TRANSCRIPT_NOT_FOUND,
+          details: {},
+        },
+      });
+    }
+
+    // Authz: Host của meeting hoặc Admin — giống updateTranscriptStatus.
+    const isHost = await this.participantRepo.findOne({
+      where: {
+        meetingId: transcript.meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      },
+    });
+    if (!isHost) {
+      const { roleCodes } = await this.getEffectiveRolesAndPermissions(userId);
+      if (!this.isAdminRole(roleCodes)) {
+        throw new ForbiddenException({
+          success: false,
+          message: 'Chi Host hoac Admin duoc xoa transcript.',
+          error: { code: 'PERMISSION_DENIED', details: {} },
+        });
+      }
+    }
+
+    const hideable = [TranscriptStatus.DRAFT, TranscriptStatus.FAILED];
+    if (!hideable.includes(transcript.status)) {
+      throw new ConflictException({
+        success: false,
+        message:
+          'Chi co the xoa transcript chua duoc danh dau da xem (draft/failed).',
+        error: {
+          code: TRANSCRIPTION_ERROR_CODES.TRANSCRIPT_NOT_DRAFT,
+          details: { status: transcript.status },
+        },
+      });
+    }
+
+    const updatedAt = new Date();
+    await this.transcriptRepo.update(transcriptId, {
+      status: TranscriptStatus.HIDDEN,
+    });
+
+    this.logger.log(
+      'Transcript ' +
+        transcriptId +
+        ' hidden (from ' +
+        transcript.status +
+        ') by ' +
+        userId,
+    );
+
+    return { transcriptId, status: TranscriptStatus.HIDDEN, updatedAt };
+  }
+
   async failTranscript(
     transcriptId: string,
     errorMessage: string,
@@ -888,10 +965,17 @@ export class TranscriptionService {
       transcript_id: string | null;
       transcript_status: string | null;
     }> = await this.dataSource.query(
+      // Gap fix (2026-08-16): sắp theo bj.started_at/completed_at khiến job vừa
+      // enqueue (cả 2 cột đều NULL — started_at chỉ set khi worker markRunning(),
+      // background_jobs không có created_at) bị NULLS LAST đẩy xuống cuối, đứng
+      // sau job CŨ đã completed. FE lấy rows[0] làm "job mới nhất" nên bị "mù"
+      // trước job mới cho tới khi worker thật sự chạy nó. transcripts.created_at
+      // luôn được set ngay trong transaction tạo job (xem createTranscriptionJob)
+      // nên dùng làm khóa sắp chính mới phản ánh đúng thứ tự tạo job.
       `SELECT
          bj.id            AS job_id,
          bj.status        AS status,
-         bj.started_at    AS created_at,
+         t.created_at     AS created_at,
          bj.completed_at  AS completed_at,
          t.id             AS transcript_id,
          t.status         AS transcript_status
@@ -900,7 +984,8 @@ export class TranscriptionService {
        WHERE bj.job_type = $1
          AND bj.related_entity_type = 'meeting'
          AND bj.related_entity_id = $2
-       ORDER BY bj.completed_at DESC NULLS LAST, bj.started_at DESC NULLS LAST`,
+         AND (t.status IS NULL OR t.status <> 'hidden')
+       ORDER BY t.created_at DESC NULLS LAST, bj.completed_at DESC NULLS LAST`,
       [BackgroundJobType.TRANSCRIPTION, meetingId],
     );
 

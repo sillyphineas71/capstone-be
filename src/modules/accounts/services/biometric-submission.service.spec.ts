@@ -39,7 +39,11 @@ describe('BiometricSubmissionService', () => {
   let userRepo: { findOne: jest.Mock };
   let faceProfileRepo: { find: jest.Mock };
   let dataSource: { transaction: jest.Mock; manager: { find: jest.Mock } };
-  let cloudinary: { uploadImage: jest.Mock; deleteImage: jest.Mock };
+  let cloudinary: {
+    uploadImage: jest.Mock;
+    deleteImage: jest.Mock;
+    resolveMediaStorageProvider: jest.Mock;
+  };
   let configService: { get: jest.Mock };
   let insertCalls: Array<Record<string, unknown>>;
 
@@ -50,6 +54,7 @@ describe('BiometricSubmissionService', () => {
     cloudinary = {
       uploadImage: jest.fn(),
       deleteImage: jest.fn().mockResolvedValue(undefined),
+      resolveMediaStorageProvider: jest.fn().mockReturnValue('cloud_provider'),
     };
     configService = {
       get: jest.fn((_k: string, def?: unknown) => def),

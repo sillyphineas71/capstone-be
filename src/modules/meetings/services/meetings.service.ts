@@ -389,6 +389,55 @@ export class MeetingsService {
     }));
   }
 
+  /**
+   * Nhóm F (2026-08-16) — như findRoomConflictDetails() nhưng đối chiếu với
+   * booking đang `PENDING` khác (không áp buffer, đúng tinh thần "cảnh báo
+   * mềm" của Nhóm D — getPendingRoomConflictsMap) thay vì `APPROVED`/`ACTIVE`.
+   * Dùng để hiển thị đúng badge/banner "trùng với yêu cầu khác đang chờ
+   * duyệt" ở màn danh sách duyệt Manager (findMeetingRequests →
+   * MeetingApprovals.jsx) — trước đây màn này chỉ gọi findRoomConflictDetails
+   * nên 2 request PENDING trùng phòng/giờ luôn hiện "Không trùng" sai lệch.
+   * CHỈ mang tính thông tin — KHÔNG đổi chính sách approve()/getRoomAvailability
+   * (vẫn chỉ APPROVED/ACTIVE mới thật sự chặn, Manager là người quyết ai giữ
+   * phòng khi có nhiều PENDING trùng nhau).
+   */
+  async findPendingRoomConflictDetails(
+    roomId: string | null,
+    startTime: Date | null,
+    endTime: Date | null,
+    excludeMeetingId?: string,
+  ): Promise<ConflictDetailDto[]> {
+    if (!roomId || !startTime || !endTime) return [];
+
+    const qb = this.dataSource
+      .getRepository(RoomBookingEntity)
+      .createQueryBuilder('rb')
+      .innerJoinAndSelect('rb.room', 'room')
+      .innerJoinAndSelect('rb.meeting', 'meeting')
+      .innerJoinAndSelect('rb.bookedByUser', 'requester')
+      .where('rb.roomId = :roomId', { roomId })
+      .andWhere('rb.status = :status', { status: RoomBookingStatus.PENDING })
+      .andWhere('rb.reservedStartTime < :endTime', { endTime })
+      .andWhere('rb.reservedEndTime > :startTime', { startTime });
+
+    if (excludeMeetingId) {
+      qb.andWhere('rb.meetingId IS DISTINCT FROM :excludeMeetingId', {
+        excludeMeetingId,
+      });
+    }
+
+    const bookings = await qb.getMany();
+
+    return bookings.map((b) => ({
+      bookingId: b.id,
+      roomName: b.room?.roomName ?? null,
+      meetingTitle: b.meeting?.title ?? null,
+      startTime: b.reservedStartTime,
+      endTime: b.reservedEndTime,
+      hostName: b.bookedByUser?.fullName ?? null,
+    }));
+  }
+
   async getRoomAvailability(
     roomId: string,
     startTime: Date,
@@ -6493,6 +6542,10 @@ export class MeetingsService {
       // thật). Chỉ check các item còn `pending` (đã approved/rejected thì
       // không cần biết đang xung đột phòng nào nữa).
       const conflictDetailsByRequestId = new Map<string, ConflictDetailDto[]>();
+      const pendingConflictDetailsByRequestId = new Map<
+        string,
+        ConflictDetailDto[]
+      >();
       await Promise.all(
         items
           .filter((mr) => mr.approvalStatus === ApprovalStatus.PENDING)
@@ -6501,20 +6554,33 @@ export class MeetingsService {
             const startTime =
               mr.requestedStartTime ?? mr.meeting?.startTime ?? null;
             const endTime = mr.requestedEndTime ?? mr.meeting?.endTime ?? null;
-            const details = await this.findRoomConflictDetails(
-              roomId,
-              startTime,
-              endTime,
-              mr.meeting?.id,
-            );
+            const [details, pendingDetails] = await Promise.all([
+              this.findRoomConflictDetails(
+                roomId,
+                startTime,
+                endTime,
+                mr.meeting?.id,
+              ),
+              this.findPendingRoomConflictDetails(
+                roomId,
+                startTime,
+                endTime,
+                mr.meeting?.id,
+              ),
+            ]);
             if (details.length > 0) {
               conflictDetailsByRequestId.set(mr.id, details);
+            }
+            if (pendingDetails.length > 0) {
+              pendingConflictDetailsByRequestId.set(mr.id, pendingDetails);
             }
           }),
       );
 
       const listItems = items.map((mr) => {
         const conflictDetails = conflictDetailsByRequestId.get(mr.id) ?? null;
+        const pendingConflictDetails =
+          pendingConflictDetailsByRequestId.get(mr.id) ?? null;
 
         return new MeetingRequestListItemDto(
           mr.id,
@@ -6527,6 +6593,7 @@ export class MeetingsService {
           mr.conflictCheckStatus,
           mr.conflictSummaryJson ?? null,
           conflictDetails,
+          pendingConflictDetails,
           mr.decisionAt,
           mr.rejectionReason,
           new UserSummaryDto(

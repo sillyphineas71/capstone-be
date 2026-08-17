@@ -313,6 +313,7 @@ export function buildMinutesPublishedGuestEmail(params: {
 export function buildRoomRemovedEmail(params: {
   meetingTitle: string;
   suggestedRooms: { roomName: string; roomCode: string; capacity: number }[];
+  isPendingApproval?: boolean;
 }): string {
   const bodyHtml =
     renderParagraph(
@@ -322,6 +323,12 @@ export function buildRoomRemovedEmail(params: {
       'Vui lòng chọn lại địa điểm mới cho cuộc họp để tránh gián đoạn.',
       'warning',
     ) +
+    (params.isPendingApproval
+      ? renderCallout(
+          'Cuộc họp này đang chờ phê duyệt và sẽ KHÔNG thể được duyệt cho đến khi người tổ chức chọn lại phòng và gửi lại yêu cầu.',
+          'warning',
+        )
+      : '') +
     (params.suggestedRooms.length > 0
       ? renderParagraph('<strong>Gợi ý phòng thay thế phù hợp:</strong>') +
         renderList(

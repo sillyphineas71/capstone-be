@@ -36,7 +36,10 @@ describe('AvatarPhotoService', () => {
   let service: AvatarPhotoService;
   let userRepo: { findOne: jest.Mock };
   let dataSource: { transaction: jest.Mock };
-  let cloudinary: { uploadImage: jest.Mock };
+  let cloudinary: {
+    uploadImage: jest.Mock;
+    resolveMediaStorageProvider: jest.Mock;
+  };
   let configService: { get: jest.Mock };
   let inserts: Array<{ repo: string; payload: Record<string, unknown> }>;
   let updates: Array<{
@@ -49,7 +52,10 @@ describe('AvatarPhotoService', () => {
     inserts = [];
     updates = [];
     userRepo = { findOne: jest.fn() };
-    cloudinary = { uploadImage: jest.fn() };
+    cloudinary = {
+      uploadImage: jest.fn(),
+      resolveMediaStorageProvider: jest.fn().mockReturnValue('cloud_provider'),
+    };
     configService = { get: jest.fn((_k: string, def?: unknown) => def) };
 
     dataSource = {

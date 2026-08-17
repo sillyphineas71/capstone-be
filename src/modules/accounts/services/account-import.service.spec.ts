@@ -40,7 +40,11 @@ describe('AccountImportService', () => {
   let service: AccountImportService;
   let usersService: { persistAccount: jest.Mock };
   let notificationsService: { enqueueEmailNotification: jest.Mock };
-  let cloudinaryService: { uploadImage: jest.Mock; deleteImage: jest.Mock };
+  let cloudinaryService: {
+    uploadImage: jest.Mock;
+    deleteImage: jest.Mock;
+    resolveMediaStorageProvider: jest.Mock;
+  };
   let vehicleRegistrationService: { register: jest.Mock };
   let dataSource: any;
 
@@ -70,6 +74,7 @@ describe('AccountImportService', () => {
         .fn()
         .mockResolvedValue({ publicId: 'p1', secureUrl: 'https://x/p1.jpg' }),
       deleteImage: jest.fn().mockResolvedValue(undefined),
+      resolveMediaStorageProvider: jest.fn().mockReturnValue('cloud_provider'),
     };
     vehicleRegistrationService = {
       register: jest.fn().mockResolvedValue({ id: 'vr-1' }),

@@ -72,7 +72,6 @@ import { generateFaceProfileCode } from '../utils/face-profile-code.util.js';
 import {
   MediaFileEntity,
   MediaFileType,
-  StorageProvider,
 } from '../../recording/entities/media-file.entity.js';
 
 import { NotificationsService } from '../../notifications/notifications.service.js';
@@ -594,7 +593,7 @@ export class UsersService {
         fileName: data.partner.fileName,
         fileType: MediaFileType.IMAGE,
         mimeType: data.partner.detectedMime,
-        storageProvider: StorageProvider.CLOUD_PROVIDER,
+        storageProvider: this.cloudinaryService.resolveMediaStorageProvider(),
         storageKey: data.partner.storageKey,
         fileUrl: data.partner.fileUrl,
         relatedEntityType: 'face_profile',

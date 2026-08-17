@@ -547,6 +547,196 @@ describe('TranscriptionService (T030)', () => {
       expect(result.segments[0].absoluteStartAt).toBeNull();
       expect(result.segments[0].absoluteEndAt).toBeNull();
     });
+
+    it('Gap fix: loại trừ transcript HIDDEN khỏi kết quả "mới nhất"', async () => {
+      participantRepo.findOne.mockResolvedValue({ meetingId, userId });
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-visible',
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+        versionNo: 1,
+        languageCode: 'vi-VN',
+        cleanedText: 'Xin chao',
+        confidenceScore: 0.9,
+        createdAt: new Date(),
+        speakerSegmentsJson: null,
+      });
+
+      await service.getTranscript(meetingId, userId, query);
+
+      const call = transcriptRepo.findOne.mock.calls[0][0] as {
+        where: { status: { type: string; value: string } };
+      };
+      expect(call.where.status.type).toBe('not');
+      expect(call.where.status.value).toBe(TranscriptStatus.HIDDEN);
+    });
+  });
+
+  describe('getTranscriptionJobs (Gap fix 2026-08-16: job vừa enqueue không bị job cũ đã completed che mất)', () => {
+    it('ORDER BY dùng t.created_at (không phải bj.started_at) làm khóa sắp chính, và loại transcript hidden', async () => {
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+      dataSource.query.mockResolvedValue([]);
+
+      await service.getTranscriptionJobs(meetingId, userId);
+
+      const [sql] = dataSource.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('t.created_at     AS created_at');
+      expect(sql).toContain(
+        'ORDER BY t.created_at DESC NULLS LAST, bj.completed_at DESC NULLS LAST',
+      );
+      expect(sql).not.toContain('bj.started_at    AS created_at');
+      expect(sql).toContain("t.status <> 'hidden'");
+    });
+
+    it('REGRESSION: job mới enqueue (started_at/completed_at NULL) vẫn đứng đầu danh sách vì DB đã sort theo t.created_at', async () => {
+      // Mô phỏng kết quả DB SAU khi áp dụng ORDER BY mới — job mới (created_at
+      // gần nhất) đứng đầu dù chưa có started_at/completed_at, đúng hành vi kỳ
+      // vọng để TranscriptViewer.jsx lấy jobs[0] làm "job mới nhất" chính xác.
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+      dataSource.query.mockResolvedValue([
+        {
+          job_id: 'job-new',
+          status: 'queued',
+          created_at: '2026-08-16T10:00:00.000Z',
+          completed_at: null,
+          transcript_id: 'tr-new',
+          transcript_status: 'processing',
+        },
+        {
+          job_id: 'job-old',
+          status: 'completed',
+          created_at: '2026-08-15T09:00:00.000Z',
+          completed_at: '2026-08-15T09:05:00.000Z',
+          transcript_id: 'tr-old',
+          transcript_status: 'draft',
+        },
+      ]);
+
+      const result = await service.getTranscriptionJobs(meetingId, userId);
+
+      expect(result[0].jobId).toBe('job-new');
+      expect(result[0].transcriptStatus).toBe('processing');
+    });
+  });
+
+  describe('hideTranscript (xóa transcript chưa đánh dấu đã xem)', () => {
+    it('transcript không tồn tại → 404 TRANSCRIPT_NOT_FOUND', async () => {
+      transcriptRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.hideTranscript('tr-missing', userId),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('không phải Host và không phải Admin → 403 PERMISSION_DENIED', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue(null);
+      dataSource.query.mockResolvedValue([]);
+
+      await expect(
+        service.hideTranscript('tr-1', 'stranger-user'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('status DRAFT → ẩn thành công (status=hidden)', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.DRAFT,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const result = await service.hideTranscript('tr-1', userId);
+
+      expect(result.status).toBe(TranscriptStatus.HIDDEN);
+      expect(transcriptRepo.update).toHaveBeenCalledWith('tr-1', {
+        status: TranscriptStatus.HIDDEN,
+      });
+    });
+
+    it('status FAILED → ẩn thành công', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.FAILED,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      const result = await service.hideTranscript('tr-1', userId);
+
+      expect(result.status).toBe(TranscriptStatus.HIDDEN);
+    });
+
+    it('status REVIEWED (đã đánh dấu đã xem) → 409 TRANSCRIPT_NOT_DRAFT', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.REVIEWED,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      await expect(service.hideTranscript('tr-1', userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('status APPROVED → 409 TRANSCRIPT_NOT_DRAFT', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.APPROVED,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      await expect(service.hideTranscript('tr-1', userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('status PROCESSING (đang chạy job) → 409 TRANSCRIPT_NOT_DRAFT', async () => {
+      transcriptRepo.findOne.mockResolvedValue({
+        id: 'tr-1',
+        meetingId,
+        status: TranscriptStatus.PROCESSING,
+      });
+      participantRepo.findOne.mockResolvedValue({
+        meetingId,
+        userId,
+        participantRole: ParticipantRole.HOST,
+      });
+
+      await expect(service.hideTranscript('tr-1', userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
   });
 
   describe('updateTranscriptResult (REGRESSION: lỗi "syntax error near {")', () => {

@@ -46,6 +46,18 @@ export class MeetingRequestListItemDto {
   @Expose()
   conflictDetails: ConflictDetailDto[] | null;
 
+  /**
+   * Nhóm F (2026-08-16) — request PENDING khác đang xin cùng phòng/khung giờ
+   * (KHÔNG phải APPROVED/ACTIVE — xem conflictDetails). Chỉ mang tính cảnh
+   * báo mềm cho Manager biết có nhiều request đang tranh cùng slot, KHÔNG
+   * chặn approve() — Manager vẫn là người quyết duyệt request nào. FE nên
+   * hiện badge/banner màu vàng-cam riêng, không gộp chung với conflictDetails
+   * (màu đỏ, xung đột với booking đã duyệt) để tránh Manager hiểu nhầm mức độ
+   * nghiêm trọng.
+   */
+  @Expose()
+  pendingConflictDetails: ConflictDetailDto[] | null;
+
   @Expose()
   decisionAt: Date | null;
 
@@ -113,6 +125,7 @@ export class MeetingRequestListItemDto {
     conflictCheckStatus: string,
     conflictSummary: Record<string, unknown> | null,
     conflictDetails: ConflictDetailDto[] | null,
+    pendingConflictDetails: ConflictDetailDto[] | null,
     decisionAt: Date | null,
     rejectionReason: string | null,
     requestedBy: UserSummaryDto,
@@ -140,6 +153,7 @@ export class MeetingRequestListItemDto {
     this.conflictCheckStatus = conflictCheckStatus;
     this.conflictSummary = conflictSummary;
     this.conflictDetails = conflictDetails;
+    this.pendingConflictDetails = pendingConflictDetails;
     this.decisionAt = decisionAt;
     this.rejectionReason = rejectionReason;
     this.requestedBy = requestedBy;
