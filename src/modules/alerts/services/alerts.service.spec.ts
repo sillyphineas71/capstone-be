@@ -166,12 +166,20 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
     // [FIX 2026-08-13] mirror ĐÚNG SQL mới trong alerts.service.ts (đã verify riêng bằng
     // psql thật, xem báo cáo recon — mock này chỉ để test hành vi qua nhiều lần gọi
     // recordAlert() liên tiếp ở tầng JS, KHÔNG thay thế verify SQL thật):
-    // - latest_match: alertType='crowd' → so với entry CUỐI CÙNG bất kể userId (vì crowd
-    //   không gắn userId); alertType khác → so với entry CUỐI CÙNG userId (như cũ, KHÔNG đổi).
+    // - latest_match: alertType KHÁC crowd → so với entry CUỐI CÙNG cùng userId (như cũ,
+    //   KHÔNG đổi — ord DESC).
     // - occurrence_count: CHỈ bị debounce chặn khi alertType='crowd' — mọi alertType khác
     //   (kể cả Intrusion userId=null/người lạ) LUÔN +1 vô điều kiện, giữ100% hành vi cũ.
     // - occurrences: gate debounce KHÔNG đổi cho mọi alertType (hành vi fix 2026-08-11).
     // - last_seen_at: LUÔN cập nhật vô điều kiện, không phụ thuộc debounce (R3).
+    // [FIX 2026-08-18] alertType='crowd' → đổi "entry CUỐI CÙNG được ghi" (ord DESC) sang
+    // "entry GẦN NHẤT VỀ occurredAt" (nearest-match) — mirror đúng SQL mới (xem
+    // alerts.service.ts, bumpOccurrence()): Crowd có 2 đường gọi song song
+    // (evaluateZoneCountNow() tức thời + evaluateCrowdAlerts() cron KHÔNG ORDER BY) có thể
+    // xử lý lại CÙNG 1 event KHÔNG THEO THỨ TỰ THỜI GIAN THẬT — "ord DESC" giả định ngầm xử
+    // lý tuần tự đúng thứ tự, không còn đúng khi cron xử lý ngoài thứ tự. So "gần nhất về
+    // occurredAt" (thời gian THẬT của event, KHÔNG PHẢI giờ xử lý) làm debounce bất biến với
+    // thứ tự/số lần xử lý lại.
     const makeStatefulQueryMock = (row: {
       occurrenceCount: number;
       lastSeenAt: string | null;
@@ -190,9 +198,25 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
 
         row.lastSeenAt = new Date().toISOString();
 
+        const nearestByTime = (
+          list: OccurrenceEntry[],
+        ): OccurrenceEntry | undefined =>
+          list.reduce<OccurrenceEntry | undefined>((nearest, e) => {
+            if (!nearest) return e;
+            const diffNearest = Math.abs(
+              new Date(entry.occurredAt).getTime() -
+                new Date(nearest.occurredAt).getTime(),
+            );
+            const diffE = Math.abs(
+              new Date(entry.occurredAt).getTime() -
+                new Date(e.occurredAt).getTime(),
+            );
+            return diffE < diffNearest ? e : nearest;
+          }, undefined);
+
         const latestMatch =
           alertType === 'crowd'
-            ? prior[prior.length - 1]
+            ? nearestByTime(prior)
             : [...prior]
                 .reverse()
                 .find((e) => e.userId !== null && e.userId === entry.userId);
@@ -600,6 +624,175 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
         });
 
         expect(r2.alert.occurrenceCount).toBe(3); // vô điều kiện, giống hệt trước fix
+      });
+
+      // [FIX 2026-08-18] #18 — nearest-match cho crowd, vô hiệu hoá double-processing giữa
+      // evaluateZoneCountNow() (tức thời) và evaluateCrowdAlerts() (cron, KHÔNG ORDER BY khi
+      // quét zone_presence_events). Xem thiết kế đầy đủ trong bumpOccurrence().
+      describe('[FIX 2026-08-18] nearest-match cho crowd — double-processing cron+immediate trở nên vô hại', () => {
+        it('CASE CHÍNH — double-processing thật: đường tức thời xử lý event X (occurredAt=T) trước, "cron" xử lý LẠI CÙNG event X (cùng occurredAt=T) tới sau → nearest-match khớp đúng entry@T (diff=0), KHÔNG tạo occurrence mới, occurrence_count KHÔNG tăng', async () => {
+          securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+          const row = {
+            id: 'alert-dup-process',
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            status: 'new',
+            occurrenceCount: 1,
+            lastSeenAt: null as string | null,
+            payloadJson: {} as Record<string, unknown>,
+          };
+          repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+          repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+          repo.query = makeStatefulQueryMock(row);
+
+          const T = '2026-08-18T09:00:00.000Z';
+          // Lần 1: đường tức thời (evaluateZoneCountNow()) xử lý event X ngay khi webhook tới.
+          const r1 = await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'zpe-X',
+            payloadJson: { occurredAt: T },
+          });
+          expect(r1.alert.occurrenceCount).toBe(2);
+
+          // Lần 2: "cron" (evaluateCrowdAlerts()) quét lại ĐÚNG event X (cùng sourceEventId,
+          // cùng occurredAt=T — event.eventTime thật KHÔNG đổi dù xử lý lại) — mô phỏng đúng
+          // double-processing (cron không ORDER BY, có thể tới sau, không theo thứ tự).
+          const r2 = await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'zpe-X',
+            payloadJson: { occurredAt: T }, // occurredAt GIỐNG HỆT lần 1 → diff=0
+          });
+
+          expect(r2.alert.occurrenceCount).toBe(2); // GIỮ NGUYÊN — KHÔNG tăng lần 2
+          const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+          expect(occurrences).toHaveLength(1); // KHÔNG có occurrence thứ 2
+        });
+
+        it('CASE BÌNH THƯỜNG — 2 event THẬT SỰ khác nhau, cách nhau đủ xa (>= debounceSeconds) → cả 2 đều tạo occurrence riêng, KHÔNG bị nuốt nhầm', async () => {
+          securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+          const row = {
+            id: 'alert-distinct',
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            status: 'new',
+            occurrenceCount: 1,
+            lastSeenAt: null as string | null,
+            payloadJson: {} as Record<string, unknown>,
+          };
+          repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+          repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+          repo.query = makeStatefulQueryMock(row);
+
+          await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'evt-A',
+            payloadJson: { occurredAt: '2026-08-18T09:00:00.000Z' },
+          });
+          const r2 = await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'evt-B',
+            // cách 60s — thật sự là 1 đợt vượt ngưỡng KHÁC, không phải double-processing.
+            payloadJson: { occurredAt: '2026-08-18T09:01:00.000Z' },
+          });
+
+          expect(r2.alert.occurrenceCount).toBe(3); // cả 2 đều tăng
+          const occurrences = r2.alert.payloadJson!.occurrences as unknown[];
+          expect(occurrences).toHaveLength(2); // cả 2 đều append, không mất event thật
+        });
+
+        it('CASE ĐẢO NGƯỢC THỨ TỰ — event CŨ HƠN tới SAU event MỚI HƠN (mô phỏng đúng cron KHÔNG ORDER BY) → nearest-match vẫn debounce đúng, KHÔNG phụ thuộc thứ tự xử lý', async () => {
+          securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+          const row = {
+            id: 'alert-out-of-order',
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            status: 'new',
+            occurrenceCount: 1,
+            lastSeenAt: null as string | null,
+            payloadJson: {} as Record<string, unknown>,
+          };
+          repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+          repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+          repo.query = makeStatefulQueryMock(row);
+
+          // Lần 1 (xử lý trước, nhưng THỜI GIAN SỰ KIỆN mới hơn): occurredAt=T+100s.
+          await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'evt-newer',
+            payloadJson: { occurredAt: '2026-08-18T09:01:40.000Z' }, // T+100s
+          });
+          // Lần 2 (xử lý SAU, nhưng THỜI GIAN SỰ KIỆN cũ hơn, chỉ cách "T" gốc 2s — mô phỏng
+          // cron quét lại 1 event cũ ngoài thứ tự). Nếu vẫn dùng "ord DESC" (last-appended =
+          // entry@T+100s), diff=98s → KHÔNG debounce (SAI). Với nearest-match, entry duy nhất
+          // hiện có LÀ @T+100s (mảng chỉ có 1 phần tử) nên vẫn so với nó — cần seed thêm 1
+          // entry GẦN sự kiện thứ 2 để bài test có ý nghĩa phân biệt "nearest" vs "last".
+          const row2Seed = {
+            ...row,
+            payloadJson: {
+              occurrences: [
+                { userId: null, sourceEventId: 'evt-near', occurredAt: '2026-08-18T09:00:02.000Z' }, // T+2s — GẦN event lần 2 sắp tới
+                { userId: null, sourceEventId: 'evt-newer', occurredAt: '2026-08-18T09:01:40.000Z' }, // T+100s — entry CUỐI CÙNG (ord DESC sẽ chọn cái này)
+              ],
+            },
+          };
+          Object.assign(row, row2Seed);
+          row.occurrenceCount = 3;
+          repo.query = makeStatefulQueryMock(row);
+
+          const r3 = await service.recordAlert({
+            alertType: 'crowd',
+            zoneId: 'zone-9',
+            sourceEventId: 'evt-late-arrival',
+            // occurredAt=T+3s — GẦN entry 'evt-near' (T+2s, diff=1s<5s → PHẢI debounce) NHƯNG
+            // XA entry cuối cùng 'evt-newer' (T+100s, diff=97s). "ord DESC" (last) sẽ so với
+            // evt-newer → SAI, không debounce. nearest-match so với evt-near → ĐÚNG, debounce.
+            payloadJson: { occurredAt: '2026-08-18T09:00:03.000Z' },
+          });
+
+          expect(r3.alert.occurrenceCount).toBe(3); // GIỮ NGUYÊN — nearest-match debounce đúng
+          const occurrences = r3.alert.payloadJson!.occurrences as unknown[];
+          expect(occurrences).toHaveLength(2); // KHÔNG append thêm — chứng minh KHÔNG phụ thuộc thứ tự xử lý
+        });
+
+        it('REGRESSION TUYỆT ĐỐI — Intrusion (KHÔNG phải crowd) ở ĐÚNG kịch bản mà nearest-match và last-match cho kết quả KHÁC NHAU → vẫn dùng "ord DESC" (last) y hệt trước, KHÔNG bị đổi sang nearest-match', async () => {
+          securityAlertConfigService.getDebounceSeconds.mockResolvedValue(5);
+          const row = {
+            id: 'alert-intrusion-order-sensitive',
+            alertType: 'intrusion',
+            zoneId: 'zone-restricted',
+            status: 'new',
+            occurrenceCount: 3,
+            lastSeenAt: null as string | null,
+            payloadJson: {
+              occurrences: [
+                { userId: 'u1', sourceEventId: 'evt-near', occurredAt: '2026-08-18T09:00:02.000Z' }, // gần
+                { userId: 'u1', sourceEventId: 'evt-newer', occurredAt: '2026-08-18T09:01:40.000Z' }, // xa, nhưng là entry CUỐI CÙNG
+              ],
+            } as Record<string, unknown>,
+          };
+          repo.findOne.mockImplementation(() => Promise.resolve({ ...row }));
+          repo.save.mockRejectedValue({ driverError: { code: '23505' } });
+          repo.query = makeStatefulQueryMock(row);
+
+          const r = await service.recordAlert({
+            alertType: 'intrusion',
+            zoneId: 'zone-restricted',
+            sourceEventId: 'evt-late-arrival',
+            // Nếu Intrusion bị đổi sang nearest-match (SAI): so với 'evt-near' (diff=1s<5s)
+            // → debounce, occurrence_count GIỮ 3. Hành vi ĐÚNG (ord DESC, KHÔNG đổi): so với
+            // entry CUỐI CÙNG 'evt-newer' (diff=97s>=5s) → KHÔNG debounce, append + tăng.
+            payloadJson: { userId: 'u1', occurredAt: '2026-08-18T09:00:03.000Z' },
+          });
+
+          expect(r.alert.occurrenceCount).toBe(4); // TĂNG — chứng minh Intrusion vẫn dùng "last", KHÔNG bị đổi sang "nearest"
+          const occurrences = r.alert.payloadJson!.occurrences as unknown[];
+          expect(occurrences).toHaveLength(3); // append thêm bình thường, y hệt hành vi cũ
+        });
       });
 
       it('last_seen_at LUÔN cập nhật dù bị debounce hay không (chống rủi ro R3 — auto-resolve không được đóng nhầm)', async () => {

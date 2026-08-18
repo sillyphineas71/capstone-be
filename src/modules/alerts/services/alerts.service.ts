@@ -230,7 +230,31 @@ export class AlertsService {
              ($2::jsonb ->> 'userId' IS NOT NULL AND elem ->> 'userId' = $2::jsonb ->> 'userId')
              OR $5 = 'crowd'
            )
-         ORDER BY ord DESC
+         -- [FIX 2026-08-18] Crowd CHỈ: so "GẦN NHẤT VỀ THỜI GIAN" (nearest-match) thay vì
+         -- "entry cuối cùng được GHI" (ord DESC — hành vi cũ, GIỮ NGUYÊN 100% cho mọi
+         -- alertType khác qua nhánh ELSE (-ord) bên dưới). Lý do: Crowd có 2 đường gọi
+         -- SONG SONG cùng ghi vào CÙNG 1 alert — evaluateZoneCountNow() (tức thời, mỗi
+         -- webhook) VÀ evaluateCrowdAlerts() (cron EVERY_MINUTE, KHÔNG ORDER BY khi quét
+         -- zone_presence_events) — cron có thể quét lại ĐÚNG event đã được đường tức thời
+         -- xử lý, tới SAU nhưng KHÔNG THEO THỨ TỰ THỜI GIAN THẬT. "ord DESC" (so với entry
+         -- ghi gần đây nhất theo THỨ TỰ XỬ LÝ) chỉ tương đương "gần nhất theo THỜI GIAN
+         -- THẬT" khi xử lý tuần tự đúng thứ tự — giả định KHÔNG còn đúng khi cron xử lý lại
+         -- ngoài thứ tự. occurredAt luôn là thời gian THẬT của event (event.eventTime/
+         -- args.eventTime — KHÔNG PHẢI giờ xử lý, xem CrowdAlertService), nên so "gần nhất
+         -- về occurredAt" làm debounce BẤT BIẾN với thứ tự/số lần xử lý lại: event X
+         -- (occurredAt=T) dù bị đánh giá lại bao nhiêu lần, luôn so trùng khớp với chính
+         -- entry@T đã ghi trước đó (diff=0) → debounce đúng, KHÔNG cần cơ chế đánh dấu
+         -- per-event nào thêm. Non-crowd giữ đúng "ord DESC" qua ELSE (-ord)::double
+         -- precision (ASC trên -ord = DESC trên ord) — 0% đổi hành vi Intrusion/stranger/
+         -- vehicle_control_match/person_watchlist_match.
+         ORDER BY (
+           CASE
+             WHEN $5 = 'crowd' THEN ABS(EXTRACT(EPOCH FROM (
+               (elem ->> 'occurredAt')::timestamptz - ($2::jsonb ->> 'occurredAt')::timestamptz
+             )))::double precision
+             ELSE (-ord)::double precision
+           END
+         ) ASC
          LIMIT 1
        ),
        debounce_check AS (
