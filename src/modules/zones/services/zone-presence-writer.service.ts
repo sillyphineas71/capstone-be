@@ -36,6 +36,14 @@ export type ResolvePresenceZoneResult =
 /** Loại zone hợp lệ cho `appear` (QC-5). Trùng PRESENCE_ZONE_TYPES bên ivss — chủ ý ở phía chủ bảng. */
 const PRESENCE_ZONE_TYPES = ['corridor', 'lobby', 'parking'];
 
+// [FIX 2026-08-18] Dedupe writeCountEvent(): camera bắn count-event mỗi ~2-4s, đọc CÙNG
+// giá trị khi đám đông không đổi → nhiều row trùng hệt nhau trong zone_presence_events,
+// khiến cron evaluateCrowdAlerts() (EVERY_MINUTE) quét lại số row lớn bất thường mỗi tick.
+// Mirror ĐÚNG pattern dedupe onFaceEvent() (Luồng 2): SELECT-precheck trước INSERT, cửa sổ
+// 8s, KHÔNG UNIQUE constraint (bảng chưa từng có, chỉ 1 nguồn ghi tuần tự — writeCountEvent()
+// chỉ được gọi từ đúng 1 chỗ, ivss-occupancy-ingest.service.ts).
+const DEDUP_WINDOW_MS = 8000;
+
 /**
  * ZonePresenceWriterService (ZPW-001 / UC-109) — nguồn ghi DUY NHẤT của `zone_presence_events`
  * cho vòng `appear` (QĐ-1/QC-4). `ivss` GỌI, KHÔNG bắn raw SQL chéo.
@@ -143,6 +151,34 @@ export class ZonePresenceWriterService {
       throw new Error(
         `writeCountEvent: zone ${input.zoneId} không tồn tại hoặc đã xoá`,
       );
+    }
+
+    // [FIX 2026-08-18] Dedupe precheck — khóa zoneId+occupancyCount (CẢ HAI phải khớp,
+    // KHÔNG chỉ zoneId: 1 lần đếm THẬT SỰ đổi giá trị vẫn phải ghi, phục vụ heatmap
+    // chính xác), cửa sổ 8s. Trùng → KHÔNG INSERT, nhưng VẪN trả về presenceId của row
+    // đã có (KHÔNG bỏ qua/return rỗng) — caller (ivss-occupancy-ingest.service.ts)
+    // destructure { presenceId } ngay sau lệnh gọi này rồi dùng để gọi
+    // evaluateZoneCountNow() TỨC THỜI; trả presenceId thật giữ nguyên khả năng đánh giá
+    // ngưỡng crowd-alert mỗi lần gọi, chỉ giảm số row LƯU TRỮ (ảnh hưởng cron quét lại
+    // sau này), không giảm tần suất đánh giá ngưỡng thời gian thực.
+    const dupRows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT id FROM zone_presence_events
+       WHERE zone_id = $1
+         AND event_type = 'count'
+         AND occupancy_count = $2
+         AND event_time >= $3
+       ORDER BY event_time DESC LIMIT 1`,
+      [
+        input.zoneId,
+        input.occupancyCount,
+        new Date(input.eventTime.getTime() - DEDUP_WINDOW_MS),
+      ],
+    );
+    if (dupRows[0]) {
+      this.logger.debug(
+        `writeCountEvent dedupe: bỏ qua INSERT (zone=${input.zoneId} count=${input.occupancyCount}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${dupRows[0].id}).`,
+      );
+      return { presenceId: dupRows[0].id };
     }
 
     const metaJson =

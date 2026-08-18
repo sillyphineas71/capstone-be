@@ -132,4 +132,116 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
       expect(qr.release).toHaveBeenCalledTimes(1);
     });
   });
+
+  // [FIX 2026-08-18] Dedupe writeCountEvent() — khóa zoneId+occupancyCount, cửa sổ 8s.
+  describe('writeCountEvent (F3, recon B5 — dedupe [FIX 2026-08-18])', () => {
+    const countInput = (over: any = {}) => ({
+      zoneId: 'z-area',
+      occupancyCount: 5,
+      eventTime: new Date('2026-07-26T09:00:00.000Z'),
+      deviceId: 'dev1',
+      metadata: { channelId: 3, source: 'ivss_occupancy' },
+      ...over,
+    });
+
+    /** dedupeHit=null → SELECT dedupe trả [] (không trùng). dedupeHit='id' → trả row đó. */
+    const wireDs = (dedupeHit: string | null = null) => {
+      ds.manager.query.mockImplementation((sql: string) => {
+        if (String(sql).includes('FROM zones WHERE id'))
+          return Promise.resolve([{ id: 'z-area' }]);
+        if (String(sql).includes("event_type = 'count'"))
+          return Promise.resolve(dedupeHit ? [{ id: dedupeHit }] : []);
+        return Promise.resolve([]);
+      });
+    };
+
+    it('zone hợp lệ, KHÔNG trùng → INSERT count + trả presenceId mới', async () => {
+      wireDs(null);
+      const r = await service.writeCountEvent(countInput());
+      expect(r).toEqual({ presenceId: 'zpe-1' });
+      const ins = qr.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO zone_presence_events'),
+      );
+      expect(ins).toBeDefined();
+      expect(String(ins[0])).toContain("'count'");
+      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1);
+    });
+
+    it('zone không tồn tại → ném, KHÔNG chạm dedupe-check, KHÔNG mở transaction', async () => {
+      ds.manager.query.mockResolvedValueOnce([]); // SELECT zones trả rỗng
+      await expect(service.writeCountEvent(countInput())).rejects.toThrow(
+        'không tồn tại hoặc đã xoá',
+      );
+      expect(ds.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('2 event CÙNG zoneId+occupancyCount trong cửa sổ 8s → CHỈ 1 row được ghi, lần 2 trả presenceId của row đã có', async () => {
+      wireDs(null);
+      const r1 = await service.writeCountEvent(countInput());
+      expect(r1).toEqual({ presenceId: 'zpe-1' });
+      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1); // lần 1: có mở transaction thật
+
+      wireDs('zpe-1'); // lần 2: giả lập DB đã có row lần 1 vừa ghi → dedupe-check thấy trùng
+      const r2 = await service.writeCountEvent(countInput());
+      expect(r2).toEqual({ presenceId: 'zpe-1' });
+      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1); // KHÔNG mở transaction thêm lần nữa → KHÔNG INSERT
+    });
+
+    it('2 event CÙNG zoneId nhưng occupancyCount KHÁC nhau (số người đổi thật) → CẢ 2 đều được ghi, KHÔNG bị dedupe nhầm', async () => {
+      wireDs(null); // occupancyCount khác nhau → SELECT dedupe (occupancy_count = $2) sẽ không khớp row cũ trong DB thật; ở mock, mô phỏng bằng cách LUÔN trả [] cho cả 2 lần gọi
+      const r1 = await service.writeCountEvent(countInput({ occupancyCount: 5 }));
+      const r2 = await service.writeCountEvent(countInput({ occupancyCount: 8 }));
+      expect(r1.presenceId).toBe('zpe-1');
+      expect(r2.presenceId).toBe('zpe-1'); // mock INSERT luôn trả cùng 1 id giả — quan trọng là createQueryRunner được gọi CẢ 2 lần
+      expect(ds.createQueryRunner).toHaveBeenCalledTimes(2);
+    });
+
+    it('2 event cách nhau NGOÀI cửa sổ 8s (DB không còn thấy trùng) → CẢ 2 đều được ghi', async () => {
+      wireDs(null); // dedupe-check luôn trả [] (mô phỏng đã ngoài cửa sổ thời gian)
+      await service.writeCountEvent(countInput());
+      await service.writeCountEvent(countInput());
+      expect(ds.createQueryRunner).toHaveBeenCalledTimes(2);
+    });
+
+    it('query dedupe đúng tham số: zoneId, occupancyCount, mốc cửa sổ = eventTime - 8000ms', async () => {
+      wireDs(null);
+      await service.writeCountEvent(countInput());
+      const dedupeCall = ds.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes("event_type = 'count'"),
+      );
+      expect(dedupeCall).toBeDefined();
+      expect(dedupeCall[1]).toEqual([
+        'z-area',
+        5,
+        new Date(new Date('2026-07-26T09:00:00.000Z').getTime() - 8000),
+      ]);
+    });
+
+    it('deduped (trả presenceId của row trùng) — presenceId hợp lệ (KHÔNG null/undefined), giữ đủ điều kiện để caller gọi evaluateZoneCountNow() bình thường', async () => {
+      wireDs('existing-row-id');
+      const r = await service.writeCountEvent(countInput());
+      expect(r.presenceId).toBe('existing-row-id');
+      expect(r.presenceId).toBeTruthy();
+    });
+
+    it('regression: metadata (channelId) vẫn ghi đúng vào metadata_json khi KHÔNG trùng — heatmap không mất dữ liệu nguồn', async () => {
+      wireDs(null);
+      await service.writeCountEvent(countInput());
+      const ins = qr.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('INSERT INTO zone_presence_events'),
+      );
+      const meta = JSON.parse(ins[1][4]);
+      expect(meta).toEqual({ channelId: 3, source: 'ivss_occupancy' });
+    });
+
+    it('INSERT lỗi → rollback + release + ném lại (hành vi cũ giữ nguyên khi không trùng)', async () => {
+      wireDs(null);
+      qr.manager.query.mockRejectedValueOnce(new Error('db boom'));
+      await expect(service.writeCountEvent(countInput())).rejects.toThrow(
+        'db boom',
+      );
+      expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(qr.release).toHaveBeenCalledTimes(1);
+    });
+  });
 });
