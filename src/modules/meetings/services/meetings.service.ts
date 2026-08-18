@@ -4474,6 +4474,21 @@ export class MeetingsService {
       );
     }
 
+    // Gỡ khuôn mặt CHỈ của người bị gỡ (KHÔNG đụng participant còn lại) — ngoài
+    // transaction (gọi thiết bị ngoài), best-effort như notification ở trên.
+    // Không gỡ → mapping còn sống, người bị gỡ vẫn quẹt mặt vào phòng được tới
+    // khi cả họp kết thúc.
+    try {
+      await this.faceProvisioningService.deprovisionParticipant(
+        meetingId,
+        participantUserId,
+      );
+    } catch (faceError: unknown) {
+      this.logger.error(
+        `[removeParticipant] deprovisionParticipant failed for meeting ${meetingId}, user ${participantUserId}: ${(faceError as Error).message}`,
+      );
+    }
+
     // ── Step 8: Build response ──
     return new RemoveParticipantResponseDto({
       meetingId,

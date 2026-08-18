@@ -198,9 +198,15 @@ export class FaceProvisioningService {
       validTo: new Date(meeting.end_time),
     });
     const uid = await provider.findUidByName(uname);
-    if (!uid) {
+    const uidMissing = !uid;
+    if (uidMissing) {
+      // Không set 'synced' ở đây: device_person_id sẽ là null, nên removeMapping()
+      // sau này không gọi được deletePerson thật (chỉ soft-delete DB) — mặt vẫn còn
+      // trên thiết bị dù hệ thống tưởng đã gỡ xong. Ghi 'failed' (giá trị đã dùng sẵn
+      // ở nhánh catch của provisionMeeting) để slot-check (dòng 160) KHÔNG coi là noop
+      // → cron tick kế tiếp tự động thử lại toàn bộ (upload+addPerson+findUidByName).
       this.logger.warn(
-        `addPerson succeeded but uid not found for ${uname} (meeting ${meeting.id}) — entry only removable via validity expiry.`,
+        `addPerson succeeded but uid not found for ${uname} (meeting ${meeting.id}) — marking failed for retry instead of synced.`,
       );
     }
 
@@ -212,8 +218,8 @@ export class FaceProvisioningService {
       bookingId: meeting.id,
       validFrom: meeting.start_time,
       validTo: meeting.end_time,
-      status: 'synced',
-      error: null,
+      status: uidMissing ? 'failed' : 'synced',
+      error: uidMissing ? 'uid not found after addPerson' : null,
     });
     // live cùng booking (chưa synced) → revive; không có live → provisioned.
     return live ? 'revived' : 'provisioned';
@@ -316,6 +322,32 @@ export class FaceProvisioningService {
       } catch (e) {
         this.logger.error(
           `deprovision mapping ${mp.id} failed: ${this.msg(e)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Gỡ khuôn mặt của ĐÚNG 1 participant khỏi 1 meeting — dùng khi participant bị
+   * gỡ khỏi meeting_participants nhưng họp vẫn tiếp diễn cho những người còn lại
+   * (removeParticipant() không được phép gọi deprovisionMeeting(), vì hàm đó gỡ
+   * CẢ họp). Bản sao phạm vi hẹp của deprovisionMeeting() — cùng điều kiện lọc,
+   * chỉ thêm `AND user_id = $2` — tái dùng removeMapping() nguyên trạng, KHÔNG
+   * sửa deprovisionMeeting() hiện có.
+   */
+  async deprovisionParticipant(meetingId: string, userId: string): Promise<void> {
+    const maps: MappingRow[] = await this.dataSource.manager.query(
+      `SELECT id, device_id, device_person_id, sync_status, metadata_json
+       FROM device_user_mappings
+       WHERE metadata_json->>'bookingId' = $1 AND user_id = $2 AND sync_status IN ('synced', 'failed', 'pending') AND deleted_at IS NULL`,
+      [meetingId, userId],
+    );
+    for (const mp of maps) {
+      try {
+        await this.removeMapping(mp);
+      } catch (e) {
+        this.logger.error(
+          `deprovision participant mapping ${mp.id} (meeting ${meetingId}, user ${userId}) failed: ${this.msg(e)}`,
         );
       }
     }

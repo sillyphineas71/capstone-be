@@ -341,6 +341,101 @@ describe('FaceProvisioningService (FMP-001)', () => {
     expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
   });
 
+  // ── deprovisionParticipant (Bug 2 — gỡ đúng 1 người, KHÔNG đụng deprovisionMeeting) ──
+  describe('deprovisionParticipant (gỡ khuôn mặt của đúng 1 participant)', () => {
+    it('mapping synced của người bị gỡ → deletePerson thật + mapping chuyển deleted', async () => {
+      let capturedParams: any[] = [];
+      dsMock.manager.query.mockImplementation((sql: string, params?: any[]) => {
+        if (sql.includes("AND user_id = $2 AND sync_status")) {
+          capturedParams = params ?? [];
+          return Promise.resolve([
+            { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
+          ]);
+        }
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      await service.deprovisionParticipant('m1', 'u1');
+      expect(capturedParams).toEqual(['m1', 'u1']);
+      expect(provider.deletePerson).toHaveBeenCalledWith('64');
+      const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+      expect(String(upd[0][0])).toContain("sync_status = 'deleted'");
+      expect(upd[0][1]).toContain('map-u1');
+    });
+
+    it('họp có 2+ người: chỉ gỡ ĐÚNG người bị remove, KHÔNG đụng mapping người khác', async () => {
+      // Query đã tự lọc user_id = $2 ở tầng SQL — mock chỉ trả về mapping của u1,
+      // xác nhận deprovisionParticipant('m1','u1') không hề query/đụng gì tới u2.
+      dsMock.manager.query.mockImplementation((sql: string, params?: any[]) => {
+        if (sql.includes("AND user_id = $2 AND sync_status")) {
+          expect(params).toEqual(['m1', 'u1']);
+          return Promise.resolve([
+            { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
+          ]);
+        }
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      await service.deprovisionParticipant('m1', 'u1');
+      expect(provider.deletePerson).toHaveBeenCalledTimes(1);
+      expect(provider.deletePerson).toHaveBeenCalledWith('64');
+    });
+
+    it('user không có mapping nào (chưa từng provision) → no-op an toàn, KHÔNG throw', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("AND user_id = $2 AND sync_status"))
+          return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+      await expect(
+        service.deprovisionParticipant('m1', 'u-never-provisioned'),
+      ).resolves.toBeUndefined();
+      expect(provider.deletePerson).not.toHaveBeenCalled();
+    });
+
+    it('lỗi mạng/thiết bị khi xoá → KHÔNG throw ra ngoài (best-effort, log lỗi)', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("AND user_id = $2 AND sync_status"))
+          return Promise.resolve([
+            { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
+          ]);
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      provider.deletePerson.mockRejectedValueOnce(new Error('network unreachable'));
+      const errSpy = jest.spyOn((service as any).logger, 'error');
+      await expect(
+        service.deprovisionParticipant('m1', 'u1'),
+      ).resolves.toBeUndefined();
+      expect(
+        errSpy.mock.calls.some((c) =>
+          String(c[0]).includes('deprovision participant mapping map-u1'),
+        ),
+      ).toBe(true);
+    });
+
+    it('regression: deprovisionMeeting() (cả họp) không đổi hành vi — vẫn KHÔNG lọc theo user_id', async () => {
+      let capturedSql = '';
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes("metadata_json->>'bookingId' = $1 AND sync_status")) {
+          capturedSql = sql;
+          return Promise.resolve([
+            { id: 'map1', device_id: 'dev1', device_person_id: '64' },
+          ]);
+        }
+        if (sql.includes('FROM iot_devices WHERE id'))
+          return Promise.resolve([device]);
+        return Promise.resolve(undefined);
+      });
+      await service.deprovisionMeeting(meeting());
+      expect(capturedSql).not.toContain('user_id');
+      expect(provider.deletePerson).toHaveBeenCalledWith('64');
+    });
+  });
+
   // ── [FIX 2026-08-16] SAFETY NET (deprovisionByMeetingStatus) ──
   describe('deprovisionByMeetingStatus (safety net, độc lập end_time)', () => {
     it('QUAN TRỌNG NHẤT: meeting status=cancelled + mapping synced → bắt và xoá NGAY (trước đây KHÔNG có lưới nào bắt được)', async () => {
@@ -511,13 +606,40 @@ describe('FaceProvisioningService (FMP-001)', () => {
     ).toBe(0);
   });
 
-  it('uid null sau addPerson → vẫn upsert (warn), KHÔNG crash', async () => {
+  it('uid null sau addPerson → upsert status=failed (KHÔNG synced), có error message, KHÔNG crash', async () => {
     dsMock.manager.query.mockImplementation(defaultRouter());
     provider.findUidByName.mockResolvedValue(null);
     await service.provisionMeeting(meeting());
     const ins = calls(dsMock.manager.query, 'INSERT INTO device_user_mappings');
     expect(ins.length).toBe(1);
     expect((ins[0][1] as any[])[2]).toBeNull(); // device_person_id = null
+    // Bug 3 fix: KHÔNG set 'synced' khi uid không tìm ra — tái dùng 'failed' đã có
+    // sẵn, kèm error rõ ràng, để removeMapping() sau này không im lặng bỏ qua
+    // deletePerson thật vì tưởng đã 'synced' thành công.
+    expect(ins[0][1]).toEqual(
+      expect.arrayContaining(['failed', 'uid not found after addPerson']),
+    );
+    expect(ins[0][1]).not.toContain('synced');
+  });
+
+  it('uid null → status=failed cho phép cron tick kế tiếp tự retry (KHÔNG bị coi synced/noop)', async () => {
+    // Mô phỏng: lượt cron trước đã ghi mapping 'failed' (uid not found) cho đúng
+    // booking này — slot-check (dòng 160) chỉ noop khi sync_status==='synced', nên
+    // 'failed' phải khiến lượt sau upload+addPerson lại từ đầu (tự phục hồi).
+    dsMock.manager.query.mockImplementation(
+      defaultRouter({
+        slot: [{ id: 'x', sync_status: 'failed', booking_id: 'm1' }],
+        upsertExisting: [{ id: 'x' }],
+      }),
+    );
+    provider.findUidByName.mockResolvedValue('70'); // lần retry này thành công
+    await service.provisionMeeting(meeting());
+    expect(provider.uploadFace).toHaveBeenCalledTimes(1);
+    expect(provider.addPerson).toHaveBeenCalledTimes(1);
+    expect(provider.findUidByName).toHaveBeenCalledWith(UNAME);
+    const upd = calls(dsMock.manager.query, 'UPDATE device_user_mappings');
+    expect(upd.length).toBe(1);
+    expect(upd[0][1]).toEqual(expect.arrayContaining(['synced', '70']));
   });
 
   it('removeMapping: device_person_id null → chỉ UPDATE removed, KHÔNG deletePerson', async () => {
