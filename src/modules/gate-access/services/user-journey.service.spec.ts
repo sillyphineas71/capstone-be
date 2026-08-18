@@ -493,8 +493,15 @@ describe('UserJourneyService (UJN-001)', () => {
     });
   });
 
-  // ══ FIX 2026-08-09 — sourceEventId cho gate + meeting (FE hiện ảnh), zone giữ null ══
-  describe('sourceEventId (FE dùng để hiện ảnh) — gate + meeting, zone giữ null', () => {
+  // ══ FIX 2026-08-09 — sourceEventId cho gate + meeting (FE hiện ảnh) ══
+  // ══ FIX 2026-08-18 — trả nợ kỹ thuật: thêm sourceEventId cho nguồn zone (đọc từ
+  //    metadata_json.sourceEventId, đã ghi sẵn bởi writeAppearEvent() từ trước — chỉ
+  //    CHƯA từng được SELECT/map ra response). KHÔNG đụng bridge/writeAppearEvent()/
+  //    DeviceEventSnapshotService — id trả về CÙNG shape iot_device_events.id mà
+  //    DeviceEventSnapshotService.getSnapshot() đã xử lý đúng cho gate/meeting (xem
+  //    device-event-snapshot.service.spec.ts:70, test happy-path chung, KHÔNG phân biệt
+  //    nguồn — không cần test tích hợp riêng, service đó không đổi).
+  describe('sourceEventId (FE dùng để hiện ảnh) — gate + meeting + zone', () => {
     it('gate: map source_event_id (cột g.event_id) vào sourceEventId', async () => {
       wire({
         gate: [
@@ -557,13 +564,50 @@ describe('UserJourneyService (UJN-001)', () => {
       ]);
     });
 
-    it('zone: LUÔN null (ràng buộc — KHÔNG đụng nguồn zone lần này)', async () => {
+    // [FIX 2026-08-18] zone giờ CÓ sourceEventId thật — đọc từ metadata_json.sourceEventId
+    // (writeAppearEvent() đã ghi sẵn từ trước, chỉ chưa được SELECT/map ra response).
+    it('zone: metadata_json.sourceEventId hợp lệ → map đúng vào sourceEventId (KHÔNG còn null)', async () => {
       wire({
         zone: [
           {
             event_time: '2026-07-29T05:00:00.000Z',
             event_type: 'appear',
             zone_name: 'Hành lang A',
+            source_event_id: 'ide-zone-1',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBe('ide-zone-1');
+    });
+
+    it('zone: KHÔNG có sourceEventId trong metadata (dữ liệu cũ/edge case) → trả null an toàn, KHÔNG throw', async () => {
+      wire({
+        zone: [
+          {
+            event_time: '2026-07-29T05:00:00.000Z',
+            event_type: 'appear',
+            zone_name: 'Hành lang A',
+            // source_event_id KHÔNG có trong row — mô phỏng metadata_json thiếu/rỗng
+            // (dữ liệu cũ trước khi field này được ghi, hoặc appear event hiếm gặp).
+          },
+        ],
+      });
+      await expect(
+        service.getUserJourney(USER_ID, '2026-07-29'),
+      ).resolves.toBeDefined();
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBeNull();
+    });
+
+    it('zone: source_event_id = null tường minh (metadata_json->>... trả NULL trong Postgres) → trả null an toàn', async () => {
+      wire({
+        zone: [
+          {
+            event_time: '2026-07-29T05:00:00.000Z',
+            event_type: 'appear',
+            zone_name: 'Hành lang A',
+            source_event_id: null,
           },
         ],
       });
@@ -571,13 +615,44 @@ describe('UserJourneyService (UJN-001)', () => {
       expect(r.events[0].sourceEventId).toBeNull();
     });
 
-    it('SQL: nguồn gate SELECT g.event_id AS source_event_id, nguồn meeting SELECT e.id', async () => {
+    // Regression: gate/meeting KHÔNG bị ảnh hưởng gì bởi thay đổi ở nguồn zone.
+    it('REGRESSION — gate: map source_event_id (cột g.event_id) vào sourceEventId, giữ nguyên 100%', async () => {
+      wire({
+        gate: [
+          {
+            access_time: '2026-07-29T01:00:00.000Z',
+            direction: 'enter',
+            plate_number: '30G69946',
+            zone_name: 'Cổng Test',
+            source_event_id: 'ide-gate-regress',
+          },
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBe('ide-gate-regress');
+    });
+
+    it('REGRESSION — meeting: sourceEventId = id event đầu phiên, giữ nguyên 100%', async () => {
+      wire({
+        meeting: [
+          face('2026-07-29T10:39:00.000Z', 'enter', 'A102-ID', 'ide-first-regress'),
+          face('2026-07-29T10:41:00.000Z', 'seen', 'A102-ID', 'ide-second-regress'),
+        ],
+      });
+      const r = await service.getUserJourney(USER_ID, '2026-07-29');
+      expect(r.events[0].sourceEventId).toBe('ide-first-regress');
+    });
+
+    it('SQL: nguồn gate SELECT g.event_id AS source_event_id, nguồn meeting SELECT e.id, nguồn zone SELECT metadata_json->>\'sourceEventId\'', async () => {
       wire();
       await service.getUserJourney(USER_ID, '2026-07-29');
       expect(sqlOf('FROM gate_access_logs').sql).toContain(
         'g.event_id AS source_event_id',
       );
       expect(sqlOf('FROM iot_device_events').sql).toContain('SELECT e.id');
+      expect(sqlOf('FROM zone_presence_events').sql).toContain(
+        `p.metadata_json->>'sourceEventId' AS source_event_id`,
+      );
     });
   });
 });

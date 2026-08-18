@@ -32,6 +32,15 @@ interface ZoneRow {
   event_time: Date | string;
   event_type: string | null;
   zone_name: string | null;
+  /**
+   * [FIX 2026-08-18] FK → iot_device_events.id, đọc từ metadata_json.sourceEventId (ghi bởi
+   * onFaceEvent() khi gọi writeAppearEvent() — xem ivss-presence-ingestion.service.ts).
+   * KHÔNG phải cột riêng của zone_presence_events (bảng này không có snapshot_file_id) —
+   * event gốc (kèm ảnh, nếu bridge có gửi) nằm ở iot_device_events, zone chỉ giữ tham chiếu
+   * qua metadata. Có thể NULL (dữ liệu cũ trước khi field này được ghi, hoặc appear event
+   * hiếm khi thiếu — xử lý null-safe y hệt gate/meeting).
+   */
+  source_event_id: string | null;
 }
 
 interface UserRow {
@@ -288,8 +297,13 @@ export class UserJourneyService {
     );
 
     // ── Nguồn 3: hiện diện khu vực — MỌI zone của user (không lọc zone cụ thể) ──
+    // [FIX 2026-08-18] Thêm metadata_json->>'sourceEventId' — FK sẵn có tới iot_device_events
+    // (ghi bởi writeAppearEvent(), xem ZoneRow.source_event_id) để FE hiện ảnh snapshot cho
+    // dòng zone, mirror ĐÚNG cách gate/meeting đã làm (source_event_id). KHÔNG đổi gì khác ở
+    // đây — KHÔNG đụng writeAppearEvent()/bridge/DeviceEventSnapshotService.
     const zoneRows: ZoneRow[] = await this.dataSource.manager.query(
-      `SELECT p.event_time, p.event_type, z.zone_name
+      `SELECT p.event_time, p.event_type, z.zone_name,
+              p.metadata_json->>'sourceEventId' AS source_event_id
          FROM zone_presence_events p
          LEFT JOIN zones z ON z.id = p.zone_id AND z.deleted_at IS NULL
         WHERE p.user_id = $1${vnDayBounds('p.event_time')}
@@ -331,10 +345,12 @@ export class UserJourneyService {
         plateNumber: null,
         roomName: null,
         meetingId: null,
-        // RÀNG BUỘC (fix 2026-08-09): KHÔNG đụng nguồn zone lần này — luôn null,
-        // không đổi schema/query. Đặt tường minh (không omit) để FE thấy field này
-        // luôn có mặt, nhất quán với gate/meeting.
-        sourceEventId: null,
+        // [FIX 2026-08-18] Nợ kỹ thuật từ fix 2026-08-09 (commit 6b670f3, chỉ scope
+        // gate+meeting) — giờ đọc thật từ metadata_json.sourceEventId (xem ZoneRow),
+        // mirror đúng cách gate/meeting đã làm. null-safe: thiếu trong metadata (dữ liệu
+        // cũ/edge case) → giữ null, KHÔNG throw, FE tự ẩn thumbnail (ThumbnailImage đã xử
+        // lý null từ trước, không cần đổi FE).
+        sourceEventId: r.source_event_id ?? null,
       };
     });
 
