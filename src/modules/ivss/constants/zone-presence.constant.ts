@@ -17,11 +17,18 @@ export const PRESENCE_ZONE_TYPES = ['corridor', 'lobby', 'parking'] as const;
 export type PresenceZoneType = (typeof PRESENCE_ZONE_TYPES)[number];
 
 /**
- * 4 lý do không ghi `appear`:
+ * 3 lý do không ghi `appear` (còn hiệu lực):
  * - `zone_unmapped`       — channel chưa có key trong `channel_presence_zone_map` (QĐ-2).
- * - `unmatched_identity`  — `resolveUser` trả NULL (userId không xác định; restricted-zone coi NULL = vi phạm).
  * - `bad_utc`             — `evt.utc` méo/lệch (`utcFallback=true`), không có `event_time` tin cậy.
  * - `zone_wrong_type`     — zone map trỏ tồn tại nhưng `zone_type ∉ PRESENCE_ZONE_TYPES` (QC-5).
+ *
+ * [FIX 2026-08-19] `unmatched_identity` KHÔNG còn được set nữa — trước đây userId=null (người
+ * lạ hoàn toàn) bị chặn không cho ghi `appear` với lý do "restricted-zone coi NULL = vi phạm",
+ * nhưng điều đó lại khiến `isViolation()` không bao giờ nhận được input null để đánh giá (mâu
+ * thuẫn logic). Giờ mirror đúng hành vi Room: userId=null vẫn ghi `appear` (userId=null),
+ * restricted-zone-intrusion tự xử lý null đúng như code đã sẵn có. Giữ lại giá trị trong union
+ * type/mảng bên dưới để không phá kiểu dữ liệu cũ đang lưu trong `iot_device_events.payload_json`
+ * (dữ liệu lịch sử trước fix vẫn có thể mang giá trị này).
  */
 export const PRESENCE_SKIPPED_REASONS = [
   'zone_unmapped',

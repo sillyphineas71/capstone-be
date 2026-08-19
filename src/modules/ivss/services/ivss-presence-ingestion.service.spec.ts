@@ -415,11 +415,16 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       );
     });
 
-    it('zone_id set độc lập với presenceSkipped/writeAppearEvent — vẫn có zone_id dù userId null (presenceSkipped=unmatched_identity, KHÔNG ghi appear)', async () => {
-      wire({ presenceMap: { '5': AREA }, user: [] }); // userId null → presenceSkipped, KHÔNG writeAppearEvent
-      await service.onFaceEvent(evt());
-      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
-      expect(payloadOf().presenceSkipped).toBe('unmatched_identity');
+    // [FIX 2026-08-19] userId=null KHÔNG còn bị presenceSkipped chặn — writeAppearEvent VẪN
+    // được gọi (với userId=null) để restricted-zone-intrusion có input đánh giá người lạ.
+    it('zone_id set độc lập với presenceSkipped/writeAppearEvent — userId null vẫn ghi zone_id VÀ vẫn gọi writeAppearEvent(userId=null)', async () => {
+      wire({ presenceMap: { '5': AREA }, user: [] }); // userId null
+      // utc mặc định của evt() là ngày cố định cũ → lệch >SKEW_MS so với "now" thật lúc test
+      // chạy → utcFallback=true → presenceSkipped='bad_utc' che mất đúng nhánh đang test.
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(writerMock.writeAppearEvent.mock.calls[0][0].userId).toBeNull();
+      expect(payloadOf().presenceSkipped).toBeNull();
       expect(zoneIdOf()).toBe(AREA); // zone_id KHÔNG phụ thuộc presenceSkipped — luôn theo channel map
     });
   });
@@ -660,11 +665,15 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       expect(payloadOf().presenceSkipped).toBe('zone_unmapped');
     });
 
-    it('unmatched_identity: userId NULL → payload skip, KHÔNG writeAppearEvent', async () => {
+    // [FIX 2026-08-19] userId NULL không còn là lý do skip — mirror hành vi Room (raw log vẫn
+    // ghi cho người lạ), để restricted-zone-intrusion.isViolation() nhận được input userId=null
+    // (trước đây luôn NULL = vi phạm nhưng chưa bao giờ có event nào tới được đó để đánh giá).
+    it('userId NULL → payload KHÔNG skip, VẪN writeAppearEvent với userId=null', async () => {
       wire({ presenceMap: { '5': AREA }, user: [] });
       await service.onFaceEvent(evt({ utc: nowIso() }));
-      expect(payloadOf().presenceSkipped).toBe('unmatched_identity');
-      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(payloadOf().presenceSkipped).toBeNull();
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(writerMock.writeAppearEvent.mock.calls[0][0].userId).toBeNull();
     });
 
     it('bad_utc: utcFallback → payload skip, KHÔNG writeAppearEvent (KHÔNG now())', async () => {
@@ -1059,18 +1068,24 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       expect(p.userId).toBe('u1');
     });
 
-    it('similarity < ngưỡng → userId null-hoá TRƯỚC khi lan xuống: matchState=unmatched_identity, payload.userId=null, KHÔNG writeAppearEvent/evaluateZoneEventNow/broadcastPresence', async () => {
+    // [FIX 2026-08-19] userId null-hoá (similarity thấp) không còn chặn writeAppearEvent/
+    // evaluateZoneEventNow cho Zone — mirror đúng chỗ userId=null do "người lạ hoàn toàn"
+    // (resolveUser trả null thẳng). broadcastPresence vẫn KHÔNG chạy — độc lập, gate riêng
+    // theo matchState==='matched' (không đổi bởi fix này).
+    it('similarity < ngưỡng → userId null-hoá TRƯỚC khi lan xuống: matchState=unmatched_identity, payload.userId=null, VẪN writeAppearEvent/evaluateZoneEventNow(userId=null), KHÔNG broadcastPresence', async () => {
       presenceConfigMock.getValues.mockResolvedValue({
         minSimilarityThreshold: 0.7,
       });
       wire({ presenceMap: { '5': AREA } });
-      service = await build(true); // realtime ON để xác nhận broadcastPresence cũng KHÔNG chạy
+      service = await build(true); // realtime ON để xác nhận broadcastPresence vẫn KHÔNG chạy
       await service.onFaceEvent(evt({ similarity: 0.5, utc: nowIso() }));
       const p = payloadOf();
       expect(p.matchState).toBe('unmatched_identity');
       expect(p.userId).toBeNull();
-      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
-      expect(intrusionMock.evaluateZoneEventNow).not.toHaveBeenCalled();
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(writerMock.writeAppearEvent.mock.calls[0][0].userId).toBeNull();
+      expect(intrusionMock.evaluateZoneEventNow).toHaveBeenCalledTimes(1);
+      expect(intrusionMock.evaluateZoneEventNow.mock.calls[0][0].userId).toBeNull();
       expect(wsMock.emitToRoom).not.toHaveBeenCalled();
     });
 

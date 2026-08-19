@@ -3,13 +3,19 @@ import { DataSource } from 'typeorm';
 
 /**
  * Input ghi một dòng `appear` vào `zone_presence_events` (ZPW-001 / UC-109).
- * `ivss` đã resolve sạch: `userId` NOT NULL (restricted-zone coi NULL = vi phạm),
  * `eventTime` TỪ `evt.utc` (parseUtc, KHÔNG now()). `metadata` gồm { channelId, szUid,
  * similarity, sourceEventId } (nhánh B: link raw event qua JSONB, KHÔNG cột event_id).
+ *
+ * [FIX 2026-08-19] `userId` giờ NULLABLE — trước đây bắt buộc NOT NULL vì
+ * `restricted-zone-intrusion.isViolation()` coi NULL = vi phạm nên `ivss` chặn không cho ghi
+ * userId=null, khiến isViolation() không bao giờ nhận được input đó để đánh giá (người lạ hoàn
+ * toàn "biến mất" khỏi cả zone_presence_events lẫn đánh giá xâm nhập khu vực hạn chế). Giờ
+ * `ivss` chuyển thẳng userId (kể cả null) xuống đây — cột `zone_presence_events.user_id` vốn
+ * đã nullable ở DB (không cần migration), `isViolation()` đã sẵn NULL-safe từ trước.
  */
 export interface WriteAppearInput {
   zoneId: string;
-  userId: string;
+  userId: string | null;
   eventTime: Date;
   deviceId?: string | null;
   metadata?: Record<string, unknown> | null;
