@@ -9,6 +9,7 @@ import { GuestAccessCacheService } from '../guest-access/services/guest-access-c
 import { GuestAttendanceService } from '../guest-access/services/guest-attendance.service';
 import { MeetingEntity } from '../meetings/entities/meeting.entity';
 import { MeetingParticipantEntity } from '../meetings/entities/meeting-participant.entity';
+import { AuthzReadRepository } from '../auth/repositories/authz-read.repository';
 
 function buildSocket(auth: Record<string, unknown> = {}) {
   return {
@@ -30,6 +31,7 @@ describe('EventsGateway', () => {
   let meetingFindOne: jest.Mock;
   let participantFindOne: jest.Mock;
   let dataSource: { getRepository: jest.Mock };
+  let authzRepo: { getEffectiveRolesAndPermissions: jest.Mock };
 
   beforeEach(async () => {
     jwtService = { verifyAsync: jest.fn() };
@@ -53,6 +55,11 @@ describe('EventsGateway', () => {
         throw new Error('unexpected entity');
       }),
     };
+    authzRepo = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: ['meeting_request.read'] }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -67,6 +74,7 @@ describe('EventsGateway', () => {
         { provide: GuestAccessCacheService, useValue: guestAccessCacheService },
         { provide: GuestAttendanceService, useValue: guestAttendanceService },
         { provide: DataSource, useValue: dataSource },
+        { provide: AuthzReadRepository, useValue: authzRepo },
       ],
     }).compile();
 
@@ -297,6 +305,89 @@ describe('EventsGateway', () => {
       expect(socket.join).toHaveBeenCalledWith(
         'ivss:meeting:11111111-1111-1111-1111-111111111111',
       );
+    });
+  });
+
+  describe('user:subscribe — realtime /manager/meeting-approvals gate', () => {
+    it('should reject when there is no identity at all', async () => {
+      const socket = buildSocket();
+      socket.data.identity = null;
+      const result = await gateway.handleUserSubscribe(socket);
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    it('should reject a guest identity', async () => {
+      const socket = buildSocket();
+      socket.data.identity = {
+        type: 'guest',
+        externalParticipantId: 'ep-1',
+        meetingId: '11111111-1111-1111-1111-111111111111',
+        jti: 'jti-1',
+      };
+      const result = await gateway.handleUserSubscribe(socket);
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(authzRepo.getEffectiveRolesAndPermissions).not.toHaveBeenCalled();
+    });
+
+    it('should reject an employee without meeting_request.read permission', async () => {
+      authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['EMPLOYEE'],
+        permissions: [],
+      });
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = await gateway.handleUserSubscribe(socket);
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    it('should join user:{userId} for an employee with meeting_request.read permission', async () => {
+      authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['meeting_request.read', 'meeting_request.approve'],
+      });
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = await gateway.handleUserSubscribe(socket);
+      expect(result.ok).toBe(true);
+      expect(socket.join).toHaveBeenCalledWith('user:user-1');
+      expect(authzRepo.getEffectiveRolesAndPermissions).toHaveBeenCalledWith(
+        'user-1',
+      );
+    });
+
+    it('should always subscribe to the caller own userId, ignoring any userId in the body', async () => {
+      authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['MANAGER'],
+        permissions: ['meeting_request.read'],
+      });
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      await gateway.handleUserSubscribe(socket);
+      expect(socket.join).toHaveBeenCalledWith('user:user-1');
+      expect(socket.join).not.toHaveBeenCalledWith(
+        expect.stringContaining('other-user'),
+      );
+    });
+  });
+
+  describe('user:unsubscribe', () => {
+    it('should leave user:{userId} for an authenticated employee', () => {
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = gateway.handleUserUnsubscribe(socket);
+      expect(result.ok).toBe(true);
+      expect(socket.leave).toHaveBeenCalledWith('user:user-1');
+    });
+
+    it('should no-op when there is no employee identity', () => {
+      const socket = buildSocket();
+      socket.data.identity = null;
+      const result = gateway.handleUserUnsubscribe(socket);
+      expect(result.ok).toBe(false);
+      expect(socket.leave).not.toHaveBeenCalled();
     });
   });
 });

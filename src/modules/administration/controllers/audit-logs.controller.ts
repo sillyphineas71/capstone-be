@@ -36,7 +36,8 @@ const XLSX_MIME =
  * AuditLogsController — endpoint xem nhật ký kiểm tra hệ thống (UC-AA-11).
  *
  * Route: GET /api/v1/audit-logs
- * Permission: audit.system.read (chỉ SYSTEM_ADMIN)
+ * Permission: audit.system.read (chỉ BUSINESS_ADMIN — chuyển từ SYSTEM_ADMIN
+ * theo yêu cầu 2026-08-20, xem migration 20260820000001-MoveAuditSystemReadPermissionToBusinessAdmin.ts)
  *
  * KHÔNG gọi AuditLogsService.logAction()/logSecurityEvent()/logEntityChange()
  * ở bất kỳ đâu trong controller này (§0.10 spec.md).
@@ -64,7 +65,7 @@ export class AuditLogsController {
     summary: 'Xem danh sách nhật ký kiểm tra hệ thống (UC-AA-11)',
     description:
       'Trả về danh sách phân trang audit logs sắp xếp theo created_at DESC. ' +
-      'Chỉ SYSTEM_ADMIN mới có quyền truy cập (permission: audit.system.read). ' +
+      'Chỉ BUSINESS_ADMIN mới có quyền truy cập (permission: audit.system.read). ' +
       'Read-only tuyệt đối — không ghi thêm audit log cho hành động xem này.',
   })
   @ApiResponse({
@@ -111,7 +112,7 @@ export class AuditLogsController {
     summary: 'Danh sách action_type có thật trong nhật ký (dựng dropdown lọc)',
     description:
       'Trả về các giá trị action_type xuất hiện trong bảng audit_logs kèm số ' +
-      'bản ghi, sắp xếp theo tần suất giảm dần. Chỉ SYSTEM_ADMIN (permission ' +
+      'bản ghi, sắp xếp theo tần suất giảm dần. Chỉ BUSINESS_ADMIN (permission ' +
       'audit.system.read, kế thừa từ class decorator).',
   })
   @ApiResponse({
@@ -152,7 +153,7 @@ export class AuditLogsController {
     summary: 'Xuất nhật ký kiểm tra hệ thống ra file Excel',
     description:
       'Render đồng bộ và trả thẳng file XLSX theo filter (from/to bắt buộc, ' +
-      'userId/actionType/entityType/severity tùy chọn). Chỉ SYSTEM_ADMIN mới có ' +
+      'userId/actionType/entityType/severity tùy chọn). Chỉ BUSINESS_ADMIN mới có ' +
       'quyền truy cập (permission: audit.system.read, kế thừa từ class decorator). ' +
       'Giới hạn an toàn 50.000 dòng — nếu bị cắt, file có 1 dòng cảnh báo cuối cùng.',
   })
