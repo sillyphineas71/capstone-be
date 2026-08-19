@@ -542,10 +542,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue([]);
       mockRepo.getLateByDepartment.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.graceMinutes).toBe(5);
       expect(mockConfigService.getMaxRangeDays).toHaveBeenCalled(); // validateMaxRange vẫn tái dùng
     });
@@ -589,10 +586,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue([]);
       mockRepo.getLateByDepartment.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.summary.totalRequired).toBe(0);
       expect(result.data.summary.onTimeRate).toBeNull();
       expect(result.data.summary.lateRate).toBeNull();
@@ -610,10 +604,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue([]);
       mockRepo.getLateByDepartment.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.summary.onTimeRate).toBe(80.0);
       expect(result.data.summary.lateRate).toBe(20.0);
     });
@@ -633,10 +624,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getPersonalTrendByWeek.mockResolvedValue(new Map());
       mockRepo.getLateHistory.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.departmentAvg).toBeNull();
       expect(mockRepo.getLateByDepartment).not.toHaveBeenCalled();
     });
@@ -653,10 +641,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue([]);
       mockRepo.getLateByDepartment.mockResolvedValue([]); // không có dòng nào trả về
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.departmentAvg).toBeNull();
     });
 
@@ -683,10 +668,7 @@ describe('OnTimeRateService', () => {
         },
       ]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.departmentAvg).toEqual({
         departmentId: 'd1',
         departmentName: 'Phong IT',
@@ -739,10 +721,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue(lateMeetings);
       mockRepo.getLateByDepartment.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.recentLate).toEqual(lateMeetings);
     });
 
@@ -758,10 +737,7 @@ describe('OnTimeRateService', () => {
       mockRepo.getLateHistory.mockResolvedValue([]);
       mockRepo.getLateByDepartment.mockResolvedValue([]);
 
-      const result = await service.getPersonalStats(
-        { userId: mockUserId },
-        {},
-      );
+      const result = await service.getPersonalStats({ userId: mockUserId }, {});
       expect(result.data.userId).toBe(mockUserId);
       expect(result.data.fullName).toBe('Nguyen Van A');
       expect(result.data.email).toBe('a@co.com');

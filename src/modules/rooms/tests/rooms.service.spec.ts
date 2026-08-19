@@ -63,6 +63,7 @@ describe('RoomsService', () => {
     capacity: 12,
     roomType: RoomType.MEETING_ROOM,
     currentStatus: RoomStatus.AVAILABLE,
+    administrativeStatus: RoomStatus.AVAILABLE,
     hasCamera: false,
     hasMicrophone: false,
     hasDisplay: false,
@@ -438,6 +439,105 @@ describe('RoomsService', () => {
     });
   });
 
+  describe('updateAdministrativeStatus', () => {
+    function mockAdminStatusTransactionSucceeds() {
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            save: jest
+              .fn()
+              .mockImplementation((_entity, data) =>
+                Promise.resolve({ ...mockRoom, ...data }),
+              ),
+          };
+          return cb(mockEm);
+        },
+      );
+    }
+
+    function mockAuditTransactionSucceeds() {
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn(),
+            save: jest.fn().mockResolvedValue({}),
+          };
+          return cb(mockEm);
+        },
+      );
+    }
+
+    it('should set administrativeStatus to maintenance and broadcast room.status.updated', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      mockAdminStatusTransactionSucceeds();
+      mockAuditTransactionSucceeds();
+
+      const result = await service.updateAdministrativeStatus(
+        mockRoomId,
+        { status: 'maintenance', reason: 'Sua may lanh' },
+        mockUserId,
+      );
+
+      expect(result.roomId).toBe(mockRoomId);
+      expect(result.administrativeStatus).toBe(RoomStatus.MAINTENANCE);
+      expect(websocketService.broadcast).toHaveBeenCalledWith(
+        'room.status.updated',
+        expect.objectContaining({
+          roomId: mockRoomId,
+          administrativeStatus: RoomStatus.MAINTENANCE,
+        }),
+      );
+    });
+
+    it('should clear override by setting status back to available', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({
+        ...mockRoom,
+        administrativeStatus: RoomStatus.MAINTENANCE,
+      });
+      mockAdminStatusTransactionSucceeds();
+      mockAuditTransactionSucceeds();
+
+      const result = await service.updateAdministrativeStatus(
+        mockRoomId,
+        { status: 'available' },
+        mockUserId,
+      );
+
+      expect(result.administrativeStatus).toBe(RoomStatus.AVAILABLE);
+    });
+
+    it('should throw NotFoundException when room does not exist', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.updateAdministrativeStatus(
+          mockRoomId,
+          { status: 'maintenance' },
+          mockUserId,
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(websocketService.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('should still return result when audit log fails', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      mockAdminStatusTransactionSucceeds();
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(async () => {
+        throw new Error('DB connection lost');
+      });
+
+      const result = await service.updateAdministrativeStatus(
+        mockRoomId,
+        { status: 'inactive' },
+        mockUserId,
+      );
+
+      expect(result.administrativeStatus).toBe(RoomStatus.INACTIVE);
+      expect(websocketService.broadcast).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('getDeletionImpact', () => {
     it('should return canDelete=true with pendingMeetingCount when only draft/pending meetings exist', async () => {
       (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
@@ -745,7 +845,7 @@ describe('RoomsService', () => {
       expect(result.capacity).toBe(12);
       expect(result.isActive).toBe(true);
 
-      // BR-3: administrativeStatus = rooms.current_status, KHONG merge vao occupancyStatus
+      // BR-3: administrativeStatus = rooms.administrative_status, KHONG merge vao occupancyStatus
       expect(result.administrativeStatus).toBe(RoomStatus.AVAILABLE);
       expect(result.occupancyStatus).not.toHaveProperty('administrativeStatus');
 
@@ -871,10 +971,10 @@ describe('RoomsService', () => {
     });
 
     it('should separate administrativeStatus from occupancyStatus (D-5, BR-3)', async () => {
-      // Edge case: currentStatus = maintenance nhung van co booking active trong DB
+      // Edge case: administrativeStatus = maintenance nhung van co booking active trong DB
       const roomMaintenance = {
         ...mockRoomWithRelations,
-        currentStatus: RoomStatus.MAINTENANCE,
+        administrativeStatus: RoomStatus.MAINTENANCE,
       };
       (roomRepo.findOne as jest.Mock).mockResolvedValue(roomMaintenance);
       (roomStatusService.getRoomStatus as jest.Mock).mockResolvedValue(

@@ -16,6 +16,7 @@ import { SystemConfigEntity } from '../../administration/entities/system-config.
 import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
+  MeetingMinutesSource,
 } from '../entities/meeting-minutes.entity.js';
 import { AI_MINUTES_JOB_NAME } from '../constants/ai-minutes-draft.constants.js';
 
@@ -208,6 +209,7 @@ describe('MinutesAiDraftProcessor', () => {
   it('forceRerun: UPDATE tai cho, versionNo+1, preparedBy doi theo nguoi trigger (AC-007)', async () => {
     const existing = {
       id: MINUTES_ID,
+      source: MeetingMinutesSource.AI,
       aiSummaryJson: { meta: {} },
       status: MeetingMinutesStatus.DRAFT,
       versionNo: 1,
@@ -360,5 +362,146 @@ describe('MinutesAiDraftProcessor', () => {
       expect(line).not.toContain(SENSITIVE);
       expect(line).not.toContain('Tóm tắt'); // không log summary
     }
+  });
+});
+
+describe('MinutesAiDraftProcessor - MKM-MANUAL-01 persistDraft', () => {
+  let processor: MinutesAiDraftProcessor;
+  let dataSource: any;
+  let minutesRepo: any;
+
+  beforeEach(() => {
+    minutesRepo = {
+      findOne: jest.fn(),
+      create: jest.fn().mockImplementation((v) => v),
+      save: jest
+        .fn()
+        .mockImplementation(async (v) => ({ id: 'new-minutes-id', ...v })),
+    };
+
+    const meetingRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'meeting-1', title: 'Hop test' }),
+      }),
+    };
+
+    const bgJobRepo = { update: jest.fn() };
+    const auditRepo = { create: jest.fn(), save: jest.fn() };
+
+    const em = {
+      getRepository: jest.fn().mockImplementation((entity) => {
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === BackgroundJobEntity) return bgJobRepo;
+        if (entity === AuditLogEntity) return auditRepo;
+        return null;
+      }),
+    };
+
+    dataSource = {
+      transaction: jest.fn().mockImplementation((cb) => cb(em)),
+    };
+
+    processor = new MinutesAiDraftProcessor(
+      dataSource,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+    (processor as any).lastRunConfig = {
+      provider: 'test',
+      modelName: 'test-model',
+    };
+  });
+
+  const payload = {
+    backgroundJobId: 'job-1',
+    meetingId: 'meeting-1',
+    transcriptId: 'transcript-1',
+    userId: 'user-1',
+    forceRerun: false,
+  };
+
+  const output = {
+    summary: 'Test summary',
+    decisions: [],
+    actionItems: [],
+    keyPoints: [],
+    risks: [],
+    openQuestions: [],
+    uncertainParts: [],
+  };
+
+  it('creates new AI minutes even when manual minutes exist for same meeting (AC-014)', async () => {
+    // findOne returns null because existing manual minutes are filtered by source: 'ai'
+    minutesRepo.findOne.mockResolvedValue(null);
+
+    const result = await (processor as any)['persistDraft'](payload, output);
+
+    expect(minutesRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        meetingId: 'meeting-1',
+        source: MeetingMinutesSource.AI,
+        deletedAt: expect.anything(),
+      },
+    });
+
+    expect(minutesRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: MeetingMinutesSource.AI,
+        minutesContent: 'Test summary',
+      }),
+    );
+    expect(minutesRepo.save).toHaveBeenCalled();
+    expect(result).toBe('new-minutes-id');
+  });
+
+  it('overwrites existing AI draft using source check instead of aiSummaryJson null-check (FR-017)', async () => {
+    const existing = {
+      id: 'existing-ai-id',
+      source: MeetingMinutesSource.AI,
+      status: MeetingMinutesStatus.DRAFT,
+      aiSummaryJson: null,
+      versionNo: 1,
+    };
+    minutesRepo.findOne.mockResolvedValue(existing);
+
+    const result = await (processor as any)['persistDraft'](
+      { ...payload, forceRerun: true },
+      output,
+    );
+
+    expect(minutesRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'existing-ai-id',
+        minutesContent: 'Test summary',
+        versionNo: 2,
+      }),
+    );
+    expect(result).toBe('existing-ai-id');
+  });
+
+  it('refuses to overwrite when existing AI minutes is not draft', async () => {
+    const existing = {
+      id: 'existing-ai-id',
+      source: MeetingMinutesSource.AI,
+      status: MeetingMinutesStatus.PUBLISHED,
+      versionNo: 1,
+    };
+    minutesRepo.findOne.mockResolvedValue(existing);
+
+    await expect(
+      (processor as any)['persistDraft'](
+        { ...payload, forceRerun: true },
+        output,
+      ),
+    ).rejects.toMatchObject({ code: 'MINUTES_ALREADY_EXISTS' });
+
+    expect(minutesRepo.save).not.toHaveBeenCalled();
   });
 });

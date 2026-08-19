@@ -1,5 +1,8 @@
 import { Expose, Type } from 'class-transformer';
-import { MeetingMinutesStatus } from '../entities/meeting-minutes.entity.js';
+import {
+  MeetingMinutesStatus,
+  MeetingMinutesSource,
+} from '../entities/meeting-minutes.entity.js';
 import { UserSummaryDto } from '../../meetings/dto/user-summary.dto.js';
 import { MinutesMeetingSummaryDto } from './minutes-meeting-summary.dto.js';
 import { UserProfileSummaryDto } from './user-profile-summary.dto.js';
@@ -16,6 +19,10 @@ export class MinutesListItemDto {
 
   @Expose()
   versionNo: number;
+
+  /** MKM-MANUAL-01: 'ai' | 'manual' */
+  @Expose()
+  source: MeetingMinutesSource;
 
   @Expose()
   createdAt: Date;

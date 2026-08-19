@@ -504,7 +504,12 @@ export class OnTimeRateRepository {
       ORDER BY week_start ASC
     `;
 
-    const rows = await this.dataSource.query(sql, [userId, graceMinutes, from, to]);
+    const rows = await this.dataSource.query(sql, [
+      userId,
+      graceMinutes,
+      from,
+      to,
+    ]);
 
     const result = new Map<
       string,

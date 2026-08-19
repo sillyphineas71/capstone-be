@@ -21,6 +21,8 @@ import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
+  MeetingMinutesSource,
+  MeetingMinutesContentFormat,
 } from '../entities/meeting-minutes.entity.js';
 import { MeetingMinutesShareEntity } from '../entities/meeting-minutes-share.entity.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
@@ -97,6 +99,8 @@ import {
   DepartmentSummaryDto,
   UserProfileSummaryDto,
 } from '../dto/user-profile-summary.dto.js';
+import { ToggleLiveShareMinutesDto } from '../dto/toggle-live-share-minutes.dto.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 
 const DEFAULT_MINUTES_CONTENT =
   '1. Thành phần tham dự\n2. Nội dung cuộc họp\n3. Kết luận\n4. Đầu việc (Action items)';
@@ -114,6 +118,11 @@ interface CreateDraftTransactionResult {
   saved: MeetingMinutesEntity;
   meeting: MeetingEntity;
   attendeesSnapshotJson: MinutesAttendeeSnapshot[];
+}
+
+interface ToggleLiveShareTransactionResult {
+  minutes: MeetingMinutesEntity;
+  changed: boolean;
 }
 
 const LIST_MAX_LIMIT = 20; // BR2 (UC-MKM-02): tá»‘i Ä‘a 20 báº£n ghi/trang
@@ -142,6 +151,13 @@ export class MinutesService {
     private readonly configService: ConfigService,
     @InjectRepository(MediaFileEntity)
     private readonly mediaFileRepo: Repository<MediaFileEntity>,
+    /**
+     * MKM-LIVE-01: optional de khong phai sua lai toan bo call-site
+     * `new MinutesService(...)` (6 tham so) hien co trong cac file test —
+     * emit WS von da la best-effort (spec muc 6.5), nen thieu service nay
+     * (vd trong unit test) chi log canh bao, khong throw.
+     */
+    private readonly websocketService?: WebsocketService,
   ) {}
 
   async createDraft(
@@ -203,8 +219,7 @@ export class MinutesService {
         if (!MEETING_STATUSES_ALLOWED_FOR_MINUTES.includes(meeting.status)) {
           throw new ConflictException({
             success: false,
-            message:
-              'Cuá»™c há»p chÆ°a báº¯t Ä‘áº§u, chÆ°a thá»ƒ táº¡o biÃªn báº£n há»p',
+            message: 'Cuộc họp chưa bắt đầu, chưa thể tạo biên bản họp',
             error: {
               code: 'MEETING_NOT_STARTED',
               details: { meetingId, currentStatus: meeting.status },
@@ -212,25 +227,33 @@ export class MinutesService {
           });
         }
 
-        // Step 5: Chá»‘ng táº¡o trÃ¹ng â€” tá»‘i Ä‘a 1 minutes active per meeting
+        // Step 5: Chống tạo trùng — tối đa 1 minutes manual active per meeting (MKM-MANUAL-01)
         const existing = await manager
           .getRepository(MeetingMinutesEntity)
           .findOne({
-            where: { meetingId, deletedAt: IsNull() },
+            where: {
+              meetingId,
+              source: MeetingMinutesSource.MANUAL,
+              deletedAt: IsNull(),
+            },
           });
 
         if (existing) {
           throw new ConflictException({
             success: false,
-            message: 'Cuộc họp này đã có biên bản họp',
+            message: 'Cuộc họp này đã có biên bản thủ công',
             error: {
               code: 'MINUTES_ALREADY_EXISTS',
-              details: { meetingId, existingMinutesId: existing.id },
+              details: {
+                meetingId,
+                existingMinutesId: existing.id,
+                source: 'manual',
+              },
             },
           });
         }
 
-        // Step 6: Snapshot danh sÃ¡ch tham dá»± táº¡i thá»i Ä‘iá»ƒm táº¡o (BR2 â€” khÃ³a cá»©ng)
+        // Step 6: Snapshot danh sách tham dự tại thời điểm tạo (BR2 — khóa cứng)
         const participants = await manager
           .getRepository(MeetingParticipantEntity)
           .find({ where: { meetingId } });
@@ -244,7 +267,7 @@ export class MinutesService {
             leftAt: p.leftAt,
           }));
 
-        // Step 7: Táº¡o báº£n ghi draft
+        // Step 7: Tạo bản ghi draft
         const title = dto.title?.trim() || `Biên bản họp: ${meeting.title}`;
 
         const minutes = manager.getRepository(MeetingMinutesEntity).create({
@@ -258,23 +281,49 @@ export class MinutesService {
             unknown
           >,
           preparedBy: authUser.userId,
+          source: MeetingMinutesSource.MANUAL,
+          contentFormat:
+            dto.contentFormat ?? MeetingMinutesContentFormat.TEMPLATE,
         });
 
-        const saved = await manager
-          .getRepository(MeetingMinutesEntity)
-          .save(minutes);
+        let saved: MeetingMinutesEntity;
+        try {
+          saved = await manager
+            .getRepository(MeetingMinutesEntity)
+            .save(minutes);
+        } catch (e: unknown) {
+          // Lớp bảo vệ thứ 2 cho race condition (plan.md mục 9.1) — lock
+          // pessimistic_write ở Step 1 đã serialize hầu hết trường hợp,
+          // nhưng vẫn bắt lỗi ux_meeting_minutes_meeting_source_active nếu
+          // có đường ghi nào khác vượt qua application check.
+          if (this.isUniqueViolation(e)) {
+            throw new ConflictException({
+              success: false,
+              message: 'Cuộc họp này đã có biên bản thủ công',
+              error: {
+                code: 'MINUTES_ALREADY_EXISTS',
+                details: { meetingId, source: 'manual' },
+              },
+            });
+          }
+          throw e;
+        }
 
         return { saved, meeting, attendeesSnapshotJson };
       },
     );
 
-    // Audit log ngoÃ i transaction â€” AuditLogsService tá»± fail-safe, khÃ´ng cháº·n business flow
+    // Audit log ngoài transaction — AuditLogsService tự fail-safe, không chặn business flow
     await this.auditLogsService.logAction({
       userId: authUser.userId,
       actionType: 'meeting_minutes_draft_created',
       entityType: 'meeting_minutes',
       entityId: result.saved.id,
-      metadataJson: { meetingId, meetingStatus: result.meeting.status },
+      metadataJson: {
+        meetingId,
+        meetingStatus: result.meeting.status,
+        source: 'manual',
+      },
     });
 
     return new DraftMinutesResponseDto({
@@ -284,6 +333,7 @@ export class MinutesService {
       status: result.saved.status,
       visibilityLevel: result.saved.visibilityLevel,
       versionNo: result.saved.versionNo,
+      contentFormat: result.saved.contentFormat,
       minutesContent: result.saved.minutesContent,
       preparedBy: result.saved.preparedBy as string,
       createdAt: result.saved.createdAt,
@@ -348,7 +398,10 @@ export class MinutesService {
         email: u.email,
         jobTitle: u.positionTitle,
         department: u.department
-          ? new DepartmentSummaryDto(u.department.id, u.department.departmentName)
+          ? new DepartmentSummaryDto(
+              u.department.id,
+              u.department.departmentName,
+            )
           : null,
         avatarUrl: u.avatarUrl,
       });
@@ -386,6 +439,7 @@ export class MinutesService {
         title: minutes.title,
         status: minutes.status,
         versionNo: minutes.versionNo,
+        source: minutes.source,
         createdAt: minutes.createdAt,
         updatedAt: minutes.updatedAt,
         issuedAt: minutes.issuedAt,
@@ -432,6 +486,7 @@ export class MinutesService {
           'minutes.title',
           'minutes.status',
           'minutes.versionNo',
+          'minutes.source',
           'minutes.createdAt',
           'minutes.updatedAt',
           'minutes.issuedAt',
@@ -492,6 +547,18 @@ export class MinutesService {
                     MeetingMinutesStatus.PUBLISHED,
                     MeetingMinutesStatus.ARCHIVED,
                   ],
+                  userId: authUser.userId,
+                },
+              )
+              // MKM-LIVE-01: đồng bộ đúng điều kiện đã thêm ở canAccessMinutes()
+              // và compareMinutes() — participant thấy được bản nháp đang live.
+              .orWhere(
+                `minutes.status = :draftStatus AND minutes.isLiveShared = true AND EXISTS (
+                  SELECT 1 FROM meeting_participants mp
+                  WHERE mp.meeting_id = meeting.id AND mp.user_id = :userId
+                )`,
+                {
+                  draftStatus: MeetingMinutesStatus.DRAFT,
                   userId: authUser.userId,
                 },
               );
@@ -568,6 +635,138 @@ export class MinutesService {
         error: { code: 'INTERNAL_ERROR' },
       });
     }
+  }
+
+  /**
+   * MKM-MANUAL-01 T006: Resolve the "official" minutes for a meeting.
+   * Priority: manual > ai. Returns null if no active minutes exist.
+   * Used by renderers/export and any place that needs a single representative minutes.
+   */
+  async resolveOfficialMinutes(
+    meetingId: string,
+  ): Promise<MeetingMinutesEntity | null> {
+    const minutesRepo = this.dataSource.getRepository(MeetingMinutesEntity);
+    const manual = await minutesRepo.findOne({
+      where: {
+        meetingId,
+        source: MeetingMinutesSource.MANUAL,
+        deletedAt: IsNull(),
+      },
+    });
+    if (manual) return manual;
+    return minutesRepo.findOne({
+      where: {
+        meetingId,
+        source: MeetingMinutesSource.AI,
+        deletedAt: IsNull(),
+      },
+    });
+  }
+
+  /**
+   * MKM-MANUAL-01 T007: Compare manual vs AI minutes for a meeting.
+   * Returns both (or null for missing) using the same MinutesListItemDto shape
+   * as findMinutesList for FE consistency.
+   */
+  async compareMinutes(
+    meetingId: string,
+    authUser: MinutesAuthUser,
+  ): Promise<{
+    manual: MinutesListItemDto | null;
+    ai: MinutesListItemDto | null;
+  }> {
+    // Validate meeting exists
+    const meeting = await this.dataSource.getRepository(MeetingEntity).findOne({
+      where: { id: meetingId },
+    });
+    if (!meeting || meeting.deletedAt) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Cuộc họp không tồn tại hoặc đã bị xóa',
+        error: { code: 'MEETING_NOT_FOUND', details: { meetingId } },
+      });
+    }
+
+    // Load both minutes with meeting join (same shape as findMinutesList)
+    const qb = this.dataSource
+      .getRepository(MeetingMinutesEntity)
+      .createQueryBuilder('minutes')
+      .leftJoinAndSelect('minutes.meeting', 'meeting')
+      .leftJoinAndSelect('meeting.host', 'host')
+      .leftJoinAndSelect('meeting.organizer', 'organizer')
+      .where('minutes.meetingId = :meetingId', { meetingId })
+      .andWhere('minutes.deletedAt IS NULL');
+
+    // Apply same visibility scope as findMinutesList
+    const { roles } = await this.authzRepo.getEffectiveRolesAndPermissions(
+      authUser.userId,
+    );
+    const isAdmin = roles.some(
+      (r) => r === 'SYSTEM_ADMIN' || r === 'BUSINESS_ADMIN',
+    );
+
+    if (!isAdmin) {
+      qb.andWhere(
+        new Brackets((sub) => {
+          sub
+            .where(
+              'minutes.status = :draftStatus AND minutes.preparedBy = :userId',
+              {
+                draftStatus: MeetingMinutesStatus.DRAFT,
+                userId: authUser.userId,
+              },
+            )
+            .orWhere(
+              `minutes.status IN (:...visibleStatuses) AND (
+                meeting.hostId = :userId
+                OR EXISTS (
+                  SELECT 1 FROM meeting_participants mp
+                  WHERE mp.meeting_id = meeting.id AND mp.user_id = :userId
+                )
+              )`,
+              {
+                visibleStatuses: [
+                  MeetingMinutesStatus.PUBLISHED,
+                  MeetingMinutesStatus.ARCHIVED,
+                ],
+                userId: authUser.userId,
+              },
+            )
+            // MKM-LIVE-01: participant thấy được bản nháp đang bật chia sẻ
+            // trực tiếp — mirror đúng điều kiện đã thêm ở canAccessMinutes()
+            // (dòng ~1196-1204), để so sánh song song cũng nhận diện được
+            // bản đang live thay vì chỉ có preparedBy mới thấy.
+            .orWhere(
+              `minutes.status = :draftStatus AND minutes.isLiveShared = true AND EXISTS (
+                SELECT 1 FROM meeting_participants mp
+                WHERE mp.meeting_id = meeting.id AND mp.user_id = :userId
+              )`,
+              {
+                draftStatus: MeetingMinutesStatus.DRAFT,
+                userId: authUser.userId,
+              },
+            );
+        }),
+      );
+    }
+
+    const items = await qb.getMany();
+    const listItems = await this.buildMinutesListItems(items);
+
+    // Map by source
+    let manual: MinutesListItemDto | null = null;
+    let ai: MinutesListItemDto | null = null;
+    for (let i = 0; i < items.length; i++) {
+      const entity = items[i];
+      const dto = listItems[i];
+      if (entity.source === MeetingMinutesSource.MANUAL) {
+        manual = dto;
+      } else if (entity.source === MeetingMinutesSource.AI) {
+        ai = dto;
+      }
+    }
+
+    return { manual, ai };
   }
 
   /* ================================================
@@ -1025,7 +1224,14 @@ export class MinutesService {
   ): Promise<boolean> {
     if (isAdmin) return true;
     if (minutes.status === MeetingMinutesStatus.DRAFT) {
-      return minutes.preparedBy === userId;
+      // MKM-LIVE-01 (FR-008/FR-009): participant cung doc duoc khi Host
+      // dang bat che do chia se truc tiep. Dieu kien AND chat
+      // (isLiveShared && isParticipant) — KHONG doi khi isLiveShared=false,
+      // giu nguyen hanh vi cu (AC-006, chong regression bao mat).
+      return (
+        minutes.preparedBy === userId ||
+        Boolean(minutes.isLiveShared && isParticipant)
+      );
     }
     if (
       minutes.status === MeetingMinutesStatus.PUBLISHED ||
@@ -1128,7 +1334,10 @@ export class MinutesService {
     if (allUserIds.length > 0) {
       const userEntities = await this.dataSource
         .getRepository(UserEntity)
-        .find({ where: { id: In(allUserIds) }, relations: { department: true } });
+        .find({
+          where: { id: In(allUserIds) },
+          relations: { department: true },
+        });
       usersById = new Map(
         userEntities.map((u) => [
           u.id,
@@ -1296,6 +1505,8 @@ export class MinutesService {
       title: minutes.title,
       status: minutes.status,
       versionNo: minutes.versionNo,
+      isLiveShared: minutes.isLiveShared,
+      contentFormat: minutes.contentFormat,
       generalInfo: new MinutesGeneralInfoDto({
         meetingTitle: meeting.title,
         meetingStatus: meeting.status,
@@ -1473,6 +1684,19 @@ export class MinutesService {
             updatedFields: result.updatedFields,
           },
         });
+        // MKM-LIVE-01 (FR-006/FR-007): chi phat tin hieu "co ban moi" khi
+        // dang live-share; im lang neu khong — khong doi hanh vi cu.
+        if (result.saved.isLiveShared) {
+          this.emitMeetingRoomEvent(
+            result.saved.meetingId,
+            'minutes.draft.updated',
+            {
+              minutesId: result.saved.id,
+              versionNo: result.saved.versionNo,
+              updatedAt: result.saved.updatedAt,
+            },
+          );
+        }
         return new UpdateDraftMinutesResponseDto({
           id: result.saved.id,
           meetingId: result.saved.meetingId,
@@ -1488,6 +1712,157 @@ export class MinutesService {
           updatedAt: result.saved.updatedAt,
         });
       });
+  }
+
+  /* ================================================
+     Live-Share Draft Minutes (MKM-LIVE-01)
+     ================================================ */
+
+  /**
+   * Host tu bat/tat che do chia se truc tiep ban nhap. Chi preparedBy cua
+   * chinh ban ghi do moi duoc goi — KHONG co nhanh bypass cho Admin (khac
+   * cac endpoint khac cua module, day la quyet dinh dieu khien ca nhan cua
+   * nguoi dang soan, khong phai quan tri he thong — xem plan.md muc 6.2).
+   */
+  async toggleLiveShare(
+    minutesId: string,
+    dto: ToggleLiveShareMinutesDto,
+    authUser: MinutesAuthUser,
+  ): Promise<MeetingMinutesEntity> {
+    const result = await this.dataSource.transaction(
+      async (manager): Promise<ToggleLiveShareTransactionResult> => {
+        const minutes = await manager
+          .getRepository(MeetingMinutesEntity)
+          .createQueryBuilder('minutes')
+          .setLock('pessimistic_write')
+          .where('minutes.id = :minutesId', { minutesId })
+          .getOne();
+
+        if (!minutes || minutes.deletedAt) {
+          throw new NotFoundException({
+            success: false,
+            message: 'Bien ban hop khong ton tai hoac da bi xoa',
+            error: {
+              code: 'MEETING_MINUTES_NOT_FOUND',
+              details: { minutesId },
+            },
+          });
+        }
+
+        if (minutes.preparedBy !== authUser.userId) {
+          throw new ForbiddenException({
+            success: false,
+            message: 'Ban khong phai la nguoi soan thao bien ban nay',
+            error: { code: 'NOT_MINUTES_OWNER', details: { minutesId } },
+          });
+        }
+
+        if (minutes.status !== MeetingMinutesStatus.DRAFT) {
+          throw new ConflictException({
+            success: false,
+            message:
+              'Chi co the bat/tat chia se truc tiep khi bien ban o trang thai nhap',
+            error: {
+              code: 'MINUTES_NOT_DRAFT',
+              details: { minutesId, currentStatus: minutes.status },
+            },
+          });
+        }
+
+        // FR-010: chi kiem tra meeting.status khi BAT — tat luon duoc phep
+        // bat ke trang thai meeting, de Host khong bi ket.
+        if (dto.enabled) {
+          const meeting = await manager
+            .getRepository(MeetingEntity)
+            .findOne({ where: { id: minutes.meetingId } });
+          if (meeting?.status !== MeetingStatus.IN_PROGRESS) {
+            throw new ConflictException({
+              success: false,
+              message:
+                'Cuoc hop khong o trang thai dang dien ra, khong the bat chia se truc tiep',
+              error: {
+                code: 'MEETING_NOT_IN_PROGRESS',
+                details: {
+                  meetingId: minutes.meetingId,
+                  meetingStatus: meeting?.status,
+                },
+              },
+            });
+          }
+        }
+
+        // AC-010: idempotent — gia tri khong doi thi khong update/emit.
+        if (minutes.isLiveShared === dto.enabled) {
+          return { minutes, changed: false };
+        }
+
+        minutes.isLiveShared = dto.enabled;
+        const saved = await manager
+          .getRepository(MeetingMinutesEntity)
+          .save(minutes);
+        return { minutes: saved, changed: true };
+      },
+    );
+
+    if (result.changed) {
+      // Best-effort, ngoai transaction — khong chan luong toggle neu loi.
+      await this.auditLogsService.logAction({
+        userId: authUser.userId,
+        actionType: 'meeting_minutes_live_share_toggled',
+        entityType: 'meeting_minutes',
+        entityId: result.minutes.id,
+        metadataJson: {
+          minutesId: result.minutes.id,
+          enabled: result.minutes.isLiveShared,
+        },
+      });
+      this.emitLiveShareEvent(result.minutes, result.minutes.isLiveShared);
+    }
+
+    return result.minutes;
+  }
+
+  /**
+   * Phat event bat/tat live-share (FR-004/FR-005). Best-effort — xem
+   * emitMeetingRoomEvent.
+   */
+  private emitLiveShareEvent(
+    minutes: MeetingMinutesEntity,
+    enabled: boolean,
+  ): void {
+    if (enabled) {
+      this.emitMeetingRoomEvent(
+        minutes.meetingId,
+        'minutes.draft.live_started',
+        { minutesId: minutes.id, versionNo: minutes.versionNo },
+      );
+    } else {
+      this.emitMeetingRoomEvent(
+        minutes.meetingId,
+        'minutes.draft.live_stopped',
+        { minutesId: minutes.id },
+      );
+    }
+  }
+
+  /**
+   * Helper dung chung emit vao room `meeting:${meetingId}` qua
+   * WebsocketService. Best-effort tuyet doi (spec muc 6.5): loi hoac server
+   * chua san sang KHONG duoc lam vo hieu business flow da COMMIT.
+   */
+  private emitMeetingRoomEvent(
+    meetingId: string,
+    event: string,
+    payload: unknown,
+  ): void {
+    try {
+      this.websocketService?.emitToRoom(`meeting:${meetingId}`, event, payload);
+    } catch (e) {
+      this.logger.warn(
+        `Failed to emit WS event "${event}" to meeting ${meetingId}`,
+        e instanceof Error ? e.message : undefined,
+      );
+    }
   }
 
   /**
@@ -1882,15 +2257,31 @@ export class MinutesService {
 
       // Step 6: Publish
       const issuedAt = new Date();
+      // MKM-LIVE-01 (FR-014/AC-009): live-share khong bao gio ap dung cho
+      // ban da published — tu dong tat cung luc voi issue.
+      const wasLiveShared = minutes.isLiveShared;
       minutes.status = MeetingMinutesStatus.PUBLISHED;
       minutes.issuedBy = authUser.userId;
       minutes.issuedAt = issuedAt;
+      if (wasLiveShared) {
+        minutes.isLiveShared = false;
+      }
       const saved = await manager
         .getRepository(MeetingMinutesEntity)
         .save(minutes);
 
-      return { saved, meeting };
+      return { saved, meeting, wasLiveShared };
     });
+
+    // Step 6.5: MKM-LIVE-01 — bao cho client dang xem live biet ban da
+    // ban hanh, khong con live-share nua (best-effort).
+    if (result.wasLiveShared) {
+      this.emitMeetingRoomEvent(
+        result.saved.meetingId,
+        'minutes.draft.live_stopped',
+        { minutesId: result.saved.id },
+      );
+    }
 
     // Step 7: Audit log (outside transaction, best-effort)
     await this.auditLogsService.logEntityChange({
@@ -2268,6 +2659,7 @@ export class MinutesService {
         'minutes.title',
         'minutes.status',
         'minutes.versionNo',
+        'minutes.source',
         'minutes.createdAt',
         'minutes.updatedAt',
         'minutes.issuedAt',

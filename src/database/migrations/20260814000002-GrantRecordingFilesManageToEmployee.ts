@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Allows Employee who is Host of a meeting to hide/soft-delete media files of their meeting.
  * Ownership check is handled in MediaFilesService layer.
  */
-export class GrantRecordingFilesManageToEmployee20260814000002
-  implements MigrationInterface
-{
+export class GrantRecordingFilesManageToEmployee20260814000002 implements MigrationInterface {
   name = 'GrantRecordingFilesManageToEmployee20260814000002';
 
   private readonly grants: Array<{ role: string; permission: string }> = [

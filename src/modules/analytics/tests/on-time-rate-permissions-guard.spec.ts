@@ -44,7 +44,9 @@ describe('OnTimeRateController — PermissionsGuard override (R2 fix)', () => {
     expect(result).toBe(true);
     // requiredPermissions=[] -> early return true (permissions.guard.ts:25-27), không cần
     // gọi DB để tra permission -- xác nhận override thật sự có hiệu lực, không phải "pass vì có quyền".
-    expect(mockAuthzRepo.getEffectiveRolesAndPermissions).not.toHaveBeenCalled();
+    expect(
+      mockAuthzRepo.getEffectiveRolesAndPermissions,
+    ).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -77,9 +79,9 @@ describe('OnTimeRateController — PermissionsGuard override (R2 fix)', () => {
         permissions: ['analytics.attendance.read'],
       });
 
-      await expect(
-        guard.canActivate(makeContext(handlerName)),
-      ).resolves.toBe(true);
+      await expect(guard.canActivate(makeContext(handlerName))).resolves.toBe(
+        true,
+      );
     },
   );
 });

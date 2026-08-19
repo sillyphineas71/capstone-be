@@ -38,6 +38,8 @@ import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 import { RealtimeStatusQueryDto } from '../dto/realtime-status-query.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
 import { UpdateRoomResponseDto } from '../dto/update-room-response.dto.js';
+import { UpdateRoomAdministrativeStatusDto } from '../dto/update-room-administrative-status.dto.js';
+import { UpdateRoomAdministrativeStatusResponseDto } from '../dto/update-room-administrative-status-response.dto.js';
 import { SearchRoomsQueryDto } from '../dto/search-rooms-query.dto.js';
 import { AvailableRoomsQueryDto } from '../dto/available-rooms-query.dto.js';
 import { AvailableRoomItemDto } from '../dto/available-room-item.dto.js';
@@ -189,6 +191,57 @@ export class RoomsController {
     return {
       success: true,
       message: 'Cập nhật thông tin phòng họp thành công',
+      data: result,
+    };
+  }
+
+  // feat-room-realtime-status: admin dat/go trang thai CHU DONG cua phong
+  // (maintenance/inactive/available), tach bach khoi trang thai occupied/
+  // reserved/available von duoc tinh real-time. 2 segment (":roomId/..."),
+  // an toan voi ':roomId' 1-segment ke ben — cung quy uoc voi ':roomId/status'.
+  @Patch(':roomId/administrative-status')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('room.update')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  @ApiOperation({ summary: 'Dat/go trang thai chu dong cua phong hop' })
+  @ApiBody({ type: UpdateRoomAdministrativeStatusDto })
+  @ApiResponse({ status: 200, description: 'Cap nhat thanh cong' })
+  @ApiResponse({ status: 400, description: 'Gia tri status khong hop le' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen room.update' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay phong' })
+  async updateAdministrativeStatus(
+    @Param('roomId', ParseUUIDPipe) roomId: string,
+    @Body() dto: UpdateRoomAdministrativeStatusDto,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: UpdateRoomAdministrativeStatusResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.roomsService.updateAdministrativeStatus(
+      roomId,
+      dto,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Cập nhật trạng thái phòng họp thành công',
       data: result,
     };
   }

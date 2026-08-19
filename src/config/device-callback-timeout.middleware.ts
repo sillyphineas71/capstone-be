@@ -56,7 +56,8 @@ export function deviceCallbackTimeout(timeoutMs: number) {
       });
       res.status(408).json({
         success: false,
-        message: 'Request timeout — server did not receive the full request in time.',
+        message:
+          'Request timeout — server did not receive the full request in time.',
         error: { code: 'DEVICE_CALLBACK_TIMEOUT', details: { timeoutMs } },
       });
     });

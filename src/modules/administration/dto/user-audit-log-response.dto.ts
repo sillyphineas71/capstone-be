@@ -45,7 +45,8 @@ export class UserAuditLogItemDto {
   ipAddress: string | null;
 
   @ApiPropertyOptional({
-    description: 'Dữ liệu ngữ cảnh (new_value/metadata/old_value); null nếu không có',
+    description:
+      'Dữ liệu ngữ cảnh (new_value/metadata/old_value); null nếu không có',
     nullable: true,
   })
   payload: Record<string, unknown> | null;

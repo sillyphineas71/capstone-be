@@ -7,6 +7,7 @@ interface RoomStatusRow {
   room_code: string;
   room_name: string;
   current_status: string;
+  administrative_status: string;
   occupancy_count: number | null;
   last_presence_at: Date | string | null;
   booking_id: string | null;
@@ -101,6 +102,7 @@ export class RoomStatusService {
 
   private static readonly SELECT_COLS = `
     r.id AS room_id, r.room_code, r.room_name, r.current_status,
+    r.administrative_status,
     oc.occupancy_count, lp.event_time AS last_presence_at,
     cb.booking_id, cb.meeting_id, cb.title, cb.host_name,
     cb.reserved_start_time, cb.reserved_end_time,
@@ -149,12 +151,35 @@ export class RoomStatusService {
     return this.toDetail(row);
   }
 
+  /**
+   * [FIX 2026-08-19] Tinh `currentStatus` HIEN THI real-time thay vi doc
+   * thang `r.current_status` — cot do bi OccupancyPersistenceService flip
+   * mot chieu sang 'occupied' va KHONG BAO GIO tu reset ve 'available', nen
+   * doc truc tiep se "dung yen" nhu du lieu tinh/mock. Uu tien:
+   * 1. administrative_status (admin dat qua PATCH .../administrative-status)
+   *    neu la 'maintenance'/'inactive' — luon thang.
+   * 2. 'occupied' neu tin hieu occupancy gan nhat (room_events) > 0.
+   * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
+   * 4. 'available' con lai.
+   */
+  private computeCurrentStatus(row: RoomStatusRow): string {
+    if (
+      row.administrative_status === 'maintenance' ||
+      row.administrative_status === 'inactive'
+    ) {
+      return row.administrative_status;
+    }
+    if ((row.occupancy_count ?? 0) > 0) return 'occupied';
+    if (row.booking_id) return 'reserved';
+    return 'available';
+  }
+
   private toListItem(row: RoomStatusRow): RoomStatusListItem {
     return {
       roomId: row.room_id,
       roomCode: row.room_code,
       roomName: row.room_name,
-      currentStatus: row.current_status,
+      currentStatus: this.computeCurrentStatus(row),
       currentBooking: row.booking_id
         ? {
             meetingId: row.meeting_id,
@@ -173,7 +198,7 @@ export class RoomStatusService {
     return {
       roomId: row.room_id,
       roomCode: row.room_code,
-      currentStatus: row.current_status,
+      currentStatus: this.computeCurrentStatus(row),
       currentBooking: row.booking_id
         ? {
             bookingId: row.booking_id,

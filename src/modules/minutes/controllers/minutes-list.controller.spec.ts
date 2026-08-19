@@ -132,6 +132,51 @@ describe('MeetingMinutesListController', () => {
     });
   });
 
+  describe('toggleLiveShare (MKM-LIVE-01)', () => {
+    it('goi minutesService.toggleLiveShare voi dung tham so va tra ve response bat', async () => {
+      minutesService.toggleLiveShare = jest.fn().mockResolvedValue({
+        id: 'min-1',
+        isLiveShared: true,
+        versionNo: 3,
+      });
+
+      const dto = { enabled: true };
+      const result = await controller.toggleLiveShare(
+        'min-1',
+        dto,
+        currentUser,
+      );
+
+      expect(minutesService.toggleLiveShare).toHaveBeenCalledWith(
+        'min-1',
+        dto,
+        { userId: 'user-1' },
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Da bat che do chia se truc tiep',
+        data: { id: 'min-1', isLiveShared: true, versionNo: 3 },
+      });
+    });
+
+    it('tra ve thong bao tat khi isLiveShared=false', async () => {
+      minutesService.toggleLiveShare = jest.fn().mockResolvedValue({
+        id: 'min-1',
+        isLiveShared: false,
+        versionNo: 4,
+      });
+
+      const result = await controller.toggleLiveShare(
+        'min-1',
+        { enabled: false },
+        currentUser,
+      );
+
+      expect(result.message).toBe('Da tat che do chia se truc tiep');
+      expect(result.data.isLiveShared).toBe(false);
+    });
+  });
+
   describe('deleteDraft', () => {
     it('should delete draft minutes', async () => {
       const result = await controller.deleteDraft('min-1', currentUser);
@@ -210,6 +255,39 @@ describe('MeetingMinutesListController', () => {
       });
       expect(result.success).toBe(true);
       expect(result.data.linkedRecordingFileId).toBe('file-1');
+    });
+  });
+
+  describe('MeetingMinutesListController - compare endpoint (MKM-MANUAL-01)', () => {
+    it('compare route is defined and accessible', () => {
+      expect(controller.compare).toBeDefined();
+    });
+
+    it('calls minutesService.compareMinutes with correct parameters', async () => {
+      const meetingId = 'test-meeting-id';
+      minutesService.compareMinutes = jest
+        .fn()
+        .mockResolvedValue({ manual: null, ai: null });
+
+      await controller.compare(meetingId, currentUser);
+
+      expect(minutesService.compareMinutes).toHaveBeenCalledWith(meetingId, {
+        userId: currentUser.userId,
+      });
+    });
+
+    it('returns success response with correct shape', async () => {
+      const meetingId = 'test-meeting-id';
+      const mockResult = { manual: { id: '1' }, ai: { id: '2' } };
+      minutesService.compareMinutes = jest.fn().mockResolvedValue(mockResult);
+
+      const response = await controller.compare(meetingId, currentUser);
+
+      expect(response).toEqual({
+        success: true,
+        message: 'So sanh bien ban thu cong va AI',
+        data: mockResult,
+      });
     });
   });
 });

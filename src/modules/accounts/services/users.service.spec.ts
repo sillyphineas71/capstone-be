@@ -2868,9 +2868,9 @@ describe('UsersService', () => {
 
         await service.listUsers({ page: 1, limit: 20 });
 
-        const fpRepoCalls = (dataSource.getRepository as jest.Mock).mock.calls.filter(
-          (c) => c[0] === FaceProfileEntity,
-        );
+        const fpRepoCalls = (
+          dataSource.getRepository as jest.Mock
+        ).mock.calls.filter((c) => c[0] === FaceProfileEntity);
         expect(fpRepoCalls.length).toBe(1); // 1 lần getRepository(FaceProfileEntity)
         expect(getRawMany).toHaveBeenCalledTimes(1); // 1 query batch, KHÔNG phải 4 (per-row)
         expect(fpWhere).toHaveBeenCalledWith('fp.userId IN (:...userIds)', {

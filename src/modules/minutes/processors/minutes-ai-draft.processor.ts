@@ -20,6 +20,7 @@ import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
+  MeetingMinutesSource,
 } from '../entities/meeting-minutes.entity.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { LlmProviderFactory } from '../ai/llm-provider.factory.js';
@@ -236,7 +237,11 @@ export class MinutesAiDraftProcessor extends WorkerHost {
 
       const minutesRepo = manager.getRepository(MeetingMinutesEntity);
       const existing = await minutesRepo.findOne({
-        where: { meetingId, deletedAt: IsNull() },
+        where: {
+          meetingId,
+          source: MeetingMinutesSource.AI,
+          deletedAt: IsNull(),
+        },
       });
 
       const aiSummaryJson = {
@@ -255,11 +260,11 @@ export class MinutesAiDraftProcessor extends WorkerHost {
 
       let minutesId: string;
       if (existing) {
-        // TOCTOU: minutes có thể được tạo tay/publish trong lúc job chạy —
+        // TOCTOU: minutes có thể được publish trong lúc job chạy —
         // chỉ được UPDATE khi là AI-draft + forceRerun (FR-016/FR-020)
         const overwritable =
           forceRerun &&
-          existing.aiSummaryJson !== null &&
+          existing.source === MeetingMinutesSource.AI &&
           existing.status === MeetingMinutesStatus.DRAFT;
         if (!overwritable) {
           throw new NonRetryableAiJobError(
@@ -301,6 +306,7 @@ export class MinutesAiDraftProcessor extends WorkerHost {
             aiSummaryJson,
             linkedTranscriptId: transcriptId,
             preparedBy: userId,
+            source: MeetingMinutesSource.AI,
           }),
         );
         minutesId = created.id;

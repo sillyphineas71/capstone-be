@@ -762,7 +762,14 @@ export class MeetingsService {
       where: { id: dto.roomId, isActive: true },
     });
 
-    if (!room || room.currentStatus === 'inactive') {
+    // [FIX 2026-08-19] them check administrativeStatus — cot admin THUC SU dat
+    // qua PATCH /rooms/:roomId/administrative-status (currentStatus khong bao
+    // gio duoc set 'inactive' o dau ca, xem BAO_CAO tuong ung).
+    if (
+      !room ||
+      room.currentStatus === 'inactive' ||
+      room.administrativeStatus === 'inactive'
+    ) {
       throw new NotFoundException({
         success: false,
         message: 'Phòng họp không tồn tại hoặc không khả dụng',
@@ -1272,7 +1279,12 @@ export class MeetingsService {
         });
       }
 
-      if (!newRoom.isActive || newRoom.currentStatus === RoomStatus.INACTIVE) {
+      // [FIX 2026-08-19] them check administrativeStatus — xem ghi chu o create().
+      if (
+        !newRoom.isActive ||
+        newRoom.currentStatus === RoomStatus.INACTIVE ||
+        newRoom.administrativeStatus === RoomStatus.INACTIVE
+      ) {
         throw new ConflictException({
           success: false,
           message: 'Phòng họp không khả dụng',
@@ -2245,7 +2257,13 @@ export class MeetingsService {
       where: { id: dto.newRoomId },
     });
 
-    if (!newRoom || !newRoom.isActive || newRoom.currentStatus === 'inactive') {
+    // [FIX 2026-08-19] them check administrativeStatus — xem ghi chu o create().
+    if (
+      !newRoom ||
+      !newRoom.isActive ||
+      newRoom.currentStatus === 'inactive' ||
+      newRoom.administrativeStatus === 'inactive'
+    ) {
       throw new UnprocessableEntityException({
         success: false,
         message: 'Phòng họp này hiện không khả dụng.',

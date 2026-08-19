@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * SYSTEM_ADMIN — vì PermissionsGuard yêu cầu ALL (không hỗ trợ OR), nên cấp
  * cùng một quyền cho cả hai role thay vì để controller kiểm tra OR.
  */
-export class SeedAuditUsersReadPermission20260813000001
-  implements MigrationInterface
-{
+export class SeedAuditUsersReadPermission20260813000001 implements MigrationInterface {
   name = 'SeedAuditUsersReadPermission20260813000001';
 
   private readonly permission = {

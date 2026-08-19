@@ -24,6 +24,7 @@ import { SystemConfigEntity } from '../../administration/entities/system-config.
 import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
+  MeetingMinutesSource,
 } from '../entities/meeting-minutes.entity.js';
 import { QueueService } from '../../queue/queue.service.js';
 import { CreateAiDraftJobDto } from '../dto/create-ai-draft-job.dto.js';
@@ -219,10 +220,16 @@ export class MinutesAiDraftService {
         });
       }
 
-      // Step 6: Quy tắc 1 minutes active/meeting (FR-004/010/016/020).
+      // Step 6: Quy tắc 1 AI minutes active/meeting (MKM-MANUAL-01: FR-004 — bản manual không chặn AI job).
       const existingMinutes = await manager
         .getRepository(MeetingMinutesEntity)
-        .findOne({ where: { meetingId, deletedAt: IsNull() } });
+        .findOne({
+          where: {
+            meetingId,
+            source: MeetingMinutesSource.AI,
+            deletedAt: IsNull(),
+          },
+        });
 
       if (existingMinutes) {
         if (!forceRerun) {

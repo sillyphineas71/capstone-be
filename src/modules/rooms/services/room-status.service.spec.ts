@@ -60,6 +60,31 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     expect(sql).toContain('LATERAL');
   });
 
+  // ─── [FIX 2026-08-19] computeCurrentStatus: real-time thay vi doc thang r.current_status ───
+  it('list: administrative_status=maintenance thang occupancy → currentStatus=maintenance', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ administrative_status: 'maintenance', occupancy_count: 5 }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].currentStatus).toBe('maintenance');
+  });
+
+  it('list: co booking hien tai nhung chua co occupancy → currentStatus=reserved', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ occupancy_count: 0, booking_id: 'bk1' }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].currentStatus).toBe('reserved');
+  });
+
+  it('list: khong booking, khong occupancy → currentStatus=available (khong con "dinh" occupied)', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({ occupancy_count: 0, booking_id: null }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].currentStatus).toBe('available');
+  });
+
   it('list: filter siteName/areaName → bind params', async () => {
     dsMock.manager.query.mockResolvedValue([]);
     await service.getRealtimeStatus({ siteName: 'Tòa A', areaName: 'Tầng 3' });

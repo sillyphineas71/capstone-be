@@ -286,7 +286,8 @@ export class DepartmentsService {
       if (dept.departmentCode === PARTNER_DEPARTMENT_CODE) {
         throw new ForbiddenException({
           success: false,
-          message: 'Không thể sửa department cố định đánh dấu tài khoản đối tác.',
+          message:
+            'Không thể sửa department cố định đánh dấu tài khoản đối tác.',
           error: { code: 'PARTNER_DEPARTMENT_PROTECTED', details: {} },
         });
       }

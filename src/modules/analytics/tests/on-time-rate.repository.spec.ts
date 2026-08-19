@@ -245,7 +245,9 @@ describe('OnTimeRateRepository', () => {
         departmentName: 'Phong IT',
       });
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('LEFT JOIN departments d ON d.id = u.department_id'),
+        expect.stringContaining(
+          'LEFT JOIN departments d ON d.id = u.department_id',
+        ),
         ['u1'],
       );
     });
@@ -280,7 +282,12 @@ describe('OnTimeRateRepository', () => {
       expect(sql).toContain("mp.invitation_status <> 'declined'");
       expect(sql).not.toContain('is_required');
       expect(sql).not.toContain('attendance_required');
-      expect(mockQuery).toHaveBeenCalledWith(sql, ['u1', 5, '2026-06-01', '2026-06-30']);
+      expect(mockQuery).toHaveBeenCalledWith(sql, [
+        'u1',
+        5,
+        '2026-06-01',
+        '2026-06-30',
+      ]);
     });
   });
 

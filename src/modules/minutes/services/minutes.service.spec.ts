@@ -33,6 +33,8 @@ import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
+  MeetingMinutesSource,
+  MeetingMinutesContentFormat,
 } from '../entities/meeting-minutes.entity.js';
 import { MeetingMinutesShareEntity } from '../entities/meeting-minutes-share.entity.js';
 import { AuditLogEntity } from '../../administration/entities/audit-log.entity.js';
@@ -191,6 +193,19 @@ describe('MinutesService', () => {
       expect(result.title).toBe('Biên bản tuỳ chỉnh');
     });
 
+    it('defaults contentFormat to template when not provided', async () => {
+      const result = await service.createDraft(meetingId, {}, authUser);
+      expect(result.contentFormat).toBe(MeetingMinutesContentFormat.TEMPLATE);
+    });
+
+    it('uses contentFormat=blank when explicitly chosen', async () => {
+      const dto: CreateDraftMinutesDto = {
+        contentFormat: MeetingMinutesContentFormat.BLANK,
+      };
+      const result = await service.createDraft(meetingId, dto, authUser);
+      expect(result.contentFormat).toBe(MeetingMinutesContentFormat.BLANK);
+    });
+
     it('allows creation when meeting is completed and reflects actualEndTime', async () => {
       meetingQueryBuilder.getOne.mockResolvedValue({
         ...baseMeeting,
@@ -301,6 +316,35 @@ describe('MinutesService', () => {
       });
 
       expect(minutesRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('maps a Postgres unique-violation (23505) on save to MINUTES_ALREADY_EXISTS (AC-013 race condition)', async () => {
+      // Application-level dedup check passed (findOne returns null), but the
+      // partial unique index ux_meeting_minutes_meeting_source_active still
+      // rejects the insert — simulates a concurrent request winning the race
+      // despite the pessimistic_write lock (defense-in-depth, plan.md 9.1).
+      minutesRepo.save.mockRejectedValue({ code: '23505' });
+
+      await expect(
+        service.createDraft(meetingId, {}, authUser),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          error: expect.objectContaining({
+            code: 'MINUTES_ALREADY_EXISTS',
+            details: expect.objectContaining({ source: 'manual' }),
+          }),
+        }),
+      });
+
+      expect(auditLogsService.logAction).not.toHaveBeenCalled();
+    });
+
+    it('rethrows non-unique-violation errors from save without mapping them', async () => {
+      minutesRepo.save.mockRejectedValue(new Error('connection reset'));
+
+      await expect(
+        service.createDraft(meetingId, {}, authUser),
+      ).rejects.toThrow('connection reset');
     });
 
     it('does not call audit log when creation fails', async () => {
@@ -767,6 +811,7 @@ describe('updateDraft service logic', () => {
   let minutesRepo: any;
   let meetingRepo: any;
   let auditLogsService: any;
+  let websocketService: { emitToRoom: jest.Mock };
 
   beforeEach(() => {
     minutesRepo = {
@@ -780,6 +825,7 @@ describe('updateDraft service logic', () => {
           status: MeetingMinutesStatus.DRAFT,
           versionNo: 1,
           title: 'Old Title',
+          isLiveShared: false,
         }),
       }),
       save: jest.fn((m) => Promise.resolve(m)),
@@ -806,6 +852,7 @@ describe('updateDraft service logic', () => {
     auditLogsService = {
       logEntityChange: jest.fn().mockResolvedValue(undefined),
     };
+    websocketService = { emitToRoom: jest.fn() };
     service = new MinutesService(
       dataSource,
       auditLogsService,
@@ -813,6 +860,7 @@ describe('updateDraft service logic', () => {
       {} as any,
       { get: jest.fn() } as any,
       {} as any,
+      websocketService as any,
     );
   });
 
@@ -931,6 +979,246 @@ describe('updateDraft service logic', () => {
       // meta phải được giữ nguyên, không cho ghi đè
       meta: { provider: 'mock', modelName: 'x', generatedByJobId: 'job-1' },
     });
+  });
+
+  it('[AC-002][MKM-LIVE-01] emit minutes.draft.updated khi dang live-share va luu noi dung thanh cong', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      id: 'min-1',
+      meetingId: 'meet-1',
+      preparedBy: 'host-1',
+      status: MeetingMinutesStatus.DRAFT,
+      versionNo: 1,
+      title: 'Old Title',
+      isLiveShared: true,
+    });
+    const result = await service.updateDraft(
+      'min-1',
+      { versionNo: 1, title: 'New Title' },
+      { userId: 'host-1' },
+    );
+    expect(websocketService.emitToRoom).toHaveBeenCalledWith(
+      'meeting:meet-1',
+      'minutes.draft.updated',
+      expect.objectContaining({
+        minutesId: 'min-1',
+        versionNo: result.versionNo,
+      }),
+    );
+  });
+
+  it('[FR-007][MKM-LIVE-01] khong emit gi khi khong dang live-share', async () => {
+    await service.updateDraft(
+      'min-1',
+      { versionNo: 1, title: 'New Title' },
+      { userId: 'host-1' },
+    );
+    expect(websocketService.emitToRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('toggleLiveShare service logic (MKM-LIVE-01)', () => {
+  let service: MinutesService;
+  let dataSource: any;
+  let em: any;
+  let minutesRepo: any;
+  let meetingRepo: any;
+  let auditLogsService: any;
+  let websocketService: { emitToRoom: jest.Mock };
+
+  const authUser = { userId: 'host-1' };
+  const minutesId = 'minutes-1';
+  const meetingId = 'meeting-1';
+
+  const baseMinutes = {
+    id: minutesId,
+    meetingId,
+    preparedBy: 'host-1',
+    status: MeetingMinutesStatus.DRAFT,
+    versionNo: 3,
+    isLiveShared: false,
+    deletedAt: null,
+  };
+
+  const baseMeeting = {
+    id: meetingId,
+    hostId: 'host-1',
+    status: MeetingStatus.IN_PROGRESS,
+  };
+
+  beforeEach(() => {
+    minutesRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({ ...baseMinutes }),
+      }),
+      save: jest.fn((m: any) => Promise.resolve({ ...m })),
+    };
+    meetingRepo = {
+      findOne: jest.fn().mockResolvedValue({ ...baseMeeting }),
+    };
+    em = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === MeetingEntity) return meetingRepo;
+        throw new Error('Unexpected entity: ' + String(entity));
+      }),
+    };
+    dataSource = {
+      transaction: jest.fn((cb: any) => cb(em)),
+    };
+    auditLogsService = {
+      logAction: jest.fn().mockResolvedValue(undefined),
+    };
+    websocketService = { emitToRoom: jest.fn() };
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      {} as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+      websocketService as any,
+    );
+  });
+
+  it('[AC-001] bat live-share thanh cong: isLiveShared=true, audit log, emit live_started', async () => {
+    const result = await service.toggleLiveShare(
+      minutesId,
+      { enabled: true },
+      authUser,
+    );
+    expect(result.isLiveShared).toBe(true);
+    expect(auditLogsService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'host-1',
+        actionType: 'meeting_minutes_live_share_toggled',
+        entityType: 'meeting_minutes',
+        entityId: minutesId,
+        metadataJson: { minutesId, enabled: true },
+      }),
+    );
+    expect(websocketService.emitToRoom).toHaveBeenCalledWith(
+      `meeting:${meetingId}`,
+      'minutes.draft.live_started',
+      { minutesId, versionNo: baseMinutes.versionNo },
+    );
+  });
+
+  it('[AC-004] tat live-share thanh cong: isLiveShared=false, emit live_stopped', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      isLiveShared: true,
+    });
+    const result = await service.toggleLiveShare(
+      minutesId,
+      { enabled: false },
+      authUser,
+    );
+    expect(result.isLiveShared).toBe(false);
+    expect(websocketService.emitToRoom).toHaveBeenCalledWith(
+      `meeting:${meetingId}`,
+      'minutes.draft.live_stopped',
+      { minutesId },
+    );
+  });
+
+  it('[AC-005] khong phai preparedBy -> 403 NOT_MINUTES_OWNER, khong emit', async () => {
+    await expect(
+      service.toggleLiveShare(
+        minutesId,
+        { enabled: true },
+        { userId: 'other-user' },
+      ),
+    ).rejects.toThrow(ForbiddenException);
+    expect(websocketService.emitToRoom).not.toHaveBeenCalled();
+  });
+
+  it('[AC-007] khong phai draft -> 409 MINUTES_NOT_DRAFT', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      status: MeetingMinutesStatus.PUBLISHED,
+    });
+    await expect(
+      service.toggleLiveShare(minutesId, { enabled: true }, authUser),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('[AC-008] bat khi meeting khong in_progress -> 409 MEETING_NOT_IN_PROGRESS', async () => {
+    meetingRepo.findOne.mockResolvedValue({
+      ...baseMeeting,
+      status: MeetingStatus.SCHEDULED,
+    });
+    await expect(
+      service.toggleLiveShare(minutesId, { enabled: true }, authUser),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('cho phep TAT ke ca khi meeting khong in_progress', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      isLiveShared: true,
+    });
+    meetingRepo.findOne.mockResolvedValue({
+      ...baseMeeting,
+      status: MeetingStatus.COMPLETED,
+    });
+    const result = await service.toggleLiveShare(
+      minutesId,
+      { enabled: false },
+      authUser,
+    );
+    expect(result.isLiveShared).toBe(false);
+  });
+
+  it('[AC-010] toggle lap lai gia tri cu -> idempotent, khong emit/audit/save them', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      isLiveShared: true,
+    });
+    const result = await service.toggleLiveShare(
+      minutesId,
+      { enabled: true },
+      authUser,
+    );
+    expect(result.isLiveShared).toBe(true);
+    expect(auditLogsService.logAction).not.toHaveBeenCalled();
+    expect(websocketService.emitToRoom).not.toHaveBeenCalled();
+    expect(minutesRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('minutes khong ton tai -> 404 MEETING_MINUTES_NOT_FOUND', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue(null);
+    await expect(
+      service.toggleLiveShare(minutesId, { enabled: true }, authUser),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('minutes da bi soft-delete -> 404 MEETING_MINUTES_NOT_FOUND', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      deletedAt: new Date(),
+    });
+    await expect(
+      service.toggleLiveShare(minutesId, { enabled: true }, authUser),
+    ).rejects.toThrow(NotFoundException);
+  });
+
+  it('van hoat dong binh thuong khi khong inject WebsocketService (optional, best-effort)', async () => {
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      {} as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+    const result = await service.toggleLiveShare(
+      minutesId,
+      { enabled: true },
+      authUser,
+    );
+    expect(result.isLiveShared).toBe(true);
   });
 });
 
@@ -1544,6 +1832,102 @@ describe('findMinutesDetail service logic', () => {
       service.findMinutesDetail('min-1', { userId: 'other-user' }),
     ).rejects.toThrow(ForbiddenException);
   });
+
+  it('[AC-003] participant co the doc draft dang live-share (isLiveShared=true)', async () => {
+    service = new MinutesService(
+      dataSource,
+      {} as any,
+      {
+        getEffectiveRolesAndPermissions: jest
+          .fn()
+          .mockResolvedValue({ roles: ['INTERNAL_USER'] }),
+      } as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      id: 'min-1',
+      meetingId: 'meet-1',
+      status: MeetingMinutesStatus.DRAFT,
+      preparedBy: 'author-1',
+      isLiveShared: true,
+      versionNo: 1,
+      meeting: { id: 'meet-1', hostId: 'host-1' },
+    });
+    dataSource.getRepository.mockImplementation((entity: any) => {
+      if (entity === MeetingMinutesEntity) return minutesRepo;
+      if (entity === MeetingParticipantEntity)
+        return { count: jest.fn().mockResolvedValue(1) }; // isParticipant = true
+      if (entity === UserEntity) return userRepo;
+      if (entity === MediaFileEntity)
+        return { find: jest.fn().mockResolvedValue([]), findOne: jest.fn() };
+      if (entity === MeetingMinutesShareEntity)
+        return {
+          count: jest.fn().mockResolvedValue(0),
+          createQueryBuilder: jest.fn().mockReturnValue({
+            leftJoin: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            getRawMany: jest.fn().mockResolvedValue([]),
+          }),
+        };
+      return { findOne: jest.fn(), count: jest.fn().mockResolvedValue(0) };
+    });
+    const result = await service.findMinutesDetail('min-1', {
+      userId: 'participant-1',
+    });
+    expect(result.status).toBe(MeetingMinutesStatus.DRAFT);
+    expect(result.isLiveShared).toBe(true);
+  });
+
+  it('[AC-006][REGRESSION] participant VAN bi chan khi isLiveShared=false — hanh vi cu giu nguyen', async () => {
+    service = new MinutesService(
+      dataSource,
+      {} as any,
+      {
+        getEffectiveRolesAndPermissions: jest
+          .fn()
+          .mockResolvedValue({ roles: ['INTERNAL_USER'] }),
+      } as any,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      id: 'min-1',
+      meetingId: 'meet-1',
+      status: MeetingMinutesStatus.DRAFT,
+      preparedBy: 'author-1',
+      isLiveShared: false,
+      meeting: { id: 'meet-1', hostId: 'host-1' },
+    });
+    dataSource.getRepository.mockImplementation((entity: any) => {
+      if (entity === MeetingMinutesEntity) return minutesRepo;
+      if (entity === MeetingParticipantEntity)
+        return { count: jest.fn().mockResolvedValue(1) }; // la participant that su
+      return { findOne: jest.fn(), count: jest.fn().mockResolvedValue(0) };
+    });
+    await expect(
+      service.findMinutesDetail('min-1', { userId: 'participant-1' }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('[T009/FR-016] response luon chua field isLiveShared dung gia tri', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      id: 'min-1',
+      meetingId: 'meet-1',
+      status: MeetingMinutesStatus.PUBLISHED,
+      preparedBy: 'author-1',
+      isLiveShared: false,
+      meeting: { id: 'meet-1', hostId: 'host-1' },
+    });
+    const result = await service.findMinutesDetail('min-1', {
+      userId: 'admin-1',
+    });
+    expect(result.isLiveShared).toBe(false);
+  });
 });
 
 describe('issueMinutes service logic', () => {
@@ -1556,6 +1940,7 @@ describe('issueMinutes service logic', () => {
   let authzRepo: any;
   let auditLogsService: any;
   let notificationRepo: any;
+  let websocketService: { emitToRoom: jest.Mock };
 
   const authUser = { userId: 'host-1' };
   const minutesId = 'minutes-1';
@@ -1572,6 +1957,7 @@ describe('issueMinutes service logic', () => {
     issuedAt: null,
     approvedBy: null,
     visibilityLevel: MeetingMinutesVisibilityLevel.PRIVATE,
+    isLiveShared: false,
     deletedAt: null,
     updatedAt: new Date('2026-07-02T09:00:00Z'),
   };
@@ -1634,6 +2020,7 @@ describe('issueMinutes service logic', () => {
     auditLogsService = {
       logEntityChange: jest.fn().mockResolvedValue(undefined),
     };
+    websocketService = { emitToRoom: jest.fn() };
     service = new MinutesService(
       dataSource,
       auditLogsService,
@@ -1641,6 +2028,7 @@ describe('issueMinutes service logic', () => {
       {} as any,
       { get: jest.fn() } as any,
       {} as any,
+      websocketService as any,
     );
   });
 
@@ -1831,5 +2219,321 @@ describe('issueMinutes service logic', () => {
     const result = await service.issueMinutes(minutesId, authUser);
     expect(result.status).toBe(MeetingMinutesStatus.PUBLISHED);
     expect(result.notifiedParticipantCount).toBe(0);
+  });
+
+  it('[AC-009][MKM-LIVE-01] tu tat isLiveShared va emit live_stopped khi ban hanh 1 ban dang live-share', async () => {
+    minutesRepo.createQueryBuilder().getOne.mockResolvedValue({
+      ...baseMinutes,
+      isLiveShared: true,
+    });
+    const result = await service.issueMinutes(minutesId, authUser);
+    expect(result.status).toBe(MeetingMinutesStatus.PUBLISHED);
+    expect(minutesRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ isLiveShared: false }),
+    );
+    expect(websocketService.emitToRoom).toHaveBeenCalledWith(
+      `meeting:${meetingId}`,
+      'minutes.draft.live_stopped',
+      { minutesId },
+    );
+  });
+
+  it('[FR-014][MKM-LIVE-01] khong emit gi them khi ban hanh 1 ban KHONG dang live-share', async () => {
+    await service.issueMinutes(minutesId, authUser);
+    expect(websocketService.emitToRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('createDraft - MKM-MANUAL-01 source handling', () => {
+  let service: MinutesService;
+  let dataSource: any;
+  let auditLogsService: any;
+  let authzRepo: any;
+  let minutesRepo: any;
+  let meetingRepo: any;
+  let participantRepo: any;
+  let notificationRepo: any;
+  let em: any;
+
+  beforeEach(() => {
+    minutesRepo = {
+      findOne: jest.fn(),
+      create: jest.fn((data) => data),
+      save: jest.fn((data) => Promise.resolve({ id: 'minutes-1', ...data })),
+    };
+    auditLogsService = {
+      logAction: jest.fn().mockResolvedValue(undefined),
+    };
+    meetingRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: 'meeting-1',
+          hostId: 'host-1',
+          status: MeetingStatus.COMPLETED,
+          actualEndTime: new Date(),
+        }),
+      }),
+      findOne: jest.fn().mockResolvedValue({ id: 'meeting-1' }),
+    };
+    participantRepo = { find: jest.fn().mockResolvedValue([]) };
+    notificationRepo = { insert: jest.fn().mockResolvedValue({}) };
+    em = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === MeetingParticipantEntity) return participantRepo;
+        if (entity === NotificationEntity) return notificationRepo;
+        throw new Error('Unexpected entity: ' + String(entity));
+      }),
+    };
+    dataSource = {
+      transaction: jest.fn((cb: any) => cb(em)),
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === MeetingParticipantEntity) return participantRepo;
+        if (entity === NotificationEntity) return notificationRepo;
+        throw new Error('Unexpected entity: ' + String(entity));
+      }),
+    };
+    authzRepo = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
+    };
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      authzRepo,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+  });
+
+  it('creates manual draft successfully when AI minutes already exist for same meeting (AC-002)', async () => {
+    minutesRepo.findOne.mockResolvedValue(null);
+    const result = await service.createDraft(
+      'meeting-1',
+      { title: 'test' },
+      { userId: 'host-1' },
+    );
+    expect(result.id).toBeDefined();
+    expect(minutesRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ source: MeetingMinutesSource.MANUAL }),
+    );
+  });
+
+  it('rejects 409 when manual minutes already exist (AC-005)', async () => {
+    minutesRepo.findOne.mockResolvedValue({
+      id: 'existing-1',
+      source: MeetingMinutesSource.MANUAL,
+    });
+    await expect(
+      service.createDraft('meeting-1', { title: 'test' } as any, {
+        userId: 'host-1',
+      }),
+    ).rejects.toThrow(ConflictException);
+    try {
+      await service.createDraft(
+        'meeting-1',
+        { title: 'test' },
+        {
+          userId: 'host-1',
+        },
+      );
+    } catch (e: any) {
+      const response = e.getResponse ? e.getResponse() : e.response;
+      expect(response.error.details.source).toBe('manual');
+    }
+  });
+
+  it('includes source=manual in audit log metadata', async () => {
+    minutesRepo.findOne.mockResolvedValue(null);
+    await service.createDraft(
+      'meeting-1',
+      { title: 'test' },
+      {
+        userId: 'host-1',
+      },
+    );
+    expect(auditLogsService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadataJson: expect.objectContaining({ source: 'manual' }),
+      }),
+    );
+  });
+
+  it('sets source=MANUAL in inserted minutes record', async () => {
+    minutesRepo.findOne.mockResolvedValue(null);
+    await service.createDraft(
+      'meeting-1',
+      { title: 'test' },
+      {
+        userId: 'host-1',
+      },
+    );
+    expect(minutesRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ source: MeetingMinutesSource.MANUAL }),
+    );
+  });
+});
+
+describe('resolveOfficialMinutes', () => {
+  let service: MinutesService;
+  let dataSource: any;
+  let auditLogsService: any;
+  let authzRepo: any;
+  let minutesRepo: any;
+
+  beforeEach(() => {
+    minutesRepo = {
+      findOne: jest.fn(),
+    };
+    dataSource = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        throw new Error('Unexpected entity: ' + String(entity));
+      }),
+    };
+    auditLogsService = { logAction: jest.fn() };
+    authzRepo = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: [], permissions: [] }),
+    };
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      authzRepo,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+  });
+
+  it('returns manual minutes when both manual and AI exist (AC-009)', async () => {
+    minutesRepo.findOne = jest
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'manual-1',
+        source: MeetingMinutesSource.MANUAL,
+      })
+      .mockResolvedValueOnce({ id: 'ai-1', source: MeetingMinutesSource.AI });
+    const result = await service.resolveOfficialMinutes('meeting-1');
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe(MeetingMinutesSource.MANUAL);
+  });
+
+  it('returns AI minutes when only AI exists (AC-010)', async () => {
+    minutesRepo.findOne = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'ai-1', source: MeetingMinutesSource.AI });
+    const result = await service.resolveOfficialMinutes('meeting-1');
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe(MeetingMinutesSource.AI);
+  });
+
+  it('returns null when no minutes exist', async () => {
+    minutesRepo.findOne = jest.fn().mockResolvedValue(null);
+    const result = await service.resolveOfficialMinutes('meeting-1');
+    expect(result).toBeNull();
+  });
+});
+
+describe('compareMinutes', () => {
+  let service: MinutesService;
+  let dataSource: any;
+  let auditLogsService: any;
+  let authzRepo: any;
+  let minutesRepo: any;
+  let meetingRepo: any;
+  let mockQueryBuilder: any;
+
+  beforeEach(() => {
+    mockQueryBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    minutesRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+    };
+    meetingRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'meeting-1' }),
+    };
+    dataSource = {
+      getRepository: jest.fn((entity: any) => {
+        if (entity === MeetingMinutesEntity) return minutesRepo;
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === RoomEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
+        if (entity === UserEntity)
+          return { find: jest.fn().mockResolvedValue([]) };
+        throw new Error('Unexpected entity: ' + String(entity));
+      }),
+    };
+    auditLogsService = { logAction: jest.fn() };
+    authzRepo = {
+      getEffectiveRolesAndPermissions: jest
+        .fn()
+        .mockResolvedValue({ roles: ['SYSTEM_ADMIN'], permissions: [] }),
+    };
+    service = new MinutesService(
+      dataSource,
+      auditLogsService,
+      authzRepo,
+      {} as any,
+      { get: jest.fn() } as any,
+      {} as any,
+    );
+  });
+
+  it('returns both manual and AI when both exist (AC-006)', async () => {
+    mockQueryBuilder.getMany.mockResolvedValue([
+      {
+        id: 'ai-1',
+        source: MeetingMinutesSource.AI,
+        meeting: { id: 'meeting-1' },
+      },
+      {
+        id: 'manual-1',
+        source: MeetingMinutesSource.MANUAL,
+        meeting: { id: 'meeting-1' },
+      },
+    ]);
+    const result = await service.compareMinutes('meeting-1', {
+      userId: 'user-1',
+    });
+    expect(result.ai).toBeDefined();
+    expect(result.manual).toBeDefined();
+    expect(result.ai!.source).toBe(MeetingMinutesSource.AI);
+    expect(result.manual!.source).toBe(MeetingMinutesSource.MANUAL);
+  });
+
+  it('returns null for manual when only AI exists (AC-007)', async () => {
+    mockQueryBuilder.getMany.mockResolvedValue([
+      {
+        id: 'ai-1',
+        source: MeetingMinutesSource.AI,
+        meeting: { id: 'meeting-1' },
+      },
+    ]);
+    const result = await service.compareMinutes('meeting-1', {
+      userId: 'user-1',
+    });
+    expect(result.ai).toBeDefined();
+    expect(result.manual).toBeNull();
+  });
+
+  it('throws 404 when meeting does not exist (AC-008)', async () => {
+    meetingRepo.findOne.mockResolvedValue(null);
+    await expect(
+      service.compareMinutes('not-found', { userId: 'user-1' }),
+    ).rejects.toThrow(NotFoundException);
   });
 });

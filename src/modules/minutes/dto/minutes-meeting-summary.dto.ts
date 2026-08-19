@@ -1,7 +1,10 @@
 import { Expose, Type } from 'class-transformer';
 import { RoomSummaryDto } from '../../meetings/dto/room-summary.dto.js';
 import { UserSummaryDto } from '../../meetings/dto/user-summary.dto.js';
-import { MeetingMode, MeetingStatus } from '../../meetings/entities/meeting.entity.js';
+import {
+  MeetingMode,
+  MeetingStatus,
+} from '../../meetings/entities/meeting.entity.js';
 
 export class MinutesMeetingSummaryDto {
   @Expose()

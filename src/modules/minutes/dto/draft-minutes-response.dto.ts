@@ -1,4 +1,5 @@
 import {
+  MeetingMinutesContentFormat,
   MeetingMinutesStatus,
   MeetingMinutesVisibilityLevel,
 } from '../entities/meeting-minutes.entity.js';
@@ -31,6 +32,7 @@ export class DraftMinutesResponseDto {
   status: MeetingMinutesStatus;
   visibilityLevel: MeetingMinutesVisibilityLevel;
   versionNo: number;
+  contentFormat: MeetingMinutesContentFormat;
   minutesContent: string;
   preparedBy: string;
   createdAt: Date;

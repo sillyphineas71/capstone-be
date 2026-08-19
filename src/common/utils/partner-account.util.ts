@@ -37,7 +37,10 @@ export function isPartnerAccount(
   departmentId: string | null | undefined,
 ): boolean {
   if (!departmentId) return false;
-  return departmentId === cachedPartnerDepartmentId || departmentId === PARTNER_DEPARTMENT_ID;
+  return (
+    departmentId === cachedPartnerDepartmentId ||
+    departmentId === PARTNER_DEPARTMENT_ID
+  );
 }
 
 export async function isPartnerAccountByDepartmentCode(
@@ -59,9 +62,10 @@ export async function isPartnerAccountByUserId(
   if (!userId) {
     return false;
   }
-  const rows: Array<{ department_code: string | null }> = await dataSource.query(
-    `SELECT d.department_code FROM users u JOIN departments d ON d.id = u.department_id AND d.deleted_at IS NULL WHERE u.id = $1 AND u.deleted_at IS NULL LIMIT 1;`,
-    [userId],
-  );
+  const rows: Array<{ department_code: string | null }> =
+    await dataSource.query(
+      `SELECT d.department_code FROM users u JOIN departments d ON d.id = u.department_id AND d.deleted_at IS NULL WHERE u.id = $1 AND u.deleted_at IS NULL LIMIT 1;`,
+      [userId],
+    );
   return rows[0]?.department_code === PARTNER_DEPARTMENT_CODE;
 }

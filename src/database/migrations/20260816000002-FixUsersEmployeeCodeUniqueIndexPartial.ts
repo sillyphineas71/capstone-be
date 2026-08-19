@@ -18,9 +18,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * Idempotent: DROP IF EXISTS / CREATE IF NOT EXISTS.
  */
-export class FixUsersEmployeeCodeUniqueIndexPartial20260816000002
-  implements MigrationInterface
-{
+export class FixUsersEmployeeCodeUniqueIndexPartial20260816000002 implements MigrationInterface {
   name = 'FixUsersEmployeeCodeUniqueIndexPartial20260816000002';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

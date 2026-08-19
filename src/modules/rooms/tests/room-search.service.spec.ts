@@ -66,7 +66,66 @@ describe('RoomSearchService', () => {
     const [sql, params] = queryMock.mock.calls[0];
     expect(sql).toContain('r.is_active = true');
     expect(sql).toContain('r.deleted_at IS NULL');
-    expect(params).toEqual([null, null, null, null, 50, 0]);
+    expect(params).toEqual([null, null, null, null, null, null, 50, 0]);
+  });
+
+  // ─── [FIX 2026-08-19] computeStatus: real-time thay vi doc thang r.current_status ───
+  it('administrative_status=maintenance thang occupancy → currentStatus=maintenance', async () => {
+    queryMock
+      .mockResolvedValueOnce([
+        {
+          ...mockRoomRow,
+          administrative_status: 'maintenance',
+          latest_occupancy_count: 5,
+        },
+      ])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({ page: 1, limit: 50 });
+    expect(result.rooms[0].currentStatus).toBe('maintenance');
+  });
+
+  it('occupancy > 0 (khong maintenance/inactive) → currentStatus=occupied', async () => {
+    queryMock
+      .mockResolvedValueOnce([
+        { ...mockRoomRow, administrative_status: 'available', latest_occupancy_count: 3 },
+      ])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({ page: 1, limit: 50 });
+    expect(result.rooms[0].currentStatus).toBe('occupied');
+  });
+
+  it('co booking hien tai, occupancy=0 → currentStatus=reserved', async () => {
+    queryMock
+      .mockResolvedValueOnce([
+        {
+          ...mockRoomRow,
+          administrative_status: 'available',
+          latest_occupancy_count: 0,
+          has_current_booking: true,
+        },
+      ])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({ page: 1, limit: 50 });
+    expect(result.rooms[0].currentStatus).toBe('reserved');
+  });
+
+  it('khong booking, khong occupancy → currentStatus=available', async () => {
+    queryMock
+      .mockResolvedValueOnce([
+        {
+          ...mockRoomRow,
+          administrative_status: 'available',
+          latest_occupancy_count: 0,
+          has_current_booking: false,
+        },
+      ])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({ page: 1, limit: 50 });
+    expect(result.rooms[0].currentStatus).toBe('available');
   });
 
   it('should combine capacityMin + capacityMax + areaName + onlyAvailable with AND', async () => {
@@ -84,7 +143,40 @@ describe('RoomSearchService', () => {
     });
 
     const [, params] = queryMock.mock.calls[0];
-    expect(params).toEqual([8, 15, 'Tang 3', true, 50, 0]);
+    expect(params).toEqual([8, 15, 'Tang 3', true, null, null, 50, 0]);
+  });
+
+  // ─── [FIX 2026-08-19] them filter q (ten/ma phong) va status (real-time) ───
+  it('should bind q and status params and expose them in appliedFilters', async () => {
+    queryMock
+      .mockResolvedValueOnce([mockRoomRow])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({
+      q: 'Phong hop',
+      status: 'occupied',
+      page: 1,
+      limit: 50,
+    });
+
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(params).toEqual([null, null, null, null, 'Phong hop', 'occupied', 50, 0]);
+    expect(sql).toContain('ILIKE');
+    expect(result.meta.appliedFilters).toEqual({
+      q: 'Phong hop',
+      status: 'occupied',
+    });
+  });
+
+  it('should trim q and treat blank q as no filter', async () => {
+    queryMock
+      .mockResolvedValueOnce([mockRoomRow])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    await service.search({ q: '   ', page: 1, limit: 50 });
+
+    const [, params] = queryMock.mock.calls[0];
+    expect(params[4]).toBeNull();
   });
 
   it('should return empty rooms array when nothing matches (E1)', async () => {
@@ -133,7 +225,7 @@ describe('RoomSearchService', () => {
     expect(result.meta.totalPages).toBe(3);
     // offset = (page-1)*limit = 50
     const [, params] = queryMock.mock.calls[0];
-    expect(params[5]).toBe(50);
+    expect(params[7]).toBe(50);
   });
 });
 

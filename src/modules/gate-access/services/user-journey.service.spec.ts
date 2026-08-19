@@ -635,15 +635,25 @@ describe('UserJourneyService (UJN-001)', () => {
     it('REGRESSION — meeting: sourceEventId = id event đầu phiên, giữ nguyên 100%', async () => {
       wire({
         meeting: [
-          face('2026-07-29T10:39:00.000Z', 'enter', 'A102-ID', 'ide-first-regress'),
-          face('2026-07-29T10:41:00.000Z', 'seen', 'A102-ID', 'ide-second-regress'),
+          face(
+            '2026-07-29T10:39:00.000Z',
+            'enter',
+            'A102-ID',
+            'ide-first-regress',
+          ),
+          face(
+            '2026-07-29T10:41:00.000Z',
+            'seen',
+            'A102-ID',
+            'ide-second-regress',
+          ),
         ],
       });
       const r = await service.getUserJourney(USER_ID, '2026-07-29');
       expect(r.events[0].sourceEventId).toBe('ide-first-regress');
     });
 
-    it('SQL: nguồn gate SELECT g.event_id AS source_event_id, nguồn meeting SELECT e.id, nguồn zone SELECT metadata_json->>\'sourceEventId\'', async () => {
+    it("SQL: nguồn gate SELECT g.event_id AS source_event_id, nguồn meeting SELECT e.id, nguồn zone SELECT metadata_json->>'sourceEventId'", async () => {
       wire();
       await service.getUserJourney(USER_ID, '2026-07-29');
       expect(sqlOf('FROM gate_access_logs').sql).toContain(

@@ -158,4 +158,3 @@ describe('MediaFilesService — ownership check for setVisibility', () => {
     },
   );
 });
-

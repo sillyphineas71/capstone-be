@@ -275,9 +275,10 @@ describe('LiveMeetingService — advance meeting statuses (F-A / MST-001)', () =
         update: jest.fn().mockResolvedValue({ affected: 1 }),
         // [FIX 2026-08-13, Fix A] executeEndMeetingInTransaction() giờ
         // SELECT booking (approved|active) trước khi release.
-        findOne: jest
-          .fn()
-          .mockResolvedValue({ id: 'booking-1', status: RoomBookingStatus.ACTIVE }),
+        findOne: jest.fn().mockResolvedValue({
+          id: 'booking-1',
+          status: RoomBookingStatus.ACTIVE,
+        }),
         create: jest.fn((_e: unknown, obj: any) => obj),
         save: jest.fn().mockResolvedValue({}),
       };

@@ -189,8 +189,12 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
 
     it('2 event CÙNG zoneId nhưng occupancyCount KHÁC nhau (số người đổi thật) → CẢ 2 đều được ghi, KHÔNG bị dedupe nhầm', async () => {
       wireDs(null); // occupancyCount khác nhau → SELECT dedupe (occupancy_count = $2) sẽ không khớp row cũ trong DB thật; ở mock, mô phỏng bằng cách LUÔN trả [] cho cả 2 lần gọi
-      const r1 = await service.writeCountEvent(countInput({ occupancyCount: 5 }));
-      const r2 = await service.writeCountEvent(countInput({ occupancyCount: 8 }));
+      const r1 = await service.writeCountEvent(
+        countInput({ occupancyCount: 5 }),
+      );
+      const r2 = await service.writeCountEvent(
+        countInput({ occupancyCount: 8 }),
+      );
       expect(r1.presenceId).toBe('zpe-1');
       expect(r2.presenceId).toBe('zpe-1'); // mock INSERT luôn trả cùng 1 id giả — quan trọng là createQueryRunner được gọi CẢ 2 lần
       expect(ds.createQueryRunner).toHaveBeenCalledTimes(2);
