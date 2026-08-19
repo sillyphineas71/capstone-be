@@ -206,6 +206,11 @@ export class RestrictedZoneIntrusionService {
         ? await this.findSourceEventIdForPresence(sourceRowId)
         : null;
 
+    // SecurityAlerts.jsx (FE) chỉ có userId (UUID) để hiện cho người vận hành — không tự
+    // tra tên. Kèm sẵn fullName ở đây (best-effort, mirror findSourceEventIdForPresence)
+    // để FE hiện tên thật thay vì UUID cho người quen vi phạm.
+    const fullName = userId ? await this.findUserFullName(userId) : null;
+
     await this.alertsService.recordAlert({
       alertType: 'intrusion',
       zoneId: rule.zoneId,
@@ -214,8 +219,27 @@ export class RestrictedZoneIntrusionService {
       payloadJson: {
         ...payloadJson,
         isKnownPerson: userId !== null,
+        fullName,
       },
     });
+  }
+
+  private async findUserFullName(userId: string): Promise<string | null> {
+    try {
+      const rows: Array<{ full_name: string }> =
+        await this.dataSource.manager.query(
+          `SELECT full_name FROM users WHERE id = $1`,
+          [userId],
+        );
+      return rows[0]?.full_name ?? null;
+    } catch (e) {
+      this.logger.warn(
+        `findUserFullName failed (userId=${userId}): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      return null;
+    }
   }
 
   /**
