@@ -17,6 +17,9 @@ interface RoomSearchRow {
   capacity: number;
   room_type: string;
   current_status: string;
+  administrative_status: string;
+  latest_occupancy_count: number | null;
+  has_current_booking: boolean;
   has_camera: boolean;
   has_microphone: boolean;
   has_display: boolean;
@@ -24,6 +27,26 @@ interface RoomSearchRow {
   faulty_count: string | number;
   warning_count: string | number;
 }
+
+/** Correlated scalar subquery dung chung cho SELECT + WHERE (khong can LATERAL join). */
+const LATEST_OCCUPANCY_SUBQUERY = `(
+  SELECT re.occupancy_count FROM room_events re
+  WHERE re.room_id = r.id AND re.occupancy_count IS NOT NULL
+  ORDER BY re.event_time DESC LIMIT 1
+)`;
+const HAS_CURRENT_BOOKING_SUBQUERY = `EXISTS (
+  SELECT 1 FROM room_bookings rb
+  WHERE rb.room_id = r.id
+    AND rb.status IN ('approved', 'active')
+    AND rb.reserved_start_time <= now() AND rb.reserved_end_time >= now()
+)`;
+/** Cung logic uu tien voi computeStatus() (JS) — dung de filter theo `status` trong WHERE. */
+const COMPUTED_STATUS_SQL = `(CASE
+  WHEN r.administrative_status IN ('maintenance', 'inactive') THEN r.administrative_status
+  WHEN COALESCE(${LATEST_OCCUPANCY_SUBQUERY}, 0) > 0 THEN 'occupied'
+  WHEN ${HAS_CURRENT_BOOKING_SUBQUERY} THEN 'reserved'
+  ELSE 'available'
+END)`;
 
 interface AvailableRoomRow {
   id: string;
@@ -65,6 +88,8 @@ export class RoomSearchService {
     const capacityMax = query.capacityMax ?? null;
     const areaName = query.areaName ?? null;
     const onlyAvailable = query.onlyAvailable ?? null;
+    const q = query.q?.trim() || null;
+    const status = query.status ?? null;
     const page = query.page ?? 1;
     const limit = query.limit ?? 50;
 
@@ -83,20 +108,37 @@ export class RoomSearchService {
       });
     }
 
+    // [FIX 2026-08-19] onlyAvailable/status nay tinh theo trang thai REAL-TIME
+    // (giong computeStatus()), khong con tin thang r.current_status (cot bi
+    // OccupancyPersistenceService flip 1 chieu sang 'occupied', khong bao gio
+    // tu reset). Dung chung cac scalar subquery voi SELECT list ben duoi.
+    // q: tim theo roomName/roomCode (ILIKE, param hoa an toan qua $5).
     const whereClause = `
       WHERE r.is_active = true
         AND r.deleted_at IS NULL
         AND ($1::int IS NULL OR r.capacity >= $1)
         AND ($2::int IS NULL OR r.capacity <= $2)
         AND ($3::text IS NULL OR r.area_name = $3)
-        AND ($4::boolean IS NULL OR $4 = false OR r.current_status = 'available')
+        AND ($4::boolean IS NULL OR $4 = false OR ${COMPUTED_STATUS_SQL} = 'available')
+        AND ($5::text IS NULL OR r.room_name ILIKE '%' || $5 || '%' OR r.room_code ILIKE '%' || $5 || '%')
+        AND ($6::text IS NULL OR ${COMPUTED_STATUS_SQL} = $6)
     `;
-    const whereParams = [capacityMin, capacityMax, areaName, onlyAvailable];
+    const whereParams = [
+      capacityMin,
+      capacityMax,
+      areaName,
+      onlyAvailable,
+      q,
+      status,
+    ];
 
     const offset = (page - 1) * limit;
     const rows: RoomSearchRow[] = await this.dataSource.manager.query(
       `SELECT r.id, r.room_code, r.room_name, r.site_name, r.area_name,
               r.location_description, r.capacity, r.room_type, r.current_status,
+              r.administrative_status,
+              ${LATEST_OCCUPANCY_SUBQUERY} AS latest_occupancy_count,
+              ${HAS_CURRENT_BOOKING_SUBQUERY} AS has_current_booking,
               r.has_camera, r.has_microphone, r.has_display, r.allow_recording,
               COALESCE(eq.faulty_count, 0) AS faulty_count,
               COALESCE(eq.warning_count, 0) AS warning_count
@@ -110,7 +152,7 @@ export class RoomSearchService {
        ) eq ON true
        ${whereClause}
        ORDER BY r.room_code ASC
-       LIMIT $5 OFFSET $6`,
+       LIMIT $7 OFFSET $8`,
       [...whereParams, limit, offset],
     );
 
@@ -125,6 +167,8 @@ export class RoomSearchService {
     if (capacityMax !== null) appliedFilters.capacityMax = capacityMax;
     if (areaName !== null) appliedFilters.areaName = areaName;
     if (onlyAvailable !== null) appliedFilters.onlyAvailable = onlyAvailable;
+    if (q !== null) appliedFilters.q = q;
+    if (status !== null) appliedFilters.status = status;
 
     return {
       rooms: rows.map((row) => this.toItem(row)),
@@ -242,6 +286,29 @@ export class RoomSearchService {
     }
   }
 
+  /**
+   * [FIX 2026-08-19] Tinh trang thai HIEN THI real-time thay vi doc thang
+   * `r.current_status` — cot do OccupancyPersistenceService flip mot chieu
+   * sang 'occupied' va KHONG BAO GIO tu reset ve 'available', nen doc truc
+   * tiep se "dung yen" nhu du lieu tinh/mock. Uu tien giong RoomStatusService:
+   * 1. administrative_status (admin dat qua PATCH .../administrative-status)
+   *    neu la 'maintenance'/'inactive' — luon thang.
+   * 2. 'occupied' neu tin hieu occupancy gan nhat (room_events) > 0.
+   * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
+   * 4. 'available' con lai.
+   */
+  private computeStatus(row: RoomSearchRow): RoomStatus {
+    if (
+      row.administrative_status === RoomStatus.MAINTENANCE ||
+      row.administrative_status === RoomStatus.INACTIVE
+    ) {
+      return row.administrative_status as RoomStatus;
+    }
+    if ((row.latest_occupancy_count ?? 0) > 0) return RoomStatus.OCCUPIED;
+    if (row.has_current_booking) return RoomStatus.RESERVED;
+    return RoomStatus.AVAILABLE;
+  }
+
   private toItem(row: RoomSearchRow): RoomSearchItemDto {
     const faultyCount = Number(row.faulty_count);
     const warningCount = Number(row.warning_count);
@@ -254,7 +321,7 @@ export class RoomSearchService {
       locationDescription: row.location_description,
       capacity: row.capacity,
       roomType: row.room_type as RoomSearchItemDto['roomType'],
-      currentStatus: row.current_status as RoomSearchItemDto['currentStatus'],
+      currentStatus: this.computeStatus(row),
       hasCamera: row.has_camera,
       hasMicrophone: row.has_microphone,
       hasDisplay: row.has_display,

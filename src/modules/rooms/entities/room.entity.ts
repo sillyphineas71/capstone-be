@@ -64,6 +64,21 @@ export class RoomEntity {
   })
   currentStatus: RoomStatus;
 
+  /**
+   * Trang thai CHU DONG do admin dat (available/maintenance/inactive), tach
+   * bach khoi `currentStatus` (cot do OccupancyPersistenceService ghi tu
+   * presence camera, chi flip sang 'occupied', khong bao gio tu reset).
+   * Uu tien cao nhat khi RoomSearchService/RoomStatusService tinh trang thai
+   * hien thi real-time. Xem migration 20260819000004.
+   */
+  @Column({
+    name: 'administrative_status',
+    type: 'varchar',
+    length: 20,
+    default: RoomStatus.AVAILABLE,
+  })
+  administrativeStatus: RoomStatus;
+
   @Column({ name: 'has_camera', type: 'boolean', default: false })
   hasCamera: boolean;
 

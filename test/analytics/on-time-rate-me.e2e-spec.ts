@@ -64,20 +64,28 @@ describe('GET /analytics/attendance/on-time-rate/me (e2e)', () => {
     };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), JwtModule.register({})],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        JwtModule.register({}),
+      ],
       controllers: [OnTimeRateController],
       providers: [
         { provide: OnTimeRateService, useValue: mockService },
         JwtAuthGuard,
         PermissionsGuard,
         AuthConfigService,
-        { provide: RedisService, useValue: { exists: async () => false, get: async () => null } },
+        {
+          provide: RedisService,
+          useValue: { exists: async () => false, get: async () => null },
+        },
         { provide: AuthzReadRepository, useValue: mockAuthzRepo },
       ],
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ transform: true, whitelist: true }),
+    );
     await app.init();
 
     jwtService = moduleFixture.get(JwtService);

@@ -118,7 +118,7 @@ export class RoomDeleteNotificationProcessor {
         suggestedRooms,
         isPendingApproval,
       }),
-      toEmails: recipients.map((u) => u.email!),
+      toEmails: recipients.map((u) => u.email),
       relatedEntityType: 'meeting',
       relatedEntityId: meetingId,
       payloadJson: { suggestedRooms },
@@ -145,9 +145,7 @@ export class RoomDeleteNotificationProcessor {
     });
 
     const managerIds = Array.from(
-      new Set(
-        primaryUsers.map((u) => u.directManagerId).filter(Boolean),
-      ),
+      new Set(primaryUsers.map((u) => u.directManagerId).filter(Boolean)),
     ) as string[];
     const managers = managerIds.length
       ? await userRepo.find({ where: { id: In(managerIds) } })

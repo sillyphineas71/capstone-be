@@ -528,9 +528,9 @@ describe('IotDevicesService', () => {
       });
 
       expect(result.deviceName).toBe('New Name');
-      expect(
-        (result.metadataJson as any).face_server_config.base_url,
-      ).toBe('http://192.168.1.12');
+      expect((result.metadataJson as any).face_server_config.base_url).toBe(
+        'http://192.168.1.12',
+      );
     });
 
     it('T11 Device chưa từng cấu hình face server (metadataJson null) + đổi IP → không lỗi, không tạo cấu trúc thừa', async () => {
@@ -615,9 +615,9 @@ describe('IotDevicesService', () => {
 
       expect(result.macAddress).toBe('BB:BB:BB:BB:BB:BB');
       expect(result.networkIdentifier).toBe('net-new');
-      expect(
-        (result.metadataJson as any).face_server_config.base_url,
-      ).toBe('http://192.168.1.12');
+      expect((result.metadataJson as any).face_server_config.base_url).toBe(
+        'http://192.168.1.12',
+      );
     });
   });
 
@@ -1173,7 +1173,10 @@ describe('IotDevicesService', () => {
         await expect(
           service.receiveVerifyEvent({
             ...callbackInput(TOKEN),
-            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            body: {
+              operator: 'VerifyPush',
+              info: { PersonID: 95, VerifyStatus: 1 },
+            },
             clientIp: REAL_DEVICE_IP,
           }),
         ).resolves.toBeDefined();
@@ -1231,7 +1234,10 @@ describe('IotDevicesService', () => {
         await expect(
           service.receiveVerifyEvent({
             ...callbackInput(TOKEN),
-            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            body: {
+              operator: 'VerifyPush',
+              info: { PersonID: 95, VerifyStatus: 1 },
+            },
             clientIp: REAL_DEVICE_IP,
           }),
         ).rejects.toThrow(ForbiddenException);
@@ -1251,7 +1257,10 @@ describe('IotDevicesService', () => {
         await expect(
           service.receiveVerifyEvent({
             ...callbackInput(TOKEN),
-            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            body: {
+              operator: 'VerifyPush',
+              info: { PersonID: 95, VerifyStatus: 1 },
+            },
             clientIp: REAL_DEVICE_IP,
           }),
         ).resolves.toBeDefined();
@@ -1267,7 +1276,10 @@ describe('IotDevicesService', () => {
         await expect(
           service.receiveVerifyEvent({
             ...callbackInput(TOKEN),
-            body: { operator: 'VerifyPush', info: { PersonID: 95, VerifyStatus: 1 } },
+            body: {
+              operator: 'VerifyPush',
+              info: { PersonID: 95, VerifyStatus: 1 },
+            },
             clientIp: REAL_DEVICE_IP,
           }),
         ).resolves.toBeDefined();

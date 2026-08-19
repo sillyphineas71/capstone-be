@@ -294,9 +294,7 @@ describe('OnTimeRateController', () => {
     });
 
     it('service throws unexpected error -> InternalServerErrorException', async () => {
-      mockService.getPersonalStats.mockRejectedValue(
-        new Error('DB failure'),
-      );
+      mockService.getPersonalStats.mockRejectedValue(new Error('DB failure'));
 
       await expect(
         controller.getPersonalStats({} as any, { userId: mockUserId }),

@@ -161,7 +161,12 @@ describe('IvssZoneAccessLogService (Zone Access Log — đường B, FIX 2026-08
     wire({
       events: [
         evt({ id: 'e1', match_state: 'matched', user_id: 'u1' }),
-        evt({ id: 'e2', match_state: 'matched', user_id: 'u2', direction: 'leave' }),
+        evt({
+          id: 'e2',
+          match_state: 'matched',
+          user_id: 'u2',
+          direction: 'leave',
+        }),
       ],
     });
     const r = await service.getZoneAccessLog(ZONE_ID, { date: '2026-07-28' });

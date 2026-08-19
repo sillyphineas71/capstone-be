@@ -39,6 +39,7 @@ import { MinutesDetailResponseDto } from '../dto/minutes-detail-response.dto.js'
 import { MinutesAttachmentResponseDto } from '../dto/minutes-attachment-response.dto.js';
 import { UpdateDraftMinutesDto } from '../dto/update-draft-minutes.dto.js';
 import { UpdateDraftMinutesResponseDto } from '../dto/update-draft-minutes-response.dto.js';
+import { ToggleLiveShareMinutesDto } from '../dto/toggle-live-share-minutes.dto.js';
 import { SearchMinutesByPersonQueryDto } from '../dto/search-minutes-by-person-query.dto.js';
 import { IssueMinutesResponseDto } from '../dto/issue-minutes-response.dto.js';
 import { LinkMinutesResourcesDto } from '../dto/link-minutes-resources.dto.js';
@@ -52,6 +53,7 @@ import { MinutesShareListResponseDto } from '../dto/minutes-share-list-response.
 import { MinutesExportService } from '../services/minutes-export.service.js';
 import { CreateMinutesExportDto } from '../dto/create-minutes-export.dto.js';
 import { CreateMinutesExportResponseDto } from '../dto/create-minutes-export-response.dto.js';
+import { CompareMinutesResponseDto } from '../dto/compare-minutes-response.dto.js';
 
 @Controller('meeting-minutes')
 export class MeetingMinutesListController {
@@ -130,6 +132,47 @@ export class MeetingMinutesListController {
       },
     };
   }
+
+  @Get('compare')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.read')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'So sanh bien ban thu cong va AI (MKM-MANUAL-01)',
+    description:
+      'Tra ve ca 2 ban ghi meeting_minutes (manual va ai) cua 1 cuoc hop, ' +
+      'hoac null neu chua co ban nao. Dung de FE render 2 panel canh nhau.',
+  })
+  @ApiQuery({
+    name: 'meetingId',
+    required: true,
+    type: String,
+    description: 'UUID cuoc hop can so sanh',
+  })
+  @ApiResponse({ status: 200, description: 'So sanh bien ban thu cong va AI' })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN' })
+  @ApiResponse({ status: 404, description: 'MEETING_NOT_FOUND' })
+  async compare(
+    @Query('meetingId', ParseUUIDPipe) meetingId: string,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: CompareMinutesResponseDto;
+  }> {
+    const result = await this.minutesService.compareMinutes(meetingId, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: 'So sanh bien ban thu cong va AI',
+      data: new CompareMinutesResponseDto(result),
+    };
+  }
+
   @Get('search-by-person')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -257,6 +300,59 @@ export class MeetingMinutesListController {
       success: true,
       message: 'Cap nhat noi dung bien ban cuoc hop thanh cong',
       data,
+    };
+  }
+
+  @Patch(':id/live-share')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermissions('meeting.minutes.update')
+  @ApiTags('Minutes')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Bat/tat che do chia se truc tiep bien ban nhap (MKM-LIVE-01)',
+    description:
+      'Cho phep Host (preparedBy) bat/tat che do cho participant cua cuoc hop xem read-only ' +
+      'noi dung bien ban dang nhap gan nhu real-time qua WebSocket. Chi ap dung khi bien ban ' +
+      'dang o trang thai draft; khi BAT them dieu kien meeting dang in_progress.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiBody({ type: ToggleLiveShareMinutesDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Bat/tat chia se truc tiep thanh cong',
+  })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN / NOT_MINUTES_OWNER' })
+  @ApiResponse({ status: 404, description: 'MEETING_MINUTES_NOT_FOUND' })
+  @ApiResponse({
+    status: 409,
+    description: 'MINUTES_NOT_DRAFT / MEETING_NOT_IN_PROGRESS',
+  })
+  async toggleLiveShare(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true }))
+    dto: ToggleLiveShareMinutesDto,
+    @CurrentUser() user: { userId: string },
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { id: string; isLiveShared: boolean; versionNo: number };
+  }> {
+    const result = await this.minutesService.toggleLiveShare(id, dto, {
+      userId: user.userId,
+    });
+    return {
+      success: true,
+      message: result.isLiveShared
+        ? 'Da bat che do chia se truc tiep'
+        : 'Da tat che do chia se truc tiep',
+      data: {
+        id: result.id,
+        isLiveShared: result.isLiveShared,
+        versionNo: result.versionNo,
+      },
     };
   }
 

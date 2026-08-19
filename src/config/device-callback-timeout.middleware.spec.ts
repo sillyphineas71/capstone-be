@@ -91,7 +91,6 @@ describe('deviceCallbackTimeout middleware', () => {
 
   it('log không lộ callback_token — path bị che ở segment token', () => {
     const logSpy = jest.spyOn(
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('@nestjs/common').Logger.prototype,
       'warn',
     );
@@ -110,7 +109,6 @@ describe('deviceCallbackTimeout middleware', () => {
 
   it('route /hb gốc (không có deviceCode/token) → path log giữ nguyên, không che nhầm', () => {
     const logSpy = jest.spyOn(
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('@nestjs/common').Logger.prototype,
       'warn',
     );

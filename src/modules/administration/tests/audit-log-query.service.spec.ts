@@ -237,7 +237,9 @@ describe('AuditLogQueryService', () => {
 
       const result = await service.listAuditLogs({});
 
-      expect(result.data[0].actorAvatarUrl).toBe('https://cdn.example.com/x.png');
+      expect(result.data[0].actorAvatarUrl).toBe(
+        'https://cdn.example.com/x.png',
+      );
     });
 
     it('should be null when actor has no avatar', async () => {

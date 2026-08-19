@@ -34,6 +34,11 @@ describe('RoomsController', () => {
     roomsService = {
       create: jest.fn().mockResolvedValue(mockResponse),
       update: jest.fn().mockResolvedValue(mockResponse),
+      updateAdministrativeStatus: jest.fn().mockResolvedValue({
+        roomId: mockRoomId,
+        administrativeStatus: 'maintenance',
+        updatedAt: new Date(),
+      }),
       getDeletionImpact: jest.fn(),
       deleteRoom: jest.fn(),
       getRoomDetail: jest.fn(),
@@ -151,6 +156,54 @@ describe('RoomsController', () => {
         controller.update(
           mockRoomId,
           updateDto as any,
+          { userId: mockUserId },
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow('Service error');
+    });
+  });
+
+  describe('updateAdministrativeStatus', () => {
+    const dto = { status: 'maintenance' as const, reason: 'Sua may lanh' };
+
+    it('should return 200 with updated administrative status on success', async () => {
+      const result = await controller.updateAdministrativeStatus(
+        mockRoomId,
+        dto,
+        { userId: mockUserId },
+        '127.0.0.1',
+      );
+
+      expect(roomsService.updateAdministrativeStatus).toHaveBeenCalledWith(
+        mockRoomId,
+        dto,
+        mockUserId,
+        '127.0.0.1',
+      );
+      expect(result.success).toBe(true);
+      expect(result.data.administrativeStatus).toBe('maintenance');
+    });
+
+    it('should throw error when userId is missing', async () => {
+      await expect(
+        controller.updateAdministrativeStatus(
+          mockRoomId,
+          dto,
+          undefined,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow('userId is required');
+    });
+
+    it('should propagate service errors (e.g. ROOM_NOT_FOUND)', async () => {
+      roomsService.updateAdministrativeStatus.mockRejectedValue(
+        new Error('Service error'),
+      );
+
+      await expect(
+        controller.updateAdministrativeStatus(
+          mockRoomId,
+          dto,
           { userId: mockUserId },
           '127.0.0.1',
         ),

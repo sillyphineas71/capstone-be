@@ -230,7 +230,9 @@ describe('NoShowDetectionService (NSC-001)', () => {
       await service.detect();
       const sql = String(candCall()[0]);
       expect(sql).toContain('re.event_time >= b.reserved_start_time');
-      expect(sql).toContain("re.event_time >= now() - ($2::int * interval '1 second')");
+      expect(sql).toContain(
+        "re.event_time >= now() - ($2::int * interval '1 second')",
+      );
     });
 
     // Kịch bản A: streak đủ ngưỡng ngay từ đầu → first_presence_at được xác nhận
@@ -273,7 +275,11 @@ describe('NoShowDetectionService (NSC-001)', () => {
     // của A (trước reserved_start_time của B) KHÔNG được tính, nên B vẫn lọt qua WHERE.
     it('Kịch bản C — event streak của booking KHÁC trước reserved_start_time của booking đang xét → KHÔNG bị chặn nhầm, No-show vẫn kích hoạt', async () => {
       // booking B: candidate duy nhất còn lại sau khi A đã có first_presence_at (đã confirm).
-      const bookingB = { booking_id: 'bk-B', meeting_id: 'mt-B', room_id: 'rm-shared' };
+      const bookingB = {
+        booking_id: 'bk-B',
+        meeting_id: 'mt-B',
+        room_id: 'rm-shared',
+      };
       dsMock.manager.query.mockImplementation((sql: string) => {
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) {

@@ -23,7 +23,10 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { detectImageMimeType } from '../utils/image-magic-bytes.util.js';
-import { PARTNER_DEPARTMENT_CODE, resolvePartnerDepartmentId } from '../../../common/utils/partner-account.util.js';
+import {
+  PARTNER_DEPARTMENT_CODE,
+  resolvePartnerDepartmentId,
+} from '../../../common/utils/partner-account.util.js';
 import { VehicleRegistrationService } from '../../anpr/services/vehicle-registration.service.js';
 import { normalizePlate } from '../../anpr/utils/normalize-plate.js';
 
@@ -309,12 +312,17 @@ export class PartnerAccountImportService {
 
     const deptRepo = this.dataSource.getRepository(DepartmentEntity);
     const partnerDept = await deptRepo.findOne({
-      where: { departmentCode: PARTNER_DEPARTMENT_CODE, isActive: true, deletedAt: IsNull() },
+      where: {
+        departmentCode: PARTNER_DEPARTMENT_CODE,
+        isActive: true,
+        deletedAt: IsNull(),
+      },
     });
     if (!partnerDept) {
       throw new BadRequestException({
         success: false,
-        message: 'Phòng ban Đối tác (department_code=PARTNER) không tồn tại hoặc đã bị khóa.',
+        message:
+          'Phòng ban Đối tác (department_code=PARTNER) không tồn tại hoặc đã bị khóa.',
         error: { code: 'PARTNER_DEPARTMENT_NOT_FOUND' },
       });
     }

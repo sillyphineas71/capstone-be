@@ -9,7 +9,10 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
  * (entity_type='users' AND entity_id=:userId) nằm ở path param + repository.
  */
 export class QueryUserAuditLogsDto {
-  @ApiPropertyOptional({ description: 'Trang hiện tại (bắt đầu từ 1)', minimum: 1 })
+  @ApiPropertyOptional({
+    description: 'Trang hiện tại (bắt đầu từ 1)',
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

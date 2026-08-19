@@ -735,8 +735,16 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
             ...row,
             payloadJson: {
               occurrences: [
-                { userId: null, sourceEventId: 'evt-near', occurredAt: '2026-08-18T09:00:02.000Z' }, // T+2s — GẦN event lần 2 sắp tới
-                { userId: null, sourceEventId: 'evt-newer', occurredAt: '2026-08-18T09:01:40.000Z' }, // T+100s — entry CUỐI CÙNG (ord DESC sẽ chọn cái này)
+                {
+                  userId: null,
+                  sourceEventId: 'evt-near',
+                  occurredAt: '2026-08-18T09:00:02.000Z',
+                }, // T+2s — GẦN event lần 2 sắp tới
+                {
+                  userId: null,
+                  sourceEventId: 'evt-newer',
+                  occurredAt: '2026-08-18T09:01:40.000Z',
+                }, // T+100s — entry CUỐI CÙNG (ord DESC sẽ chọn cái này)
               ],
             },
           };
@@ -770,8 +778,16 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
             lastSeenAt: null as string | null,
             payloadJson: {
               occurrences: [
-                { userId: 'u1', sourceEventId: 'evt-near', occurredAt: '2026-08-18T09:00:02.000Z' }, // gần
-                { userId: 'u1', sourceEventId: 'evt-newer', occurredAt: '2026-08-18T09:01:40.000Z' }, // xa, nhưng là entry CUỐI CÙNG
+                {
+                  userId: 'u1',
+                  sourceEventId: 'evt-near',
+                  occurredAt: '2026-08-18T09:00:02.000Z',
+                }, // gần
+                {
+                  userId: 'u1',
+                  sourceEventId: 'evt-newer',
+                  occurredAt: '2026-08-18T09:01:40.000Z',
+                }, // xa, nhưng là entry CUỐI CÙNG
               ],
             } as Record<string, unknown>,
           };
@@ -786,7 +802,10 @@ describe('AlertsService (ASC-001 / UC-123)', () => {
             // Nếu Intrusion bị đổi sang nearest-match (SAI): so với 'evt-near' (diff=1s<5s)
             // → debounce, occurrence_count GIỮ 3. Hành vi ĐÚNG (ord DESC, KHÔNG đổi): so với
             // entry CUỐI CÙNG 'evt-newer' (diff=97s>=5s) → KHÔNG debounce, append + tăng.
-            payloadJson: { userId: 'u1', occurredAt: '2026-08-18T09:00:03.000Z' },
+            payloadJson: {
+              userId: 'u1',
+              occurredAt: '2026-08-18T09:00:03.000Z',
+            },
           });
 
           expect(r.alert.occurrenceCount).toBe(4); // TĂNG — chứng minh Intrusion vẫn dùng "last", KHÔNG bị đổi sang "nearest"

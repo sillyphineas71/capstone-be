@@ -10,6 +10,7 @@ import { RecordingModule } from '../recording/recording.module.js';
 import { TranscriptionModule } from '../transcription/transcription.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { StorageModule } from '../storage/storage.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
 import { MinutesController } from './controllers/minutes.controller.js';
 import { MeetingMinutesListController } from './controllers/minutes-list.controller.js';
 import { MinutesAiDraftController } from './controllers/minutes-ai-draft.controller.js';
@@ -35,6 +36,7 @@ import {
     TranscriptionModule,
     AuthModule,
     StorageModule,
+    WebsocketModule,
     TypeOrmModule.forFeature([
       MeetingMinutesEntity,
       MeetingMinutesShareEntity,

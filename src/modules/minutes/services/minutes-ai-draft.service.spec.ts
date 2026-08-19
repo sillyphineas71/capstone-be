@@ -24,12 +24,15 @@ import {
   BackgroundJobType,
 } from '../../administration/entities/background-job.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
+import { IsNull } from 'typeorm';
 import {
   MeetingMinutesEntity,
   MeetingMinutesStatus,
+  MeetingMinutesSource,
 } from '../entities/meeting-minutes.entity.js';
 import { CreateAiDraftJobDto } from '../dto/create-ai-draft-job.dto.js';
 import {
+  AI_MINUTES_CONFIG_KEY,
   AI_MINUTES_ERROR_CODES,
   AI_MINUTES_JOB_ATTEMPTS,
   AI_MINUTES_JOB_NAME,
@@ -665,5 +668,136 @@ describe('MinutesAiDraftService.getAiDraftAvailability (MKM-AI-03)', () => {
     await expect(
       service.getAiDraftAvailability(MEETING_ID, { userId: OTHER_USER_ID }),
     ).resolves.toEqual({ enabled: true, requireHumanReview: false });
+  });
+});
+
+describe('MinutesAiDraftService - MKM-MANUAL-01', () => {
+  let service: MinutesAiDraftService;
+  let dataSource: { transaction: jest.Mock; manager: any };
+  let queueService: { addJob: jest.Mock };
+
+  let meetingRepo: any;
+  let transcriptRepo: any;
+  let backgroundJobRepo: any;
+  let meetingMinutesRepo: any;
+  let systemConfigRepo: any;
+  let em: any;
+
+  beforeEach(() => {
+    meetingRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue({
+        setLock: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue({
+          id: 'meeting-1',
+          hostId: 'user-1',
+          deletedAt: null,
+        }),
+      }),
+      findOne: jest.fn(),
+    };
+
+    systemConfigRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        configKey: AI_MINUTES_CONFIG_KEY,
+        isActive: true,
+        configJson: { enabled: true },
+      }),
+    };
+
+    transcriptRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'transcript-1',
+        meetingId: 'meeting-1',
+        status: TranscriptStatus.APPROVED,
+        securityStatus: TranscriptSecurityStatus.NORMAL,
+      }),
+    };
+
+    backgroundJobRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((data: any) => data),
+      save: jest.fn((data: any) => Promise.resolve({ id: 'job-1', ...data })),
+      update: jest.fn(),
+    };
+
+    meetingMinutesRepo = {
+      findOne: jest.fn(),
+    };
+
+    em = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === MeetingEntity) return meetingRepo;
+        if (entity === SystemConfigEntity) return systemConfigRepo;
+        if (entity === TranscriptEntity) return transcriptRepo;
+        if (entity === BackgroundJobEntity) return backgroundJobRepo;
+        if (entity === MeetingMinutesEntity) return meetingMinutesRepo;
+        throw new Error(`Unexpected entity in test: ${String(entity)}`);
+      }),
+      query: jest.fn().mockResolvedValue([]),
+    };
+
+    dataSource = {
+      transaction: jest.fn((cb: (manager: unknown) => unknown) => cb(em)),
+      manager: em,
+    };
+
+    queueService = {
+      addJob: jest.fn().mockResolvedValue({ id: 'bullmq-job-1' }),
+    };
+
+    service = new MinutesAiDraftService(
+      dataSource as never,
+      queueService as unknown as QueueService,
+    );
+  });
+
+  it('enqueues AI job successfully even when manual minutes exist (AC-003)', async () => {
+    meetingMinutesRepo.findOne.mockResolvedValue(null);
+
+    const result = await service.createAiDraftJob(
+      'meeting-1',
+      { transcriptId: 'transcript-1' },
+      { userId: 'user-1' },
+    );
+
+    expect(meetingMinutesRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        meetingId: 'meeting-1',
+        source: MeetingMinutesSource.AI,
+        deletedAt: IsNull(),
+      },
+    });
+
+    expect(result.jobId).toBe('job-1');
+    expect(result.status).toBe('queued');
+    expect(backgroundJobRepo.save).toHaveBeenCalled();
+  });
+
+  it('still blocks when AI minutes already exist and forceRerun=false', async () => {
+    meetingMinutesRepo.findOne.mockResolvedValue({
+      id: 'minutes-ai-1',
+      meetingId: 'meeting-1',
+      source: MeetingMinutesSource.AI,
+      status: MeetingMinutesStatus.PUBLISHED,
+      aiSummaryJson: null,
+      deletedAt: null,
+    });
+
+    await expect(
+      service.createAiDraftJob(
+        'meeting-1',
+        { transcriptId: 'transcript-1', forceRerun: false },
+        { userId: 'user-1' },
+      ),
+    ).rejects.toThrow(ConflictException);
+
+    expect(meetingMinutesRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        meetingId: 'meeting-1',
+        source: MeetingMinutesSource.AI,
+        deletedAt: IsNull(),
+      },
+    });
   });
 });

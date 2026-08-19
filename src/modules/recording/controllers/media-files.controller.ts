@@ -185,7 +185,11 @@ export class MediaFilesController {
       (req as any).user?.sub ||
       (req as any).user?.id ||
       '';
-    const data = await this.mediaFilesService.setVisibility(fileId, dto, userId);
+    const data = await this.mediaFilesService.setVisibility(
+      fileId,
+      dto,
+      userId,
+    );
     return {
       success: true,
       message: 'Media file visibility updated',

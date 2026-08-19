@@ -261,9 +261,7 @@ describe('RoomDeleteNotificationProcessor', () => {
                 },
                 { id: 'manager-1', email: 'manager@example.com' },
               ];
-              return Promise.resolve(
-                pool.filter((u) => ids.includes(u.id)),
-              );
+              return Promise.resolve(pool.filter((u) => ids.includes(u.id)));
             }),
           };
         }

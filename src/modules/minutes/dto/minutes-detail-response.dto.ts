@@ -1,7 +1,10 @@
 // MinutesDetailResponseDto — response for GET meeting-minutes/:id (UC-MKM-03)
 // Nested DTOs for 4 data groups: generalInfo, mainContent, relatedResources, attachments
 
-import { MeetingMinutesStatus } from '../entities/meeting-minutes.entity.js';
+import {
+  MeetingMinutesContentFormat,
+  MeetingMinutesStatus,
+} from '../entities/meeting-minutes.entity.js';
 import {
   MinutesActionItem,
   MinutesDecisionItem,
@@ -166,6 +169,10 @@ export class MinutesDetailResponseDto {
   title: string;
   status: MeetingMinutesStatus;
   versionNo: number;
+  /** MKM-LIVE-01 (FR-016): true khi Host dang bat che do chia se truc tiep. */
+  isLiveShared: boolean;
+  /** 'blank' (trang trắng) hoặc 'template' (structured). Cố định từ lúc tạo. */
+  contentFormat: MeetingMinutesContentFormat;
   generalInfo: MinutesGeneralInfoDto;
   mainContent: MinutesMainContentDto;
   /** Khối insight AI (null nếu biên bản soạn tay). */

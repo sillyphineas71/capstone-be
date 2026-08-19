@@ -6,6 +6,7 @@ import {
   Max,
   IsString,
   MaxLength,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -35,6 +36,20 @@ export class SearchRoomsQueryDto {
   @Type(() => Boolean)
   @IsBoolean({ message: 'onlyAvailable phai la boolean' })
   onlyAvailable?: boolean;
+
+  /** Tim theo roomName/roomCode (ILIKE, khong phan biet hoa/thuong). */
+  @IsOptional()
+  @IsString({ message: 'q phai la chuoi ky tu' })
+  @MaxLength(255, { message: 'q toi da 255 ky tu' })
+  q?: string;
+
+  /** Loc theo trang thai TINH REAL-TIME (xem RoomSearchService.computeStatus). */
+  @IsOptional()
+  @IsIn(['available', 'occupied', 'reserved', 'maintenance', 'inactive'], {
+    message:
+      "status khong hop le. Gia tri: available, occupied, reserved, maintenance, inactive",
+  })
+  status?: string;
 
   @IsOptional()
   @Type(() => Number)

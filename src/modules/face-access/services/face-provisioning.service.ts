@@ -335,7 +335,10 @@ export class FaceProvisioningService {
    * chỉ thêm `AND user_id = $2` — tái dùng removeMapping() nguyên trạng, KHÔNG
    * sửa deprovisionMeeting() hiện có.
    */
-  async deprovisionParticipant(meetingId: string, userId: string): Promise<void> {
+  async deprovisionParticipant(
+    meetingId: string,
+    userId: string,
+  ): Promise<void> {
     const maps: MappingRow[] = await this.dataSource.manager.query(
       `SELECT id, device_id, device_person_id, sync_status, metadata_json
        FROM device_user_mappings

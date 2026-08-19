@@ -58,7 +58,10 @@ export class UserAuditLogsController {
     description: 'Danh sách lịch sử hoạt động phân trang',
     type: UserAuditLogListResponseDto,
   })
-  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR — userId không hợp lệ' })
+  @ApiResponse({
+    status: 400,
+    description: 'VALIDATION_ERROR — userId không hợp lệ',
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized — chưa đăng nhập' })
   @ApiResponse({
     status: 403,

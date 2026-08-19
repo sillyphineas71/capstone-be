@@ -146,9 +146,7 @@ describe('FaceAttendanceService (FAT-001)', () => {
         return Promise.reject(new Error('db write failed'));
       return router()(sql);
     });
-    await expect(service.onVerify(input())).rejects.toThrow(
-      'db write failed',
-    );
+    await expect(service.onVerify(input())).rejects.toThrow('db write failed');
     expect(wsMock.emitToRoom).not.toHaveBeenCalled();
   });
 

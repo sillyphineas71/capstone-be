@@ -242,11 +242,9 @@ describe('MediaFilesController list/detail/visibility (REC-006)', () => {
   });
 
   it('visibility → data', async () => {
-    const r = await controller.setVisibility(
-      'f1',
-      { action: 'hide' },
-      { user: { userId: 'u1' } } as any,
-    );
+    const r = await controller.setVisibility('f1', { action: 'hide' }, {
+      user: { userId: 'u1' },
+    } as any);
     expect(serviceMock.setVisibility).toHaveBeenCalledWith(
       'f1',
       { action: 'hide' },

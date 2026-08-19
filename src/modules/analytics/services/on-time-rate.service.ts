@@ -439,8 +439,7 @@ export class OnTimeRateService {
           departmentName: deptRow.departmentName,
           onTimeRate:
             Math.round(
-              (deptRow.onTimeCount / deptRow.totalRequiredParticipants) *
-                1000,
+              (deptRow.onTimeCount / deptRow.totalRequiredParticipants) * 1000,
             ) / 10,
         };
       }

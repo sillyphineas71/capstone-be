@@ -27,6 +27,16 @@ export enum MeetingMinutesVisibilityLevel {
   PUBLIC_INTERNAL = 'public_internal',
 }
 
+export enum MeetingMinutesSource {
+  AI = 'ai',
+  MANUAL = 'manual',
+}
+
+export enum MeetingMinutesContentFormat {
+  TEMPLATE = 'template',
+  BLANK = 'blank',
+}
+
 @Entity('meeting_minutes')
 export class MeetingMinutesEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -51,6 +61,37 @@ export class MeetingMinutesEntity {
     default: MeetingMinutesVisibilityLevel.PARTICIPANTS,
   })
   visibilityLevel: MeetingMinutesVisibilityLevel;
+
+  /**
+   * MKM-LIVE-01: Host tu bat/tat de participant cua meeting xem read-only
+   * ban nhap gan nhu real-time qua WebSocket. Chi co y nghia khi
+   * status=draft; tu dong ve false khi ban hanh (issue).
+   */
+  @Column({ name: 'is_live_shared', type: 'boolean', default: false })
+  isLiveShared: boolean;
+
+  /**
+   * MKM-MANUAL-01: Nguồn gốc tường minh — 'ai' (do AI draft processor tạo) hoặc
+   * 'manual' (do Host soạn thủ công). Thay thế việc suy luận ngầm qua ai_summary_json.
+   * Partial unique index (meeting_id, source) WHERE deleted_at IS NULL đảm bảo
+   * tối đa 1 bản active/nguồn/meeting ở tầng DB.
+   */
+  @Column({ type: 'varchar', length: 10 })
+  source: MeetingMinutesSource;
+
+  /**
+   * feat-manual-minutes-content-format: nguoi soan thu cong chon 'blank'
+   * (trang trang, chi minutes_content tu do) hoac 'template' (structured —
+   * decisions/action items nhu template mac dinh). Bien ban AI luon la
+   * 'template'. Chon 1 lan luc tao, khong doi sau do.
+   */
+  @Column({
+    name: 'content_format',
+    type: 'varchar',
+    length: 20,
+    default: MeetingMinutesContentFormat.TEMPLATE,
+  })
+  contentFormat: MeetingMinutesContentFormat;
 
   @Column({ name: 'minutes_content', type: 'text' })
   minutesContent: string;

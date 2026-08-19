@@ -97,9 +97,7 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       }
       // [FIX 2026-08-17] dedupe precheck (SELECT ... IS NOT DISTINCT FROM ...).
       if (sql.includes('IS NOT DISTINCT FROM'))
-        return Promise.resolve(
-          over.dedupeHit ? [{ id: over.dedupeHit }] : [],
-        );
+        return Promise.resolve(over.dedupeHit ? [{ id: over.dedupeHit }] : []);
       return Promise.resolve(undefined);
     });
   };

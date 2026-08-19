@@ -28,7 +28,7 @@ describe('UserAuditLogQueryService', () => {
       findUserAuditLogs: jest.fn().mockResolvedValue(rows),
       countUserAuditLogs: jest.fn().mockResolvedValue(total),
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const service = new UserAuditLogQueryService(repo as any);
     return { service, repo };
   }

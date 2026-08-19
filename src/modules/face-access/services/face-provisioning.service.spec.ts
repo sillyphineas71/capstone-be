@@ -346,7 +346,7 @@ describe('FaceProvisioningService (FMP-001)', () => {
     it('mapping synced của người bị gỡ → deletePerson thật + mapping chuyển deleted', async () => {
       let capturedParams: any[] = [];
       dsMock.manager.query.mockImplementation((sql: string, params?: any[]) => {
-        if (sql.includes("AND user_id = $2 AND sync_status")) {
+        if (sql.includes('AND user_id = $2 AND sync_status')) {
           capturedParams = params ?? [];
           return Promise.resolve([
             { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
@@ -368,7 +368,7 @@ describe('FaceProvisioningService (FMP-001)', () => {
       // Query đã tự lọc user_id = $2 ở tầng SQL — mock chỉ trả về mapping của u1,
       // xác nhận deprovisionParticipant('m1','u1') không hề query/đụng gì tới u2.
       dsMock.manager.query.mockImplementation((sql: string, params?: any[]) => {
-        if (sql.includes("AND user_id = $2 AND sync_status")) {
+        if (sql.includes('AND user_id = $2 AND sync_status')) {
           expect(params).toEqual(['m1', 'u1']);
           return Promise.resolve([
             { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
@@ -385,7 +385,7 @@ describe('FaceProvisioningService (FMP-001)', () => {
 
     it('user không có mapping nào (chưa từng provision) → no-op an toàn, KHÔNG throw', async () => {
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("AND user_id = $2 AND sync_status"))
+        if (sql.includes('AND user_id = $2 AND sync_status'))
           return Promise.resolve([]);
         return Promise.resolve(undefined);
       });
@@ -397,7 +397,7 @@ describe('FaceProvisioningService (FMP-001)', () => {
 
     it('lỗi mạng/thiết bị khi xoá → KHÔNG throw ra ngoài (best-effort, log lỗi)', async () => {
       dsMock.manager.query.mockImplementation((sql: string) => {
-        if (sql.includes("AND user_id = $2 AND sync_status"))
+        if (sql.includes('AND user_id = $2 AND sync_status'))
           return Promise.resolve([
             { id: 'map-u1', device_id: 'dev1', device_person_id: '64' },
           ]);
@@ -405,7 +405,9 @@ describe('FaceProvisioningService (FMP-001)', () => {
           return Promise.resolve([device]);
         return Promise.resolve(undefined);
       });
-      provider.deletePerson.mockRejectedValueOnce(new Error('network unreachable'));
+      provider.deletePerson.mockRejectedValueOnce(
+        new Error('network unreachable'),
+      );
       const errSpy = jest.spyOn((service as any).logger, 'error');
       await expect(
         service.deprovisionParticipant('m1', 'u1'),
@@ -459,7 +461,11 @@ describe('FaceProvisioningService (FMP-001)', () => {
       dsMock.manager.query.mockImplementation((sql: string) => {
         if (sql.includes("me.status IN ('completed', 'cancelled')"))
           return Promise.resolve([
-            { id: 'map-completed-early', device_id: 'dev1', device_person_id: '88' },
+            {
+              id: 'map-completed-early',
+              device_id: 'dev1',
+              device_person_id: '88',
+            },
           ]);
         if (sql.includes('FROM iot_devices WHERE id'))
           return Promise.resolve([device]);
@@ -515,7 +521,9 @@ describe('FaceProvisioningService (FMP-001)', () => {
       expect(provider.deletePerson).toHaveBeenCalledTimes(2);
       expect(
         errSpy.mock.calls.some((c) =>
-          String(c[0]).includes('safety-net deprovision mapping map-fail failed'),
+          String(c[0]).includes(
+            'safety-net deprovision mapping map-fail failed',
+          ),
         ),
       ).toBe(true);
     });

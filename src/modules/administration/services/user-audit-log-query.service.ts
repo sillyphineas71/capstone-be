@@ -97,7 +97,8 @@ export class UserAuditLogQueryService {
       description: this.deriveDescription(row.action_type),
       ipAddress: row.ip_address ?? null,
       // Ưu tiên giá trị mới, rồi metadata, cuối cùng snapshot cũ.
-      payload: row.new_value_json ?? row.metadata_json ?? row.old_value_json ?? null,
+      payload:
+        row.new_value_json ?? row.metadata_json ?? row.old_value_json ?? null,
     };
   }
 

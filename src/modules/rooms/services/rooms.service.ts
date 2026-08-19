@@ -15,6 +15,8 @@ import { CreateRoomDto } from '../dto/create-room.dto.js';
 import { CreateRoomResponseDto } from '../dto/create-room-response.dto.js';
 import { UpdateRoomDto } from '../dto/update-room.dto.js';
 import { UpdateRoomResponseDto } from '../dto/update-room-response.dto.js';
+import { UpdateRoomAdministrativeStatusDto } from '../dto/update-room-administrative-status.dto.js';
+import { UpdateRoomAdministrativeStatusResponseDto } from '../dto/update-room-administrative-status-response.dto.js';
 import { DeletionImpactResponseDto } from '../dto/deletion-impact-response.dto.js';
 import { DeleteRoomResponseDto } from '../dto/delete-room-response.dto.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
@@ -327,6 +329,77 @@ export class RoomsService {
   }
 
   /**
+   * Dat/go trang thai CHU DONG cua phong (maintenance/inactive/available),
+   * tach bach hoan toan khoi `currentStatus` (cot do OccupancyPersistenceService
+   * ghi tu presence camera — khong dung chung de tranh xung dot ghi). Gia tri
+   * nay uu tien cao nhat khi RoomSearchService/RoomStatusService tinh trang
+   * thai hien thi real-time (xem migration 20260819000004).
+   */
+  async updateAdministrativeStatus(
+    roomId: string,
+    dto: UpdateRoomAdministrativeStatusDto,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<UpdateRoomAdministrativeStatusResponseDto> {
+    const room = await this.roomRepo.findOne({
+      where: { id: roomId, deletedAt: IsNull() },
+    });
+    if (!room) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Phong hop khong ton tai',
+        error: { code: 'ROOM_NOT_FOUND', details: { roomId } },
+        timestamp: new Date().toISOString(),
+        path: `/api/v1/rooms/${roomId}/administrative-status`,
+      });
+    }
+
+    const oldStatus = room.administrativeStatus;
+
+    const saved = await this.dataSource.transaction(async (em) => {
+      room.administrativeStatus = dto.status as RoomStatus;
+      room.updatedBy = userId;
+      return em.save(RoomEntity, room);
+    });
+
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'room',
+          entityId: saved.id,
+          oldValueJson: { administrativeStatus: oldStatus },
+          newValueJson: {
+            administrativeStatus: saved.administrativeStatus,
+            reason: dto.reason ?? null,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      // Audit log fail KHONG rollback update (dong nhat pattern update()).
+      this.logger.error(
+        `Failed to write audit log for room administrative-status update ${saved.id}: ${err instanceof Error ? err.message : 'Unknown'}`,
+      );
+    }
+
+    this.websocketService.broadcast('room.status.updated', {
+      roomId: saved.id,
+      administrativeStatus: saved.administrativeStatus,
+      updatedAt: saved.updatedAt,
+    });
+
+    return new UpdateRoomAdministrativeStatusResponseDto({
+      roomId: saved.id,
+      administrativeStatus: saved.administrativeStatus,
+      updatedAt: saved.updatedAt,
+    });
+  }
+
+  /**
    * Cuoc hop TUONG LAI DA DUYET (status=SCHEDULED) tai phong nay (2026-08-16,
    * dao nguoc BR2 cu). Cac cuoc hop nay CHAN xoa phong hoan toan — admin phai
    * tu doi phong/huy truoc khi xoa duoc (khong con null-hoa roomId ngam nua).
@@ -485,10 +558,7 @@ export class RoomsService {
     }
 
     const affectedMeetingIds = await this.dataSource.transaction(async (em) => {
-      const affectedMeetings = await this.findFuturePendingMeetings(
-        roomId,
-        em,
-      );
+      const affectedMeetings = await this.findFuturePendingMeetings(roomId, em);
 
       // (a) soft-delete rooms
       await em.softRemove(RoomEntity, room);
@@ -608,7 +678,10 @@ export class RoomsService {
    *
    * BR-2: phong soft-deleted (deletedAt IS NOT NULL) → 404 ROOM_NOT_FOUND.
    * BR-1: goi lai RoomStatusService.getRoomStatus() noi bo — KHONG viet lai LATERAL SQL.
-   * BR-3: administrativeStatus = room.currentStatus nguyen trang.
+   * BR-3 [FIX 2026-08-19]: administrativeStatus = room.administrativeStatus
+   * (cot rieng, admin dat qua PATCH .../administrative-status) — KHONG con
+   * dung room.currentStatus (cot bi OccupancyPersistenceService flip 1 chieu
+   * sang 'occupied', khong bao gio tu reset ve 'available').
    * BR-4: upcomingBookings: status IN ('approved','active'), reserved_start_time > now(), LIMIT 5, ASC.
    * BR-6: createdBy/updatedBy null-safe.
    * SEC-03: upcomingBookings dung parameterized query ($1).
@@ -713,7 +786,7 @@ export class RoomsService {
       locationDescription: room.locationDescription ?? null,
       capacity: room.capacity,
       roomType: room.roomType,
-      administrativeStatus: room.currentStatus, // BR-3: KHONG doi ten trung occupancyStatus
+      administrativeStatus: room.administrativeStatus, // BR-3: KHONG doi ten trung occupancyStatus
       hasCamera: room.hasCamera,
       hasMicrophone: room.hasMicrophone,
       hasDisplay: room.hasDisplay,

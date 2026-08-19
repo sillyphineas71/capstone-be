@@ -583,6 +583,37 @@ describe('MeetingsService', () => {
       expect(result.participantCount).toBe(1);
     });
 
+    it('[FIX 2026-08-19] should throw ROOM_NOT_FOUND when room.administrativeStatus is inactive', async () => {
+      setupDefaultMocks();
+      mockRepo.findOne.mockImplementation(async (options?: any) => {
+        const id = options?.where?.id;
+        if (id === 'room-uuid') {
+          return {
+            id: 'room-uuid',
+            roomName: 'Phòng A',
+            capacity: 20,
+            isActive: true,
+            currentStatus: 'available',
+            administrativeStatus: 'inactive',
+          } as RoomEntity;
+        }
+        return { id: 'some-id', accountStatus: AccountStatus.ACTIVE };
+      });
+
+      // Dung future date dong (khong hardcode) — tranh phu thuoc vao thoi diem
+      // chay test, chi test rieng nhanh administrativeStatus.
+      const future = new Date(Date.now() + 24 * 3600_000);
+      const futureDto = {
+        ...validDto,
+        startTime: future.toISOString(),
+        endTime: new Date(future.getTime() + 3600_000).toISOString(),
+      };
+
+      await expect(
+        service.create(futureDto, authUser, clientContext),
+      ).rejects.toThrow('Phòng họp không tồn tại hoặc không khả dụng');
+    });
+
     it('[T022] should throw 409 when room has conflict', async () => {
       setupDefaultMocks();
       mockRepo.findOne.mockImplementation(async (options?: any) => {
@@ -1252,6 +1283,37 @@ describe('MeetingsService', () => {
       expect(result.requestId).toBeDefined();
     });
 
+    it('[FIX 2026-08-19] should throw ROOM_NOT_AVAILABLE when newRoomId.administrativeStatus is inactive', async () => {
+      setupMocks();
+      const inactiveRoom = {
+        id: 'room-uuid-2',
+        roomName: 'Room B',
+        capacity: 20,
+        isActive: true,
+        currentStatus: 'available',
+        administrativeStatus: 'inactive',
+      };
+      mockRepo.findOne.mockImplementation(async (options: any = {}) => {
+        const where = options.where ?? {};
+        const id = where.id;
+        if (id === 'meeting-uuid') return fakeMeeting;
+        if (id === 'room-uuid') return fakeRoom;
+        if (id === 'room-uuid-2') return inactiveRoom;
+        if (where.meetingId === 'meeting-uuid' && where.status)
+          return fakeActiveBooking;
+        return null;
+      });
+
+      await expect(
+        service.updateMeetingTime(
+          'meeting-uuid',
+          { ...validDto, newRoomId: 'room-uuid-2' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow('Phòng họp không khả dụng');
+    });
+
     it('[T040] SCHEDULED: notifies approvers (MEETING_REQUEST_CREATED), KHÔNG báo participants MEETING_TIME_UPDATED (chưa áp dụng)', async () => {
       setupMocks();
       const approverQb = mockQueryBuilder();
@@ -1615,6 +1677,31 @@ describe('MeetingsService', () => {
       expect(result.newRoom.id).toBe('new-room-uuid');
       expect(result.notificationStatus).toBe('queued');
       expect(dataSource.transaction).toHaveBeenCalled();
+    });
+
+    it('[FIX 2026-08-19] should throw ROOM_NOT_AVAILABLE when newRoom.administrativeStatus is inactive', async () => {
+      setupFindOneMocks({
+        // startTime dong (future) — tranh nham voi check MEETING_ALREADY_STARTED,
+        // chi test rieng nhanh administrativeStatus.
+        meeting: {
+          ...fakeMeeting,
+          startTime: new Date(Date.now() + 24 * 3600_000),
+          endTime: new Date(Date.now() + 25 * 3600_000),
+        },
+        newRoom: { ...fakeNewRoom, administrativeStatus: 'inactive' },
+      });
+      setupAttendeeCountMocks(5);
+      setupTransactionMocks();
+      mockRepo.find.mockResolvedValue([]);
+
+      await expect(
+        service.updateMeetingRoom(
+          'meeting-uuid',
+          { newRoomId: 'new-room-uuid' },
+          authUser,
+          clientContext,
+        ),
+      ).rejects.toThrow('Phòng họp này hiện không khả dụng.');
     });
 
     it('[T012-2] should update room successfully for host', async () => {
