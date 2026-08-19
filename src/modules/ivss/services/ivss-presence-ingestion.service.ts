@@ -196,7 +196,11 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       const presenceZoneId = presenceMap[chKey] ?? null;
       let presenceSkipped: PresenceSkippedReason | null = null;
       if (!presenceZoneId) presenceSkipped = 'zone_unmapped';
-      else if (!userId) presenceSkipped = 'unmatched_identity';
+      // [FIX 2026-08-19] Bỏ skip theo userId==null (trước: 'unmatched_identity') — restricted-
+      // zone-intrusion.isViolation() coi userId=null LÀ vi phạm (mirror Room, xem ZPW-001 §5.4
+      // cũ đã lỗi thời), nhưng writer trước đây chặn không cho ghi nên isViolation() không bao
+      // giờ nhận được input null để đánh giá. Giờ để userId=null đi tiếp tới writeAppearEvent()
+      // — zone_presence_events.user_id vốn đã nullable ở DB, không cần migration.
       else if (utcFallback) presenceSkipped = 'bad_utc';
       else {
         const chk =
@@ -317,7 +321,9 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
 
       // ZPW-001 (UC-109, A.1): GHI presence SAU raw event + SAU nhánh điểm danh. Chỉ khi KHÔNG
       // skip (mọi presenceSkipped đã ở payload). try/catch NUỐT lỗi — KHÔNG vỡ điểm danh/ack.
-      if (!presenceSkipped && presenceZoneId && userId) {
+      // [FIX 2026-08-19] Bỏ "&& userId" — userId=null (người lạ hoàn toàn) giờ VẪN ghi appear,
+      // để restricted-zone-intrusion đánh giá được (xem comment ở presenceSkipped phía trên).
+      if (!presenceSkipped && presenceZoneId) {
         try {
           const { presenceId } = await this.zonePresenceWriter.writeAppearEvent(
             {
