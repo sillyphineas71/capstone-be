@@ -200,6 +200,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
           direction,
           evt.plateNumber,
           snapshotFileId,
+          eventTime,
         );
         if (wasMerged) return true;
 
@@ -337,6 +338,21 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
    * SET event_time/payload_json/snapshot_file_id) nên giữ nguyên mốc "first_seen" xuyên
    * suốt chuỗi merge.
    *
+   * [FIX 2026-08-19] Rolling-window `event_time` TRƯỚC ĐÂY so với `NOW()` (giờ SERVER) —
+   * lỗi trộn 2 miền đồng hồ, vì `event_time` là giờ CAMERA (từ `evt.utc` qua `parseUtc()`).
+   * Độ trễ camera→server thật (đo được ~13s qua dữ liệu production 2026-08-15) ăn mòn gần
+   * hết cửa sổ 15s danh nghĩa, khiến 2 lần đọc CÙNG 1 biển số cách nhau vài giây (theo giờ
+   * camera) vẫn KHÔNG merge được. Sửa: nhận thêm `eventTime` (giờ camera của sự kiện ĐANG
+   * xử lý, cùng nguồn `parseUtc()` với caller) làm tham số, tính ngưỡng cửa sổ TRONG JS
+   * (mirror đúng cách `ivss-presence-ingestion.service.ts` dedupe Face Recognition đã làm
+   * đúng: `event_time >= eventTime.getTime() - DEDUP_WINDOW_MS`), truyền thẳng 1 mốc
+   * `Date` cụ thể vào SQL — không còn `NOW()` nào tham gia phép so `event_time`.
+   * Điều kiện `created_at > NOW() - MAX_MERGE_DURATION_SECONDS` GIỮ NGUYÊN — `created_at`
+   * do chính Postgres server gán lúc INSERT (`@CreateDateColumn`), cùng miền đồng hồ với
+   * `NOW()`, không có bug. Cùng lý do, `SET event_time = NOW()` ở UPDATE bên dưới cũng đổi
+   * thành `SET event_time = eventTime` (giờ camera của lần đọc vừa gộp, đại diện "last_seen")
+   * — trước đây nhảy sang giờ server gây `event_time > created_at` đảo ngược sau merge.
+   *
    * RACE FIX: nhận `manager` (EntityManager của transaction có pg_advisory_xact_lock
    * theo channelId ở caller) thay vì tự dùng `this.dataSource.manager` — để SELECT+
    * UPDATE ở đây chạy TRONG CÙNG transaction/khoá với INSERT fallback của caller,
@@ -349,6 +365,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
     direction: Direction,
     plateNumber: string,
     snapshotFileId: string | null,
+    eventTime: Date,
   ): Promise<boolean> {
     try {
       const rows:
@@ -359,14 +376,14 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
           WHERE event_type = 'ivss_vehicle_event'
             AND payload_json->>'channelId' = $1
             AND payload_json->>'direction' = $2
-            AND event_time > NOW() - ($3::int * INTERVAL '1 second')
+            AND event_time > $3::timestamptz
             AND created_at > NOW() - ($4::int * INTERVAL '1 second')
           ORDER BY event_time DESC
           LIMIT 1`,
         [
           String(channelId),
           direction,
-          OCR_MERGE_WINDOW_SECONDS,
+          new Date(eventTime.getTime() - OCR_MERGE_WINDOW_SECONDS * 1000),
           MAX_MERGE_DURATION_SECONDS,
         ],
       );
@@ -384,7 +401,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
 
       await manager.query(
         `UPDATE iot_device_events
-            SET event_time = NOW(),
+            SET event_time = $5::timestamptz,
                 payload_json = jsonb_set(
                   payload_json,
                   '{rawReads}',
@@ -408,6 +425,7 @@ export class VehicleResolveService implements VehicleEventHandlerPort {
           snapshotFileId,
           recent.id,
           MAX_RAW_READS,
+          eventTime,
         ],
       );
       return true;

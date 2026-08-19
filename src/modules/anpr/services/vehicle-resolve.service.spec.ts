@@ -705,6 +705,11 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       });
     };
 
+    // [FIX 2026-08-19] eventTime của "sự kiện đang xử lý" — tham số MỚI của
+    // mergeIntoRecentEvent(), dùng chung 1 mốc cố định cho mọi lời gọi trực tiếp trong
+    // suite này (mirror evt().utc mặc định) để test window/bind không phụ thuộc đồng hồ máy chạy test.
+    const MERGE_EVENT_TIME = new Date('2026-06-24T09:00:00.000Z');
+
     it('có row gần nhất cùng channel+direction trong cửa sổ + plate đủ giống → UPDATE (bump) + trả true', async () => {
       wireMerge('evt-old', '30A99998'); // OCR lệch 1 ký tự cuối — vẫn coi cùng xe
       const merged = await (service as any).mergeIntoRecentEvent(
@@ -713,6 +718,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         null,
+        MERGE_EVENT_TIME,
       );
       expect(merged).toBe(true);
       expect(mergeUpdate()).toBeDefined();
@@ -726,12 +732,16 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         null,
+        MERGE_EVENT_TIME,
       );
       expect(merged).toBe(false);
       expect(mergeUpdate()).toBeUndefined();
     });
 
-    it('SQL SELECT bind đúng channelId(string)/direction/cửa sổ 15s + trần tổng 90s để DB tự lọc theo channel+direction+thời gian', async () => {
+    // [FIX 2026-08-19] event_time giờ so với $3 (mốc Date tính TRONG JS từ eventTime của
+    // sự kiện hiện tại — mirror dedupe Face Recognition), KHÔNG còn `NOW() - INTERVAL`.
+    // created_at vẫn dùng NOW() - INTERVAL như cũ (không có bug, cùng miền đồng hồ server).
+    it('SQL SELECT bind đúng channelId(string)/direction/mốc cửa sổ 15s tính từ eventTime + trần tổng 90s để DB tự lọc theo channel+direction+thời gian', async () => {
       wireMerge(null);
       await (service as any).mergeIntoRecentEvent(
         dsMock.manager,
@@ -739,17 +749,23 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         null,
+        MERGE_EVENT_TIME,
       );
       const sel = selectMerge();
       expect(sel!.sql).toContain("event_type = 'ivss_vehicle_event'");
       expect(sel!.sql).toContain("payload_json->>'channelId' = $1");
       expect(sel!.sql).toContain("payload_json->>'direction' = $2");
-      expect(sel!.sql).toContain("INTERVAL '1 second'");
+      expect(sel!.sql).toContain('event_time > $3::timestamptz');
       // [FIX 2026-08-11, A1] điều kiện created_at SONG SONG (AND) event_time — KHÔNG thay thế.
       expect(sel!.sql).toContain(
         "created_at > NOW() - ($4::int * INTERVAL '1 second')",
       );
-      expect(sel!.params).toEqual(['5', 'enter', 15, 90]);
+      expect(sel!.params).toEqual([
+        '5',
+        'enter',
+        new Date(MERGE_EVENT_TIME.getTime() - 15 * 1000), // OCR_MERGE_WINDOW_SECONDS=15
+        90,
+      ]);
     });
 
     // [FIX 2026-08-11, A1] Trần TỔNG thời gian gộp — chống "cửa sổ tự làm mới vô hạn".
@@ -765,6 +781,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           'enter',
           '30A99999',
           null,
+          MERGE_EVENT_TIME,
         );
         expect(merged).toBe(true);
         expect(mergeUpdate()).toBeDefined();
@@ -810,14 +827,18 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         'media-new',
+        MERGE_EVENT_TIME,
       );
       const upd = mergeUpdate();
       expect(upd!.sql).toContain('COALESCE(snapshot_file_id, $2)');
+      // [FIX 2026-08-19] SET event_time = $5 (eventTime của lần đọc hiện tại), KHÔNG còn NOW().
+      expect(upd!.sql).toContain('event_time = $5::timestamptz');
       expect(upd!.params).toEqual([
         JSON.stringify(['30A99999']),
         'media-new',
         'evt-old',
         12, // [FIX 2026-08-11, A2] MAX_RAW_READS
+        MERGE_EVENT_TIME,
       ]);
     });
 
@@ -829,6 +850,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         null,
+        MERGE_EVENT_TIME,
       );
       const upd = mergeUpdate();
       expect(upd!.sql).toContain('jsonb_set(');
@@ -885,6 +907,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           'enter',
           'e', // trùng entry cuối → isSimilarPlate('e','e')=true qua nhánh a===b
           null,
+          MERGE_EVENT_TIME,
         );
         expect(merged).toBe(true);
         expect(row.rawReads).toEqual(['a', 'b', 'c', 'd', 'e', 'e']);
@@ -900,6 +923,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           'enter',
           'p11', // trùng entry cuối cùng đã seed
           null,
+          MERGE_EVENT_TIME,
         );
         expect(merged).toBe(true);
         expect(row.rawReads).toHaveLength(12);
@@ -915,6 +939,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           'enter',
           '30A99999',
           null,
+          MERGE_EVENT_TIME,
         );
         const upd = mergeUpdate();
         const coalesceCount = (
@@ -936,6 +961,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
         'enter',
         '30A99999',
         null,
+        MERGE_EVENT_TIME,
       );
       expect(merged).toBe(false);
     });
@@ -973,6 +999,7 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
           'seen',
           '86886',
           null,
+          MERGE_EVENT_TIME,
         );
         expect(merged).toBe(false);
         expect(mergeUpdate()).toBeUndefined();
@@ -1013,6 +1040,103 @@ describe('VehicleResolveService (VRE-001 / UC5)', () => {
       expect(payloadOf().direction).toBe('leave');
       const sel = selectMerge();
       expect(sel!.params[1]).toBe('leave');
+    });
+
+    // [FIX 2026-08-19] Bug thật phát hiện qua đối chiếu dữ liệu production 2026-08-15:
+    // rolling-window trước đây so `event_time` (giờ CAMERA, từ evt.utc) với `NOW()` (giờ
+    // SERVER) — độ trễ camera→server thật (~13s đo được) ăn mòn gần hết cửa sổ 15s danh
+    // nghĩa, khiến 2 lần đọc CÙNG 1 biển số cách nhau chỉ 3s (giờ camera) KHÔNG merge được.
+    // Các test dưới đây xác nhận ngưỡng SELECT giờ tính hoàn toàn từ `eventTime` của sự
+    // kiện đang xử lý (JS, giống hệt cách dedupe Face Recognition làm), không còn phụ
+    // thuộc NOW()/đồng hồ máy chạy test — đúng quy ước sẵn có của file này: unit test xác
+    // nhận code BIND đúng tham số để Postgres tự lọc, không re-implement logic thời gian.
+    describe('[FIX 2026-08-19] rolling-window event_time tính từ eventTime hiện tại (JS), không còn NOW() (giờ server)', () => {
+      // parseUtc() có ngưỡng lệch SKEW_MS=1h so với giờ thật của máy chạy test (fallback
+      // sang now() nếu evt.utc lệch quá 1h) — dùng mốc TƯƠNG ĐỐI theo Date.now() (không
+      // hardcode ngày cụ thể) để test luôn hợp lệ bất kể chạy vào lúc nào, không rơi vào
+      // nhánh utcFallback ngoài ý muốn.
+      const secondsAgo = (s: number) => new Date(Date.now() - s * 1000);
+
+      it('Kịch bản bug thật: 2 lần đọc CÙNG 1 biển cách nhau 3s theo giờ camera (độ trễ server ~13s không còn ảnh hưởng) → ngưỡng SELECT tính đúng từ eventTime hiện tại, merge thành công', async () => {
+        // Mô phỏng đúng tỉ lệ đã quan sát trong DB thật (2026-08-15): 2 lần đọc cách nhau
+        // 3s theo giờ CAMERA, dù request thứ 2 tới server trễ hơn ~13s so với request 1
+        // (độ trễ đó KHÔNG còn xuất hiện ở đâu trong công thức ngưỡng nữa, vì chỉ có
+        // eventTime — giờ camera — tham gia phép tính, không có NOW() nào cả).
+        const eventTime1 = secondsAgo(20); // giờ camera của lần đọc 1
+        const eventTime2 = secondsAgo(17); // +3s so với lần đọc 1 (giờ camera)
+
+        wireMerge('evt-old', '30F5577'); // giả lập DB "thấy" row của lần đọc 1 (Postgres thật sẽ thấy, vì event_time1 > ngưỡng mới)
+        await service.onVehicleEvent(
+          evt({ plateNumber: '30F5577', utc: eventTime2.toISOString() }),
+        );
+
+        const sel = selectMerge();
+        const threshold = sel!.params[2] as Date;
+        // Ngưỡng PHẢI tính từ eventTime2 (sự kiện đang xử lý), KHÔNG phải NOW() lúc test chạy.
+        expect(threshold.toISOString()).toBe(
+          new Date(eventTime2.getTime() - 15 * 1000).toISOString(),
+        );
+        // Chứng minh bằng số học: event_time1 (giờ camera lần đọc 1) PHẢI lớn hơn ngưỡng mới
+        // → Postgres thật (event_time > $3) sẽ TÌM THẤY row lần đọc 1 → merge được.
+        expect(eventTime1.getTime()).toBeGreaterThan(threshold.getTime());
+
+        expect(insert()).toBeUndefined(); // đã merge — KHÔNG tạo row mới
+        const upd = mergeUpdate();
+        expect(upd).toBeDefined();
+      });
+
+      it('Case bình thường (độ trễ ~0, môi trường test/demo thật) → vẫn merge đúng như trước, hành vi không đổi', async () => {
+        const eventTime1 = secondsAgo(2);
+        const eventTime2 = secondsAgo(0); // +2s, độ trễ gần 0
+
+        wireMerge('evt-old', '30A99998');
+        await service.onVehicleEvent(
+          evt({ plateNumber: '30A99999', utc: eventTime2.toISOString() }),
+        );
+
+        expect(insert()).toBeUndefined();
+        expect(mergeUpdate()).toBeDefined();
+        const sel = selectMerge();
+        const threshold = sel!.params[2] as Date;
+        expect(eventTime1.getTime()).toBeGreaterThan(threshold.getTime());
+      });
+
+      it('2 lần đọc cách nhau NGOÀI cửa sổ merge (>15s theo giờ camera) → ngưỡng SELECT loại trừ đúng, Postgres thật sẽ KHÔNG thấy row (không merge quá đà)', async () => {
+        const eventTime1 = secondsAgo(25);
+        const eventTime2 = secondsAgo(5); // cách 20s, vượt 15s
+
+        // Mock vẫn "thấy" row (wireMerge không tự lọc theo thời gian, giống mọi test khác
+        // trong file — chỉ dùng để xác nhận GIÁ TRỊ ngưỡng đúng, việc Postgres thật loại
+        // trừ row nào là trách nhiệm của WHERE event_time > $3, không phải của JS).
+        wireMerge('evt-old', '30A99998');
+        await service.onVehicleEvent(
+          evt({ plateNumber: '30A99999', utc: eventTime2.toISOString() }),
+        );
+
+        const sel = selectMerge();
+        const threshold = sel!.params[2] as Date;
+        expect(threshold.toISOString()).toBe(
+          new Date(eventTime2.getTime() - 15 * 1000).toISOString(),
+        );
+        // event_time1 giờ PHẢI nhỏ hơn ngưỡng → Postgres thật (event_time > $3) sẽ KHÔNG
+        // thấy row lần đọc 1 → không merge quá đà 2 lượt xe cách xa nhau.
+        expect(eventTime1.getTime()).toBeLessThan(threshold.getTime());
+      });
+
+      it('Sau merge, event_time của dòng kết quả = eventTime của lần đọc GẦN NHẤT (giờ camera) — không còn nhảy sang NOW() (giờ server)', async () => {
+        const eventTimeLatest = secondsAgo(1);
+        wireMerge('evt-old', '30F5577');
+        await service.onVehicleEvent(
+          evt({ plateNumber: '30F5577', utc: eventTimeLatest.toISOString() }),
+        );
+        const upd = mergeUpdate();
+        expect(upd).toBeDefined();
+        expect(upd!.sql).toContain('event_time = $5::timestamptz');
+        expect(upd!.sql).not.toContain('event_time = NOW()');
+        expect((upd!.params[4] as Date).toISOString()).toBe(
+          eventTimeLatest.toISOString(),
+        );
+      });
     });
   });
 
