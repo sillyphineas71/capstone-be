@@ -70,11 +70,21 @@ export interface RoomStatusDetail {
  */
 @Injectable()
 export class RoomStatusService {
+  /**
+   * [FIX 2026-08-20] Dong bo voi RoomSearchService — tin hieu occupancy chi
+   * "con hieu luc" trong vong OCCUPANCY_SIGNAL_TTL_MINUTES phut ke tu
+   * event_time, tranh phong bi ket dinh 'occupied' vinh vien khi camera
+   * ngung gui event sau 1 lan bao occupancy_count > 0 (xac nhan tren RDS:
+   * co phong con occupancy_count > 0 tu event cach day hon 700 gio).
+   */
+  private static readonly OCCUPANCY_SIGNAL_TTL_MINUTES = 15;
+
   // LATERAL subquery dùng chung cho list + detail (anti-N+1).
   private static readonly LATERAL_JOINS = `
     LEFT JOIN LATERAL (
       SELECT occupancy_count FROM room_events
       WHERE room_id = r.id AND occupancy_count IS NOT NULL
+        AND event_time >= now() - interval '${RoomStatusService.OCCUPANCY_SIGNAL_TTL_MINUTES} minutes'
       ORDER BY event_time DESC LIMIT 1
     ) oc ON true
     LEFT JOIN LATERAL (
@@ -158,7 +168,8 @@ export class RoomStatusService {
    * doc truc tiep se "dung yen" nhu du lieu tinh/mock. Uu tien:
    * 1. administrative_status (admin dat qua PATCH .../administrative-status)
    *    neu la 'maintenance'/'inactive' — luon thang.
-   * 2. 'occupied' neu tin hieu occupancy gan nhat (room_events) > 0.
+   * 2. 'occupied' neu tin hieu occupancy CON HIEU LUC (trong
+   *    OCCUPANCY_SIGNAL_TTL_MINUTES phut gan nhat, xem LATERAL_JOINS/oc) > 0.
    * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
    * 4. 'available' con lai.
    */

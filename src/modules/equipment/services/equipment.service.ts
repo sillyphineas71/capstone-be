@@ -34,6 +34,10 @@ import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 import { EquipmentFaultConfirmationResponseDto } from '../dto/equipment-fault-confirmation-response.dto.js';
+import {
+  EquipmentFaultHistoryItemDto,
+  EquipmentFaultEventType,
+} from '../dto/equipment-fault-history-item.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
 
@@ -343,9 +347,9 @@ export class EquipmentService {
       );
     }
 
-    // Phase D — notify SYSTEM_ADMIN (fail-separate, KHÔNG rollback nghiệp vụ)
+    // Phase D — notify BUSINESS_ADMIN (fail-separate, KHÔNG rollback nghiệp vụ)
     try {
-      const adminIds = await this.resolveSystemAdminIds();
+      const adminIds = await this.resolveBusinessAdminIds();
       const room = saved.currentRoomId
         ? await this.dataSource.getRepository(RoomEntity).findOne({
             where: { id: saved.currentRoomId },
@@ -374,7 +378,7 @@ export class EquipmentService {
       });
     } catch (err) {
       this.logger.error(
-        `Failed to notify SYSTEM_ADMIN for equipment fault ${saved.id}: ${
+        `Failed to notify BUSINESS_ADMIN for equipment fault ${saved.id}: ${
           err instanceof Error ? err.message : 'Unknown'
         }`,
       );
@@ -398,10 +402,10 @@ export class EquipmentService {
   }
 
   /**
-   * Helper Lấy danh sách ID của người dùng có role SYSTEM_ADMIN.
+   * Helper Lấy danh sách ID của người dùng có role BUSINESS_ADMIN.
    * Direct SQL query mirror stranger-alert.service.ts / vehicle-control-alert.service.ts.
    */
-  private async resolveSystemAdminIds(): Promise<string[]> {
+  private async resolveBusinessAdminIds(): Promise<string[]> {
     if (!this.dataSource.manager?.query) {
       return [];
     }
@@ -409,7 +413,7 @@ export class EquipmentService {
       `SELECT DISTINCT u.id FROM users u
          JOIN user_roles ur ON ur.user_id = u.id AND ur.is_active = true
          JOIN roles r ON r.id = ur.role_id
-        WHERE r.role_code = 'SYSTEM_ADMIN' AND u.deleted_at IS NULL`,
+        WHERE r.role_code = 'BUSINESS_ADMIN' AND u.deleted_at IS NULL`,
     );
     return rows.map((r) => r.id);
   }
@@ -691,6 +695,85 @@ export class EquipmentService {
       currentRoomId: saved.currentRoomId,
       createdAt: saved.createdAt,
     });
+  }
+
+  /**
+   * Lich su bao hong / xac nhan / khac phuc cua 1 thiet bi (GET /equipments/:id/fault-history).
+   * Khong co bang rieng — suy ra tu audit_logs (entityType='equipment', entityId=equipmentId),
+   * phan loai lai thanh 3 loai su kien qua actionType/severity/newValueJson vi bang audit_logs
+   * dung chung cho ca create/assign/report/confirm/resolve/delete:
+   *  - reported : actionType='update' + severity=WARNING (ghi trong reportFault)
+   *  - confirmed: actionType='confirm'                    (ghi trong confirmFault)
+   *  - resolved : actionType='update' + severity=INFO + co key 'resolutionNote'
+   *               (phan biet voi assignment cung actionType='update'+INFO nhung khong co key nay)
+   */
+  async getFaultHistory(
+    equipmentId: string,
+  ): Promise<EquipmentFaultHistoryItemDto[]> {
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: { code: 'EQUIPMENT_NOT_FOUND', details: { equipmentId } },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/fault-history`,
+      });
+    }
+
+    const rows = await this.dataSource.getRepository(AuditLogEntity).find({
+      where: { entityType: 'equipment', entityId: equipmentId },
+      relations: { user: true },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+
+    const events: EquipmentFaultHistoryItemDto[] = [];
+    for (const row of rows) {
+      const nv = (row.newValueJson ?? {}) as Record<string, unknown>;
+      let eventType: EquipmentFaultEventType | null = null;
+      let note: string | null = null;
+
+      if (row.actionType === 'confirm') {
+        eventType = 'confirmed';
+        note = (nv.confirmationNote as string | undefined) ?? null;
+      } else if (
+        row.actionType === 'update' &&
+        row.severity === AuditLogSeverity.WARNING
+      ) {
+        eventType = 'reported';
+        note = (nv.lastIssueNote as string | undefined) ?? null;
+      } else if (
+        row.actionType === 'update' &&
+        row.severity === AuditLogSeverity.INFO &&
+        'resolutionNote' in nv
+      ) {
+        eventType = 'resolved';
+        note = (nv.resolutionNote as string | undefined) ?? null;
+      }
+
+      if (!eventType) continue;
+
+      events.push(
+        new EquipmentFaultHistoryItemDto({
+          id: row.id,
+          eventType,
+          actorId: row.userId,
+          actorName: row.user?.fullName ?? null,
+          note,
+          healthStatus:
+            (nv.healthStatus as string | undefined) ??
+            (nv.healthStatusAtConfirmation as string | undefined) ??
+            null,
+          assetStatus: (nv.assetStatus as string | undefined) ?? null,
+          createdAt: row.createdAt,
+        }),
+      );
+    }
+
+    return events;
   }
 
   /**

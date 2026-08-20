@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí |
 | :--- | :--- | :--- |
 | 2026-08-14 | Tạo mới spec.md cho EQUIP-FAULT-LIFECYCLE-001 (khép kín vòng đời báo lỗi thiết bị: notify SYSTEM_ADMIN → sysadmin xác nhận → sysadmin cập nhật sau khi sửa xong). Trạng thái [Missing]. | Toàn bộ file |
+| 2026-08-20 | ĐẢO NGƯỢC quyết định notify: người dùng chốt lại — báo lỗi thiết bị giờ notify role `BUSINESS_ADMIN` (không còn `SYSTEM_ADMIN`), vì BA mới là người thực tế xử lý confirm/resolve trên FE. Đổi `resolveSystemAdminIds()` → `resolveBusinessAdminIds()` trong `equipment.service.ts`, SQL `role_code` đổi từ `SYSTEM_ADMIN` sang `BUSINESS_ADMIN`. Permission `equipment.confirm_fault`/`equipment.resolve_fault` giữ nguyên `[SYSTEM_ADMIN, BUSINESS_ADMIN]` — không đổi. | Mục 0 (dòng "Notification chỉ gửi..."), §Primary Actor/Trigger/Expected Output, FR-01, AC-01, C3, EC-04 |
 
 > Phạm vi: mở rộng UC-62 (`feat-report-equipment-fault`, đã triển khai) bằng 3 việc: (1) notify SYSTEM_ADMIN khi có report mới, (2) endpoint mới cho sysadmin xác nhận lỗi thật, (3) endpoint mới cho sysadmin cập nhật lại sau khi sửa vật lý xong (recovery — điểm đã được UC-62 §10/§11-C10 đánh dấu "KHÔNG thuộc UC-62, là UC riêng future").
 > KHÔNG bao gồm: cảnh báo khi đặt phòng (`spec/features/meetings/feat-room-equipment-fault-warning/`) và badge thiết bị hỏng khi tìm phòng (`spec/features/rooms/feat-room-search-equipment-badge/`) — 2 feature riêng, module khác.
@@ -50,9 +51,9 @@ Tổ hợp `(entityType='equipment', actionType='update', severity='WARNING')` l
 | :--- | :--- |
 | **Feature ID** | EQUIP-FAULT-LIFECYCLE-001 |
 | **Module** | Equipment Management (`src/modules/equipment`), phụ thuộc `NotificationsModule` |
-| **Primary Actor** | SYSTEM_ADMIN (nhận notify, xác nhận, xử lý xong); EMPLOYEE/MANAGER/BUSINESS_ADMIN/SYSTEM_ADMIN (report — đã có ở UC-62, không đổi) |
-| **Trigger** | (1) Nhân viên gọi `PATCH .../fault` có sẵn → cần notify SYSTEM_ADMIN. (2) SYSTEM_ADMIN xác nhận lỗi thật trước khi cử người sửa. (3) SYSTEM_ADMIN cập nhật sau khi sửa vật lý xong. |
-| **Expected Output** | SYSTEM_ADMIN nhận được notification in-app khi có report mới; có endpoint xác nhận (ghi vết audit, không đổi trạng thái thiết bị); có endpoint đưa thiết bị về `healthy`/`warning` sau khi sửa xong, kèm `lastMaintenanceAt`. |
+| **Primary Actor** | BUSINESS_ADMIN (nhận notify, xác nhận, xử lý xong — đổi từ SYSTEM_ADMIN, xem changelog 2026-08-20); EMPLOYEE/MANAGER/BUSINESS_ADMIN/SYSTEM_ADMIN (report — đã có ở UC-62, không đổi) |
+| **Trigger** | (1) Nhân viên gọi `PATCH .../fault` có sẵn → cần notify BUSINESS_ADMIN. (2) SYSTEM_ADMIN/BUSINESS_ADMIN xác nhận lỗi thật trước khi cử người sửa. (3) SYSTEM_ADMIN/BUSINESS_ADMIN cập nhật sau khi sửa vật lý xong. |
+| **Expected Output** | BUSINESS_ADMIN nhận được notification in-app khi có report mới; có endpoint xác nhận (ghi vết audit, không đổi trạng thái thiết bị); có endpoint đưa thiết bị về `healthy`/`warning` sau khi sửa xong, kèm `lastMaintenanceAt`. |
 | **Pre-condition** | Thiết bị tồn tại và đang có `healthStatus != healthy` (đang có vấn đề cần xác nhận/xử lý). |
 | **Related** | UC-62 (`feat-report-equipment-fault`, đã có — mở rộng, KHÔNG sửa method `reportFault` hiện có ngoài việc THÊM Phase D). Related module: `feat-room-equipment-fault-warning` (meetings), `feat-room-search-equipment-badge` (rooms) — đọc `healthStatus` do feature này duy trì. |
 
@@ -68,7 +69,7 @@ Tổ hợp `(entityType='equipment', actionType='update', severity='WARNING')` l
 
 ### 2.2. Role & Permission Rules
 - `equipment.confirm_fault`, `equipment.resolve_fault`: seed cho `SYSTEM_ADMIN, BUSINESS_ADMIN` — mirror đúng nhóm quyền admin đang dùng cho `equipment.create/delete/assign` (KHÔNG mở cho MANAGER/EMPLOYEE, khác với `report_fault`).
-- Notification chỉ gửi cho role `SYSTEM_ADMIN` (chốt với PO — không gửi BUSINESS_ADMIN dù họ cũng có quyền confirm/resolve).
+- Notification chỉ gửi cho role `BUSINESS_ADMIN` (đảo ngược quyết định cũ 2026-08-20 — trước đây chỉ gửi SYSTEM_ADMIN; BA là người thực tế thao tác confirm/resolve trên FE nên nhận notify trực tiếp, SYSTEM_ADMIN không còn nhận).
 
 ### 2.3. Actor Constraints
 - Actor phải đăng nhập (`JwtAuthGuard`) và có permission tương ứng (`PermissionsGuard`).
@@ -135,7 +136,7 @@ Cả 2 DTO dùng `forbidNonWhitelisted` (ValidationPipe chuẩn dự án) → fi
 
 ### 5.1. Notify khi report (Phase D của `reportFault` đã có)
 1. Sau khi Phase C (audit) của `reportFault` hoàn tất (thành công hay thất bại đều không ảnh hưởng — audit đã fail-separate từ trước).
-2. Resolve danh sách `userId` có role `SYSTEM_ADMIN` (raw SQL, mirror `resolveAdmins()`).
+2. Resolve danh sách `userId` có role `BUSINESS_ADMIN` (raw SQL, mirror `resolveAdmins()`).
 3. Load tên phòng nếu `saved.currentRoomId` có giá trị (query nhẹ `RoomEntity`).
 4. Gọi `notificationsService.createNotification(...)` — **fail-separate** (try/catch riêng, không ảnh hưởng response của `reportFault`).
 
@@ -217,7 +218,7 @@ Cả 3 đều audit **fail-separate** (transaction riêng, `try/catch`, `logger.
 | Việc | Thuộc feature nào | Feature này làm? |
 | :--- | :--- | :--- |
 | Report lỗi (set warning/faulty/offline) | UC-62 (đã có) | ❌ (không sửa, chỉ thêm Phase D) |
-| Notify SYSTEM_ADMIN khi có report | **EQUIP-FAULT-LIFECYCLE-001** | ✅ |
+| Notify BUSINESS_ADMIN khi có report | **EQUIP-FAULT-LIFECYCLE-001** | ✅ |
 | Xác nhận lỗi thật | **EQUIP-FAULT-LIFECYCLE-001** | ✅ |
 | Cập nhật sau khi sửa xong (recovery) | **EQUIP-FAULT-LIFECYCLE-001** | ✅ |
 | Cảnh báo khi đặt phòng có thiết bị hỏng | `feat-room-equipment-fault-warning` (meetings) | ❌ |
@@ -233,7 +234,7 @@ Cả 3 đều audit **fail-separate** (transaction riêng, `try/catch`, `logger.
 | :--- | :--- | :--- |
 | C1 | Lưu trạng thái "đã xác nhận" ở đâu | Chỉ `audit_logs`, KHÔNG thêm cột |
 | C2 | Booking gate chặn mức độ nào | (thuộc spec khác) chỉ `faulty/offline` |
-| C3 | Notification gửi role nào | Chỉ `SYSTEM_ADMIN` |
+| C3 | Notification gửi role nào | Chỉ `BUSINESS_ADMIN` (đảo ngược 2026-08-20, xem changelog — trước đó là `SYSTEM_ADMIN`) |
 | C4 | Real-time WebSocket push | KHÔNG — chỉ in-app inbox |
 | C5 | Permission confirm/resolve — role nào | `SYSTEM_ADMIN, BUSINESS_ADMIN` (mirror `create/delete/assign`) |
 | C6 | `lastMaintenanceAt` set khi nào | Chỉ khi `resolveFault`, không set ở `confirmFault` |
@@ -244,7 +245,7 @@ Cả 3 đều audit **fail-separate** (transaction riêng, `try/catch`, `logger.
 
 ## 12. Functional Requirements
 
-- **FR-01**: Khi `reportFault` thành công, hệ thống tạo 1 notification in-app cho toàn bộ user có role `SYSTEM_ADMIN`.
+- **FR-01**: Khi `reportFault` thành công, hệ thống tạo 1 notification in-app cho toàn bộ user có role `BUSINESS_ADMIN`.
 - **FR-02**: Notify thất bại KHÔNG ảnh hưởng response thành công của `reportFault` (fail-separate).
 - **FR-03**: Cung cấp `PATCH /api/v1/equipments/:equipmentId/fault-confirmation`, chỉ user có `equipment.confirm_fault` được gọi.
 - **FR-04**: Confirm ghi đúng 1 dòng `audit_logs` (`actionType='confirm'`), KHÔNG đổi field nào trên `equipments`.
@@ -265,7 +266,7 @@ Cả 3 đều audit **fail-separate** (transaction riêng, `try/catch`, `logger.
 
 ## 14. Acceptance Criteria
 
-- **AC-01**: EMPLOYEE gọi `PATCH .../fault` thành công → có 1 bản ghi `notifications` mới, `recipient_user_ids_json` chứa đúng toàn bộ userId role SYSTEM_ADMIN.
+- **AC-01**: EMPLOYEE gọi `PATCH .../fault` thành công → có 1 bản ghi `notifications` mới, `recipient_user_ids_json` chứa đúng toàn bộ userId role BUSINESS_ADMIN.
 - **AC-02**: SYSTEM_ADMIN gọi `PATCH .../fault-confirmation` với thiết bị đang `faulty` → 200, có 1 dòng `audit_logs` mới (`actionType='confirm'`), `equipments.health_status` KHÔNG đổi.
 - **AC-03**: Gọi `fault-confirmation` khi thiết bị đang `healthy` → 409 `EQUIPMENT_NO_ACTIVE_FAULT`.
 - **AC-04**: SYSTEM_ADMIN gọi `PATCH .../fault-resolution` với `healthStatus=healthy` → 200, `data.healthStatus='healthy'`, `lastMaintenanceAt` được set, `lastIssueNote` cũ vẫn còn.
@@ -278,7 +279,7 @@ Cả 3 đều audit **fail-separate** (transaction riêng, `try/catch`, `logger.
 - **EC-01**: 404 thiết bị không tồn tại (cả 2 endpoint mới).
 - **EC-02**: 409 `EQUIPMENT_NO_ACTIVE_FAULT` khi `healthStatus=healthy`.
 - **EC-03**: 422 giá trị enum ngoài allowlist (`healthStatus` resolve nhận `faulty/offline` → reject ở DTO).
-- **EC-04**: Notify thất bại (SYSTEM_ADMIN rỗng, hoặc `createNotification` throw) → log warning, KHÔNG ảnh hưởng response chính.
+- **EC-04**: Notify thất bại (BUSINESS_ADMIN rỗng, hoặc `createNotification` throw) → log warning, KHÔNG ảnh hưởng response chính.
 - **EC-05**: Không tìm được reporter gần nhất (report đầu tiên bị audit ghi lỗi trước đó, hoặc dữ liệu cũ) → bỏ qua bước notify reporter, không lỗi.
 
 ---

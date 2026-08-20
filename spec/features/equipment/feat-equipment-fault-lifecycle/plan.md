@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí |
 | :--- | :--- | :--- |
 | 2026-08-14 | Tạo mới plan.md cho EQUIP-FAULT-LIFECYCLE-001. | Toàn bộ file |
+| 2026-08-20 | ĐẢO NGƯỢC quyết định #3: notify report giờ gửi `BUSINESS_ADMIN` (không còn `SYSTEM_ADMIN`) — theo yêu cầu người dùng, xem `spec.md` changelog cùng ngày. | Mục 0.2 (dòng #3), Phase D |
 
 > Dựa trên `spec.md` (EQUIP-FAULT-LIFECYCLE-001) đã duyệt. **CHỈ kế hoạch** — KHÔNG code, KHÔNG task breakdown.
 > Mirror pattern `reportFault`/`create` (UC-61/UC-62) trong cùng module. THÊM additive vào `EquipmentService`/`EquipmentController`/`EquipmentModule` sẵn có.
@@ -22,7 +23,7 @@
 | :--- | :--- |
 | 1 | "Đã xác nhận" chỉ lưu ở `audit_logs` (`actionType='confirm'`), KHÔNG thêm cột `equipments`. |
 | 2 | (thuộc spec khác — booking gate chỉ `faulty/offline`, không liên quan file sửa ở đây) |
-| 3 | Notification report chỉ gửi role `SYSTEM_ADMIN` (raw SQL, KHÔNG BUSINESS_ADMIN dù họ có quyền confirm/resolve). |
+| 3 | Notification report chỉ gửi role `BUSINESS_ADMIN` (raw SQL — đảo ngược 2026-08-20, trước đó là `SYSTEM_ADMIN`). |
 | 4 | KHÔNG WebSocket real-time — chỉ `notificationsService.createNotification()` (in-app inbox). |
 | 5 | Permission `equipment.confirm_fault`/`equipment.resolve_fault` → `[SYSTEM_ADMIN, BUSINESS_ADMIN]`. |
 | 6 | `lastMaintenanceAt=now()` set CHỈ ở `resolveFault`, KHÔNG set ở `confirmFault`. |
@@ -113,14 +114,14 @@ private async findLastFaultReportAuditLog(equipmentId: string): Promise<{ userId
 ```
 Dùng chung cho cả `confirmFault` và `resolveFault`.
 
-### 1.5. Helper mới — `resolveSystemAdminIds`
+### 1.5. Helper mới — `resolveBusinessAdminIds` (đổi tên 2026-08-20, trước đó là `resolveSystemAdminIds`)
 ```ts
-private async resolveSystemAdminIds(): Promise<string[]> {
+private async resolveBusinessAdminIds(): Promise<string[]> {
   const rows: Array<{ id: string }> = await this.dataSource.manager.query(
     `SELECT DISTINCT u.id FROM users u
        JOIN user_roles ur ON ur.user_id = u.id AND ur.is_active = true
        JOIN roles r ON r.id = ur.role_id
-      WHERE r.role_code = 'SYSTEM_ADMIN' AND u.deleted_at IS NULL`,
+      WHERE r.role_code = 'BUSINESS_ADMIN' AND u.deleted_at IS NULL`,
   );
   return rows.map((r) => r.id);
 }
@@ -219,7 +220,7 @@ Copy chính xác cấu trúc `up()`/`down()` của `20260811000003-SeedRoomDetai
 
 | Giá trị enum | Dùng khi |
 | :--- | :--- |
-| `EQUIPMENT_FAULT_REPORTED = 'equipment_fault_reported'` | Phase D của `reportFault`, gửi SYSTEM_ADMIN |
+| `EQUIPMENT_FAULT_REPORTED = 'equipment_fault_reported'` | Phase D của `reportFault`, gửi BUSINESS_ADMIN |
 | `EQUIPMENT_FAULT_CONFIRMED = 'equipment_fault_confirmed'` | `confirmFault`, gửi reporter |
 | `EQUIPMENT_FAULT_RESOLVED = 'equipment_fault_resolved'` | `resolveFault`, gửi reporter |
 
