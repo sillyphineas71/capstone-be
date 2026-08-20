@@ -110,10 +110,12 @@ export class IotAuditRepository {
       configMetadata: Record<string, any>;
     },
   ): Promise<void> {
-    // metadata must not contain one_time_callback_token or callback_token_hash
+    // metadata must not contain one_time_callback_token, callback_token_hash, or
+    // password_encrypted (SEC-01: dù đã mã hoá, không cần lưu thêm 1 bản vào audit_logs)
     const safeMetadata = { ...params.configMetadata };
     delete safeMetadata.one_time_callback_token;
     delete safeMetadata.callback_token_hash;
+    delete safeMetadata.password_encrypted;
 
     await entityManager.query(
       `

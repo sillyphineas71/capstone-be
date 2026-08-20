@@ -45,4 +45,23 @@ export class ConfigureFaceServerDto {
     message: 'stranger_path must be a valid path starting with /',
   })
   stranger_path: string;
+
+  /**
+   * Chiều BE→thiết bị (gọi /webs/login của chính FaceGate để upload ảnh/thêm người) —
+   * trước đây KHÔNG có field nào trong DTO để nhập, chỉ set được bằng cách sửa tay DB.
+   * base_url optional: bỏ trống → FaceDeviceProviderFactory tự fallback sang
+   * `http://${ip_address}` (xem face-device-provider.factory.ts:36-37).
+   */
+  @IsUrl({ require_tld: false })
+  @IsOptional()
+  base_url?: string;
+
+  @IsString()
+  @IsOptional()
+  username?: string;
+
+  /** Plaintext qua HTTPS — service mã hoá AES-256-GCM (encryptSecret) trước khi lưu DB. */
+  @IsString()
+  @IsOptional()
+  password?: string;
 }

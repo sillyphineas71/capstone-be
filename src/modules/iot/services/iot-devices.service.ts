@@ -918,7 +918,7 @@ export class IotDevicesService {
     // sinh là "đã revoked" (CALLBACK_TOKEN_REVOKED) dù token này chưa từng bị revoke.
     delete currentFaceConfig.revoked_at;
     delete currentFaceConfig.revoked_reason;
-    const newFaceConfig = {
+    const newFaceConfig: Record<string, unknown> = {
       ...currentFaceConfig,
       callback_enabled,
       callback_protocol: dto.callback_protocol,
@@ -931,6 +931,14 @@ export class IotDevicesService {
       callback_token_last4: tokenLast4,
       configured_at: configuredAt,
     };
+    // Chiều BE→thiết bị (base_url/username/password) — CHỈ ghi đè khi DTO thực sự gửi
+    // field đó, mirror đúng pattern preserve-field-không-thuộc-DTO ở trên (FIX
+    // 2026-08-16): không gửi → giữ nguyên giá trị cũ (nếu có) từ currentFaceConfig.
+    if (dto.base_url !== undefined) newFaceConfig.base_url = dto.base_url;
+    if (dto.username !== undefined) newFaceConfig.username = dto.username;
+    if (dto.password !== undefined) {
+      newFaceConfig.password_encrypted = encryptSecret(dto.password);
+    }
 
     const currentMetadata = device.metadataJson || {};
     const updatedMetadata = {
