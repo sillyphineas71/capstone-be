@@ -118,7 +118,7 @@ describe('EquipmentService.reportFault Notify Phase D (EQUIP-FAULT-LIFECYCLE-001
     };
   }
 
-  it('[N1] reportFault thành công → gọi createNotification với EQUIPMENT_FAULT_REPORTED cho SYSTEM_ADMIN', async () => {
+  it('[N1] reportFault thành công → gọi createNotification với EQUIPMENT_FAULT_REPORTED cho BUSINESS_ADMIN', async () => {
     const { service, createNotification } = setup({});
     const res = await service.reportFault(
       equipmentId,
@@ -140,7 +140,7 @@ describe('EquipmentService.reportFault Notify Phase D (EQUIP-FAULT-LIFECYCLE-001
     );
   });
 
-  it('[N2] resolveSystemAdminIds trả [] → createNotification vẫn được gọi với [] không throw', async () => {
+  it('[N2] resolveBusinessAdminIds trả [] → createNotification vẫn được gọi với [] không throw', async () => {
     const { service, createNotification } = setup({ adminUserIds: [] });
     const res = await service.reportFault(
       equipmentId,

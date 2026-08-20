@@ -28,10 +28,24 @@ interface RoomSearchRow {
   warning_count: string | number;
 }
 
+/**
+ * [FIX 2026-08-20] Tin hieu occupancy chi duoc coi la "con hieu luc" trong
+ * OCCUPANCY_SIGNAL_TTL_MINUTES phut ke tu event_time. Truoc day subquery lay
+ * ban ghi occupancy_count moi nhat MOI TUNG CO, khong gioi han thoi gian —
+ * chi can 1 lan camera/test gui occupancy_count > 0 roi im lang mai (khong
+ * co event tiep theo dua ve 0), phong bi "dinh" trang thai occupied vinh
+ * vien du thuc te khong con ai trong phong (xac nhan tren RDS: co phong hien
+ * occupancy_count > 0 tu event cach day hon 700 gio). Gioi han thoi gian nay
+ * khien tin hieu cu tu dong het han → COALESCE(...,0) > 0 = false → roi ve
+ * logic booking (reserved/available) thay vi ket dinh occupied.
+ */
+const OCCUPANCY_SIGNAL_TTL_MINUTES = 15;
+
 /** Correlated scalar subquery dung chung cho SELECT + WHERE (khong can LATERAL join). */
 const LATEST_OCCUPANCY_SUBQUERY = `(
   SELECT re.occupancy_count FROM room_events re
   WHERE re.room_id = r.id AND re.occupancy_count IS NOT NULL
+    AND re.event_time >= now() - interval '${OCCUPANCY_SIGNAL_TTL_MINUTES} minutes'
   ORDER BY re.event_time DESC LIMIT 1
 )`;
 const HAS_CURRENT_BOOKING_SUBQUERY = `EXISTS (
@@ -293,7 +307,8 @@ export class RoomSearchService {
    * tiep se "dung yen" nhu du lieu tinh/mock. Uu tien giong RoomStatusService:
    * 1. administrative_status (admin dat qua PATCH .../administrative-status)
    *    neu la 'maintenance'/'inactive' — luon thang.
-   * 2. 'occupied' neu tin hieu occupancy gan nhat (room_events) > 0.
+   * 2. 'occupied' neu tin hieu occupancy CON HIEU LUC (trong
+   *    OCCUPANCY_SIGNAL_TTL_MINUTES phut gan nhat, xem LATEST_OCCUPANCY_SUBQUERY) > 0.
    * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
    * 4. 'available' con lai.
    */

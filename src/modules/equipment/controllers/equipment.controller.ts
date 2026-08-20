@@ -37,6 +37,7 @@ import { ListEquipmentsQueryDto } from '../dto/list-equipments-query.dto.js';
 import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 import { EquipmentFaultConfirmationResponseDto } from '../dto/equipment-fault-confirmation-response.dto.js';
+import { EquipmentFaultHistoryItemDto } from '../dto/equipment-fault-history-item.dto.js';
 
 @ApiTags('Equipment')
 @Controller('equipments')
@@ -382,6 +383,33 @@ export class EquipmentController {
       success: true,
       message: 'Cap nhat thiet bi da sua xong thanh cong',
       data: result,
+    };
+  }
+
+  @Get(':equipmentId/fault-history')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.read')
+  @ApiOperation({
+    summary: 'Lich su bao hong / xac nhan / khac phuc cua 1 thiet bi',
+  })
+  @ApiResponse({ status: 200, description: 'Lich su bao hong thiet bi' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.read' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  async getFaultHistory(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentFaultHistoryItemDto[];
+  }> {
+    const data = await this.equipmentService.getFaultHistory(equipmentId);
+
+    return {
+      success: true,
+      message: 'Lich su bao hong thiet bi',
+      data,
     };
   }
 }

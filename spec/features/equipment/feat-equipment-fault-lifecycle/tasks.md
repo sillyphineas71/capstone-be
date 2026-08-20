@@ -4,6 +4,7 @@
 | Ngày cập nhật | Tóm tắt thay đổi | Vị trí |
 | :--- | :--- | :--- |
 | 2026-08-14 | Tạo mới tasks.md cho EQUIP-FAULT-LIFECYCLE-001 (T001–T010). | Toàn bộ file |
+| 2026-08-20 | ĐẢO NGƯỢC #2: notify report giờ gửi `BUSINESS_ADMIN` (không còn `SYSTEM_ADMIN`) — xem `spec.md`/`plan.md` changelog cùng ngày. | Mục 0.2 (#2), T004, đoạn code Phase D |
 
 > Dựa trên `spec.md` + `plan.md` (EQUIP-FAULT-LIFECYCLE-001) đã duyệt. **CHỈ danh sách task** — KHÔNG code.
 > KHÔNG execute migration, KHÔNG commit. Mirror `reportFault`/`create` trong cùng module.
@@ -20,7 +21,7 @@
 | # | Chốt |
 | :--- | :--- |
 | 1 | Confirm chỉ ghi `audit_logs` (`actionType='confirm'`), KHÔNG đổi field `equipments`. |
-| 2 | Notify report chỉ role `SYSTEM_ADMIN`. |
+| 2 | Notify report chỉ role `BUSINESS_ADMIN` (đảo ngược 2026-08-20, trước đó là `SYSTEM_ADMIN`). |
 | 3 | KHÔNG WebSocket — chỉ `createNotification()` in-app. |
 | 4 | Permission confirm/resolve → `[SYSTEM_ADMIN, BUSINESS_ADMIN]`. |
 | 5 | `lastMaintenanceAt` set CHỈ ở `resolveFault`. |
@@ -81,11 +82,11 @@ Thêm import: `NotificationsService`, `NotificationType, NotificationChannel, No
 
 Thêm constructor param `private readonly notificationsService: NotificationsService` (additive, cuối danh sách param hiện có).
 
-Thêm helper `resolveSystemAdminIds()` (private, raw SQL — xem plan §1.5) và Phase D:
+Thêm helper `resolveBusinessAdminIds()` (private, raw SQL — xem plan §1.5, đổi tên/role 2026-08-20) và Phase D:
 ```ts
-// Phase D — notify SYSTEM_ADMIN (fail-separate, KHÔNG rollback nghiệp vụ)
+// Phase D — notify BUSINESS_ADMIN (fail-separate, KHÔNG rollback nghiệp vụ)
 try {
-  const adminIds = await this.resolveSystemAdminIds();
+  const adminIds = await this.resolveBusinessAdminIds();
   const room = saved.currentRoomId
     ? await this.dataSource.getRepository(RoomEntity).findOne({ where: { id: saved.currentRoomId }, select: { id: true, roomName: true } })
     : null;
@@ -103,7 +104,7 @@ try {
     payloadJson: { healthStatus: saved.healthStatus, assetStatus: saved.assetStatus, roomId: saved.currentRoomId, issueNote: dto.issueNote },
   });
 } catch (err) {
-  this.logger.error(`Failed to notify SYSTEM_ADMIN for equipment fault ${saved.id}: ${err instanceof Error ? err.message : 'Unknown'}`);
+  this.logger.error(`Failed to notify BUSINESS_ADMIN for equipment fault ${saved.id}: ${err instanceof Error ? err.message : 'Unknown'}`);
 }
 ```
 
@@ -204,7 +205,7 @@ Mock `NotificationsService.createNotification` (jest mock), mock `dataSource.man
 | Ràng buộc (§0.2) | Task |
 | :--- | :--- |
 | 1 confirm chỉ audit, không đổi entity | T005 |
-| 2 notify report chỉ SYSTEM_ADMIN | T004 |
+| 2 notify report chỉ BUSINESS_ADMIN (đảo ngược 2026-08-20) | T004 |
 | 3 không WebSocket | T004, T005, T006 (chỉ `createNotification`) |
 | 4 permission confirm/resolve = SYSTEM_ADMIN+BUSINESS_ADMIN | T007 (guard), T008 (seed) |
 | 5 `lastMaintenanceAt` chỉ set ở resolve | T006 |
