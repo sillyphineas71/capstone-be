@@ -159,6 +159,8 @@ import { ConflictDetailDto } from '../dto/conflict-detail.dto.js';
 
 import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
+import type { GuestInviteIssueResult } from '../../guest-access/types/guest-invite-metadata.type.js';
 import { AgendaItemDto } from '../dto/agenda-item.dto.js';
 import { ReplaceAgendaDto } from '../dto/replace-agenda.dto.js';
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
@@ -245,6 +247,7 @@ export class MeetingsService {
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
     private readonly guestInviteService: GuestInviteService,
+    private readonly guestEmailService: GuestEmailService,
     /**
      * Optional — emit realtime cho hàng đợi `/manager/meeting-approvals` là
      * best-effort (giống pattern MinutesService), và tránh phải sửa lại
@@ -942,10 +945,18 @@ export class MeetingsService {
     );
 
     const approverIds = await this.resolveApproverIds();
+    // Người đặt phòng TỰ MÌNH có quyền duyệt (VD Manager) → auto-approve luôn thay vì
+    // bắt xếp hàng chờ duyệt: mirror MeetingRequestReviewService.approve()'s guard
+    // SELF_APPROVAL_NOT_ALLOWED (chặn tự duyệt yêu cầu do chính mình tạo) — nếu người
+    // này CŨNG là (hoặc là MỘT TRONG) approver hợp lệ, không có ai KHÁC bắt buộc phải
+    // duyệt hộ, nên tạo thẳng ở trạng thái đã duyệt thay vì kẹt PENDING_APPROVAL chờ
+    // 1 approver khác (có thể không tồn tại/không online).
+    const isAutoApprovable = approverIds.includes(authUser.userId);
 
     let meeting: MeetingEntity;
     let request: MeetingRequestEntity;
     let booking: RoomBookingEntity;
+    const issuedGuestInvites: GuestInviteIssueResult[] = [];
 
     // Phòng thủ lớp 2: dù generateMeetingCode đã kiểm tồn tại, vẫn còn khe race cực hẹp
     // giữa lúc kiểm và lúc INSERT. Đụng ux_meetings_code/ux_room_bookings_code → sinh mã
@@ -953,6 +964,7 @@ export class MeetingsService {
     for (let attempt = 0; ; attempt++) {
       try {
         await this.dataSource.transaction(async (em) => {
+          const now = new Date();
           meeting = em.create(MeetingEntity, {
             meetingCode,
             title: dto.title,
@@ -965,7 +977,9 @@ export class MeetingsService {
             meetingType: (dto.meetingType as MeetingType) || MeetingType.NORMAL,
             meetingMode:
               (dto.meetingMode as MeetingMode) || MeetingMode.OFFLINE,
-            status: MeetingStatus.PENDING_APPROVAL,
+            status: isAutoApprovable
+              ? MeetingStatus.SCHEDULED
+              : MeetingStatus.PENDING_APPROVAL,
             visibilityLevel: 'internal' as any,
             timezone: 'Asia/Ho_Chi_Minh',
             expectedAttendeeCount: dto.expectedAttendeeCount || null,
@@ -986,8 +1000,17 @@ export class MeetingsService {
             targetRoomId: dto.roomId,
             requestedStartTime: startTime,
             requestedEndTime: endTime,
-            approvalMode: ApprovalMode.MANUAL,
-            approvalStatus: ApprovalStatus.PENDING,
+            approvalMode: isAutoApprovable
+              ? ApprovalMode.AUTO
+              : ApprovalMode.MANUAL,
+            approvalStatus: isAutoApprovable
+              ? ApprovalStatus.APPROVED
+              : ApprovalStatus.PENDING,
+            ...(isAutoApprovable && {
+              decisionBy: authUser.userId,
+              decisionAt: now,
+              appliedAt: now,
+            }),
             conflictCheckStatus:
               participantConflictResult.conflicts.length > 0
                 ? ConflictCheckStatus.WARNING
@@ -1021,8 +1044,14 @@ export class MeetingsService {
             bookingType: BookingType.SCHEDULED,
             reservedStartTime: startTime,
             reservedEndTime: endTime,
-            status: RoomBookingStatus.PENDING,
+            status: isAutoApprovable
+              ? RoomBookingStatus.APPROVED
+              : RoomBookingStatus.PENDING,
             bookedBy: authUser.userId,
+            ...(isAutoApprovable && {
+              approvedBy: authUser.userId,
+              approvedAt: now,
+            }),
           });
           await em.save(RoomBookingEntity, booking);
 
@@ -1080,6 +1109,24 @@ export class MeetingsService {
                 }),
             );
             await em.save(MeetingExternalParticipantEntity, externalRecords);
+
+            // Auto-approved (isAutoApprovable): meeting đi thẳng SCHEDULED, KHÔNG còn
+            // bước approve() thủ công nào để sinh lời mời khách (mirror
+            // MeetingRequestReviewService.approve() — CHỈ CREATE_MEETING, CHỈ khách có
+            // email, xem FR-GLA-004/006) — phải tự làm ở đây, nếu không khách ngoài
+            // công ty sẽ KHÔNG BAO GIỜ nhận được link mời.
+            if (isAutoApprovable) {
+              for (const ep of externalRecords) {
+                if (!ep.email) continue;
+                const issued = await this.guestInviteService.issueInvite(em, {
+                  externalParticipantId: ep.id,
+                  email: ep.email,
+                  meetingEndTime: endTime,
+                  issuedBy: authUser.userId,
+                });
+                issuedGuestInvites.push(issued);
+              }
+            }
           }
 
           const event = em.create(MeetingEventEntity, {
@@ -1087,11 +1134,13 @@ export class MeetingsService {
             eventType: MeetingEventType.MEETING_REQUEST_CREATED,
             actorUserId: authUser.userId,
             sourceType: MeetingEventSourceType.MANUAL,
-            description: `Yêu cầu tạo cuộc họp "${dto.title}"`,
+            description: isAutoApprovable
+              ? `Cuộc họp "${dto.title}" được tạo và tự động duyệt (người đặt có quyền duyệt)`
+              : `Yêu cầu tạo cuộc họp "${dto.title}"`,
             newValueJson: {
               meetingId: meeting.id,
               meetingCode,
-              status: MeetingStatus.PENDING_APPROVAL,
+              status: meeting.status,
             } as any,
           });
           await em.save(MeetingEventEntity, event);
@@ -1127,8 +1176,95 @@ export class MeetingsService {
       }
     }
 
-    // Post-transaction: notify approvers (non-blocking, no rollback)
-    if (approverIds.length > 0) {
+    if (isAutoApprovable) {
+      // \u0110\u00e3 t\u1ea1o th\u1eb3ng \u1edf tr\u1ea1ng th\u00e1i SCHEDULED/APPROVED \u2014 kh\u00f4ng c\u00f3 g\u00ec "ch\u1edd duy\u1ec7t" n\u1eefa,
+      // n\u00ean KH\u00d4NG g\u1eedi th\u00f4ng b\u00e1o "y\u00eau c\u1ea7u ch\u1edd duy\u1ec7t" cho approverIds (mirror
+      // enqueueApprovalNotifications() c\u1ee7a MeetingRequestReviewService.approve(),
+      // nh\u01b0ng ch\u1ea1y tr\u1ef1c ti\u1ebfp \u1edf \u0111\u00e2y v\u00ec request \u0111\u00e3 t\u1ef1 \u00e1p d\u1ee5ng ngay trong transaction
+      // tr\u00ean, kh\u00f4ng qua approve() n\u1eefa).
+      try {
+        const emailMap = await this.resolveUserEmails(
+          uniqueParticipantIds,
+          this.dataSource.manager,
+        );
+        for (const uid of uniqueParticipantIds) {
+          try {
+            await this.notificationsService.createNotification({
+              notificationType: NotificationType.MEETING_INVITE,
+              channel: NotificationChannel.IN_APP,
+              subject: `Th\u01b0 m\u1eddi tham d\u1ef1 cu\u1ed9c h\u1ecdp: ${dto.title}`,
+              content: `B\u1ea1n \u0111\u01b0\u1ee3c m\u1eddi tham d\u1ef1 cu\u1ed9c h\u1ecdp "${dto.title}" v\u00e0o l\u00fac ${startTime.toISOString()}`,
+              relatedEntityType: 'meeting',
+              relatedEntityId: meeting!.id,
+              recipientScope: 'user_list',
+              recipientUserIds: [uid],
+              createdBy: authUser.userId,
+            });
+            const userEmail = emailMap.get(uid);
+            if (userEmail) {
+              await this.notificationsService.enqueueEmailNotification({
+                notificationType: NotificationType.MEETING_INVITE,
+                channel: NotificationChannel.EMAIL,
+                subject: `Th\u01b0 m\u1eddi tham d\u1ef1 cu\u1ed9c h\u1ecdp: ${dto.title}`,
+                content: `B\u1ea1n \u0111\u01b0\u1ee3c m\u1eddi tham d\u1ef1 cu\u1ed9c h\u1ecdp "${dto.title}"`,
+                emailHtml: buildMeetingInviteEmail({
+                  meetingTitle: dto.title,
+                  startTime,
+                  endTime,
+                }),
+                toEmails: [userEmail],
+                relatedEntityType: 'meeting',
+                relatedEntityId: meeting!.id,
+                recipientScope: 'user_list',
+                createdBy: authUser.userId,
+              });
+            }
+          } catch (notifError) {
+            this.logger.error(
+              '[Create/auto-approve] Failed to notify participant ' +
+                uid +
+                ': ' +
+                (notifError as Error).message,
+            );
+          }
+        }
+      } catch (notifError) {
+        this.logger.error(
+          '[Create/auto-approve] Failed to resolve/send participant invites for meeting ' +
+            meeting!.id +
+            ': ' +
+            (notifError as Error).message,
+        );
+      }
+
+      if (issuedGuestInvites.length > 0) {
+        let hostName = 'Ch\u01b0a x\u00e1c \u0111\u1ecbnh';
+        const hostUser = await this.dataSource
+          .getRepository(UserEntity)
+          .findOne({ where: { id: hostId } });
+        if (hostUser?.fullName) hostName = hostUser.fullName;
+        for (const invite of issuedGuestInvites) {
+          try {
+            await this.guestEmailService.sendInviteLink({
+              to: invite.email,
+              meetingTitle: dto.title,
+              startTime,
+              endTime,
+              hostName,
+              link: invite.link,
+            });
+          } catch (notifError) {
+            this.logger.error(
+              '[Create/auto-approve] Failed to send guest invite email to ' +
+                invite.email +
+                ': ' +
+                (notifError as Error).message,
+            );
+          }
+        }
+      }
+    } else if (approverIds.length > 0) {
+      // Post-transaction: notify approvers (non-blocking, no rollback)
       try {
         const requester = await this.dataSource
           .getRepository(UserEntity)
@@ -1167,8 +1303,10 @@ export class MeetingsService {
       id: meeting!.id,
       meetingCode,
       title: dto.title,
-      status: MeetingStatus.PENDING_APPROVAL,
-      approvalStatus: ApprovalStatus.PENDING,
+      status: meeting!.status,
+      approvalStatus: isAutoApprovable
+        ? ApprovalStatus.APPROVED
+        : ApprovalStatus.PENDING,
       startTime,
       endTime,
       roomId: dto.roomId,
@@ -1177,7 +1315,7 @@ export class MeetingsService {
       hostId,
       participantCount:
         uniqueParticipantIds.length + (dto.externalParticipants?.length || 0),
-      bookingStatus: RoomBookingStatus.PENDING,
+      bookingStatus: booking!.status,
       bookingCode,
       createdAt: meeting!.createdAt,
     });

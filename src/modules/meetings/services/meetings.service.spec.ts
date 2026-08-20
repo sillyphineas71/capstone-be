@@ -66,6 +66,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
 import { StorageService } from '../../storage/storage.service.js';
 
 describe('MeetingsService', () => {
@@ -143,6 +144,7 @@ describe('MeetingsService', () => {
 
     mockGuestInviteService = {
       revokeAllForMeeting: jest.fn().mockResolvedValue(0),
+      issueInvite: jest.fn(),
     };
 
     em = {
@@ -199,6 +201,10 @@ describe('MeetingsService', () => {
           // sau transaction — mock để không phá vỡ toàn bộ suite hiện có.
           provide: GuestInviteService,
           useValue: mockGuestInviteService,
+        },
+        {
+          provide: GuestEmailService,
+          useValue: { sendInviteLink: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();

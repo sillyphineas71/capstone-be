@@ -19,6 +19,7 @@ import { NotificationsService } from '../../notifications/notifications.service.
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
 import { WarningTokenUtil } from '../utils/warning-token.util.js';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -164,6 +165,10 @@ describe('MeetingsService - create() Equipment Fault Warning (EW1-EW6)', () => {
         {
           provide: GuestInviteService,
           useValue: mockGuestInviteService,
+        },
+        {
+          provide: GuestEmailService,
+          useValue: { sendInviteLink: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();

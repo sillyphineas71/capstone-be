@@ -24,6 +24,7 @@ import { AuditLogEntity } from '../../administration/entities/audit-log.entity.j
 import { UpdateAgendaItemDto } from '../dto/update-agenda-item.dto.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
+import { GuestEmailService } from '../../guest-access/services/guest-email.service.js';
 import { ConfigService } from '@nestjs/config';
 import { StorageService } from '../../storage/storage.service.js';
 
@@ -127,6 +128,10 @@ describe('MeetingsService.updateAgendaItem', () => {
         {
           provide: GuestInviteService,
           useValue: { revokeAllForMeeting: jest.fn().mockResolvedValue(0) },
+        },
+        {
+          provide: GuestEmailService,
+          useValue: { sendInviteLink: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();
