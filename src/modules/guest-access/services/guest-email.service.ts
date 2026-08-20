@@ -38,8 +38,8 @@ export class GuestEmailService {
     const html = buildGuestInviteEmail(params);
     const result = await this.mailService.sendMail({
       to: params.to,
-      subject: `Thu moi tham du: ${params.meetingTitle}`,
-      text: `Ban duoc moi tham du cuoc hop "${params.meetingTitle}". Truy cap: ${params.link}`,
+      subject: `Thư mời tham dự: ${params.meetingTitle}`,
+      text: `Bạn được mời tham dự cuộc họp "${params.meetingTitle}". Truy cập: ${params.link}`,
       html,
     });
 
@@ -68,8 +68,8 @@ export class GuestEmailService {
     });
     const result = await this.mailService.sendMail({
       to: params.to,
-      subject: 'Ma xac nhan tham du cuoc hop',
-      text: `Ma OTP cua ban la: ${params.otp}. Ma co hieu luc trong ${expiresMinutes} phut.`,
+      subject: 'Mã xác nhận tham dự cuộc họp',
+      text: `Mã OTP của bạn là: ${params.otp}. Mã có hiệu lực trong ${expiresMinutes} phút.`,
       html,
     });
 

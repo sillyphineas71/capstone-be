@@ -32,6 +32,8 @@ import {
   UserEntity,
   AccountStatus,
 } from '../../accounts/entities/user.entity.js';
+import { UserRoleEntity } from '../../accounts/entities/user-role.entity.js';
+import { MEETING_INELIGIBLE_ROLE_CODES } from '../../../common/utils/meeting-ineligible-roles.util.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -157,6 +159,10 @@ export class ParticipantImportService {
       ['Họ và tên', 'External: bắt buộc'],
       ['Tổ chức', 'External: tùy chọn'],
       ['Số điện thoại', 'External: tùy chọn'],
+      [
+        'Lưu ý',
+        'Chỉ tài khoản nội bộ có vai trò Nhân viên (Employee) hoặc Quản lý (Manager) mới được thêm làm người tham dự. Tài khoản Business Admin / System Admin sẽ bị từ chối (dòng lỗi ROLE_NOT_ALLOWED).',
+      ],
     ];
     guideRows.forEach((r, idx) => {
       const row = guide.addRow(r);
@@ -615,6 +621,26 @@ export class ParticipantImportService {
         }
       }
 
+      // [2026-08-21] Chặn import Business Admin / System Admin làm participant —
+      // hệ thống chỉ cho phép Employee/Manager tham dự cuộc họp.
+      const resolvedIdsForRoleCheck = internalStates
+        .filter((s) => !s.isHardError && s.resolvedUserId)
+        .map((s) => s.resolvedUserId!);
+      if (resolvedIdsForRoleCheck.length > 0) {
+        const ineligibleUserIds = await this.getIneligibleMeetingUserIds(
+          resolvedIdsForRoleCheck,
+        );
+        for (const s of internalStates) {
+          if (
+            !s.isHardError &&
+            s.resolvedUserId &&
+            ineligibleUserIds.has(s.resolvedUserId)
+          ) {
+            this.markError(s, ImportRowReason.ROLE_NOT_ALLOWED);
+          }
+        }
+      }
+
       // Duplicate-in-file (internal) theo resolvedUserId
       const seenUserIds = new Set<string>();
       for (const s of internalStates) {
@@ -844,6 +870,25 @@ export class ParticipantImportService {
   }
 
   // ── Small utilities ──
+
+  /** Trả về tập userId đang giữ role BUSINESS_ADMIN/SYSTEM_ADMIN (không được tham dự họp). */
+  private async getIneligibleMeetingUserIds(
+    userIds: string[],
+  ): Promise<Set<string>> {
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .where('ur.userId IN (:...userIds)', { userIds })
+      .andWhere('ur.isActive = :isActive', { isActive: true })
+      .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > NOW())')
+      .andWhere('r.roleCode IN (:...codes)', {
+        codes: MEETING_INELIGIBLE_ROLE_CODES,
+      })
+      .select('ur.userId', 'userId')
+      .getRawMany<{ userId: string }>();
+    return new Set(rows.map((r) => r.userId));
+  }
 
   private markError(state: RowState, reason: ImportRowReason): RowState {
     state.isHardError = true;

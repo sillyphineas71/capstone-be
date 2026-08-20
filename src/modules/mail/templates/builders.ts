@@ -364,7 +364,7 @@ export function buildEarlyVacancyAlertEmail(params: {
 
 export function buildNoShowAlertEmail(params: {
   kind: 'warning' | 'released';
-  roomId: string;
+  roomName: string;
 }): string {
   const isWarning = params.kind === 'warning';
   const bodyHtml =
@@ -373,7 +373,7 @@ export function buildNoShowAlertEmail(params: {
         ? 'Phòng họp vẫn chưa ghi nhận có người tham dự sau giờ bắt đầu (cảnh báo no-show):'
         : 'Phòng họp đã được tự động giải phóng do không có người tham dự (no-show):',
     ) +
-    renderInfoTable([{ label: 'Mã phòng', value: escapeHtml(params.roomId) }]) +
+    renderInfoTable([{ label: 'Phòng', value: escapeHtml(params.roomName) }]) +
     (isWarning
       ? renderCallout(
           'Nếu cuộc họp vẫn diễn ra, vui lòng check-in ngay để tránh phòng bị tự động giải phóng.',
@@ -449,13 +449,13 @@ export function buildLateCheckinHostSummaryEmail(params: {
 
 export function buildStrangerAlertEmail(params: {
   deviceCode: string;
-  roomId?: string | null;
+  roomName?: string | null;
 }): string {
   const rows: InfoRow[] = [
     { label: 'Thiết bị', value: escapeHtml(params.deviceCode) },
   ];
-  if (params.roomId) {
-    rows.push({ label: 'Khu vực / Phòng', value: escapeHtml(params.roomId) });
+  if (params.roomName) {
+    rows.push({ label: 'Khu vực / Phòng', value: escapeHtml(params.roomName) });
   }
   const bodyHtml =
     renderCallout(

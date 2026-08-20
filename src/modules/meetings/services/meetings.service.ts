@@ -95,6 +95,10 @@ import {
 import { UserRoleEntity } from '../../accounts/entities/user-role.entity.js';
 import { RoleEntity } from '../../accounts/entities/role.entity.js';
 import { PermissionEntity } from '../../accounts/entities/permission.entity.js';
+import {
+  isMeetingIneligibleRole,
+  MEETING_INELIGIBLE_ROLE_CODES,
+} from '../../../common/utils/meeting-ineligible-roles.util.js';
 
 import { CreateMeetingDto } from '../dto/create-meeting.dto.js';
 import { CreateMeetingResponseDto } from '../dto/create-meeting-response.dto.js';
@@ -116,9 +120,9 @@ import {
 import {
   MediaFileEntity,
   MediaFileType,
-  StorageProvider,
 } from '../../recording/entities/media-file.entity.js';
 import { StorageService } from '../../storage/storage.service.js';
+import { CloudinaryService } from '../../storage/cloudinary.service.js';
 import { RecordingConfigEntity } from '../../recording/entities/recording-config.entity.js';
 import { AddInternalParticipantDto } from '../dto/add-internal-participant.dto.js';
 import { RemoveParticipantParamsDto } from '../dto/remove-participant-params.dto.js';
@@ -132,7 +136,10 @@ import { MyScheduleQueryDto } from '../dto/my-schedule-query.dto.js';
 import { RemoveExternalParticipantBodyDto } from '../dto/remove-external-participant-body.dto.js';
 import { RemoveExternalParticipantResponseDto } from '../dto/remove-external-participant-response.dto.js';
 import { ScheduleResponseDto } from '../dto/schedule-response.dto.js';
-import { ScheduleEventDto } from '../dto/schedule-event.dto.js';
+import {
+  ScheduleEventDto,
+  ScheduleHostDto,
+} from '../dto/schedule-event.dto.js';
 import { ScheduleRoomDto } from '../dto/schedule-room.dto.js';
 import { ScheduleRangeDto } from '../dto/schedule-range.dto.js';
 import { MeetingHistoryQueryDto } from '../dto/meeting-history-query.dto.js';
@@ -252,6 +259,14 @@ export class MeetingsService {
      * trong test khi chưa cấu hình WebsocketModule.
      */
     @Optional() private readonly websocketService?: WebsocketService,
+    /**
+     * Optional cùng lý do trên (test call-site cũ dùng positional args).
+     * Agenda attachment (feat-attach-meeting-agenda-document) dùng Cloudinary
+     * thay vì StorageService.saveFile() — file cần xem lại được bất kể máy
+     * nào đang chạy backend (fix storage-split khi đổi qua lại local/EC2,
+     * xem BAO_CAO_FE_AGENDA_ATTACHMENT_LIVE_MEETING_2026-08-09.md).
+     */
+    @Optional() private readonly cloudinaryService?: CloudinaryService,
   ) {}
 
   /**
@@ -857,6 +872,24 @@ export class MeetingsService {
           error: {
             code: 'VALIDATION_ERROR',
             details: { invalidParticipantIds: invalidIds },
+          },
+        });
+      }
+
+      // [2026-08-21] Chặn mời Business Admin / System Admin tham gia cuộc họp
+      // (bao gồm cả trường hợp được chọn làm host) — hệ thống chỉ cho phép
+      // Employee/Manager tham dự.
+      const ineligibleRoleUserIds = await this.getIneligibleMeetingUserIds(
+        uniqueParticipantIds,
+      );
+      if (ineligibleRoleUserIds.size > 0) {
+        throw new BadRequestException({
+          success: false,
+          message:
+            'Không thể mời tài khoản Business Admin / System Admin tham gia cuộc họp',
+          error: {
+            code: 'PARTICIPANT_ROLE_NOT_ALLOWED',
+            details: { invalidParticipantIds: [...ineligibleRoleUserIds] },
           },
         });
       }
@@ -3430,6 +3463,18 @@ export class MeetingsService {
       });
     }
 
+    // [2026-08-21] Chặn mời Business Admin / System Admin tham gia cuộc họp —
+    // hệ thống chỉ cho phép Employee/Manager tham dự.
+    const invitedUserRoleCodes = await this.getActiveRoleCodes(dto.userId);
+    if (isMeetingIneligibleRole(invitedUserRoleCodes)) {
+      throw new BadRequestException({
+        success: false,
+        message:
+          'Không thể mời tài khoản Business Admin / System Admin tham gia cuộc họp',
+        error: { code: 'PARTICIPANT_ROLE_NOT_ALLOWED', details: {} },
+      });
+    }
+
     const existingParticipant = await this.dataSource
       .getRepository(MeetingParticipantEntity)
       .findOne({
@@ -3762,6 +3807,15 @@ export class MeetingsService {
         `COALESCE(r.site_name || ', ' || r.area_name, r.location_description, '')`,
         'room_location',
       )
+      .addSelect('COALESCE(m.host_id, m.organizer_id)', 'host_id')
+      .addSelect(
+        'COALESCE(hostUser.full_name, organizerUser.full_name)',
+        'host_full_name',
+      )
+      .addSelect(
+        `CASE WHEN rc.status = 'active' AND (rc.enable_audio = true OR rc.enable_video = true) THEN true ELSE false END`,
+        'recording_enabled',
+      )
       .leftJoin(
         'meeting_participants',
         'mp',
@@ -3769,6 +3823,9 @@ export class MeetingsService {
         { userId },
       )
       .leftJoin('rooms', 'r', 'r.id = m.room_id')
+      .leftJoin('users', 'hostUser', 'hostUser.id = m.host_id')
+      .leftJoin('users', 'organizerUser', 'organizerUser.id = m.organizer_id')
+      .leftJoin('recording_configs', 'rc', 'rc.meeting_id = m.id')
       .where(
         '(m.organizer_id = :userId OR m.host_id = :userId OR mp.id IS NOT NULL)',
         { userId },
@@ -3844,6 +3901,8 @@ export class MeetingsService {
           : new Date(row.m_end_time).toISOString();
       const isCurrent = row.is_current === true || row.is_current === 'true';
       const isPast = row.is_past === true || row.is_past === 'true';
+      const recordingEnabled =
+        row.recording_enabled === true || row.recording_enabled === 'true';
 
       return new ScheduleEventDto({
         meetingId: row.m_id,
@@ -3855,6 +3914,14 @@ export class MeetingsService {
         status: row.m_status,
         userRole: row.effective_user_role as 'organizer' | 'host' | 'attendee',
         room,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        host: row.host_id
+          ? new ScheduleHostDto({
+              id: row.host_id as string,
+              fullName: (row.host_full_name as string) ?? '',
+            })
+          : null,
+        recordingEnabled,
         colorKey: row.m_status,
         isCurrent,
         isPast,
@@ -4275,6 +4342,40 @@ export class MeetingsService {
     } catch {
       return false;
     }
+  }
+
+  /** Lấy danh sách role_code đang active của một user (dùng cho check nghiệp vụ theo role). */
+  private async getActiveRoleCodes(userId: string): Promise<string[]> {
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .where('ur.userId = :userId', { userId })
+      .andWhere('ur.isActive = :isActive', { isActive: true })
+      .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > NOW())')
+      .select('r.roleCode', 'roleCode')
+      .getRawMany<{ roleCode: string }>();
+    return rows.map((r) => r.roleCode);
+  }
+
+  /** Batch: trả về tập userId (trong danh sách truyền vào) đang giữ role BUSINESS_ADMIN/SYSTEM_ADMIN. */
+  private async getIneligibleMeetingUserIds(
+    userIds: string[],
+  ): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set();
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .where('ur.userId IN (:...userIds)', { userIds })
+      .andWhere('ur.isActive = :isActive', { isActive: true })
+      .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > NOW())')
+      .andWhere('r.roleCode IN (:...codes)', {
+        codes: MEETING_INELIGIBLE_ROLE_CODES,
+      })
+      .select('ur.userId', 'userId')
+      .getRawMany<{ userId: string }>();
+    return new Set(rows.map((r) => r.userId));
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -6306,18 +6407,22 @@ export class MeetingsService {
     );
 
     const mediaFileId = randomUUID();
+    const agendaStorageKey = `agenda-attachments/${mediaFileId}${ext}`;
     let storageResult: {
       storageKey: string;
       publicUrl: string;
       sizeBytes: number;
     };
     try {
-      storageResult = await this.storageService.saveFile({
-        buffer: file.buffer,
-        originalName: file.originalname,
-        folder: 'agenda-attachments',
-        storageKey: `agenda-attachments/${mediaFileId}${ext}`,
-      });
+      const uploadResult = await this.cloudinaryService!.uploadRawFile(
+        file.buffer,
+        agendaStorageKey,
+      );
+      storageResult = {
+        storageKey: uploadResult.publicId,
+        publicUrl: uploadResult.secureUrl,
+        sizeBytes: file.buffer.length,
+      };
     } catch (error) {
       this.logger.error(
         `Storage save failed for agenda attachment ${agendaId}`,
@@ -6395,7 +6500,7 @@ export class MeetingsService {
           fileName: file.originalname,
           fileType: MediaFileType.DOCUMENT,
           mimeType: file.mimetype,
-          storageProvider: StorageProvider.LOCAL,
+          storageProvider: this.cloudinaryService!.resolveMediaStorageProvider(),
           storageKey: storageResult.storageKey,
           fileUrl: storageResult.publicUrl,
           fileSizeBytes: String(storageResult.sizeBytes),
@@ -6418,8 +6523,8 @@ export class MeetingsService {
         await manager.save(AuditLogEntity, auditLog);
       });
     } catch (error) {
-      await this.storageService
-        .deleteFile(storageResult.storageKey)
+      await this.cloudinaryService!
+        .deleteRawFile(storageResult.storageKey)
         .catch((cleanupError) => {
           this.logger.warn(
             `Failed to clean up orphan storage file: ${storageResult.storageKey}`,
@@ -6510,12 +6615,14 @@ export class MeetingsService {
       return { fileId, agendaId, deletedAt, storageKey: mediaFile.storageKey };
     });
 
-    await this.storageService.deleteFile(result.storageKey).catch((error) => {
-      this.logger.warn(
-        `Failed to delete physical file from storage: ${result.storageKey}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-    });
+    await this.cloudinaryService!
+      .deleteRawFile(result.storageKey)
+      .catch((error) => {
+        this.logger.warn(
+          `Failed to delete physical file from storage: ${result.storageKey}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      });
 
     return new DeleteAgendaAttachmentResponseDto({
       fileId: result.fileId,

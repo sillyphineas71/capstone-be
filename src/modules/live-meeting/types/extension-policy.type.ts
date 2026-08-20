@@ -6,6 +6,12 @@ export interface ExtensionPolicy {
   allowedExtensionMinutes: number[];
   maxExtensionCountPerMeeting: number;
   maxTotalExtensionMinutesPerMeeting: number;
+  /**
+   * Khoang dem (phut) truoc gio bat dau cuoc hop ke tiep cung phong.
+   * requestedNewEndTime phai <= (nextMeeting.startTime - bufferMinutesBeforeNextMeeting)
+   * de duoc auto-accept; vi pham thi bi tu choi ngay (khong con qua Manager).
+   */
+  bufferMinutesBeforeNextMeeting: number;
 }
 
 /**
@@ -15,4 +21,5 @@ export const DEFAULT_EXTENSION_POLICY: ExtensionPolicy = {
   allowedExtensionMinutes: [15, 30, 60],
   maxExtensionCountPerMeeting: 2,
   maxTotalExtensionMinutesPerMeeting: 60,
+  bufferMinutesBeforeNextMeeting: 15,
 };

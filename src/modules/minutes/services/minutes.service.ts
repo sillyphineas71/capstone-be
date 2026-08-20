@@ -2156,8 +2156,8 @@ export class MinutesService {
           await this.dataSource.getRepository(NotificationEntity).insert({
             notificationType: NotificationType.MINUTES_DELETED_BY_ADMIN,
             channel: NotificationChannel.IN_APP,
-            subject: 'Bien ban hop da bi xoa boi Admin',
-            content: 'Bien ban hop cua ban da bi xoa boi Admin.',
+            subject: 'Biên bản họp đã bị xóa bởi Admin',
+            content: 'Biên bản họp của bạn đã bị xóa bởi Admin.',
             relatedEntityType: 'meeting_minutes',
             relatedEntityId: minutesId,
             recipientScope: 'user_list',
@@ -2312,8 +2312,8 @@ export class MinutesService {
         await this.dataSource.getRepository(NotificationEntity).insert({
           notificationType: NotificationType.MINUTES_DISTRIBUTION,
           channel: NotificationChannel.IN_APP,
-          subject: 'Bien ban hop da duoc ban hanh chinh thuc',
-          content: `Bien ban hop "${result.saved.title}" da duoc ban hanh chinh thuc.`,
+          subject: 'Biên bản họp đã được ban hành chính thức',
+          content: `Biên bản họp "${result.saved.title}" đã được ban hành chính thức.`,
           relatedEntityType: 'meeting_minutes',
           relatedEntityId: minutesId,
           recipientScope: 'user_list',

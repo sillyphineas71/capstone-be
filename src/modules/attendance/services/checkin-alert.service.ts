@@ -25,6 +25,7 @@ import {
 
 import { RedisService } from '../../redis/redis.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
+import { formatDateTimeVN } from '../../mail/templates/layout.js';
 import {
   buildLateCheckinAlertEmail,
   buildLateCheckinHostSummaryEmail,
@@ -383,7 +384,7 @@ export class CheckInAlertService {
             `Bạn chưa check-in cho cuộc họp sau:\n` +
             `  - Tên cuộc họp: ${meeting.title}\n` +
             `  - Phòng: ${meeting.roomName ?? 'N/A'}\n` +
-            `  - Giờ bắt đầu: ${new Date(meeting.actualStartTime ?? meeting.startTime).toISOString()}\n` +
+            `  - Giờ bắt đầu: ${formatDateTimeVN(meeting.actualStartTime ?? meeting.startTime)}\n` +
             `  - Đã trễ: ${lateMinutes} phút\n\n` +
             `Vui lòng check-in ngay tại phòng họp để đảm bảo theo dõi tham dự.\n\n` +
             `-- Hệ thống quản lý cuộc họp`;

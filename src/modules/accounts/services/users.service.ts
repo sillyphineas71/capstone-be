@@ -33,6 +33,7 @@ import {
 import { DepartmentEntity } from '../entities/department.entity.js';
 import { RoleEntity } from '../entities/role.entity.js';
 import { UserRoleEntity } from '../entities/user-role.entity.js';
+import { MEETING_INELIGIBLE_ROLE_CODES } from '../../../common/utils/meeting-ineligible-roles.util.js';
 import {
   FaceProfileEntity,
   FaceProfileStatus,
@@ -2000,37 +2001,54 @@ export class UsersService {
     const limit = query.limit || 20;
     const search = query.search?.trim();
 
-    const baseWhere = {
-      deletedAt: IsNull(),
-      accountStatus: AccountStatus.ACTIVE,
-    };
-
-    // UC-13: search khớp fullName / email / employee_code (OR).
-    // Mỗi nhánh OR BẮT BUỘC spread ...baseWhere để giữ ACTIVE + deletedAt IS NULL
-    // (không lộ tài khoản INACTIVE/đã xóa).
-    const where = search
-      ? [
-          { ...baseWhere, fullName: ILike(`%${search}%`) },
-          { ...baseWhere, email: ILike(`%${search}%`) },
-          { ...baseWhere, employeeCode: ILike(`%${search}%`) },
-        ]
-      : baseWhere;
-
-    const [entities, total] = await this.dataSource
+    // UC-13: search khớp fullName / email / employee_code (OR), luôn giữ
+    // ACTIVE + deletedAt IS NULL (không lộ tài khoản INACTIVE/đã xóa).
+    const qb = this.dataSource
       .getRepository(UserEntity)
-      .findAndCount({
-        where,
-        select: {
-          id: true,
-          fullName: true,
-          email: true,
-          employeeCode: true,
-          avatarUrl: true,
-        },
-        order: { fullName: 'asc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      });
+      .createQueryBuilder('u')
+      .where('u.deletedAt IS NULL')
+      .andWhere('u.accountStatus = :status', { status: AccountStatus.ACTIVE });
+
+    if (search) {
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('u.fullName ILIKE :s', { s: `%${search}%` })
+            .orWhere('u.email ILIKE :s', { s: `%${search}%` })
+            .orWhere('u.employeeCode ILIKE :s', { s: `%${search}%` });
+        }),
+      );
+    }
+
+    // [2026-08-21] Chặn BA/SA khỏi autocomplete mời họp — chỉ áp dụng khi caller
+    // khai báo rõ ngữ cảnh chọn participant cuộc họp (meetingEligibleOnly=true),
+    // không đổi hành vi mặc định vì endpoint còn dùng chung cho nhiều autocomplete
+    // khác. Xem common/utils/meeting-ineligible-roles.util.ts.
+    if (query.meetingEligibleOnly) {
+      qb.andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM user_roles ur
+          INNER JOIN roles r ON r.id = ur.role_id
+          WHERE ur.user_id = u.id
+            AND ur.is_active = true
+            AND (ur.expired_at IS NULL OR ur.expired_at > NOW())
+            AND r.role_code IN (:...ineligibleRoles)
+        )`,
+        { ineligibleRoles: MEETING_INELIGIBLE_ROLE_CODES },
+      );
+    }
+
+    qb.select([
+      'u.id',
+      'u.fullName',
+      'u.email',
+      'u.employeeCode',
+      'u.avatarUrl',
+    ])
+      .orderBy('u.fullName', 'ASC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [entities, total] = await qb.getManyAndCount();
 
     // [FIX 2026-08-17] Batch hasFaceProfile (1 query cho cả trang — tránh N+1),
     // mirror ĐÚNG pattern "Batch roles" ở listUsersForManagement bên dưới. Chỉ

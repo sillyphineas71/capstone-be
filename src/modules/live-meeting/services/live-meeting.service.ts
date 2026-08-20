@@ -23,6 +23,7 @@ import {
   RoomBookingEntity,
   RoomBookingStatus,
 } from '../../rooms/entities/room-booking.entity.js';
+import { RoomEntity } from '../../rooms/entities/room.entity.js';
 import {
   RoomBookingUsageEntity,
   RoomUsageStatus,
@@ -670,10 +671,17 @@ export class LiveMeetingService {
           ? json.maxTotalExtensionMinutesPerMeeting
           : DEFAULT_EXTENSION_POLICY.maxTotalExtensionMinutesPerMeeting;
 
+      const bufferMinutesBeforeNextMeeting =
+        typeof json.bufferMinutesBeforeNextMeeting === 'number' &&
+        json.bufferMinutesBeforeNextMeeting >= 0
+          ? json.bufferMinutesBeforeNextMeeting
+          : DEFAULT_EXTENSION_POLICY.bufferMinutesBeforeNextMeeting;
+
       return {
         allowedExtensionMinutes,
         maxExtensionCountPerMeeting,
         maxTotalExtensionMinutesPerMeeting,
+        bufferMinutesBeforeNextMeeting,
       };
     } catch (error: unknown) {
       this.logger.error(
@@ -742,20 +750,9 @@ export class LiveMeetingService {
       });
     }
 
-    // Validate extensionMinutes in allowed set
-    if (!policy.allowedExtensionMinutes.includes(dto.extensionMinutes)) {
-      throw new ConflictException({
-        success: false,
-        message: 'Thoi luong gia han khong hop le',
-        error: {
-          code: MEETING_EXTENSION_ERRORS.MEETING_EXTENSION_INVALID_DURATION,
-          details: {
-            allowedValues: policy.allowedExtensionMinutes,
-            received: dto.extensionMinutes,
-          },
-        },
-      });
-    }
+    // extensionMinutes: nhap tu do theo phut (DTO da validate 1..240).
+    // Khong con gioi han theo tap gia tri co dinh — viec cho phep hay tu choi
+    // phu thuoc buffer truoc cuoc hop ke tiep (xem buoc kiem tra conflict ben duoi).
 
     // Check extension limits (count applied requests)
     const appliedRequests = await this.dataSource
@@ -842,8 +839,14 @@ export class LiveMeetingService {
       });
     }
 
-    // Check room conflict
-    const conflictBookings = await this.dataSource
+    // Tim cuoc hop ke tiep gan nhat trong cung phong (theo reserved_start_time)
+    // de kiem tra buffer — chi cuoc hop ke tiep moi anh huong quyet dinh gia han.
+    const RELEVANT_BOOKING_STATUSES = [
+      RoomBookingStatus.PENDING,
+      RoomBookingStatus.APPROVED,
+      RoomBookingStatus.ACTIVE,
+    ];
+    const upcomingBookings = await this.dataSource
       .getRepository(RoomBookingEntity)
       .find({
         where: {
@@ -851,30 +854,38 @@ export class LiveMeetingService {
         },
       });
 
-    const conflicts = conflictBookings.filter((b) => {
-      if (b.id === activeBooking.id) return false;
-      if (!['pending', 'approved', 'active'].includes(b.status)) return false;
-      return (
-        b.reservedStartTime < requestedNewEndTime &&
-        b.reservedEndTime > oldEndTime
-      );
-    });
+    const nextBooking = upcomingBookings
+      .filter(
+        (b) =>
+          b.id !== activeBooking.id &&
+          RELEVANT_BOOKING_STATUSES.includes(b.status) &&
+          b.reservedStartTime > oldEndTime,
+      )
+      .sort(
+        (a, b) => a.reservedStartTime.getTime() - b.reservedStartTime.getTime(),
+      )[0];
 
-    if (conflicts.length > 0) {
-      // PATH B: Pending (conflict)
-      return this.handleConflictPath(
-        meeting,
-        activeBooking,
-        oldEndTime,
-        requestedNewEndTime,
-        dto,
-        authUser,
-        conflicts,
-        policy,
+    if (nextBooking) {
+      const bufferMinutes = policy.bufferMinutesBeforeNextMeeting;
+      const safeLimit = new Date(
+        nextBooking.reservedStartTime.getTime() - bufferMinutes * 60 * 1000,
       );
+
+      if (requestedNewEndTime > safeLimit) {
+        // PATH B: Tu choi ngay — vi pham buffer truoc cuoc hop ke tiep.
+        return this.handleRejectedPath(
+          meeting,
+          oldEndTime,
+          requestedNewEndTime,
+          dto,
+          authUser,
+          nextBooking,
+          bufferMinutes,
+        );
+      }
     }
 
-    // PATH A: Auto-apply (no conflict)
+    // PATH A: Auto-apply (khong vi pham buffer / khong co cuoc hop ke tiep)
     return this.handleAutoApplyPath(
       meeting,
       activeBooking,
@@ -1071,7 +1082,203 @@ export class LiveMeetingService {
   }
 
   // ───────────────────────────────────────────────────────────
-  //  UC-IMM-02: Conflict/pending path
+  //  UC-IMM-02: Rejected path (vi pham buffer truoc cuoc hop ke tiep)
+  //  Thay the hoan toan luong "pending -> Manager duyet" cho truong hop nay:
+  //  tu choi ngay lap tuc va tra ve thong tin cuoc hop + Host ke tiep de
+  //  2 Host tu lien he thoa thuan, khong can Manager can thiep.
+  // ───────────────────────────────────────────────────────────
+
+  private async handleRejectedPath(
+    meeting: MeetingEntity,
+    oldEndTime: Date,
+    requestedNewEndTime: Date,
+    dto: ExtensionRequestDto,
+    authUser: AuthUser,
+    nextBooking: RoomBookingEntity,
+    bufferMinutes: number,
+  ): Promise<ExtensionRequestResponseDto> {
+    const now = new Date();
+    const requestCode = `EXT-${meeting.meetingCode}-${now.getTime()}-REJECTED`;
+
+    const [nextMeeting, room] = await Promise.all([
+      this.dataSource
+        .getRepository(MeetingEntity)
+        .findOne({ where: { id: nextBooking.meetingId } }),
+      meeting.roomId
+        ? this.dataSource
+            .getRepository(RoomEntity)
+            .findOne({ where: { id: meeting.roomId } })
+        : Promise.resolve(null),
+    ]);
+
+    const nextHost = nextMeeting?.hostId
+      ? await this.dataSource
+          .getRepository(UserEntity)
+          .findOne({ where: { id: nextMeeting.hostId } })
+      : null;
+
+    const rejectionReason =
+      `Khong the gia han: thoi gian yeu cau ket thuc luc ${requestedNewEndTime.toISOString()} ` +
+      `vi pham khoang dem ${bufferMinutes} phut truoc cuoc hop ke tiep` +
+      (nextMeeting ? ` "${nextMeeting.title}"` : '') +
+      ` (bat dau luc ${nextBooking.reservedStartTime.toISOString()}). ` +
+      `Vui long lien he truc tiep Host cuoc hop sau de thong nhat thoi gian gia han.`;
+
+    let requestId: string;
+
+    try {
+      requestId = await this.dataSource.transaction(async (em) => {
+        const requestEntity = em.create(MeetingRequestEntity, {
+          requestCode,
+          meetingId: meeting.id,
+          requestType: MeetingRequestType.EXTEND_MEETING,
+          requestedBy: authUser.userId,
+          requestedAt: now,
+          requestedEndTime: requestedNewEndTime,
+          approvalMode: ApprovalMode.AUTO,
+          approvalStatus: ApprovalStatus.REJECTED,
+          conflictCheckStatus: ConflictCheckStatus.BLOCKED,
+          conflictCheckedAt: now,
+          conflictSummaryJson: {
+            nextMeetingId: nextMeeting?.id ?? null,
+            nextBookingId: nextBooking.id,
+            nextMeetingStartTime: nextBooking.reservedStartTime.toISOString(),
+            bufferMinutes,
+            checkedAt: now.toISOString(),
+          },
+          rejectionReason,
+          requestPayloadJson: {
+            extensionMinutes: dto.extensionMinutes,
+            reason: dto.reason ?? null,
+            oldEndTime: oldEndTime.toISOString(),
+            requestedNewEndTime: requestedNewEndTime.toISOString(),
+          },
+          notes: 'Auto-rejected: violates buffer before next meeting',
+        });
+        await em.save(MeetingRequestEntity, requestEntity);
+
+        const auditLog = em.create(AuditLogEntity, {
+          userId: authUser.userId,
+          actionType: 'extend_meeting_auto_rejected',
+          entityType: 'meeting',
+          entityId: meeting.id,
+          oldValueJson: { endTime: oldEndTime.toISOString() },
+          newValueJson: {
+            requestedEndTime: requestedNewEndTime.toISOString(),
+            extensionMinutes: dto.extensionMinutes,
+            nextMeetingId: nextMeeting?.id ?? null,
+          },
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+
+        this.logger.log(
+          `[Extension] Auto-rejected for meeting ${meeting.id}: +${dto.extensionMinutes}m violates buffer before meeting ${nextMeeting?.id ?? 'unknown'} (request ${requestEntity.id})`,
+        );
+
+        return requestEntity.id;
+      });
+    } catch (error: unknown) {
+      this.logger.error(
+        `[Extension] Rejected-path transaction failed for meeting ${meeting.id}: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+
+    const nextMeetingSummary = nextMeeting
+      ? {
+          id: nextMeeting.id,
+          title: nextMeeting.title,
+          startTime: nextMeeting.startTime.toISOString(),
+          endTime: nextMeeting.endTime.toISOString(),
+          roomName: room?.roomName ?? null,
+        }
+      : undefined;
+
+    const nextMeetingHostSummary = nextHost
+      ? {
+          id: nextHost.id,
+          fullName: nextHost.fullName,
+          email: nextHost.email,
+          phoneNumber: nextHost.phoneNumber ?? null,
+        }
+      : undefined;
+
+    // Notify current Host (best-effort) — day la nguoi vua bi tu choi request,
+    // KHONG notify Manager vi luong nay khong con di qua Manager.
+    try {
+      const notifEntity = this.dataSource.manager.create(NotificationEntity, {
+        notificationType: NotificationType.MEETING_REQUEST_REJECTED,
+        channel: NotificationChannel.IN_APP,
+        subject: 'Yêu cầu gia hạn bị từ chối',
+        content: rejectionReason,
+        relatedEntityType: 'meeting_request',
+        relatedEntityId: requestId,
+        recipientScope: 'user_list',
+        recipientUserIdsJson: [authUser.userId],
+        priority: NotificationPriority.HIGH,
+        createdBy: authUser.userId,
+        payloadJson: {
+          type: 'meeting_extension_rejected',
+          title: 'Yêu cầu gia hạn bị từ chối',
+          message: rejectionReason,
+          meetingId: meeting.id,
+          requestId,
+          extensionMinutes: dto.extensionMinutes,
+          nextMeeting: nextMeetingSummary ?? null,
+          nextMeetingHost: nextMeetingHostSummary ?? null,
+        },
+        deliveryStatus: 'draft' as any,
+        retryCount: 0,
+        readCount: 0,
+      });
+      await this.dataSource.manager.save(NotificationEntity, notifEntity);
+
+      this.websocketService.emitToRoom(
+        `meeting:${meeting.id}`,
+        'meeting.extension.rejected',
+        {
+          eventType: 'meeting.extension.rejected',
+          data: {
+            meetingId: meeting.id,
+            requestId,
+            extensionMinutes: dto.extensionMinutes,
+            rejectionReason,
+            nextMeeting: nextMeetingSummary ?? null,
+            nextMeetingHost: nextMeetingHostSummary ?? null,
+            occurredAt: now.toISOString(),
+          },
+        },
+      );
+    } catch (notifError: unknown) {
+      this.logger.error(
+        `[Extension] Failed to notify host for rejected request ${requestId}: ${(notifError as Error).message}`,
+      );
+      // Best-effort — khong throw, request van da duoc ghi nhan la rejected.
+    }
+
+    return new ExtensionRequestResponseDto({
+      requestId,
+      meetingId: meeting.id,
+      oldEndTime: oldEndTime.toISOString(),
+      requestedNewEndTime: requestedNewEndTime.toISOString(),
+      extensionMinutes: dto.extensionMinutes,
+      approvalMode: 'auto',
+      status: 'rejected',
+      conflictCheckStatus: 'blocked',
+      rejectionReason,
+      nextMeeting: nextMeetingSummary,
+      nextMeetingHost: nextMeetingHostSummary,
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────
+  //  UC-IMM-03 (deprecated cho UC-IMM-02): Manager pending/decide path
+  //  Khong con duoc goi tu requestExtension() — moi conflict gio di qua
+  //  handleRejectedPath() o tren. Giu lai code nay vi decideExtension()
+  //  (endpoint rieng, UC-IMM-03) van con hoat dong doc lap cho cac request
+  //  pending cu/khac. Xem BAO_CAO lien quan truoc khi xoa han feature nay.
   // ───────────────────────────────────────────────────────────
 
   /**
@@ -1216,8 +1423,8 @@ export class LiveMeetingService {
     try {
       const notificationPayload = {
         type: 'meeting_extension_request',
-        title: 'Yeu cau gia han cuoc hop can xu ly',
-        message: `Cuoc hop "${meeting.title}" dang yeu cau gia han them ${dto.extensionMinutes} phut nhung bi trung lich.`,
+        title: 'Yêu cầu gia hạn cuộc họp cần xử lý',
+        message: `Cuộc họp "${meeting.title}" đang yêu cầu gia hạn thêm ${dto.extensionMinutes} phút nhưng bị trùng lịch.`,
         meetingId: meeting.id,
         meetingTitle: meeting.title,
         requestId,
@@ -1230,7 +1437,7 @@ export class LiveMeetingService {
         conflicts: conflictDetails,
         cta: {
           type: 'view_extension_request',
-          label: 'Xem yeu cau gia han',
+          label: 'Xem yêu cầu gia hạn',
           target: `/meeting-requests/${requestId}`,
         },
       };
@@ -1238,8 +1445,8 @@ export class LiveMeetingService {
       const notifEntity = this.dataSource.manager.create(NotificationEntity, {
         notificationType: NotificationType.MEETING_REQUEST_CREATED,
         channel: NotificationChannel.IN_APP,
-        subject: 'Yeu cau gia han cuoc hop',
-        content: `Cuoc hop "${meeting.title}" yeu cau gia han ${dto.extensionMinutes} phut`,
+        subject: 'Yêu cầu gia hạn cuộc họp',
+        content: `Cuộc họp "${meeting.title}" yêu cầu gia hạn ${dto.extensionMinutes} phút`,
         relatedEntityType: 'meeting_request',
         relatedEntityId: requestId,
         recipientScope: 'user_list',
@@ -4776,11 +4983,11 @@ export class LiveMeetingService {
       const notifEntity = this.dataSource.manager.create(NotificationEntity, {
         notificationType: NotificationType.AUDIO_TRACK_UPLOAD_REQUESTED,
         channel: NotificationChannel.IN_APP,
-        subject: 'Vui long upload ghi am cuoc hop',
+        subject: 'Vui lòng upload ghi âm cuộc họp',
         content:
-          'Cuoc hop "' +
+          'Cuộc họp "' +
           meetingTitle +
-          '" da ket thuc. Vui long upload file ghi am (audio) cua ban de he thong tao ban ghi loi noi tu dong.',
+          '" đã kết thúc. Vui lòng upload file ghi âm (audio) của bạn để hệ thống tạo bản ghi lời nói tự động.',
         relatedEntityType: 'meeting',
         relatedEntityId: meetingId,
         recipientScope: 'user_list',
