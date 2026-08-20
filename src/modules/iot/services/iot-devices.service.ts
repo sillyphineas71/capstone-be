@@ -443,6 +443,8 @@ export class IotDevicesService {
     total: number;
     online: number;
     offline: number;
+    disabled: number;
+    maintenance: number;
     unknown: number;
     byType: Record<string, number>;
   }> {
@@ -466,6 +468,8 @@ export class IotDevicesService {
     let total = 0;
     let online = 0;
     let offline = 0;
+    let disabled = 0;
+    let maintenance = 0;
     for (const row of statusRows) {
       const count = Number(row.count) || 0;
       total += count;
@@ -473,6 +477,10 @@ export class IotDevicesService {
         online = count;
       } else if (row.status === IoTDeviceStatus.OFFLINE) {
         offline = count;
+      } else if (row.status === IoTDeviceStatus.DISABLED) {
+        disabled = count;
+      } else if (row.status === IoTDeviceStatus.MAINTENANCE) {
+        maintenance = count;
       }
     }
 
@@ -485,7 +493,12 @@ export class IotDevicesService {
       total,
       online,
       offline,
-      unknown: total - online - offline,
+      disabled,
+      maintenance,
+      // FE trước đây đọc field `disabled` không tồn tại (luôn 0) vì disabled/maintenance
+      // trước bị gộp chung vào unknown, không tách được — giờ tách rõ 2 field trên,
+      // unknown chỉ còn là phần dư THẬT sự không khớp status nào (bình thường luôn 0).
+      unknown: total - online - offline - disabled - maintenance,
       byType,
     };
   }

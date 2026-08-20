@@ -1901,7 +1901,9 @@ describe('IotDevicesService', () => {
         total: 6,
         online: 3,
         offline: 2,
-        unknown: 1, // disabled tính vào unknown (không online/offline)
+        disabled: 1,
+        maintenance: 0,
+        unknown: 0, // disabled giờ tách riêng, không còn lẫn vào unknown
         byType: { ip_camera: 4, face_server: 2 },
       });
     });
@@ -1915,6 +1917,8 @@ describe('IotDevicesService', () => {
         total: 0,
         online: 0,
         offline: 0,
+        disabled: 0,
+        maintenance: 0,
         unknown: 0,
         byType: {},
       });
