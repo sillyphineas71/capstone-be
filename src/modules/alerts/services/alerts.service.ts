@@ -267,6 +267,14 @@ export class AlertsService {
        )
        UPDATE security_alerts
           SET last_seen_at = NOW(),
+              -- [FIX] bumpOccurrence() dùng raw SQL (this.repo.query), KHÔNG đi qua
+              -- Repository.update()/save() nên @UpdateDateColumn của TypeORM KHÔNG tự
+              -- update — updated_at bị đứng yên ở thời điểm INSERT vĩnh viễn dù alert vẫn
+              -- tiếp tục nhận occurrence mới. FE (SecurityAlerts.jsx) đọc updated_at làm cột
+              -- "Ngày"/"Giờ" chính (tooltip "Cập nhật gần nhất") nên hiện sai — luôn đứng ở
+              -- lần đầu tiên thay vì lần gần nhất. Set tường minh ở đây để khớp đúng ý nghĩa
+              -- cột, mirror hành vi acknowledge()/resolve() (đi qua repo.update() nên tự có).
+              updated_at = NOW(),
               occurrence_count = CASE
                 WHEN $5 = 'crowd' AND (SELECT is_debounced FROM debounce_check)
                 THEN occurrence_count
