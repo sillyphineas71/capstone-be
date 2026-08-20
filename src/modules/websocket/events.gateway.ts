@@ -21,12 +21,14 @@ import { GUEST_TOKEN_TYPE } from '../guest-access/constants/guest-access.constan
 import { GuestJwtPayload } from '../guest-access/types/guest-jwt-payload.type.js';
 import { MeetingParticipantEntity } from '../meetings/entities/meeting-participant.entity.js';
 import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
+import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IVSS_MEETING_ROOM = (meetingId: string): string =>
   `ivss:meeting:${meetingId}`;
 const MEETING_ROOM = (meetingId: string): string => `meeting:${meetingId}`;
+const USER_ROOM = (userId: string): string => `user:${userId}`;
 
 type SocketIdentity =
   | { type: 'employee'; userId: string }
@@ -83,6 +85,7 @@ export class EventsGateway
     private readonly guestAccessCacheService: GuestAccessCacheService,
     private readonly guestAttendanceService: GuestAttendanceService,
     private readonly dataSource: DataSource,
+    private readonly authzRepo: AuthzReadRepository,
   ) {}
 
   afterInit(server: Server): void {
@@ -271,6 +274,57 @@ export class EventsGateway
       return { ok: false };
     }
     const room = MEETING_ROOM(meetingId);
+    void client.leave(room);
+    return { ok: true, room };
+  }
+
+  /**
+   * Cho phép nhân viên đang xử lý phê duyệt cuộc họp (manager/admin) nhận
+   * realtime update trên hàng đợi `/manager/meeting-approvals` của họ, thay
+   * vì phải bấm "Tải lại". Room = `user:{userId}` — CHỈ tự subscribe cho
+   * chính mình (bỏ qua mọi userId trong body), và CHỈ join được nếu có
+   * quyền `meeting_request.read` — nếu không mọi nhân viên đã đăng nhập đều
+   * nghe được nội dung yêu cầu họp của người khác.
+   */
+  @SubscribeMessage('user:subscribe')
+  async handleUserSubscribe(
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ ok: boolean; room?: string }> {
+    const identity = (client.data as { identity?: SocketIdentity | null })
+      .identity;
+    if (!identity || identity.type !== 'employee') {
+      this.logger.warn(
+        `[WS] user:subscribe rejected — no valid employee identity (socket=${client.id})`,
+      );
+      return { ok: false };
+    }
+
+    const { permissions } = await this.authzRepo.getEffectiveRolesAndPermissions(
+      identity.userId,
+    );
+    if (!permissions.includes('meeting_request.read')) {
+      this.logger.warn(
+        `[WS] user:subscribe rejected — user ${identity.userId} lacks meeting_request.read`,
+      );
+      return { ok: false };
+    }
+
+    const room = USER_ROOM(identity.userId);
+    void client.join(room);
+    return { ok: true, room };
+  }
+
+  @SubscribeMessage('user:unsubscribe')
+  handleUserUnsubscribe(@ConnectedSocket() client: Socket): {
+    ok: boolean;
+    room?: string;
+  } {
+    const identity = (client.data as { identity?: SocketIdentity | null })
+      .identity;
+    if (!identity || identity.type !== 'employee') {
+      return { ok: false };
+    }
+    const room = USER_ROOM(identity.userId);
     void client.leave(room);
     return { ok: true, room };
   }

@@ -585,6 +585,17 @@ export class MeetingRequestReviewService {
     // (mirror writeNotificationFailureAudit ở enqueueApprovalNotifications).
     await this.sendGuestInviteEmails(approvalResult, authUser, clientContext);
 
+    // Best-effort — realtime cho hàng đợi /manager/meeting-approvals (xem
+    // MeetingsService#emitMeetingRequestRealtime).
+    const approverIds = await this.meetingsService.getMeetingRequestApproverIds();
+    this.meetingsService.emitMeetingRequestUpdate(approverIds, {
+      requestId,
+      meetingId: approvalResult.meetingId,
+      requestType: approvalResult.requestType,
+      approvalStatus: ApprovalStatus.APPROVED,
+      action: 'approved',
+    });
+
     return new ApproveResponseDto({
       requestId,
       approvalStatus: ApprovalStatus.APPROVED,
@@ -1038,6 +1049,7 @@ export class MeetingRequestReviewService {
       return {
         meetingTitle: meeting.title,
         meetingId: meeting.id,
+        requestType: request.requestType,
         appliedAt: now,
         requesterId: request.requestedBy,
         hostId: meeting.hostId,
@@ -1060,6 +1072,16 @@ export class MeetingRequestReviewService {
       authUser,
       clientContext,
     );
+
+    // Best-effort — realtime cho hàng đợi /manager/meeting-approvals.
+    const approverIds = await this.meetingsService.getMeetingRequestApproverIds();
+    this.meetingsService.emitMeetingRequestUpdate(approverIds, {
+      requestId,
+      meetingId: rejectResult.meetingId,
+      requestType: rejectResult.requestType,
+      approvalStatus: ApprovalStatus.REJECTED,
+      action: 'rejected',
+    });
 
     return new RejectResponseDto({
       requestId,
@@ -1232,7 +1254,10 @@ export class MeetingRequestReviewService {
 
   /** Idempotent guard: re-check PENDING trong lock, trả false nếu đã xử lý ở tick khác. */
   private async expireOne(requestId: string): Promise<boolean> {
-    return this.dataSource.transaction(async (em) => {
+    let expiredMeetingId: string | null = null;
+    let expiredRequestType: MeetingRequestType | null = null;
+
+    const done = await this.dataSource.transaction(async (em) => {
       const request = await em.findOne(MeetingRequestEntity, {
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -1247,6 +1272,8 @@ export class MeetingRequestReviewService {
       if (!meeting || meeting.status !== MeetingStatus.PENDING_APPROVAL) {
         return false;
       }
+      expiredMeetingId = meeting.id;
+      expiredRequestType = request.requestType;
 
       const isUpdateRequest =
         request.requestType === MeetingRequestType.UPDATE_TIME ||
@@ -1334,5 +1361,28 @@ export class MeetingRequestReviewService {
 
       return true;
     });
+
+    // Best-effort — realtime cho hàng đợi /manager/meeting-approvals: request
+    // tự hết hạn (cron) trước đây không phát tín hiệu gì ngoài audit log,
+    // khiến FE vẫn hiện request đã rời hàng đợi cho tới khi tự bấm "Tải lại".
+    if (done && expiredMeetingId) {
+      try {
+        const approverIds =
+          await this.meetingsService.getMeetingRequestApproverIds();
+        this.meetingsService.emitMeetingRequestUpdate(approverIds, {
+          requestId,
+          meetingId: expiredMeetingId,
+          requestType: expiredRequestType ?? '',
+          approvalStatus: ApprovalStatus.EXPIRED,
+          action: 'expired',
+        });
+      } catch (error) {
+        this.logger.warn(
+          `[expireOne] WS emit failed for request ${requestId}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return done;
   }
 }

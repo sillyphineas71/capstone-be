@@ -7,6 +7,7 @@ import {
   BadRequestException,
   BadGatewayException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
@@ -81,6 +82,7 @@ import {
 } from '../../mail/templates/builders.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { FaceProvisioningService } from '../../face-access/services/face-provisioning.service.js';
+import { WebsocketService } from '../../websocket/websocket.service.js';
 import {
   AuditLogEntity,
   AuditLogSeverity,
@@ -243,7 +245,46 @@ export class MeetingsService {
     private readonly configService: ConfigService,
     private readonly storageService: StorageService,
     private readonly guestInviteService: GuestInviteService,
+    /**
+     * Optional — emit realtime cho hàng đợi `/manager/meeting-approvals` là
+     * best-effort (giống pattern MinutesService), và tránh phải sửa lại
+     * toàn bộ call-site `new MeetingsService(...)`/TestingModule hiện có
+     * trong test khi chưa cấu hình WebsocketModule.
+     */
+    @Optional() private readonly websocketService?: WebsocketService,
   ) {}
+
+  /**
+   * Best-effort: bắn `meeting_request.updated` tới từng approver đang mở
+   * `/manager/meeting-approvals` (room `user:{userId}`, xem
+   * EventsGateway#handleUserSubscribe) để FE tự refetch danh sách thay vì
+   * phải bấm "Tải lại". Lỗi emit KHÔNG được phép ảnh hưởng nghiệp vụ chính.
+   */
+  private emitMeetingRequestRealtime(
+    approverIds: string[],
+    payload: {
+      requestId: string;
+      meetingId: string;
+      requestType: string;
+      approvalStatus: string;
+      action: 'created' | 'approved' | 'rejected' | 'expired';
+    },
+  ): void {
+    if (!this.websocketService) return;
+    for (const userId of approverIds) {
+      try {
+        this.websocketService.emitToUser(
+          userId,
+          'meeting_request.updated',
+          payload,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `[WS] Failed to emit meeting_request.updated to user ${userId}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
 
   /**
    * Đọc `system_configs.room_booking_buffer_minutes` (Nhóm B, mặc định 15 phút nếu thiếu
@@ -1113,6 +1154,13 @@ export class MeetingsService {
             (notifError as Error).message,
         );
       }
+      this.emitMeetingRequestRealtime(approverIds, {
+        requestId: request!.id,
+        meetingId: meeting!.id,
+        requestType: MeetingRequestType.CREATE_MEETING,
+        approvalStatus: ApprovalStatus.PENDING,
+        action: 'created',
+      });
     }
 
     return new CreateMeetingResponseDto({
@@ -1808,6 +1856,13 @@ export class MeetingsService {
             createdBy: authUser.userId,
           });
         }
+        this.emitMeetingRequestRealtime(approverIds, {
+          requestId,
+          meetingId,
+          requestType: MeetingRequestType.UPDATE_TIME,
+          approvalStatus: ApprovalStatus.PENDING,
+          action: 'created',
+        });
       } catch (notifError: unknown) {
         this.logger.error(
           `[updateMeetingTime] Approver notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
@@ -2636,6 +2691,13 @@ export class MeetingsService {
             createdBy: authUser.userId,
           });
         }
+        this.emitMeetingRequestRealtime(approverIds, {
+          requestId,
+          meetingId,
+          requestType: MeetingRequestType.UPDATE_ROOM,
+          approvalStatus: ApprovalStatus.PENDING,
+          action: 'created',
+        });
       } catch (notifError: unknown) {
         this.logger.error(
           `[updateMeetingRoom] Approver notification failed for meeting ${meetingId}: ${(notifError as Error).message}`,
@@ -5029,6 +5091,31 @@ export class MeetingsService {
       backgroundJobId,
     });
   }
+  /**
+   * Wrapper public của `resolveApproverIds()` — dùng bởi
+   * `MeetingRequestReviewService` (approve/reject/expire) để bắn realtime
+   * WS `meeting_request.updated` tới đúng audience đã nhận in-app
+   * notification khi request được tạo, giữ nhất quán "ai thấy request thì
+   * người đó nhận update realtime".
+   */
+  async getMeetingRequestApproverIds(): Promise<string[]> {
+    return this.resolveApproverIds();
+  }
+
+  /** Bắn realtime `meeting_request.updated` — public để MeetingRequestReviewService tái dùng. */
+  emitMeetingRequestUpdate(
+    approverIds: string[],
+    payload: {
+      requestId: string;
+      meetingId: string;
+      requestType: string;
+      approvalStatus: string;
+      action: 'created' | 'approved' | 'rejected' | 'expired';
+    },
+  ): void {
+    this.emitMeetingRequestRealtime(approverIds, payload);
+  }
+
   private async resolveApproverIds(): Promise<string[]> {
     try {
       const config = await this.dataSource
