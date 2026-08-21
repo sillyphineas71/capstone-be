@@ -60,6 +60,7 @@ import { RecordingSystemConfigService } from './services/recording-system-config
     TypeOrmModule,
     RecordingSessionService,
     RecordingSystemConfigService,
+    MediaFilesService,
   ],
 })
 export class RecordingModule {}

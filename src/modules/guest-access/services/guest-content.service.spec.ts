@@ -13,11 +13,14 @@ import { MeetingParticipantEntity } from '../../meetings/entities/meeting-partic
 import { MeetingExternalParticipantEntity } from '../../meetings/entities/meeting-external-participant.entity';
 import { MeetingNoteEntity } from '../../meetings/entities/meeting-note.entity';
 import { RecordingSessionEntity } from '../../recording/entities/recording-session.entity';
+import { MediaFileEntity } from '../../recording/entities/media-file.entity';
+import { MediaFilesService } from '../../recording/services/media-files.service';
 
 describe('GuestContentService', () => {
   let service: GuestContentService;
   let lobbyService: { getStatus: jest.Mock; assertAdmitted: jest.Mock };
   let attendanceService: { logJoinOnce: jest.Mock };
+  let mediaFilesService: { buildSignedDownloadUrl: jest.Mock };
   let repos: Map<unknown, { find: jest.Mock; findOne: jest.Mock }>;
   let dataSource: { getRepository: jest.Mock };
 
@@ -28,7 +31,7 @@ describe('GuestContentService', () => {
   };
 
   beforeEach(async () => {
-    repos = new Map([
+    repos = new Map<unknown, { find: jest.Mock; findOne: jest.Mock }>([
       [
         MeetingEntity,
         {
@@ -48,10 +51,14 @@ describe('GuestContentService', () => {
           find: jest
             .fn()
             .mockResolvedValue([
-              { agendaOrder: 1, title: 'Item 1', status: 'planned' },
+              { id: 'agenda-1', agendaOrder: 1, title: 'Item 1', status: 'planned' },
             ]),
           findOne: jest.fn(),
         },
+      ],
+      [
+        MediaFileEntity,
+        { find: jest.fn().mockResolvedValue([]), findOne: jest.fn() },
       ],
       [
         MeetingParticipantEntity,
@@ -100,6 +107,9 @@ describe('GuestContentService', () => {
       assertAdmitted: jest.fn(),
     };
     attendanceService = { logJoinOnce: jest.fn() };
+    mediaFilesService = {
+      buildSignedDownloadUrl: jest.fn().mockReturnValue('https://signed.example/file'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -107,6 +117,7 @@ describe('GuestContentService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: GuestLobbyService, useValue: lobbyService },
         { provide: GuestAttendanceService, useValue: attendanceService },
+        { provide: MediaFilesService, useValue: mediaFilesService },
       ],
     }).compile();
 
@@ -159,7 +170,7 @@ describe('GuestContentService', () => {
     expect(result.meetingTitle).toBe('Weekly Sync');
     expect(result.hostName).toBe('Host Nguyen');
     expect(result.agenda).toEqual([
-      { order: 1, title: 'Item 1', status: 'planned' },
+      { order: 1, title: 'Item 1', status: 'planned', attachments: [] },
     ]);
     expect(result.recordingActive).toBe(false);
   });
@@ -168,5 +179,38 @@ describe('GuestContentService', () => {
     const result = await service.getGuestMeetingView(guest);
     expect(result).not.toHaveProperty('transcript');
     expect(result).not.toHaveProperty('recordingFileUrl');
+  });
+
+  it('should include agenda attachments with a signed download URL via MediaFilesService', async () => {
+    const mediaFileRepo = repos.get(MediaFileEntity)!;
+    mediaFileRepo.find.mockResolvedValue([
+      {
+        id: 'file-1',
+        relatedEntityId: 'agenda-1',
+        fileName: 'slides.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: '2048',
+      },
+    ]);
+
+    const result = await service.getGuestMeetingView(guest);
+
+    expect(mediaFileRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          relatedEntityType: 'meeting_agenda',
+        }),
+      }),
+    );
+    expect(mediaFilesService.buildSignedDownloadUrl).toHaveBeenCalled();
+    expect(result.agenda[0].attachments).toEqual([
+      {
+        id: 'file-1',
+        fileName: 'slides.pdf',
+        mimeType: 'application/pdf',
+        fileSizeBytes: '2048',
+        downloadUrl: 'https://signed.example/file',
+      },
+    ]);
   });
 });

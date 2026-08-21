@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In, IsNull } from 'typeorm';
 import { MeetingEntity } from '../../meetings/entities/meeting.entity.js';
 import { MeetingAgendaEntity } from '../../meetings/entities/meeting-agenda.entity.js';
 import { MeetingParticipantEntity } from '../../meetings/entities/meeting-participant.entity.js';
@@ -9,6 +9,8 @@ import {
   RecordingSessionEntity,
   RecordingSessionStatus,
 } from '../../recording/entities/recording-session.entity.js';
+import { MediaFileEntity } from '../../recording/entities/media-file.entity.js';
+import { MediaFilesService } from '../../recording/services/media-files.service.js';
 import { GuestLobbyService } from './guest-lobby.service.js';
 import { GuestAttendanceService } from './guest-attendance.service.js';
 import { GuestRequestContext } from '../types/guest-jwt-payload.type.js';
@@ -34,6 +36,14 @@ export interface GuestMeetingParticipantView {
   organizationName: string | null;
 }
 
+export interface GuestAgendaAttachmentView {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: string | null;
+  downloadUrl: string | null;
+}
+
 export interface GuestMeetingViewDto {
   meetingId: string;
   meetingTitle: string;
@@ -42,7 +52,12 @@ export interface GuestMeetingViewDto {
   hostName: string;
   status: string;
   recordingActive: boolean;
-  agenda: Array<{ order: number; title: string; status: string }>;
+  agenda: Array<{
+    order: number;
+    title: string;
+    status: string;
+    attachments: GuestAgendaAttachmentView[];
+  }>;
   participants: GuestMeetingParticipantView[];
   sharedNotes: Array<{ content: string; pinned: boolean; createdAt: Date }>;
 }
@@ -60,7 +75,47 @@ export class GuestContentService {
     private readonly dataSource: DataSource,
     private readonly lobbyService: GuestLobbyService,
     private readonly guestAttendanceService: GuestAttendanceService,
+    private readonly mediaFilesService: MediaFilesService,
   ) {}
+
+  /**
+   * File đính kèm agenda cho khách xem/tải — tái dùng đúng logic sinh
+   * Signed URL của `MediaFilesService.buildSignedDownloadUrl` (secure-download
+   * endpoint KHÔNG yêu cầu JWT, chỉ cần HMAC token) nên phù hợp cho khách
+   * ngoài công ty không có tài khoản nội bộ.
+   */
+  private async loadAgendaAttachmentsMap(
+    agendaIds: string[],
+  ): Promise<Map<string, GuestAgendaAttachmentView[]>> {
+    const map = new Map<string, GuestAgendaAttachmentView[]>();
+    if (agendaIds.length === 0) {
+      return map;
+    }
+
+    const files = await this.dataSource.getRepository(MediaFileEntity).find({
+      where: {
+        relatedEntityType: 'meeting_agenda',
+        relatedEntityId: In(agendaIds),
+        deletedAt: IsNull(),
+      },
+      order: { uploadedAt: 'DESC' },
+    });
+
+    for (const file of files) {
+      const agendaId = file.relatedEntityId as string;
+      const list = map.get(agendaId) ?? [];
+      list.push({
+        id: file.id,
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        fileSizeBytes: file.fileSizeBytes,
+        downloadUrl: this.mediaFilesService.buildSignedDownloadUrl(file),
+      });
+      map.set(agendaId, list);
+    }
+
+    return map;
+  }
 
   async getGuestMeetingView(
     guest: GuestRequestContext,
@@ -114,6 +169,10 @@ export class GuestContentService {
       }),
     ]);
 
+    const agendaAttachmentsMap = await this.loadAgendaAttachmentsMap(
+      agendaItems.map((a) => a.id),
+    );
+
     const participants: GuestMeetingParticipantView[] = [
       ...internalParticipants.map((p) => ({
         fullName: p.user?.fullName ?? 'N/A',
@@ -137,6 +196,7 @@ export class GuestContentService {
         order: a.agendaOrder,
         title: a.title,
         status: a.status,
+        attachments: agendaAttachmentsMap.get(a.id) ?? [],
       })),
       participants,
       sharedNotes: sharedNotes.map((n) => ({

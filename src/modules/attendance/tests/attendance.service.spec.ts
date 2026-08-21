@@ -7,6 +7,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { AttendanceService } from '../services/attendance.service.js';
+import { AuthzReadRepository } from '../../../modules/auth/repositories/authz-read.repository.js';
 import {
   MeetingEntity,
   MeetingStatus,
@@ -29,6 +30,7 @@ describe('AttendanceService', () => {
   let participantRepo: jest.Mocked<Repository<MeetingParticipantEntity>>;
   let userRepo: jest.Mocked<Repository<UserEntity>>;
   let attendanceRepo: jest.Mocked<Repository<AttendanceRecordEntity>>;
+  let authzRead: jest.Mocked<AuthzReadRepository>;
 
   const mockMeeting = {
     id: 'meeting-uuid-1',
@@ -134,6 +136,14 @@ describe('AttendanceService', () => {
             findOne: jest.fn(),
           },
         },
+        {
+          provide: AuthzReadRepository,
+          useValue: {
+            getEffectiveRolesAndPermissions: jest
+              .fn()
+              .mockResolvedValue({ roles: [], permissions: [] }),
+          },
+        },
       ],
     }).compile();
 
@@ -142,6 +152,7 @@ describe('AttendanceService', () => {
     participantRepo = module.get(getRepositoryToken(MeetingParticipantEntity));
     userRepo = module.get(getRepositoryToken(UserEntity));
     attendanceRepo = module.get(getRepositoryToken(AttendanceRecordEntity));
+    authzRead = module.get(AuthzReadRepository);
   });
 
   // ===== T022: validateAndGetMeeting =====
@@ -207,6 +218,32 @@ describe('AttendanceService', () => {
       await expect(
         service.checkAccess(mockMeeting, 'unknown-user'),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    // [FIX] checkIsAdmin() truoc day luon return false (stub chua lam xong,
+    // "Will be enhanced with proper role check") — BUSINESS_ADMIN/SYSTEM_ADMIN
+    // khong phai organizer/host/participant/manager cua 1 meeting cu the se bi
+    // 403 PERMISSION_DENIED du co @RequirePermissions('attendance.read') o route.
+    it('should give full access to BUSINESS_ADMIN even when not organizer/host/participant/manager', async () => {
+      participantRepo.findOne.mockResolvedValue(null);
+      participantRepo.find.mockResolvedValue([]);
+      authzRead.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['BUSINESS_ADMIN'],
+        permissions: [],
+      });
+      const result = await service.checkAccess(mockMeeting, 'ba-user-uuid');
+      expect(result.canViewAttendanceSource).toBe(true);
+    });
+
+    it('should give full access to SYSTEM_ADMIN even when not organizer/host/participant/manager', async () => {
+      participantRepo.findOne.mockResolvedValue(null);
+      participantRepo.find.mockResolvedValue([]);
+      authzRead.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['SYSTEM_ADMIN'],
+        permissions: [],
+      });
+      const result = await service.checkAccess(mockMeeting, 'sa-user-uuid');
+      expect(result.canViewAttendanceSource).toBe(true);
     });
   });
 

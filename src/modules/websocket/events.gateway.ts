@@ -21,7 +21,6 @@ import { GUEST_TOKEN_TYPE } from '../guest-access/constants/guest-access.constan
 import { GuestJwtPayload } from '../guest-access/types/guest-jwt-payload.type.js';
 import { MeetingParticipantEntity } from '../meetings/entities/meeting-participant.entity.js';
 import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
-import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,7 +84,6 @@ export class EventsGateway
     private readonly guestAccessCacheService: GuestAccessCacheService,
     private readonly guestAttendanceService: GuestAttendanceService,
     private readonly dataSource: DataSource,
-    private readonly authzRepo: AuthzReadRepository,
   ) {}
 
   afterInit(server: Server): void {
@@ -279,32 +277,27 @@ export class EventsGateway
   }
 
   /**
-   * Cho phép nhân viên đang xử lý phê duyệt cuộc họp (manager/admin) nhận
-   * realtime update trên hàng đợi `/manager/meeting-approvals` của họ, thay
-   * vì phải bấm "Tải lại". Room = `user:{userId}` — CHỈ tự subscribe cho
-   * chính mình (bỏ qua mọi userId trong body), và CHỈ join được nếu có
-   * quyền `meeting_request.read` — nếu không mọi nhân viên đã đăng nhập đều
-   * nghe được nội dung yêu cầu họp của người khác.
+   * Cho phép bất kỳ nhân viên đã đăng nhập nhận realtime update dành riêng
+   * cho họ — hàng đợi phê duyệt (`meeting_request.updated`) VÀ chuông thông
+   * báo chung (`notification.created`, xem NotificationsService.createNotification).
+   * Room = `user:{userId}` — CHỈ tự subscribe cho chính mình (bỏ qua mọi
+   * userId trong body), server chỉ emit vào room này những sự kiện đã lọc
+   * đúng theo `identity.userId` nên không cần thêm permission gate: join
+   * room của chính mình không lộ dữ liệu của người khác.
+   * [Sửa 2026-08-21] Bỏ yêu cầu quyền `meeting_request.read` — gate này chặn
+   * luôn cả nhân viên thường (không có quyền đó) nhận thông báo no-show/biên
+   * bản/... vốn không liên quan gì đến hàng đợi phê duyệt.
    */
   @SubscribeMessage('user:subscribe')
-  async handleUserSubscribe(
-    @ConnectedSocket() client: Socket,
-  ): Promise<{ ok: boolean; room?: string }> {
+  handleUserSubscribe(@ConnectedSocket() client: Socket): {
+    ok: boolean;
+    room?: string;
+  } {
     const identity = (client.data as { identity?: SocketIdentity | null })
       .identity;
     if (!identity || identity.type !== 'employee') {
       this.logger.warn(
         `[WS] user:subscribe rejected — no valid employee identity (socket=${client.id})`,
-      );
-      return { ok: false };
-    }
-
-    const { permissions } = await this.authzRepo.getEffectiveRolesAndPermissions(
-      identity.userId,
-    );
-    if (!permissions.includes('meeting_request.read')) {
-      this.logger.warn(
-        `[WS] user:subscribe rejected — user ${identity.userId} lacks meeting_request.read`,
       );
       return { ok: false };
     }
