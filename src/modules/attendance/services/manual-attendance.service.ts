@@ -357,16 +357,18 @@ export class ManualAttendanceService {
     return meeting;
   }
 
-  /** Gate trạng thái: tương lai (now<start) hoặc status không hợp lệ → 409 ATTENDANCE_NOT_OPEN_YET. */
+  /**
+   * Gate trạng thái meeting → 409 ATTENDANCE_NOT_OPEN_YET.
+   *
+   * [2026-08-22] BỎ điều kiện `now < meeting.startTime`. Điểm danh thủ công
+   * TRƯỚC giờ họp là hợp lệ (Host mở phòng sớm, chốt danh sách trước) — và
+   * computeLateFlags() vốn đã tính đúng: checkInTime <= startTime ⇒
+   * isLate=false, lateMinutes=0 ⇒ deriveStatus() trả "có mặt đúng giờ".
+   * KHÔNG đụng tới luồng điểm danh khuôn mặt/IoT: FaceAttendanceService có
+   * cửa sổ thời gian riêng (POST_GRACE_MINUTES / DEFAULT_LATE_GRACE_MINUTES)
+   * và không gọi hàm này.
+   */
   private assertMeetingOpen(meeting: MeetingEntity): void {
-    const now = new Date();
-    if (now < meeting.startTime) {
-      throw new ConflictException({
-        message:
-          'Attendance is not open yet. Please come back when the meeting starts.',
-        error: 'ATTENDANCE_NOT_OPEN_YET',
-      });
-    }
     const allowed: MeetingStatus[] = [
       MeetingStatus.SCHEDULED,
       MeetingStatus.IN_PROGRESS,

@@ -3448,6 +3448,32 @@ export class LiveMeetingService {
 
     const author = noteWithAuthor.author;
 
+    // [2026-08-22] Realtime ghi chú: báo cho mọi client đang ở trong phòng họp
+    // rằng có ghi chú mới, để tab của người khác tự nạp lại danh sách thay vì
+    // phải F5. CỐ Ý KHÔNG gửi kèm `content`: room `meeting:{id}` có cả socket
+    // của khách ngoài công ty (GLA-001), mà ghi chú internal không được lộ cho
+    // khách. Client nhận tín hiệu rồi gọi lại endpoint đọc vốn đã lọc đúng
+    // quyền/visibility của từng người. Best-effort — lỗi emit KHÔNG làm hỏng
+    // ghi chú đã lưu thành công.
+    try {
+      this.websocketService.emitToRoom(
+        `meeting:${meetingId}`,
+        'meeting.note.created',
+        {
+          meetingId,
+          noteId: noteWithAuthor.id,
+          visibilityLevel: noteWithAuthor.visibilityLevel,
+          createdAt:
+            noteWithAuthor.createdAt?.toISOString() || new Date().toISOString(),
+        },
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Failed to emit meeting.note.created for meeting ${meetingId}: ` +
+          (e instanceof Error ? e.message : 'unknown'),
+      );
+    }
+
     const { NoteResponseDto } = await import('../dto/note-response.dto.js');
     return new NoteResponseDto({
       id: noteWithAuthor.id,

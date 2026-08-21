@@ -18,7 +18,7 @@ import { MediaFilesService } from '../../recording/services/media-files.service'
 
 describe('GuestContentService', () => {
   let service: GuestContentService;
-  let lobbyService: { getStatus: jest.Mock; assertAdmitted: jest.Mock };
+  let lobbyService: { getStatusWithAutoAdmit: jest.Mock; assertAdmitted: jest.Mock };
   let attendanceService: { logJoinOnce: jest.Mock };
   let mediaFilesService: { buildSignedDownloadUrl: jest.Mock };
   let repos: Map<unknown, { find: jest.Mock; findOne: jest.Mock }>;
@@ -103,7 +103,9 @@ describe('GuestContentService', () => {
       getRepository: jest.fn((entity: unknown) => repos.get(entity)),
     };
     lobbyService = {
-      getStatus: jest.fn().mockResolvedValue(GuestLobbyStatus.ADMITTED),
+      getStatusWithAutoAdmit: jest
+        .fn()
+        .mockResolvedValue(GuestLobbyStatus.ADMITTED),
       assertAdmitted: jest.fn(),
     };
     attendanceService = { logJoinOnce: jest.fn() };
@@ -124,12 +126,17 @@ describe('GuestContentService', () => {
     service = module.get(GuestContentService);
   });
 
-  it('should reject via GuestLobbyService.assertAdmitted before querying content', async () => {
+  it('should reject via GuestLobbyService.assertAdmitted before querying meeting content', async () => {
     lobbyService.assertAdmitted.mockImplementation(() => {
       throw new Error('blocked');
     });
     await expect(service.getGuestMeetingView(guest)).rejects.toThrow('blocked');
-    expect(dataSource.getRepository).not.toHaveBeenCalledWith(MeetingEntity);
+    expect(lobbyService.getStatusWithAutoAdmit).toHaveBeenCalledWith(
+      guest.meetingId,
+      guest.externalParticipantId,
+      new Date('2026-08-10T09:00:00Z'),
+    );
+    expect(attendanceService.logJoinOnce).not.toHaveBeenCalled();
   });
 
   it('should log guest_join exactly once via GuestAttendanceService', async () => {

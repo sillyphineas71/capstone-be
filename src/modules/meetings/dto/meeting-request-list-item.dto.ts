@@ -3,6 +3,10 @@ import { UserSummaryDto } from './user-summary.dto.js';
 import { RoomSummaryDto } from './room-summary.dto.js';
 import { MeetingRequestType } from '../entities/meeting-request.entity.js';
 import { ConflictDetailDto } from './conflict-detail.dto.js';
+import {
+  ParticipantConflictDetailDto,
+  ParticipantConflictSummaryDto,
+} from './participant-conflict-detail.dto.js';
 
 const EDIT_REQUEST_TYPES: readonly MeetingRequestType[] = [
   MeetingRequestType.UPDATE_TIME,
@@ -57,6 +61,23 @@ export class MeetingRequestListItemDto {
    */
   @Expose()
   pendingConflictDetails: ConflictDetailDto[] | null;
+
+  /**
+   * MKM-PCONF-01 (2026-08-22) — xung đột NGƯỜI THAM DỰ, check TƯƠI và gom
+   * theo cuộc họp gây trùng (kèm danh sách người + thông tin cuộc họp đó).
+   * Thay cho việc FE phải suy ra từ `conflictCheckStatus === 'warning'` — cờ
+   * đó chỉ nói "có trùng ai đó" tại thời điểm tạo, không nói trùng với ai và
+   * ở cuộc họp nào.
+   *
+   * CẢNH BÁO MỀM: khác `conflictDetails` (xung đột phòng, approve() chặn),
+   * Manager vẫn duyệt được CẢ HAI cuộc họp — FE chỉ cần hỏi xác nhận.
+   */
+  @Expose()
+  participantConflictDetails: ParticipantConflictDetailDto[] | null;
+
+  /** Số liệu gộp sẵn của `participantConflictDetails` cho badge/dialog. */
+  @Expose()
+  participantConflictSummary: ParticipantConflictSummaryDto | null;
 
   @Expose()
   decisionAt: Date | null;
@@ -142,6 +163,8 @@ export class MeetingRequestListItemDto {
       endTime: Date | null;
       roomId: string | null;
     } | null = null,
+    participantConflictDetails: ParticipantConflictDetailDto[] | null = null,
+    participantConflictSummary: ParticipantConflictSummaryDto | null = null,
   ) {
     this.id = id;
     this.requestCode = requestCode;
@@ -154,6 +177,8 @@ export class MeetingRequestListItemDto {
     this.conflictSummary = conflictSummary;
     this.conflictDetails = conflictDetails;
     this.pendingConflictDetails = pendingConflictDetails;
+    this.participantConflictDetails = participantConflictDetails;
+    this.participantConflictSummary = participantConflictSummary;
     this.decisionAt = decisionAt;
     this.rejectionReason = rejectionReason;
     this.requestedBy = requestedBy;

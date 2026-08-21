@@ -120,19 +120,22 @@ export class GuestContentService {
   async getGuestMeetingView(
     guest: GuestRequestContext,
   ): Promise<GuestMeetingViewDto> {
-    const lobbyStatus = await this.lobbyService.getStatus(
+    const meeting = await this.dataSource
+      .getRepository(MeetingEntity)
+      .findOne({ where: { id: guest.meetingId }, relations: { host: true } });
+    // Guard đã xác nhận meeting tồn tại/hợp lệ trước khi tới đây
+    // (GuestMeetingScopeGuard) — không throw lại ở đây, chỉ phòng hờ null.
+
+    const lobbyStatus = await this.lobbyService.getStatusWithAutoAdmit(
+      guest.meetingId,
       guest.externalParticipantId,
+      meeting?.startTime,
     );
     this.lobbyService.assertAdmitted(lobbyStatus);
 
     // Ghi attendance_events(guest_join) đúng 1 lần/phiên (FR-GLA-038/039).
     await this.guestAttendanceService.logJoinOnce(guest);
 
-    const meeting = await this.dataSource
-      .getRepository(MeetingEntity)
-      .findOne({ where: { id: guest.meetingId }, relations: { host: true } });
-    // Guard đã xác nhận meeting tồn tại/hợp lệ trước khi tới đây
-    // (GuestMeetingScopeGuard) — không throw lại ở đây, chỉ phòng hờ null.
     const meetingTitle = meeting?.title ?? '';
     const hostName = meeting?.host?.fullName ?? 'Chua xac dinh';
 

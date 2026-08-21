@@ -170,12 +170,27 @@ describe('AttendanceService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw ConflictException when meeting is in the future', async () => {
+    // [2026-08-22] Doi hanh vi co y: truoc day meeting tuong lai -> 409
+    // ATTENDANCE_NOT_OPEN_YET. Gate do da bo vi Host duoc bat dau hop som,
+    // va diem danh truoc gio la hop le (van tinh dung gio).
+    it('should ALLOW access when meeting is in the future (gate removed)', async () => {
       const futureMeeting = {
         ...mockMeeting,
+        status: MeetingStatus.SCHEDULED,
         startTime: new Date('2099-01-01T00:00:00Z'),
       };
       meetingRepo.findOne.mockResolvedValue(futureMeeting);
+      const result = await service.validateAndGetMeeting('meeting-uuid-1');
+      expect(result.startTime).toEqual(new Date('2099-01-01T00:00:00Z'));
+    });
+
+    it('should still throw ConflictException when meeting status is not allowed', async () => {
+      const draftMeeting = {
+        ...mockMeeting,
+        status: MeetingStatus.PENDING_APPROVAL,
+        startTime: new Date('2099-01-01T00:00:00Z'),
+      };
+      meetingRepo.findOne.mockResolvedValue(draftMeeting);
       await expect(
         service.validateAndGetMeeting('meeting-uuid-1'),
       ).rejects.toThrow(ConflictException);

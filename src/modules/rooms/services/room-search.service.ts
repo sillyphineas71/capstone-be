@@ -20,6 +20,7 @@ interface RoomSearchRow {
   administrative_status: string;
   latest_occupancy_count: number | null;
   has_current_booking: boolean;
+  has_live_meeting: boolean;
   has_camera: boolean;
   has_microphone: boolean;
   has_display: boolean;
@@ -54,10 +55,26 @@ const HAS_CURRENT_BOOKING_SUBQUERY = `EXISTS (
     AND rb.status IN ('approved', 'active')
     AND rb.reserved_start_time <= now() AND rb.reserved_end_time >= now()
 )`;
+/**
+ * [FIX 2026-08-22] Cuoc hop cua booking dang chay da THUC SU bat dau
+ * (live-meeting.service flip meeting -> in_progress va booking approved ->
+ * active cung luc). Truoc day trang thai 'occupied' chi dua vao tin hieu
+ * camera (room_events.occupancy_count); phong dang hop nhung khong co camera
+ * gui event bi hien 'reserved' (= "Duoc dat truoc") du da vao hop.
+ */
+const HAS_LIVE_MEETING_SUBQUERY = `EXISTS (
+  SELECT 1 FROM room_bookings rb
+  JOIN meetings mt ON mt.id = rb.meeting_id
+  WHERE rb.room_id = r.id
+    AND rb.status IN ('approved', 'active')
+    AND rb.reserved_start_time <= now() AND rb.reserved_end_time >= now()
+    AND mt.status = 'in_progress'
+)`;
 /** Cung logic uu tien voi computeStatus() (JS) — dung de filter theo `status` trong WHERE. */
 const COMPUTED_STATUS_SQL = `(CASE
   WHEN r.administrative_status IN ('maintenance', 'inactive') THEN r.administrative_status
   WHEN COALESCE(${LATEST_OCCUPANCY_SUBQUERY}, 0) > 0 THEN 'occupied'
+  WHEN ${HAS_LIVE_MEETING_SUBQUERY} THEN 'occupied'
   WHEN ${HAS_CURRENT_BOOKING_SUBQUERY} THEN 'reserved'
   ELSE 'available'
 END)`;
@@ -153,6 +170,7 @@ export class RoomSearchService {
               r.administrative_status,
               ${LATEST_OCCUPANCY_SUBQUERY} AS latest_occupancy_count,
               ${HAS_CURRENT_BOOKING_SUBQUERY} AS has_current_booking,
+              ${HAS_LIVE_MEETING_SUBQUERY} AS has_live_meeting,
               r.has_camera, r.has_microphone, r.has_display, r.allow_recording,
               COALESCE(eq.faulty_count, 0) AS faulty_count,
               COALESCE(eq.warning_count, 0) AS warning_count
@@ -309,8 +327,11 @@ export class RoomSearchService {
    *    neu la 'maintenance'/'inactive' — luon thang.
    * 2. 'occupied' neu tin hieu occupancy CON HIEU LUC (trong
    *    OCCUPANCY_SIGNAL_TTL_MINUTES phut gan nhat, xem LATEST_OCCUPANCY_SUBQUERY) > 0.
-   * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
-   * 4. 'available' con lai.
+   * 3. [FIX 2026-08-22] 'occupied' neu cuoc hop cua booking dang chay da bat dau
+   *    (meetings.status = 'in_progress', xem HAS_LIVE_MEETING_SUBQUERY).
+   * 4. 'reserved' neu co booking approved/active dang trong khung gio hien tai
+   *    nhung cuoc hop chua bat dau.
+   * 5. 'available' con lai.
    */
   private computeStatus(row: RoomSearchRow): RoomStatus {
     if (
@@ -320,6 +341,7 @@ export class RoomSearchService {
       return row.administrative_status as RoomStatus;
     }
     if ((row.latest_occupancy_count ?? 0) > 0) return RoomStatus.OCCUPIED;
+    if (row.has_live_meeting) return RoomStatus.OCCUPIED;
     if (row.has_current_booking) return RoomStatus.RESERVED;
     return RoomStatus.AVAILABLE;
   }

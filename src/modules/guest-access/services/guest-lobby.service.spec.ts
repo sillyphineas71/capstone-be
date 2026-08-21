@@ -113,6 +113,67 @@ describe('GuestLobbyService', () => {
     });
   });
 
+  describe('getStatusWithAutoAdmit', () => {
+    it('should auto-admit a waiting guest once the meeting start time has passed', async () => {
+      cache.getLobbyStatus.mockResolvedValue(GuestLobbyStatus.WAITING);
+      const pastStart = new Date(Date.now() - 60_000);
+
+      const result = await service.getStatusWithAutoAdmit(
+        'meeting-1',
+        'ep-1',
+        pastStart,
+      );
+
+      expect(result).toBe(GuestLobbyStatus.ADMITTED);
+      expect(cache.removeFromLobby).toHaveBeenCalledWith('meeting-1', 'ep-1');
+      expect(cache.setLobbyStatus).toHaveBeenCalledWith(
+        'ep-1',
+        GuestLobbyStatus.ADMITTED,
+      );
+    });
+
+    it('should keep a guest waiting when the meeting has not started yet', async () => {
+      cache.getLobbyStatus.mockResolvedValue(GuestLobbyStatus.WAITING);
+      const futureStart = new Date(Date.now() + 60_000);
+
+      const result = await service.getStatusWithAutoAdmit(
+        'meeting-1',
+        'ep-1',
+        futureStart,
+      );
+
+      expect(result).toBe(GuestLobbyStatus.WAITING);
+      expect(cache.setLobbyStatus).not.toHaveBeenCalled();
+    });
+
+    it('should not touch an already-admitted or rejected guest', async () => {
+      cache.getLobbyStatus.mockResolvedValue(GuestLobbyStatus.REJECTED);
+      const pastStart = new Date(Date.now() - 60_000);
+
+      const result = await service.getStatusWithAutoAdmit(
+        'meeting-1',
+        'ep-1',
+        pastStart,
+      );
+
+      expect(result).toBe(GuestLobbyStatus.REJECTED);
+      expect(cache.setLobbyStatus).not.toHaveBeenCalled();
+    });
+
+    it('should treat an undefined meeting start time as not-yet-started', async () => {
+      cache.getLobbyStatus.mockResolvedValue(GuestLobbyStatus.WAITING);
+
+      const result = await service.getStatusWithAutoAdmit(
+        'meeting-1',
+        'ep-1',
+        undefined,
+      );
+
+      expect(result).toBe(GuestLobbyStatus.WAITING);
+      expect(cache.setLobbyStatus).not.toHaveBeenCalled();
+    });
+  });
+
   describe('assertAdmitted', () => {
     it('should throw ForbiddenException (GUEST_LOBBY_PENDING) when waiting', () => {
       expect(() => service.assertAdmitted(GuestLobbyStatus.WAITING)).toThrow(
