@@ -101,6 +101,9 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     const sql = dsMock.manager.query.mock.calls[0][0];
     expect(sql).toContain("resolution_status = 'kept'");
     expect(sql).toContain('first_presence_at IS NOT NULL');
+    // Bắt buộc xét cả 'snoozed' (không chỉ 'risk'/'warning_sent') — presence hợp lệ
+    // trong lúc gia hạn "Tôi vẫn đến" phải "cứu" được case, không bị auto-release đè lên.
+    expect(sql).toContain("detection_status IN ('risk','warning_sent','snoozed')");
   });
 
   // ── #32 warnBatch ──
@@ -472,6 +475,24 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(spy).not.toHaveBeenCalled();
     const sql = String(dsMock.manager.query.mock.calls[0][0]);
     expect(sql).toContain("nc.detection_status = 'warning_sent'");
+  });
+
+  // [FIX 2026-08-22, race no-show/auto-release] Kịch bản bắt buộc: case đang 'snoozed'
+  // (đã bấm "Tôi vẫn đến") có presence hợp lệ trong lúc gia hạn — reconcilePresence()
+  // chạy TRƯỚC autoReleaseBatch() trong CÙNG tick (scheduler.service.ts đã gộp, xem
+  // scheduler.service.spec.ts) nên chuyển case sang 'resolved' TRƯỚC. Tại đây xác nhận
+  // candidate SQL của autoReleaseBatch() tự loại case đã 'resolved' — chỉ khớp
+  // detection_status='snoozed' còn nguyên — dù snooze_until đã hết hạn, case KHÔNG còn
+  // bị auto-release đè lên nữa vì không còn khớp WHERE.
+  it("Kịch bản snoozed + presence hợp lệ (đã được reconcilePresence resolve trước) → autoReleaseBatch KHÔNG release dù snooze_until đã hết hạn", async () => {
+    dsMock.manager.query.mockResolvedValueOnce([]); // case đã 'resolved' → không khớp WHERE, DB thật trả rỗng
+    const spy = jest.spyOn(service, 'release');
+    const r = await service.autoReleaseBatch();
+    expect(r).toEqual({ scanned: 0, released: 0, skipped: 0 });
+    expect(spy).not.toHaveBeenCalled();
+    const sql = String(dsMock.manager.query.mock.calls[0][0]);
+    expect(sql).toContain("nc.detection_status = 'snoozed'");
+    expect(sql).toContain('nc.snooze_until <= now()');
   });
 
   // ── #33b manualRelease mapping (A) ──

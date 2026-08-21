@@ -28,7 +28,6 @@ import { OccupancyPersistenceService } from '../presence/services/occupancy-pers
  *
  * Luồng thực tế (TODO):
  * - checkNoShow() → UtilizationService.detectNoShow()
- * - autoRelease() → UtilizationService.autoReleaseRooms()
  * - sendReminders() → NotificationsService.sendScheduledReminders()
  * - checkCheckinAlerts() → CheckInAlertService.processMeetings()
  */
@@ -229,54 +228,48 @@ export class SchedulerService {
    * TRƯỚC detect() — xác nhận có mặt theo đồng hồ thực cho các booking chỉ có 1 event dương
    * lúc vào (cảm biến báo-khi-chuyển-trạng-thái, không gửi liên tục), rồi detect() mới quét
    * dựa trên first_presence_at đã được cập nhật tới thời điểm mới nhất trong CÙNG lần chạy.
+   *
+   * [FIX 2026-08-22, race no-show/auto-release] auto-release GỘP vào CUỐI chuỗi này —
+   * trước đây `autoRelease()` là 1 `@Cron(EVERY_MINUTE)` riêng, độc lập hoàn toàn (không
+   * khoá, không đảm bảo thứ tự) với `checkNoShow()`. Xác nhận qua dữ liệu thật (case
+   * a9225eae/7d1bf2ff, 2026-08-21): presence đã đủ `presenceConfirmSeconds` tới 21-41 GIÂY
+   * TRƯỚC KHI phòng bị auto-release, nhưng `first_presence_at` chỉ được
+   * `reconcilePendingConfirmations()` ghi nhận ~20s SAU KHI phòng đã bị thu hồi — vì tick
+   * của 2 cron không đồng bộ, `autoReleaseBatch()` đọc thấy `first_presence_at IS NULL` và
+   * release trước khi cron kia kịp xác nhận. Gộp tuần tự vào 1 luồng xoá hoàn toàn race này:
+   * `reconcilePresence()` LUÔN chạy xong (case đã kept/resolved nếu có presence hợp lệ)
+   * TRƯỚC KHI `autoReleaseBatch()` chạy trong CÙNG tick. `autoReleaseEnabled` GIỮ NGUYÊN
+   * gate ĐỘC LẬP (KHÔNG gộp chung điều kiện với `noShowEnabled`) — admin vẫn bật được cảnh
+   * báo no-show mà tắt riêng auto-release, đúng hành vi cũ.
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'no-show-check' })
   async checkNoShow(): Promise<void> {
     if (!this.schedulerEnabled || !this.noShowEnabled) return;
 
-    // R12 → NSC-001 (#31) → NSL-001 (OQ-4): reconcile-presence-by-time → detect →
-    // reconcile-presence(no_show_cases) → warn. KHÔNG ném ra cron.
+    // R12 → NSC-001 (#31) → NSL-001 (OQ-4/#33): reconcile-presence-by-time → detect →
+    // reconcile-presence(no_show_cases) → warn → auto-release (nếu bật). KHÔNG ném ra cron.
     try {
       const p =
         await this.occupancyPersistenceService.reconcilePendingConfirmations();
       const d = await this.noShowDetectionService.detect();
       const rec = await this.noShowLifecycleService.reconcilePresence();
       const w = await this.noShowLifecycleService.warnBatch();
+
+      let releaseLog = 'auto-release SKIPPED (autoReleaseEnabled=false)';
+      if (this.autoReleaseEnabled) {
+        const r = await this.noShowLifecycleService.autoReleaseBatch();
+        releaseLog = `auto-release scanned=${r.scanned} released=${r.released} skipped=${r.skipped}`;
+      }
+
       this.logger.log(
         `[Scheduler] no-show-check: presence-reconcile scanned=${p.scanned} confirmed=${p.confirmed}` +
           ` | detected scanned=${d.scanned} created=${d.created}` +
-          ` | reconcile resolved=${rec.resolved} | warn scanned=${w.scanned} warned=${w.warned}`,
+          ` | reconcile resolved=${rec.resolved} | warn scanned=${w.scanned} warned=${w.warned}` +
+          ` | ${releaseLog}`,
       );
     } catch (e) {
       this.logger.error(
         `[Scheduler] no-show-check failed: ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-    }
-  }
-
-  /**
-   * Auto-release room job.
-   *
-   * EVERY_MINUTE — cùng lý do với no-show-check ở trên: auto_release_grace_minutes
-   * cấu hình được (vd 5 phút), nhưng cron riêng 5 phút/lần cộng dồn thêm tới gần
-   * 5 phút trễ nữa lên trên grace đã cấu hình. SCHEDULER_AUTO_RELEASE_CRON hiện
-   * KHÔNG được đọc ở đâu (dead config), tương tự no-show-check.
-   */
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'auto-release' })
-  async autoRelease(): Promise<void> {
-    if (!this.schedulerEnabled || !this.autoReleaseEnabled) return;
-
-    // NSL-001 (#33): release case warning_sent quá deadline. KHÔNG ném ra cron (ARCH-02).
-    try {
-      const r = await this.noShowLifecycleService.autoReleaseBatch();
-      this.logger.log(
-        `[Scheduler] auto-release: scanned=${r.scanned} released=${r.released} skipped=${r.skipped}`,
-      );
-    } catch (e) {
-      this.logger.error(
-        `[Scheduler] auto-release failed: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

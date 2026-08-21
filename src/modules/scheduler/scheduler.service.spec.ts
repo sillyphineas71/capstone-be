@@ -213,7 +213,12 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
   // [FIX 2026-08-13, R12] presence-reconcile phải chạy TRƯỚC detect — xác nhận có mặt
   // theo đồng hồ thực trước khi detect() quét, để cùng lần chạy không tạo case oan cho
   // booking vừa đủ ngưỡng presenceConfirmSeconds nhưng chưa có event mới nào kích hoạt lại.
-  it('checkNoShow ON → thứ tự presence-reconcile → detect → reconcile → warn', async () => {
+  //
+  // [FIX 2026-08-22, race no-show/auto-release] auto-release nay GỘP vào CUỐI chuỗi này
+  // (không còn @Cron('auto-release') riêng) — reconcilePresence() LUÔN chạy xong (case đã
+  // được "kept" nếu có presence hợp lệ) TRƯỚC KHI autoReleaseBatch() được gọi trong CÙNG
+  // tick, xoá race giữa 2 cron độc lập trước đây (xem no-show-lifecycle.service.spec.ts).
+  it('checkNoShow ON (autoReleaseEnabled mặc định OFF) → thứ tự presence-reconcile → detect → reconcile → warn, KHÔNG auto-release', async () => {
     cfg = { SCHEDULER_ENABLED: true, SCHEDULER_NO_SHOW_CHECK_ENABLED: true };
     const s = await build();
     await s.checkNoShow();
@@ -223,20 +228,58 @@ describe('SchedulerService (NSL-001 + EVD-001 + IPS-001 + GAP-001 cron wiring)',
       'reconcile',
       'warn',
     ]);
-  });
-
-  it('autoRelease gate OFF → KHÔNG gọi batch', async () => {
-    cfg = { SCHEDULER_ENABLED: true };
-    const s = await build();
-    await s.autoRelease();
     expect(lifecycleMock.autoReleaseBatch).not.toHaveBeenCalled();
   });
 
-  it('autoRelease ON → gọi autoReleaseBatch', async () => {
+  // Trường hợp bắt buộc: noShowEnabled=true NHƯNG autoReleaseEnabled=false — cảnh báo
+  // no-show vẫn chạy đủ (detect/reconcile/warn), nhưng phòng KHÔNG bị tự động thu hồi.
+  // 2 cờ ĐỘC LẬP — gộp cron KHÔNG được phép làm auto-release "ăn theo" cờ noShowEnabled.
+  it('checkNoShow ON + autoReleaseEnabled=false → warn vẫn chạy, autoReleaseBatch KHÔNG được gọi', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_NO_SHOW_CHECK_ENABLED: true,
+      SCHEDULER_AUTO_RELEASE_ENABLED: false,
+    };
+    const s = await build();
+    await s.checkNoShow();
+    expect(lifecycleMock.warnBatch).toHaveBeenCalledTimes(1);
+    expect(lifecycleMock.autoReleaseBatch).not.toHaveBeenCalled();
+  });
+
+  it('checkNoShow ON + autoReleaseEnabled=true → auto-release chạy SAU CÙNG, sau warn', async () => {
+    cfg = {
+      SCHEDULER_ENABLED: true,
+      SCHEDULER_NO_SHOW_CHECK_ENABLED: true,
+      SCHEDULER_AUTO_RELEASE_ENABLED: true,
+    };
+    const s = await build();
+    // build() tạo lifecycleMock mới mỗi lần — override SAU build() để track thứ tự gọi
+    // qua mảng `calls` dùng chung (object reference giữ nguyên sau khi Nest đã inject).
+    lifecycleMock.autoReleaseBatch = jest.fn(async () => {
+      calls.push('auto-release');
+      return { scanned: 0, released: 0, skipped: 0 };
+    });
+    await s.checkNoShow();
+    expect(calls).toEqual([
+      'presence-reconcile',
+      'detect',
+      'reconcile',
+      'warn',
+      'auto-release',
+    ]);
+  });
+
+  it('checkNoShow gate OFF (default) → KHÔNG gọi autoReleaseBatch (dù autoReleaseEnabled=true)', async () => {
     cfg = { SCHEDULER_ENABLED: true, SCHEDULER_AUTO_RELEASE_ENABLED: true };
     const s = await build();
-    await s.autoRelease();
-    expect(lifecycleMock.autoReleaseBatch).toHaveBeenCalledTimes(1);
+    await s.checkNoShow();
+    expect(lifecycleMock.autoReleaseBatch).not.toHaveBeenCalled();
+  });
+
+  it('autoRelease() (method riêng) không còn tồn tại trên SchedulerService — đã gộp vào checkNoShow()', async () => {
+    cfg = { SCHEDULER_ENABLED: true };
+    const s = await build();
+    expect((s as unknown as { autoRelease?: unknown }).autoRelease).toBeUndefined();
   });
 
   // ── EVD-001 earlyVacancy cron ──
