@@ -1,5 +1,5 @@
-import { IsOptional, IsString, Min, Max } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsBoolean, Min, Max } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 
 export class ListUsersQueryDto {
   @Type(() => Number)
@@ -16,4 +16,15 @@ export class ListUsersQueryDto {
   @IsOptional()
   @IsString({ message: 'search phải là chuỗi ký tự' })
   search?: string;
+
+  /**
+   * Khi true: loại các tài khoản role BUSINESS_ADMIN/SYSTEM_ADMIN khỏi kết quả.
+   * Dùng bởi các UI chọn người tham dự cuộc họp (BA/SA không được mời họp) —
+   * KHÔNG áp dụng mặc định vì endpoint này còn dùng chung cho nhiều autocomplete
+   * khác (quản lý phòng ban, ANPR, nhật ký ra vào...).
+   */
+  @Transform(({ value }) => (value === undefined ? undefined : value === 'true'))
+  @IsOptional()
+  @IsBoolean({ message: 'meetingEligibleOnly phải là boolean' })
+  meetingEligibleOnly?: boolean;
 }

@@ -43,16 +43,19 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
     size: 1024 * 1024,
   };
 
-  const mockStorageResult = {
-    storageKey: 'agenda-attachments/uuid.pdf',
-    publicUrl: 'http://localhost/uploads/agenda-attachments/uuid.pdf',
-    sizeBytes: 1024 * 1024,
+  const mockCloudinaryResult = {
+    publicId: 'agenda-attachments/uuid.pdf',
+    secureUrl: 'https://res.cloudinary.com/demo/raw/upload/agenda-attachments/uuid.pdf',
   };
 
   describe('addAgendaAttachment', () => {
     let service: MeetingsService;
     let dataSource: { getRepository: jest.Mock; transaction: jest.Mock };
-    let storageService: { saveFile: jest.Mock; deleteFile: jest.Mock };
+    let cloudinaryService: {
+      uploadRawFile: jest.Mock;
+      deleteRawFile: jest.Mock;
+      resolveMediaStorageProvider: jest.Mock;
+    };
     let configService: { get: jest.Mock };
 
     let outerMeetingRepo: { findOne: jest.Mock };
@@ -107,9 +110,10 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         transaction: jest.fn((cb: (m: any) => any) => cb(em)),
       };
 
-      storageService = {
-        saveFile: jest.fn().mockResolvedValue(mockStorageResult),
-        deleteFile: jest.fn().mockResolvedValue(undefined),
+      cloudinaryService = {
+        uploadRawFile: jest.fn().mockResolvedValue(mockCloudinaryResult),
+        deleteRawFile: jest.fn().mockResolvedValue(undefined),
+        resolveMediaStorageProvider: jest.fn().mockReturnValue('cloud_provider'),
       };
       configService = {
         get: jest.fn((_key: string, defaultValue?: any) => defaultValue),
@@ -122,7 +126,10 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         {} as any,
         {} as any,
         configService as any,
-        storageService as any,
+        {} as any,
+        {} as any,
+        undefined,
+        cloudinaryService as any,
       );
     });
 
@@ -139,8 +146,9 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
       expect(result.fileName).toBe('report.pdf');
       expect(result.mimeType).toBe('application/pdf');
       expect(result.uploadedBy).toBe(organizerId);
-      expect(storageService.saveFile).toHaveBeenCalledWith(
-        expect.objectContaining({ folder: 'agenda-attachments' }),
+      expect(cloudinaryService.uploadRawFile).toHaveBeenCalledWith(
+        mockFile.buffer,
+        expect.stringContaining('agenda-attachments/'),
       );
       expect(mediaFileRepo.insert).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -268,7 +276,7 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
     });
 
     it('throws AGENDA_ATTACHMENT_STORAGE_FAILED when storage save fails', async () => {
-      storageService.saveFile.mockRejectedValue(new Error('disk full'));
+      cloudinaryService.uploadRawFile.mockRejectedValue(new Error('disk full'));
       await expect(
         service.addAgendaAttachment(meetingId, agendaId, mockFile, organizerId),
       ).rejects.toThrow(BadGatewayException);
@@ -286,8 +294,8 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
       await expect(
         service.addAgendaAttachment(meetingId, agendaId, mockFile, organizerId),
       ).rejects.toThrow();
-      expect(storageService.deleteFile).toHaveBeenCalledWith(
-        mockStorageResult.storageKey,
+      expect(cloudinaryService.deleteRawFile).toHaveBeenCalledWith(
+        mockCloudinaryResult.publicId,
       );
     });
   });
@@ -295,7 +303,7 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
   describe('removeAgendaAttachment', () => {
     let service: MeetingsService;
     let dataSource: { transaction: jest.Mock };
-    let storageService: { saveFile: jest.Mock; deleteFile: jest.Mock };
+    let cloudinaryService: { uploadRawFile: jest.Mock; deleteRawFile: jest.Mock };
     let configService: { get: jest.Mock };
 
     let meetingQb: { setLock: jest.Mock; where: jest.Mock; getOne: jest.Mock };
@@ -338,9 +346,9 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         save: jest.fn().mockResolvedValue(undefined),
       };
       dataSource = { transaction: jest.fn((cb: (m: any) => any) => cb(em)) };
-      storageService = {
-        saveFile: jest.fn(),
-        deleteFile: jest.fn().mockResolvedValue(undefined),
+      cloudinaryService = {
+        uploadRawFile: jest.fn(),
+        deleteRawFile: jest.fn().mockResolvedValue(undefined),
       };
       configService = {
         get: jest.fn((_key: string, defaultValue?: any) => defaultValue),
@@ -353,7 +361,10 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         {} as any,
         {} as any,
         configService as any,
-        storageService as any,
+        {} as any,
+        {} as any,
+        undefined,
+        cloudinaryService as any,
       );
     });
 
@@ -371,7 +382,7 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         { id: fileId },
         expect.objectContaining({ deletedAt: expect.any(Date) }),
       );
-      expect(storageService.deleteFile).toHaveBeenCalledWith(
+      expect(cloudinaryService.deleteRawFile).toHaveBeenCalledWith(
         mockMediaFile.storageKey,
       );
     });
@@ -501,6 +512,7 @@ describe('MeetingsService — Agenda Attachment (feat-attach-meeting-agenda-docu
         {} as any,
         configService as any,
         storageService as any,
+        {} as any,
       );
     });
 

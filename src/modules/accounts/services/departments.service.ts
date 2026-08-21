@@ -20,6 +20,8 @@ import {
   AuditLogEntity,
   AuditLogSeverity,
 } from '../../administration/entities/audit-log.entity.js';
+import { UserRoleEntity } from '../entities/user-role.entity.js';
+import { MEETING_INELIGIBLE_ROLE_CODES } from '../../../common/utils/meeting-ineligible-roles.util.js';
 
 import { CreateDepartmentDto } from '../dto/create-department.dto.js';
 import { UpdateDepartmentDto } from '../dto/update-department.dto.js';
@@ -855,7 +857,7 @@ export class DepartmentsService {
       });
     }
 
-    const users = await this.dataSource.getRepository(UserEntity).find({
+    const allUsers = await this.dataSource.getRepository(UserEntity).find({
       where: {
         departmentId,
         deletedAt: IsNull(),
@@ -876,6 +878,13 @@ export class DepartmentsService {
         employmentStatus: true,
       },
     });
+
+    // [2026-08-21] Endpoint này chỉ phục vụ nạp participant khi đặt lịch họp
+    // (xem docstring trên) — loại Business Admin/System Admin (không được tham dự họp).
+    const users =
+      allUsers.length === 0
+        ? allUsers
+        : await this.excludeMeetingIneligibleUsers(allUsers);
 
     const items: DepartmentMemberItemDto[] = users.map((u) => ({
       id: u.id,
@@ -901,6 +910,28 @@ export class DepartmentsService {
     });
 
     return items;
+  }
+
+  /** Loại khỏi danh sách các user đang giữ role BUSINESS_ADMIN/SYSTEM_ADMIN (không tham dự họp). */
+  private async excludeMeetingIneligibleUsers(
+    users: UserEntity[],
+  ): Promise<UserEntity[]> {
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .where('ur.userId IN (:...userIds)', {
+        userIds: users.map((u) => u.id),
+      })
+      .andWhere('ur.isActive = :isActive', { isActive: true })
+      .andWhere('(ur.expiredAt IS NULL OR ur.expiredAt > NOW())')
+      .andWhere('r.roleCode IN (:...codes)', {
+        codes: MEETING_INELIGIBLE_ROLE_CODES,
+      })
+      .select('ur.userId', 'userId')
+      .getRawMany<{ userId: string }>();
+    const ineligibleIds = new Set(rows.map((r) => r.userId));
+    return users.filter((u) => !ineligibleIds.has(u.id));
   }
 
   /** Map DepartmentEntity → DepartmentResponseDto (dùng chung cho list). */

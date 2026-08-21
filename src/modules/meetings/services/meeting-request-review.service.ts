@@ -31,6 +31,7 @@ import {
   buildMeetingRoomUpdatedEmail,
   buildMeetingTimeUpdatedEmail,
 } from '../../mail/templates/builders.js';
+import { formatDateTimeVN } from '../../mail/templates/layout.js';
 import {
   MeetingEventEntity,
   MeetingEventType,
@@ -629,10 +630,10 @@ export class MeetingRequestReviewService {
         ? `Cập nhật phòng họp: ${result.meetingTitle}`
         : `Cập nhật thời gian cuộc họp: ${result.meetingTitle}`;
     const content = !isUpdateRequest
-      ? `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${result.meetingStartTime.toISOString()}`
+      ? `Bạn được mời tham dự cuộc họp "${result.meetingTitle}" vào lúc ${formatDateTimeVN(result.meetingStartTime)}`
       : result.requestType === MeetingRequestType.UPDATE_ROOM
         ? `Phòng họp cho cuộc họp "${result.meetingTitle}" đã được thay đổi${result.oldRoomName && result.newRoomName ? ` từ "${result.oldRoomName}" sang "${result.newRoomName}"` : ''}.`
-        : `Thời gian cuộc họp "${result.meetingTitle}" đã được cập nhật (${result.meetingStartTime.toISOString()} → ${result.meetingEndTime.toISOString()}).`;
+        : `Thời gian cuộc họp "${result.meetingTitle}" đã được cập nhật (${formatDateTimeVN(result.meetingStartTime)} → ${formatDateTimeVN(result.meetingEndTime)}).`;
     const emailHtml = !isUpdateRequest
       ? buildMeetingInviteEmail({
           meetingTitle: result.meetingTitle,

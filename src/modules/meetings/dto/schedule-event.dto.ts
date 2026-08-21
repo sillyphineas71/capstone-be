@@ -1,5 +1,15 @@
 ﻿import { ScheduleRoomDto } from './schedule-room.dto.js';
 
+export class ScheduleHostDto {
+  id: string;
+  fullName: string;
+
+  constructor(data: ScheduleHostDto) {
+    this.id = data.id;
+    this.fullName = data.fullName;
+  }
+}
+
 export class ScheduleEventDto {
   meetingId: string;
   meetingCode: string;
@@ -10,6 +20,10 @@ export class ScheduleEventDto {
   status: string;
   userRole: 'organizer' | 'host' | 'attendee';
   room: ScheduleRoomDto | null;
+  // Người chủ trì hiển thị = host nếu có, không thì fallback organizer
+  // (khớp quy tắc resolveEffectiveUserRole ở getMySchedule()).
+  host: ScheduleHostDto | null;
+  recordingEnabled: boolean;
   colorKey: string;
   isCurrent: boolean;
   isPast: boolean;
@@ -24,6 +38,8 @@ export class ScheduleEventDto {
     this.status = data.status;
     this.userRole = data.userRole;
     this.room = data.room;
+    this.host = data.host;
+    this.recordingEnabled = data.recordingEnabled;
     this.colorKey = data.colorKey;
     this.isCurrent = data.isCurrent;
     this.isPast = data.isPast;

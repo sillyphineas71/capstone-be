@@ -11,6 +11,7 @@ import {
 } from './users.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { buildPartnerAccountWelcomeEmail } from '../../mail/templates/builders.js';
+import { formatDateTimeVN } from '../../mail/templates/layout.js';
 import {
   NotificationType,
   NotificationChannel,
@@ -515,7 +516,7 @@ export class PartnerAccountImportService {
           subject:
             'Tài khoản đối tác Smart Meeting Management đã được khởi tạo',
           emailHtml: welcomeEmailHtml,
-          content: `Kính gửi ${item.fullName},\nTài khoản đối tác của bạn (${item.email}) đã được khởi tạo thành công. Mật khẩu chính là địa chỉ email này. Hạn sử dụng: ${item.expiresAt.toISOString()}`,
+          content: `Kính gửi ${item.fullName},\nTài khoản đối tác của bạn (${item.email}) đã được khởi tạo thành công. Mật khẩu chính là địa chỉ email này. Hạn sử dụng: ${formatDateTimeVN(item.expiresAt)}`,
           notificationType: NotificationType.ACCOUNT_WELCOME,
           payloadJson: { partnerAccountImport: true },
         });

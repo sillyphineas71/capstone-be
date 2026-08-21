@@ -25,6 +25,10 @@ interface MeetingPartyRow {
   host_id: string | null;
 }
 
+interface RoomNameRow {
+  room_name: string | null;
+}
+
 interface EmailRow {
   email: string | null;
 }
@@ -176,8 +180,14 @@ export class EarlyVacancyService {
       );
       if (recipientUserIds.length === 0) return;
 
+      const roomRows: RoomNameRow[] = await this.dataSource.manager.query(
+        `SELECT room_name FROM rooms WHERE id = $1 LIMIT 1`,
+        [cand.room_id],
+      );
+      const roomLabel = roomRows[0]?.room_name ?? cand.room_id;
+
       const subject = 'Cảnh báo phòng trống sớm';
-      const content = `Phòng (room ${cand.room_id}) trống ≥ ${emptyMinutes} phút khi cuộc họp đang diễn ra.`;
+      const content = `Phòng ${roomLabel} trống ≥ ${emptyMinutes} phút khi cuộc họp đang diễn ra.`;
       const meta = {
         bookingId: cand.booking_id,
         meetingId: cand.meeting_id,

@@ -117,8 +117,17 @@ export class StrangerAlertService implements StrangerAlertHook {
       );
       return;
     }
+    let roomLabel: string | null = null;
+    if (evt.roomId) {
+      const roomRows: { room_name: string | null }[] =
+        await this.dataSource.manager.query(
+          `SELECT room_name FROM rooms WHERE id = $1 LIMIT 1`,
+          [evt.roomId],
+        );
+      roomLabel = roomRows[0]?.room_name ?? evt.roomId;
+    }
     const content = `Phát hiện khuôn mặt lạ tại thiết bị ${evt.deviceCode}${
-      evt.roomId ? ` (room ${evt.roomId})` : ''
+      roomLabel ? ` (phòng ${roomLabel})` : ''
     }.`;
 
     await this.notificationsService.createNotification({
@@ -144,7 +153,7 @@ export class StrangerAlertService implements StrangerAlertHook {
         content,
         emailHtml: buildStrangerAlertEmail({
           deviceCode: evt.deviceCode,
-          roomId: evt.roomId ?? null,
+          roomName: roomLabel,
         }),
         toEmails: admins.emails,
         payloadJson: meta,

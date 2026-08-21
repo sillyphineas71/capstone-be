@@ -23,6 +23,7 @@ import {
   buildMinutesPublishedEmail,
   buildMinutesPublishedGuestEmail,
 } from '../../mail/templates/builders.js';
+import { formatDateTimeVN } from '../../mail/templates/layout.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 import { StorageService } from '../../storage/storage.service.js';
@@ -898,9 +899,9 @@ export class MeetingNotificationsService {
       'Bạn được mời tham dự cuộc họp: <b>' + meeting.title + '</b><br/>';
     content +=
       'Thời gian: ' +
-      meeting.startTime.toISOString() +
+      formatDateTimeVN(meeting.startTime) +
       ' — ' +
-      meeting.endTime.toISOString() +
+      formatDateTimeVN(meeting.endTime) +
       '<br/>';
     if (dto.includeAgenda) {
       const agendas = await this.agendaRepo.find({
@@ -926,7 +927,7 @@ export class MeetingNotificationsService {
       'Nhắc nhở: Cuộc họp <b>' +
       meeting.title +
       '</b> sẽ diễn ra vào lúc ' +
-      meeting.startTime.toISOString() +
+      formatDateTimeVN(meeting.startTime) +
       '. Vui lòng tham dự đúng giờ.'
     );
   }

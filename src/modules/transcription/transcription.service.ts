@@ -491,9 +491,9 @@ export class TranscriptionService {
       await this.notificationsService.createNotification({
         notificationType: NotificationType.TRANSCRIPT_READY,
         channel: NotificationChannel.IN_APP,
-        subject: 'Transcript da san sang',
+        subject: 'Transcript đã sẵn sàng',
         content:
-          'Ban ghi loi noi (transcript) cua cuoc hop da duoc tao xong va san sang de xem/review.',
+          'Bản ghi lời nói (transcript) của cuộc họp đã được tạo xong và sẵn sàng để xem/review.',
         relatedEntityType: 'meeting',
         relatedEntityId: transcript.meetingId,
         recipientScope: 'user_list',

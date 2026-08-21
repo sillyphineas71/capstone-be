@@ -116,6 +116,66 @@ export class CloudinaryService implements OnModuleInit {
   }
 
   /**
+   * Upload buffer file bất kỳ (docx/pptx/pdf/...) lên Cloudinary resource_type=raw
+   * (hoặc MinIO local nếu AVATAR_STORAGE_DRIVER=local). Khác `uploadImage`: publicId
+   * do caller truyền vào nguyên vẹn (đã gồm folder + tên + đuôi file, ví dụ
+   * 'agenda-attachments/<uuid>.docx') để khớp quy ước storage_key hiện có, KHÔNG để
+   * Cloudinary tự sinh id ngẫu nhiên.
+   */
+  async uploadRawFile(
+    buffer: Buffer,
+    publicId: string,
+  ): Promise<CloudinaryUploadResult> {
+    if (this.driver === 'local') {
+      const result = await this.storageService.saveFile({
+        buffer,
+        originalName: publicId,
+        storageKey: publicId,
+      });
+      return {
+        publicId: result.storageKey,
+        secureUrl: result.publicUrl,
+      };
+    }
+
+    const result = await new Promise<UploadApiResponse>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { public_id: publicId, resource_type: 'raw' },
+        (error, response) => {
+          if (error || !response) {
+            reject(
+              error instanceof Error
+                ? error
+                : new Error('Cloudinary raw upload failed'),
+            );
+            return;
+          }
+          resolve(response);
+        },
+      );
+      Readable.from(buffer).pipe(uploadStream);
+    });
+
+    return {
+      publicId: result.public_id,
+      secureUrl: result.secure_url,
+    };
+  }
+
+  /**
+   * Xóa raw file trên Cloudinary (hoặc MinIO local) theo publicId/storageKey.
+   * Tách khỏi `deleteImage` vì Cloudinary yêu cầu đúng `resource_type` lúc destroy
+   * khớp với lúc upload (raw != image).
+   */
+  async deleteRawFile(publicId: string): Promise<void> {
+    if (this.driver === 'local') {
+      await this.storageService.deleteFile(publicId);
+      return;
+    }
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
+  }
+
+  /**
    * [FIX 2026-08-16] `storage_provider` THẬT SỰ của bytes vừa upload — caller PHẢI dùng
    * giá trị này khi insert `media_files.storage_provider`, KHÔNG được hard-code
    * `StorageProvider.CLOUD_PROVIDER`.

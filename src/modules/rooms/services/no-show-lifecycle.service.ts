@@ -44,6 +44,10 @@ interface MeetingPartyRow {
   host_id: string | null;
 }
 
+interface RoomNameRow {
+  room_name: string | null;
+}
+
 interface EmailRow {
   email: string | null;
 }
@@ -400,14 +404,20 @@ export class NoShowLifecycleService {
       );
       if (recipientUserIds.length === 0) return;
 
+      const roomRows: RoomNameRow[] = await this.dataSource.manager.query(
+        `SELECT room_name FROM rooms WHERE id = $1 LIMIT 1`,
+        [c.room_id],
+      );
+      const roomLabel = roomRows[0]?.room_name ?? c.room_id;
+
       const subject =
         kind === 'warning'
           ? 'Cảnh báo no-show'
           : 'Phòng đã giải phóng (no-show)';
       const content =
         kind === 'warning'
-          ? `Phòng chưa có người sau giờ bắt đầu — cảnh báo no-show (room ${c.room_id}).`
-          : `Phòng đã được giải phóng do no-show (room ${c.room_id}).`;
+          ? `Phòng ${roomLabel} chưa có người sau giờ bắt đầu — cảnh báo no-show.`
+          : `Phòng ${roomLabel} đã được giải phóng do no-show.`;
       const meta = {
         noShowCaseId: c.id,
         bookingId: c.booking_id,
@@ -490,7 +500,7 @@ export class NoShowLifecycleService {
             content,
             emailHtml: buildNoShowAlertEmail({
               kind,
-              roomId: c.room_id,
+              roomName: roomLabel,
               confirmLink,
             }),
             toEmails,

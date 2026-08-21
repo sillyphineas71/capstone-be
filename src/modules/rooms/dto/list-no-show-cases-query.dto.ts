@@ -31,7 +31,7 @@ export class ListNoShowCasesQueryDto {
   @IsOptional()
   @IsEnum(NoShowDetectionStatus, {
     message:
-      'status phải là một trong: risk, confirmed, warning_sent, released, dismissed, resolved',
+      'status phải là một trong: risk, confirmed, warning_sent, snoozed, released, dismissed, resolved',
   })
   status?: NoShowDetectionStatus;
 

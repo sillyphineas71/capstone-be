@@ -536,10 +536,10 @@ export class AdminBiometricReviewService {
         await manager.insert(NotificationEntity, {
           notificationType: NotificationType.BIOMETRIC_REJECTED,
           channel: NotificationChannel.IN_APP,
-          subject: 'Anh sinh trac hoc khong duoc chap nhan',
+          subject: 'Ảnh sinh trắc học không được chấp nhận',
           content: normalizedReason
-            ? `Anh sinh trac hoc cua ban khong duoc chap nhan. Vui long nop lai anh khac.\nLy do: ${normalizedReason}`
-            : 'Anh sinh trac hoc cua ban khong duoc chap nhan. Vui long nop lai anh khac.',
+            ? `Ảnh sinh trắc học của bạn không được chấp nhận. Vui lòng nộp lại ảnh khác.\nLý do: ${normalizedReason}`
+            : 'Ảnh sinh trắc học của bạn không được chấp nhận. Vui lòng nộp lại ảnh khác.',
           relatedEntityType: 'face_profile',
           relatedEntityId: faceProfileId,
           recipientUserIdsJson: [fp.userId],

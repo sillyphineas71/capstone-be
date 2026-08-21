@@ -14,6 +14,7 @@ export enum NoShowDetectionStatus {
   RISK = 'risk',
   CONFIRMED = 'confirmed',
   WARNING_SENT = 'warning_sent',
+  SNOOZED = 'snoozed',
   RELEASED = 'released',
   DISMISSED = 'dismissed',
   RESOLVED = 'resolved',
