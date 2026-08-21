@@ -17,6 +17,7 @@ import { UserEntity } from '../accounts/entities/user.entity.js';
 import { MediaFileEntity } from '../recording/entities/media-file.entity.js';
 import { TranscriptEntity } from '../transcription/entities/transcript.entity.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { WebsocketModule } from '../websocket/websocket.module.js';
 
 /**
  * NotificationsModule — Module quản lý notifications.
@@ -46,6 +47,10 @@ import { AuthModule } from '../auth/auth.module.js';
  * (cần JwtService/AuthConfigService), và MeetingNotificationsService dùng
  * AuthzReadRepository (export từ AuthModule). AuthModule không import ngược lại
  * NotificationsModule/AccountsModule nên không có circular dependency.
+ *
+ * [Sửa 2026-08-21] CÓ import WebsocketModule: createNotification() đẩy realtime
+ * qua WebsocketService.emitToUser() ngay sau khi lưu DB, để chuông thông báo FE
+ * không cần load lại trang. WebsocketModule không import lại NotificationsModule.
  */
 @Module({
   imports: [
@@ -63,6 +68,7 @@ import { AuthModule } from '../auth/auth.module.js';
       TranscriptEntity,
     ]),
     AuthModule,
+    WebsocketModule,
   ],
   controllers: [NotificationsController],
   providers: [

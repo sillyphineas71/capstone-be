@@ -41,6 +41,10 @@ import {
   AttendanceRecordDetailResponseDto,
   AttendanceEditHistoryItemDto,
 } from '../dto/attendance-record-detail-response.dto.js';
+import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+
+/** Role codes (UPPERCASE — đúng seed thật) coi là admin cho mục đích bypass checkAccess. */
+const ADMIN_ROLE_CODES = ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
 
 interface ParticipantWithUser {
   participantId: string;
@@ -74,6 +78,7 @@ export class AttendanceService {
     private readonly userRepo: Repository<UserEntity>,
     @InjectRepository(AttendanceRecordEntity)
     private readonly attendanceRecordRepo: Repository<AttendanceRecordEntity>,
+    private readonly authzRead: AuthzReadRepository,
   ) {}
 
   // ===== T011: validateAndGetMeeting =====
@@ -212,21 +217,10 @@ export class AttendanceService {
   }
 
   private async checkIsAdmin(userId: string): Promise<boolean> {
-    // Simplified check: query user_roles for admin role
-    // In production, this should check permissions via permission service
-    try {
-      const { UserRoleEntity } =
-        await import('../../accounts/entities/user-role.entity.js');
-      const { RoleEntity } =
-        await import('../../accounts/entities/role.entity.js');
-      const { DataSource } = await import('typeorm');
-      // Use fallback: check if user has business_admin or system_admin role
-      const adminRoleCodes = ['BUSINESS_ADMIN', 'SYSTEM_ADMIN'];
-      // For now, simplified to query role check
-      return false; // Will be enhanced with proper role check
-    } catch {
-      return false;
-    }
+    const { roles } = await this.authzRead.getEffectiveRolesAndPermissions(
+      userId,
+    );
+    return roles.some((r) => ADMIN_ROLE_CODES.includes(r));
   }
 
   // ===== T014: getParticipantsWithAttendance =====

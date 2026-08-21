@@ -57,4 +57,29 @@ describe('UserJourneyController (UJN-001)', () => {
     // trên DB thật). KHÔNG dùng gate_access.* vì chưa chắc có ở mọi môi trường ⇒ tránh 403.
     expect(perms).toEqual(['zones.gate_log.read']);
   });
+
+  // ── [2026-08-21] Route "own" — bất kỳ user login nào cũng xem hành trình ĐẦY ĐỦ của mình ──
+  describe('myJourney (GET /campus/user-journey/me)', () => {
+    it('gọi service với userId lấy từ CurrentUser (JWT), KHÔNG phải query', async () => {
+      const r = await controller.myJourney(
+        { userId: 'self-1' },
+        { date: '2026-08-21' },
+      );
+      expect(r.success).toBe(true);
+      expect(serviceMock.getUserJourney).toHaveBeenCalledWith(
+        'self-1',
+        '2026-08-21',
+      );
+    });
+
+    it('chỉ gate JwtAuthGuard — KHÔNG có PermissionsGuard/RequirePermissions (self-scoped, không cần quyền)', () => {
+      const guards =
+        Reflect.getMetadata('__guards__', controller.myJourney) ?? [];
+      expect(guards).toContain(JwtAuthGuard);
+      expect(guards).not.toContain(PermissionsGuard);
+
+      const perms = Reflect.getMetadata(PERMISSIONS_KEY, controller.myJourney);
+      expect(perms).toBeUndefined();
+    });
+  });
 });

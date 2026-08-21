@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module.js';
+import { RecordingModule } from '../recording/recording.module.js';
 import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
 import { MeetingExternalParticipantEntity } from '../meetings/entities/meeting-external-participant.entity.js';
 import { AttendanceEventEntity } from '../attendance/entities/attendance-event.entity.js';
@@ -34,6 +35,7 @@ import { GuestManagementController } from './controllers/guest-management.contro
   imports: [
     JwtModule.register({}),
     AuthModule,
+    RecordingModule,
     TypeOrmModule.forFeature([
       MeetingEntity,
       MeetingExternalParticipantEntity,

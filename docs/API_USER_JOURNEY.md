@@ -1,10 +1,37 @@
 # API — Hành trình khuôn viên (User Journey)
 
+## CHANGELOG & REVISION HISTORY
+| Ngày cập nhật | Tóm tắt thay đổi | Vị trí |
+| :--- | :--- | :--- |
+| 2026-08-21 | Thêm route "own" `GET /campus/user-journey/me` — EMPLOYEE (isSelfOnly) giờ xem được hành trình ĐẦY ĐỦ (gate+meeting+zone) của chính mình thay vì chỉ fallback về `gate-access/history`. Route cũ (`GET /campus/user-journey?userId=`) giữ nguyên, vẫn admin-gated bằng `zones.gate_log.read`. | Mục 1 (mới: 1.1), mục "Luồng hoạt động trên FE" |
+
 Tài liệu API cho tính năng "Hành trình khuôn viên" ở trang [UserJourney.jsx](../../FE_SmarTracking/src/pages/shared/UserJourney.jsx)
-(FE repo). Trang dùng **2 API**: một để tìm/chọn nhân viên (dropdown autocomplete),
-một để lấy dữ liệu hành trình chính.
+(FE repo). Trang dùng **3 API**: một để tìm/chọn nhân viên (dropdown autocomplete, chỉ
+admin/manager mới thấy ô này), một để lấy hành trình của CHÍNH mình (mọi role đã login),
+một để lấy hành trình của MỘT nhân viên bất kỳ (admin-gated).
 
 Base URL: `/api/v1` (global prefix, xem [main.ts](../src/main.ts)).
+
+---
+
+## 1.1. GET `/api/v1/campus/user-journey/me` — API "own" (UC UJN-001, self)
+
+Nguồn: [user-journey.controller.ts](../src/modules/gate-access/controllers/user-journey.controller.ts)
+(method `myJourney`), cùng service với route admin bên dưới.
+
+**Auth/Permission:** chỉ `JwtAuthGuard` — KHÔNG cần permission `zones.gate_log.read`.
+`userId` truyền vào service lấy từ `@CurrentUser()` (JWT), KHÔNG nhận từ query, nên user
+chỉ có thể xem đúng hành trình của chính họ — an toàn tương đương route `GET /gate-access/history`
+(own) đã có từ trước (mirror convention `GateAccessHistoryController.listOwn`).
+
+### Query params
+
+| Field | Kiểu | Bắt buộc | Ghi chú |
+|---|---|---|---|
+| `date` | `YYYY-MM-DD` | Không | Mặc định = hôm nay theo giờ VN nếu bỏ trống |
+
+Response shape **giống hệt** mục 1 bên dưới (cùng `UserJourneyResponseDto`, cùng 3 nguồn
+gate/meeting/zone) — chỉ khác ở chỗ `userId` luôn là chính user gọi API, không truyền được.
 
 ---
 
@@ -182,7 +209,14 @@ FE gọi qua `getUsers()` trong `businessAdminServices.js` (FE repo).
 
 ## Luồng hoạt động trên FE
 
-Người dùng gõ tên/email → debounce 300ms → gọi `GET /users?search=...&limit=15` để đổ dropdown
-→ chọn 1 nhân viên + ngày → gọi `GET /campus/user-journey?userId=...&date=...` → render 3 thẻ KPI
-(`gateCount`, `meetingCount`, `zoneCount`) và timeline dọc từ `events[]`, phân trang phía client
-10 sự kiện/trang.
+**Admin/Manager** (`BUSINESS_ADMIN`/`MANAGER`/`SYSTEM_ADMIN`, `isSelfOnly=false`): gõ tên/email
+→ debounce 300ms → gọi `GET /users?search=...&limit=15` để đổ dropdown → chọn 1 nhân viên + ngày
+→ gọi `GET /campus/user-journey?userId=...&date=...` (mục 1).
+
+**Employee** (`isSelfOnly=true`, mọi role còn lại): không có ô tìm nhân viên (chỉ xem được chính
+mình) → chọn ngày → gọi `GET /campus/user-journey/me?date=...` (mục 1.1, không cần quyền
+`zones.gate_log.read`).
+
+Cả 2 nhánh đều render 3 thẻ KPI (`gateCount`, `meetingCount`, `zoneCount`) và timeline dọc từ
+`events[]` giống hệt nhau, phân trang phía client 10 sự kiện/trang — khác biệt DUY NHẤT là
+nguồn API và việc employee không chọn được người khác.

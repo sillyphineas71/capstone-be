@@ -19,6 +19,7 @@ import { BackgroundJobsService } from '../administration/services/background-job
 import { BackgroundJobType } from '../administration/entities/background-job.entity.js';
 import { NotificationListItemDto } from './dto/notification-list-item.dto.js';
 import { NotificationReadStateService } from './services/notification-read-state.service.js';
+import { WebsocketService } from '../websocket/websocket.service.js';
 
 export interface CreateNotificationDto {
   notificationType: NotificationType;
@@ -76,6 +77,7 @@ export class NotificationsService {
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
     private readonly readStateService: NotificationReadStateService,
+    private readonly websocketService: WebsocketService,
   ) {
     this.notificationQueueName = this.configService.get<string>(
       'QUEUE_NOTIFICATION',
@@ -114,7 +116,47 @@ export class NotificationsService {
         ' — type: ' +
         saved.notificationType,
     );
+    this.pushRealtime(saved);
     return saved;
+  }
+
+  /**
+   * Đẩy realtime notification qua WS ngay khi tạo, để chuông thông báo FE
+   * cập nhật số lượng/hiện banner mà không cần load lại trang. Chỉ đẩy cho
+   * kênh hiển thị trong inbox (`in_app`/`websocket` — khớp filter của
+   * listMyNotifications) và khi có recipientUserIds cụ thể; email/SMS đơn
+   * thuần không có gì để hiện trên chuông. Lỗi emit KHÔNG được làm fail việc
+   * tạo notification (đã lưu DB thành công là xong nghiệp vụ chính).
+   */
+  private pushRealtime(n: NotificationEntity): void {
+    const recipientUserIds = n.recipientUserIdsJson ?? [];
+    if (
+      recipientUserIds.length === 0 ||
+      (n.channel !== NotificationChannel.IN_APP &&
+        n.channel !== NotificationChannel.WEBSOCKET)
+    ) {
+      return;
+    }
+    const payload: NotificationListItemDto = {
+      id: n.id,
+      notificationType: n.notificationType,
+      subject: n.subject,
+      content: n.content,
+      relatedEntityType: n.relatedEntityType,
+      relatedEntityId: n.relatedEntityId,
+      priority: n.priority,
+      createdAt: n.createdAt,
+      isRead: false,
+      payloadJson: n.payloadJson ?? null,
+    };
+    try {
+      for (const userId of recipientUserIds) {
+        this.websocketService.emitToUser(userId, 'notification.created', payload);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`[Notifications] pushRealtime ${n.id} failed: ${message}`);
+    }
   }
 
   async enqueueEmailNotification(dto: EnqueueEmailNotificationDto): Promise<{

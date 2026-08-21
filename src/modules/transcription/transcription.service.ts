@@ -378,6 +378,10 @@ export class TranscriptionService {
     return {
       transcriptId: transcript.id,
       meetingId: transcript.meetingId,
+      // Cho FE match đúng file audio (media_files) đã sinh ra transcript này,
+      // để phát lại từng đoạn theo startMs/endMs — nhiều recording session/audio
+      // track có thể tồn tại trên cùng 1 meeting.
+      recordingSessionId: transcript.recordingSessionId,
       status: transcript.status,
       language: transcript.languageCode || '',
       versionNo: transcript.versionNo,

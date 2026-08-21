@@ -38,6 +38,7 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
       {} as any, // backgroundJobsService
       { get: jest.fn() } as any, // configService
       readStateService,
+      { emitToUser: jest.fn() } as any, // websocketService
     );
   });
 

@@ -136,7 +136,7 @@ export class MediaFilesService {
    * - `local`/`s3`/`minio`: sinh short-lived signed token qua secure-download endpoint.
    * Trả null nếu không sinh được (không chặn response detail chỉ vì lỗi này).
    */
-  private buildSignedDownloadUrl(m: MediaFileEntity): string | null {
+  buildSignedDownloadUrl(m: MediaFileEntity): string | null {
     if (m.storageProvider === StorageProvider.CLOUD_PROVIDER) {
       return m.fileUrl ?? null;
     }
