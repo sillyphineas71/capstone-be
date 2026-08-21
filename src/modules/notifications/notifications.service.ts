@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
   NotificationEntity,
@@ -76,6 +76,7 @@ export class NotificationsService {
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly configService: ConfigService,
     private readonly readStateService: NotificationReadStateService,
+    private readonly dataSource: DataSource,
   ) {
     this.notificationQueueName = this.configService.get<string>(
       'QUEUE_NOTIFICATION',
@@ -233,22 +234,34 @@ export class NotificationsService {
       .getManyAndCount();
 
     const readState = await this.readStateService.getReadState(userId);
-    const data: NotificationListItemDto[] = items.map((item) => ({
-      id: item.id,
-      notificationType: item.notificationType,
-      subject: item.subject,
-      content: item.content,
-      relatedEntityType: item.relatedEntityType,
-      relatedEntityId: item.relatedEntityId,
-      priority: item.priority,
-      createdAt: item.createdAt,
-      isRead: this.readStateService.computeIsRead(
-        readState,
-        item.id,
-        item.createdAt,
-      ),
-      payloadJson: item.payloadJson ?? null,
-    }));
+    const noShowLiveStatusMap = await this.fetchNoShowLiveStatusMap(items);
+    const data: NotificationListItemDto[] = items.map((item) => {
+      const noShowCaseId =
+        item.notificationType === NotificationType.NO_SHOW_ALERT
+          ? (item.payloadJson?.noShowCaseId as string | undefined)
+          : undefined;
+      const live = noShowCaseId
+        ? noShowLiveStatusMap.get(noShowCaseId)
+        : undefined;
+      return {
+        id: item.id,
+        notificationType: item.notificationType,
+        subject: item.subject,
+        content: item.content,
+        relatedEntityType: item.relatedEntityType,
+        relatedEntityId: item.relatedEntityId,
+        priority: item.priority,
+        createdAt: item.createdAt,
+        isRead: this.readStateService.computeIsRead(
+          readState,
+          item.id,
+          item.createdAt,
+        ),
+        payloadJson: item.payloadJson ?? null,
+        noShowLiveStatus: live?.detectionStatus ?? null,
+        noShowSnoozeUntil: live?.snoozeUntil ?? null,
+      };
+    });
 
     return {
       data,
@@ -259,6 +272,46 @@ export class NotificationsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * [Fix 2026-08-21, Bug 1/2] Batch tra `detection_status`/`snooze_until` SỐNG
+   * của `no_show_cases` cho các notification type='no_show_alert' trong trang
+   * hiện tại — 1 query duy nhất (không N+1). `notifications.payload_json` là
+   * bản ghi lịch sử, KHÔNG BAO GIỜ được ghi đè lại sau khi tạo (xem
+   * NoShowLifecycleService#notifyNoShow, NoShowService#snooze — không service
+   * nào update ngược lại notifications) — nên FE (bell dropdown lẫn trang đầy
+   * đủ) phải đọc trạng thái case từ đây, không phải từ payloadJson.kind tĩnh.
+   */
+  private async fetchNoShowLiveStatusMap(
+    items: NotificationEntity[],
+  ): Promise<
+    Map<string, { detectionStatus: string; snoozeUntil: Date | string | null }>
+  > {
+    const caseIds = Array.from(
+      new Set(
+        items
+          .filter((i) => i.notificationType === NotificationType.NO_SHOW_ALERT)
+          .map((i) => i.payloadJson?.noShowCaseId as string | undefined)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    if (caseIds.length === 0) return new Map();
+
+    const rows: Array<{
+      id: string;
+      detection_status: string;
+      snooze_until: Date | string | null;
+    }> = await this.dataSource.manager.query(
+      `SELECT id, detection_status, snooze_until FROM no_show_cases WHERE id = ANY($1)`,
+      [caseIds],
+    );
+    return new Map(
+      rows.map((r) => [
+        r.id,
+        { detectionStatus: r.detection_status, snoozeUntil: r.snooze_until },
+      ]),
+    );
   }
 
   /**

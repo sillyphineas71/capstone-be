@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/unbound-method */
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service.js';
 import { NotificationReadStateService } from './services/notification-read-state.service.js';
@@ -8,6 +8,7 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
   let repo: any;
   let readStateService: jest.Mocked<NotificationReadStateService>;
   let queryBuilder: any;
+  let dataSourceMock: any;
 
   beforeEach(() => {
     queryBuilder = {
@@ -32,12 +33,15 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
       markAllRead: jest.fn(),
     } as unknown as jest.Mocked<NotificationReadStateService>;
 
+    dataSourceMock = { manager: { query: jest.fn().mockResolvedValue([]) } };
+
     service = new NotificationsService(
       repo,
       {} as any, // queueService (không dùng trong các test này)
       {} as any, // backgroundJobsService
       { get: jest.fn() } as any, // configService
       readStateService,
+      dataSourceMock,
     );
   });
 
@@ -78,6 +82,126 @@ describe('NotificationsService — inbox + BE-07 mark-read', () => {
       expect(readStateService.getReadState).toHaveBeenCalledWith('u1');
       expect(result.data[0].isRead).toBe(true);
       expect(result.data[1].isRead).toBe(false);
+      // Không phải no_show_alert → không đụng DataSource, noShowLiveStatus null.
+      expect(dataSourceMock.manager.query).not.toHaveBeenCalled();
+      expect(result.data[0].noShowLiveStatus).toBeNull();
+    });
+
+    // ══ [Fix 2026-08-21, Bug 1/2] noShowLiveStatus — trạng thái SỐNG, không phải
+    // payloadJson.kind tĩnh lúc tạo. Tái hiện đúng kịch bản: bấm "Tôi vẫn đến"
+    // (case → snoozed trong DB) rồi RELOAD trang (gọi lại listMyNotifications) —
+    // trước fix, payloadJson.kind vẫn 'warning' nên nút hiện lại; sau fix,
+    // noShowLiveStatus phải phản ánh đúng 'snoozed' để FE ẩn nút.
+    it("no_show_alert: payloadJson.kind vẫn 'warning' (snapshot cũ) NHƯNG case đã snoozed trong DB → noShowLiveStatus='snoozed' (tái hiện đúng kịch bản bấm→reload)", async () => {
+      const items = [
+        {
+          id: 'n1',
+          notificationType: 'no_show_alert',
+          subject: 'Cảnh báo no-show',
+          content: 'c1',
+          relatedEntityType: 'no_show_case',
+          relatedEntityId: 'case-1',
+          priority: 'normal',
+          createdAt: new Date('2026-08-21'),
+          payloadJson: { kind: 'warning', noShowCaseId: 'case-1' },
+        },
+      ];
+      queryBuilder.getManyAndCount.mockResolvedValue([items, 1]);
+      readStateService.getReadState.mockResolvedValue({
+        readIds: new Set(),
+        readAllAt: null,
+      });
+      readStateService.computeIsRead.mockReturnValue(false);
+      dataSourceMock.manager.query.mockResolvedValue([
+        {
+          id: 'case-1',
+          detection_status: 'snoozed',
+          snooze_until: '2026-08-21T11:00:00Z',
+        },
+      ]);
+
+      const result = await service.listMyNotifications('u1', 1, 20);
+
+      expect(dataSourceMock.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('FROM no_show_cases'),
+        [['case-1']],
+      );
+      expect(result.data[0].payloadJson).toEqual({
+        kind: 'warning',
+        noShowCaseId: 'case-1',
+      }); // payloadJson KHÔNG bị sửa — vẫn là bản ghi lịch sử gốc.
+      expect(result.data[0].noShowLiveStatus).toBe('snoozed');
+      expect(result.data[0].noShowSnoozeUntil).toBe('2026-08-21T11:00:00Z');
+    });
+
+    it('no_show_alert nhưng case đã bị xoá/không tìm thấy → noShowLiveStatus null (fail-safe, không throw)', async () => {
+      const items = [
+        {
+          id: 'n1',
+          notificationType: 'no_show_alert',
+          subject: null,
+          content: 'c1',
+          relatedEntityType: null,
+          relatedEntityId: null,
+          priority: 'normal',
+          createdAt: new Date('2026-08-21'),
+          payloadJson: { kind: 'warning', noShowCaseId: 'case-deleted' },
+        },
+      ];
+      queryBuilder.getManyAndCount.mockResolvedValue([items, 1]);
+      readStateService.getReadState.mockResolvedValue({
+        readIds: new Set(),
+        readAllAt: null,
+      });
+      readStateService.computeIsRead.mockReturnValue(false);
+      dataSourceMock.manager.query.mockResolvedValue([]); // 0 row
+
+      const result = await service.listMyNotifications('u1', 1, 20);
+      expect(result.data[0].noShowLiveStatus).toBeNull();
+      expect(result.data[0].noShowSnoozeUntil).toBeNull();
+    });
+
+    it('nhiều no_show_alert item → 1 query duy nhất, batch theo caseId (không N+1)', async () => {
+      const items = [
+        {
+          id: 'n1',
+          notificationType: 'no_show_alert',
+          subject: null,
+          content: 'c1',
+          relatedEntityType: null,
+          relatedEntityId: null,
+          priority: 'normal',
+          createdAt: new Date('2026-08-21'),
+          payloadJson: { kind: 'warning', noShowCaseId: 'case-1' },
+        },
+        {
+          id: 'n2',
+          notificationType: 'no_show_alert',
+          subject: null,
+          content: 'c2',
+          relatedEntityType: null,
+          relatedEntityId: null,
+          priority: 'normal',
+          createdAt: new Date('2026-08-21'),
+          payloadJson: { kind: 'released', noShowCaseId: 'case-2' },
+        },
+      ];
+      queryBuilder.getManyAndCount.mockResolvedValue([items, 2]);
+      readStateService.getReadState.mockResolvedValue({
+        readIds: new Set(),
+        readAllAt: null,
+      });
+      readStateService.computeIsRead.mockReturnValue(false);
+      dataSourceMock.manager.query.mockResolvedValue([
+        { id: 'case-1', detection_status: 'snoozed', snooze_until: null },
+        { id: 'case-2', detection_status: 'released', snooze_until: null },
+      ]);
+
+      const result = await service.listMyNotifications('u1', 1, 20);
+
+      expect(dataSourceMock.manager.query).toHaveBeenCalledTimes(1);
+      expect(result.data[0].noShowLiveStatus).toBe('snoozed');
+      expect(result.data[1].noShowLiveStatus).toBe('released');
     });
   });
 

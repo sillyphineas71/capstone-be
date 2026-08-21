@@ -15,4 +15,14 @@ export class NotificationListItemDto {
    * Cột `payload_json` đã tồn tại sẵn trong baseline, trước đây bị lọc bỏ ở DTO này.
    */
   payloadJson: Record<string, unknown> | null;
+  /**
+   * [Fix 2026-08-21, Bug 1/2] Trạng thái SỐNG của `no_show_cases` tương ứng
+   * (tra theo `payloadJson.noShowCaseId`), KHÔNG PHẢI snapshot tĩnh
+   * `payloadJson.kind` lúc notification được tạo (payloadJson KHÔNG BAO GIỜ
+   * được cập nhật lại sau khi tạo — record lịch sử). null nếu không phải
+   * notificationType='no_show_alert' hoặc case đã bị xoá.
+   */
+  noShowLiveStatus?: string | null;
+  /** Chỉ có giá trị khi noShowLiveStatus='snoozed'. */
+  noShowSnoozeUntil?: Date | string | null;
 }
