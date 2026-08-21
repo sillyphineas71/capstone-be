@@ -3675,6 +3675,12 @@ describe('MeetingsService', () => {
         // vỡ các test không liên quan tới tính năng đó.
         innerJoinAndSelect: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue([]),
+        // MKM-PCONF-01: thêm findParticipantConflictDetails (dùng getRawMany
+        // + addSelect/innerJoin/addOrderBy) vào cùng Promise.all đó.
+        innerJoin: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
       };
       return qb;
     };
@@ -3854,14 +3860,18 @@ describe('MeetingsService', () => {
         },
       ]);
 
-      // findPendingRoomConflictDetails không await gì trước khi gọi
-      // createQueryBuilder(), còn findRoomConflictDetails await
-      // getRoomBookingBufferMs() trước — nên dù đứng sau trong Promise.all([...]),
-      // nó tới createQueryBuilder() trước (thứ tự thật khi chạy, không phải
-      // thứ tự khai báo).
+      // findPendingRoomConflictDetails và findParticipantConflictDetails không
+      // await gì trước khi gọi createQueryBuilder(), còn findRoomConflictDetails
+      // await getRoomBookingBufferMs() trước — nên dù đứng trước trong
+      // Promise.all([...]), nó tới createQueryBuilder() SAU (thứ tự thật khi
+      // chạy, không phải thứ tự khai báo).
+      const participantConflictQb = mockRequestListQb();
+      participantConflictQb.getRawMany.mockResolvedValue([]);
+
       mockRepo.createQueryBuilder
         .mockReturnValueOnce(listQb)
         .mockReturnValueOnce(pendingConflictQb)
+        .mockReturnValueOnce(participantConflictQb)
         .mockReturnValueOnce(approvedConflictQb);
 
       const result = await service.findMeetingRequests({}, { userId: 'u1' });
@@ -3874,6 +3884,162 @@ describe('MeetingsService', () => {
         roomName: 'P.A201',
         meetingTitle: 'Xung đột phòng họp',
         hostName: 'Bui Van Long',
+      });
+    });
+  });
+
+  // MKM-PCONF-01 (2026-08-22) — xung đột NGƯỜI THAM DỰ phải trả về đủ thông
+  // tin cuộc họp gây trùng + danh sách người, gom theo cuộc họp (trước đây FE
+  // chỉ có cờ conflictCheckStatus='warning', không biết trùng với ai/ở đâu).
+  describe('findParticipantConflictDetails', () => {
+    const makeQb = (raw: any[]) => ({
+      innerJoin: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(raw),
+    });
+
+    const conflictRow = (over: Record<string, unknown> = {}) => ({
+      meetingId: 'm2',
+      meetingCode: 'MT-002',
+      meetingTitle: 'Họp kỹ thuật',
+      meetingStatus: MeetingStatus.SCHEDULED,
+      startTime: new Date('2026-08-22T03:30:00Z'),
+      endTime: new Date('2026-08-22T04:30:00Z'),
+      roomName: 'P.B302',
+      hostName: 'Trần Host',
+      userId: 'u1',
+      fullName: 'Nguyễn Văn A',
+      email: 'a@x.com',
+      employeeCode: 'NV001',
+      avatarUrl: null,
+      departmentName: 'Kỹ thuật',
+      isRequired: true,
+      participantRole: 'attendee',
+      conflictingRole: 'attendee',
+      ...over,
+    });
+
+    it('trả [] khi thiếu meetingId/khung giờ (không đụng DB)', async () => {
+      expect(
+        await service.findParticipantConflictDetails(
+          null,
+          new Date(),
+          new Date(),
+        ),
+      ).toEqual([]);
+      expect(mockRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('chỉ tốn 1 query và trả [] khi không có ai bị trùng', async () => {
+      mockRepo.createQueryBuilder.mockReturnValueOnce(makeQb([]));
+
+      const result = await service.findParticipantConflictDetails(
+        'm1',
+        new Date('2026-08-22T03:00:00Z'),
+        new Date('2026-08-22T04:00:00Z'),
+      );
+
+      expect(result).toEqual([]);
+      expect(mockRepo.createQueryBuilder).toHaveBeenCalledTimes(1);
+    });
+
+    it('gom theo cuộc họp gây trùng, kèm thông tin phòng/host và danh sách người', async () => {
+      mockRepo.createQueryBuilder.mockReturnValueOnce(
+        makeQb([
+          conflictRow(),
+          // Cùng người, cùng cuộc họp (dữ liệu trùng dòng) → chỉ giữ 1.
+          conflictRow(),
+          conflictRow({
+            meetingId: 'm3',
+            meetingCode: 'MT-003',
+            meetingTitle: 'Họp nhân sự',
+            meetingStatus: MeetingStatus.PENDING_APPROVAL,
+            startTime: new Date('2026-08-22T03:00:00Z'),
+            endTime: new Date('2026-08-22T03:45:00Z'),
+            roomName: null,
+            hostName: null,
+            userId: 'u2',
+            fullName: 'Lê Thị B',
+            email: 'b@x.com',
+            employeeCode: null,
+            departmentName: null,
+            isRequired: false,
+            conflictingRole: 'host',
+          }),
+        ]),
+      );
+
+      const result = await service.findParticipantConflictDetails(
+        'm1',
+        new Date('2026-08-22T03:00:00Z'),
+        new Date('2026-08-22T04:00:00Z'),
+      );
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({
+        meetingId: 'm2',
+        meetingCode: 'MT-002',
+        meetingTitle: 'Họp kỹ thuật',
+        meetingStatus: MeetingStatus.SCHEDULED,
+        roomName: 'P.B302',
+        hostName: 'Trần Host',
+      });
+      expect(result[0].participants).toHaveLength(1);
+      expect(result[0].participants[0]).toMatchObject({
+        userId: 'u1',
+        fullName: 'Nguyễn Văn A',
+        employeeCode: 'NV001',
+        departmentName: 'Kỹ thuật',
+        // isRequired lấy theo cuộc họp ĐANG XÉT, không phải cuộc họp gây trùng.
+        isRequired: true,
+        conflictingRole: 'attendee',
+      });
+      expect(result[1].participants[0]).toMatchObject({
+        userId: 'u2',
+        isRequired: false,
+        conflictingRole: 'host',
+      });
+    });
+
+    it('buildParticipantConflictSummary khử trùng lặp người giữa các cuộc họp', () => {
+      const participant = (userId: string, isRequired: boolean) => ({
+        userId,
+        fullName: null,
+        email: null,
+        employeeCode: null,
+        departmentName: null,
+        avatarUrl: null,
+        isRequired,
+        participantRole: null,
+        conflictingRole: null,
+      });
+      const meeting = (meetingId: string, participants: any[]) => ({
+        meetingId,
+        meetingCode: null,
+        meetingTitle: null,
+        meetingStatus: null,
+        roomName: null,
+        hostName: null,
+        startTime: new Date(),
+        endTime: new Date(),
+        participants,
+      });
+
+      expect(
+        service.buildParticipantConflictSummary([
+          meeting('m2', [participant('u1', true)]),
+          meeting('m3', [participant('u1', true), participant('u2', false)]),
+        ]),
+      ).toEqual({
+        conflictedUserCount: 2,
+        requiredUserCount: 1,
+        meetingCount: 2,
       });
     });
   });

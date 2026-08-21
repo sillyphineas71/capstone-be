@@ -75,6 +75,27 @@ export class GuestLobbyService {
     return this.cache.getLobbyStatus(externalParticipantId);
   }
 
+  /**
+   * Đọc trạng thái lobby, nhưng tự động duyệt khách nếu cuộc họp đã tới giờ
+   * bắt đầu (`meeting.start_time`) — khách không còn phải chờ host bấm
+   * "Duyệt" khi đã tới giờ họp, host chỉ cần duyệt sớm cho khách vào trước
+   * giờ nếu muốn.
+   */
+  async getStatusWithAutoAdmit(
+    meetingId: string,
+    externalParticipantId: string,
+    meetingStartTime: Date | undefined,
+  ): Promise<GuestLobbyStatus | null> {
+    const status = await this.getStatus(externalParticipantId);
+    const meetingHasStarted =
+      !!meetingStartTime && Date.now() >= meetingStartTime.getTime();
+    if (status === GuestLobbyStatus.WAITING && meetingHasStarted) {
+      await this.admit(meetingId, externalParticipantId);
+      return GuestLobbyStatus.ADMITTED;
+    }
+    return status;
+  }
+
   async listWaiting(meetingId: string): Promise<string[]> {
     return this.cache.listLobby(meetingId);
   }

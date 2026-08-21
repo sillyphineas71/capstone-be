@@ -92,6 +92,7 @@ import {
   UserEntity,
   AccountStatus,
 } from '../../accounts/entities/user.entity.js';
+import { DepartmentEntity } from '../../accounts/entities/department.entity.js';
 import { UserRoleEntity } from '../../accounts/entities/user-role.entity.js';
 import { RoleEntity } from '../../accounts/entities/role.entity.js';
 import { PermissionEntity } from '../../accounts/entities/permission.entity.js';
@@ -163,6 +164,10 @@ import { MeetingRequestListItemDto } from '../dto/meeting-request-list-item.dto.
 import { UserSummaryDto } from '../dto/user-summary.dto.js';
 import { RoomSummaryDto } from '../dto/room-summary.dto.js';
 import { ConflictDetailDto } from '../dto/conflict-detail.dto.js';
+import {
+  ParticipantConflictDetailDto,
+  ParticipantConflictSummaryDto,
+} from '../dto/participant-conflict-detail.dto.js';
 
 import { WarningTokenUtil, WarningItem } from '../utils/warning-token.util.js';
 import { GuestInviteService } from '../../guest-access/services/guest-invite.service.js';
@@ -492,6 +497,145 @@ export class MeetingsService {
       endTime: b.reservedEndTime,
       hostName: b.bookedByUser?.fullName ?? null,
     }));
+  }
+
+  /**
+   * MKM-PCONF-01 (2026-08-22) — check TƯƠI xung đột NGƯỜI THAM DỰ cho 1 cuộc
+   * họp: self-join meeting_participants để tìm những cuộc họp khác trùng khung
+   * giờ mà cũng có mặt người tham dự của cuộc họp này, gom theo cuộc họp.
+   *
+   * KHÔNG đọc `conflict_summary_json` (ảnh chụp lúc create(), chỉ có
+   * {userId, busyFrom, busyTo} — thiếu tên người/tên cuộc họp và đã cũ nếu
+   * participant bị thêm/bớt sau đó).
+   *
+   * Đây CHỈ là cảnh báo mềm — khác xung đột phòng, approve() KHÔNG chặn, nên
+   * Manager có thể duyệt cả 2 cuộc họp cùng người nếu chấp nhận rủi ro.
+   * Cùng bộ lọc trạng thái với checkParticipantConflicts (bỏ cancelled/
+   * completed) để 2 nơi không báo lệch nhau.
+   */
+  async findParticipantConflictDetails(
+    meetingId: string | null,
+    startTime: Date | null,
+    endTime: Date | null,
+  ): Promise<ParticipantConflictDetailDto[]> {
+    if (!meetingId || !startTime || !endTime) return [];
+
+    // 1 query duy nhất (self-join meeting_participants) thay vì 2 lượt
+    // round-trip — findMeetingRequests gọi hàm này cho TỪNG item pending nên
+    // mỗi query thừa đều nhân lên theo page size.
+    const rows = await this.dataSource
+      .getRepository(MeetingParticipantEntity)
+      .createQueryBuilder('own')
+      .innerJoin(
+        MeetingParticipantEntity,
+        'other',
+        'other.userId = own.userId AND other.meetingId != own.meetingId',
+      )
+      .innerJoin(MeetingEntity, 'm', 'm.id = other.meetingId')
+      .innerJoin(UserEntity, 'u', 'u.id = own.userId')
+      .leftJoin(RoomEntity, 'room', 'room.id = m.roomId')
+      .leftJoin(UserEntity, 'host', 'host.id = m.hostId')
+      .leftJoin(DepartmentEntity, 'dept', 'dept.id = u.departmentId')
+      .select('m.id', 'meetingId')
+      .addSelect('m.meetingCode', 'meetingCode')
+      .addSelect('m.title', 'meetingTitle')
+      .addSelect('m.status', 'meetingStatus')
+      .addSelect('m.startTime', 'startTime')
+      .addSelect('m.endTime', 'endTime')
+      .addSelect('room.roomName', 'roomName')
+      .addSelect('host.fullName', 'hostName')
+      .addSelect('u.id', 'userId')
+      .addSelect('u.fullName', 'fullName')
+      .addSelect('u.email', 'email')
+      .addSelect('u.employeeCode', 'employeeCode')
+      .addSelect('u.avatarUrl', 'avatarUrl')
+      .addSelect('dept.departmentName', 'departmentName')
+      // isRequired/participantRole lấy theo cuộc họp ĐANG XÉT (own), còn
+      // conflictingRole là vai trò ở cuộc họp gây trùng (other).
+      .addSelect('own.isRequired', 'isRequired')
+      .addSelect('own.participantRole', 'participantRole')
+      .addSelect('other.participantRole', 'conflictingRole')
+      .where('own.meetingId = :meetingId', { meetingId })
+      .andWhere('m.status NOT IN (:...excludedStatuses)', {
+        excludedStatuses: [MeetingStatus.CANCELLED, MeetingStatus.COMPLETED],
+      })
+      .andWhere('m.startTime < :endTime', { endTime })
+      .andWhere('m.endTime > :startTime', { startTime })
+      .andWhere('m.deletedAt IS NULL')
+      .orderBy('m.startTime', 'ASC')
+      .addOrderBy('u.fullName', 'ASC')
+      .getRawMany<{
+        meetingId: string;
+        meetingCode: string | null;
+        meetingTitle: string | null;
+        meetingStatus: string | null;
+        startTime: Date;
+        endTime: Date;
+        roomName: string | null;
+        hostName: string | null;
+        userId: string;
+        fullName: string | null;
+        email: string | null;
+        employeeCode: string | null;
+        avatarUrl: string | null;
+        departmentName: string | null;
+        isRequired: boolean | null;
+        participantRole: string | null;
+        conflictingRole: string | null;
+      }>();
+
+    const byMeeting = new Map<string, ParticipantConflictDetailDto>();
+    for (const row of rows) {
+      let detail = byMeeting.get(row.meetingId);
+      if (!detail) {
+        detail = {
+          meetingId: row.meetingId,
+          meetingCode: row.meetingCode ?? null,
+          meetingTitle: row.meetingTitle ?? null,
+          meetingStatus: row.meetingStatus ?? null,
+          roomName: row.roomName ?? null,
+          hostName: row.hostName ?? null,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          participants: [],
+        };
+        byMeeting.set(row.meetingId, detail);
+      }
+      // Cùng 1 người có thể ra nhiều dòng trên cùng cuộc họp (dữ liệu cũ chưa
+      // có unique (meeting_id, user_id)) — chỉ giữ 1.
+      if (detail.participants.some((p) => p.userId === row.userId)) continue;
+      detail.participants.push({
+        userId: row.userId,
+        fullName: row.fullName ?? null,
+        email: row.email ?? null,
+        employeeCode: row.employeeCode ?? null,
+        departmentName: row.departmentName ?? null,
+        avatarUrl: row.avatarUrl ?? null,
+        isRequired: row.isRequired ?? true,
+        participantRole: row.participantRole ?? null,
+        conflictingRole: row.conflictingRole ?? null,
+      });
+    }
+
+    return [...byMeeting.values()];
+  }
+  /** Gộp nhanh danh sách xung đột người thành số liệu cho badge/dialog FE. */
+  buildParticipantConflictSummary(
+    details: ParticipantConflictDetailDto[],
+  ): ParticipantConflictSummaryDto {
+    const conflictedUserIds = new Set<string>();
+    const requiredUserIds = new Set<string>();
+    for (const detail of details) {
+      for (const participant of detail.participants) {
+        conflictedUserIds.add(participant.userId);
+        if (participant.isRequired) requiredUserIds.add(participant.userId);
+      }
+    }
+    return {
+      conflictedUserCount: conflictedUserIds.size,
+      requiredUserCount: requiredUserIds.size,
+      meetingCount: details.length,
+    };
   }
 
   async getRoomAvailability(
@@ -6773,6 +6917,11 @@ export class MeetingsService {
         string,
         ConflictDetailDto[]
       >();
+      // MKM-PCONF-01 — xung đột NGƯỜI (cảnh báo mềm, KHÔNG chặn approve).
+      const participantConflictsByRequestId = new Map<
+        string,
+        ParticipantConflictDetailDto[]
+      >();
       await Promise.all(
         items
           .filter((mr) => mr.approvalStatus === ApprovalStatus.PENDING)
@@ -6781,25 +6930,34 @@ export class MeetingsService {
             const startTime =
               mr.requestedStartTime ?? mr.meeting?.startTime ?? null;
             const endTime = mr.requestedEndTime ?? mr.meeting?.endTime ?? null;
-            const [details, pendingDetails] = await Promise.all([
-              this.findRoomConflictDetails(
-                roomId,
-                startTime,
-                endTime,
-                mr.meeting?.id,
-              ),
-              this.findPendingRoomConflictDetails(
-                roomId,
-                startTime,
-                endTime,
-                mr.meeting?.id,
-              ),
-            ]);
+            const [details, pendingDetails, participantDetails] =
+              await Promise.all([
+                this.findRoomConflictDetails(
+                  roomId,
+                  startTime,
+                  endTime,
+                  mr.meeting?.id,
+                ),
+                this.findPendingRoomConflictDetails(
+                  roomId,
+                  startTime,
+                  endTime,
+                  mr.meeting?.id,
+                ),
+                this.findParticipantConflictDetails(
+                  mr.meeting?.id ?? null,
+                  startTime,
+                  endTime,
+                ),
+              ]);
             if (details.length > 0) {
               conflictDetailsByRequestId.set(mr.id, details);
             }
             if (pendingDetails.length > 0) {
               pendingConflictDetailsByRequestId.set(mr.id, pendingDetails);
+            }
+            if (participantDetails.length > 0) {
+              participantConflictsByRequestId.set(mr.id, participantDetails);
             }
           }),
       );
@@ -6808,6 +6966,11 @@ export class MeetingsService {
         const conflictDetails = conflictDetailsByRequestId.get(mr.id) ?? null;
         const pendingConflictDetails =
           pendingConflictDetailsByRequestId.get(mr.id) ?? null;
+        const participantConflictDetails =
+          participantConflictsByRequestId.get(mr.id) ?? null;
+        const participantConflictSummary = participantConflictDetails
+          ? this.buildParticipantConflictSummary(participantConflictDetails)
+          : null;
 
         return new MeetingRequestListItemDto(
           mr.id,
@@ -6855,6 +7018,8 @@ export class MeetingsService {
                 roomId: mr.meeting.roomId,
               }
             : null,
+          participantConflictDetails,
+          participantConflictSummary,
         );
       });
 

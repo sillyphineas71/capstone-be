@@ -14,6 +14,7 @@ interface RoomStatusRow {
   meeting_id: string | null;
   title: string | null;
   host_name: string | null;
+  meeting_status: string | null;
   reserved_start_time: Date | string | null;
   reserved_end_time: Date | string | null;
   no_show_status: string | null;
@@ -93,7 +94,7 @@ export class RoomStatusService {
       ORDER BY event_time DESC LIMIT 1
     ) lp ON true
     LEFT JOIN LATERAL (
-      SELECT b.id AS booking_id, b.meeting_id, m.title,
+      SELECT b.id AS booking_id, b.meeting_id, m.title, m.status AS meeting_status,
              u.full_name AS host_name, b.reserved_start_time, b.reserved_end_time
       FROM room_bookings b
       JOIN meetings m ON m.id = b.meeting_id
@@ -114,7 +115,7 @@ export class RoomStatusService {
     r.id AS room_id, r.room_code, r.room_name, r.current_status,
     r.administrative_status,
     oc.occupancy_count, lp.event_time AS last_presence_at,
-    cb.booking_id, cb.meeting_id, cb.title, cb.host_name,
+    cb.booking_id, cb.meeting_id, cb.title, cb.host_name, cb.meeting_status,
     cb.reserved_start_time, cb.reserved_end_time,
     nsc.detection_status AS no_show_status`;
 
@@ -170,8 +171,15 @@ export class RoomStatusService {
    *    neu la 'maintenance'/'inactive' — luon thang.
    * 2. 'occupied' neu tin hieu occupancy CON HIEU LUC (trong
    *    OCCUPANCY_SIGNAL_TTL_MINUTES phut gan nhat, xem LATERAL_JOINS/oc) > 0.
-   * 3. 'reserved' neu co booking approved/active dang trong khung gio hien tai.
-   * 4. 'available' con lai.
+   * 3. [FIX 2026-08-22] 'occupied' neu cuoc hop cua booking dang chay da THUC SU
+   *    bat dau (meetings.status = 'in_progress' — live-meeting.service flip
+   *    booking approved -> active va meeting -> in_progress cung luc). Truoc day
+   *    chi tin tin hieu camera (oc), nen phong dang hop nhung khong co
+   *    room_events occupancy (camera chua lap / khong gui event) van hien
+   *    'reserved' = "Duoc dat truoc" tren /business-admin/rooms.
+   * 4. 'reserved' neu co booking approved/active dang trong khung gio hien tai
+   *    nhung cuoc hop chua bat dau.
+   * 5. 'available' con lai.
    */
   private computeCurrentStatus(row: RoomStatusRow): string {
     if (
@@ -181,6 +189,7 @@ export class RoomStatusService {
       return row.administrative_status;
     }
     if ((row.occupancy_count ?? 0) > 0) return 'occupied';
+    if (row.meeting_status === 'in_progress') return 'occupied';
     if (row.booking_id) return 'reserved';
     return 'available';
   }

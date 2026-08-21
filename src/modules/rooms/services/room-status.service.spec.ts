@@ -19,6 +19,7 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     meeting_id: 'mt1',
     title: 'Sprint',
     host_name: 'Nguyễn Văn A',
+    meeting_status: 'scheduled',
     reserved_start_time: '2026-06-16T08:00:00Z',
     reserved_end_time: '2026-06-16T10:00:00Z',
     no_show_status: null,
@@ -69,12 +70,51 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     expect(r[0].currentStatus).toBe('maintenance');
   });
 
-  it('list: co booking hien tai nhung chua co occupancy → currentStatus=reserved', async () => {
+  it('list: co booking hien tai nhung cuoc hop chua bat dau → currentStatus=reserved', async () => {
     dsMock.manager.query.mockResolvedValue([
-      row({ occupancy_count: 0, booking_id: 'bk1' }),
+      row({ occupancy_count: 0, booking_id: 'bk1', meeting_status: 'scheduled' }),
     ]);
     const r = await service.getRealtimeStatus({});
     expect(r[0].currentStatus).toBe('reserved');
+  });
+
+  // [FIX 2026-08-22] Cuoc hop da bat dau nhung khong co tin hieu camera →
+  // truoc day hien 'reserved' ("Duoc dat truoc") tren /business-admin/rooms.
+  it('list: cuoc hop dang dien ra, khong co occupancy → currentStatus=occupied', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({
+        occupancy_count: null,
+        booking_id: 'bk1',
+        meeting_status: 'in_progress',
+      }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].currentStatus).toBe('occupied');
+  });
+
+  it('list: administrative_status van thang meeting in_progress', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({
+        administrative_status: 'maintenance',
+        occupancy_count: null,
+        booking_id: 'bk1',
+        meeting_status: 'in_progress',
+      }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].currentStatus).toBe('maintenance');
+  });
+
+  it('detail: cuoc hop dang dien ra, khong co occupancy → currentStatus=occupied', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({
+        occupancy_count: null,
+        booking_id: 'bk1',
+        meeting_status: 'in_progress',
+      }),
+    ]);
+    const r = await service.getRoomStatus('r1');
+    expect(r.currentStatus).toBe('occupied');
   });
 
   it('list: khong booking, khong occupancy → currentStatus=available (khong con "dinh" occupied)', async () => {

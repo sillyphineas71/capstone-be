@@ -94,16 +94,16 @@ export class AttendanceService {
       });
     }
 
-    const now = new Date();
-    if (now < meeting.startTime) {
-      throw new ConflictException({
-        message:
-          'Attendance list is not open yet. Please come back when the meeting starts.',
-        error: 'ATTENDANCE_NOT_OPEN_YET',
-      });
-    }
+    // [2026-08-22] BO gate `now < meeting.startTime`. Ly do: Host duoc phep bat
+    // dau cuoc hop SOM hon gio len lich, khi do meeting.status = in_progress
+    // nhung dong ho tuong van chua toi startTime => GET danh sach diem danh tra
+    // 409 ATTENDANCE_NOT_OPEN_YET, FE hien toast "Danh sach diem danh chua duoc
+    // mo" lap lai moi 15s. Diem danh SOM la hop le; computeLateFlags() da xu ly
+    // dung (checkInTime <= startTime => isLate=false, lateMinutes=0 => dung gio).
+    // Gate theo TRANG THAI meeting ben duoi van giu nguyen — do moi la rao chan
+    // that su (draft/pending_approval/cancelled van bi chan).
 
-    // Allowed statuses: scheduled(now>=start), in_progress, completed
+    // Allowed statuses: scheduled, in_progress, completed
     const allowedStatuses: MeetingStatus[] = [
       MeetingStatus.SCHEDULED,
       MeetingStatus.IN_PROGRESS,

@@ -104,12 +104,32 @@ describe('RoomSearchService', () => {
           administrative_status: 'available',
           latest_occupancy_count: 0,
           has_current_booking: true,
+          has_live_meeting: false,
         },
       ])
       .mockResolvedValueOnce([{ count: '1' }]);
 
     const result = await service.search({ page: 1, limit: 50 });
     expect(result.rooms[0].currentStatus).toBe('reserved');
+  });
+
+  // [FIX 2026-08-22] Cuoc hop da bat dau nhung phong khong co tin hieu camera —
+  // truoc day bi hien 'reserved' (= "Duoc dat truoc") du dang hop.
+  it('cuoc hop dang dien ra, occupancy=0 → currentStatus=occupied', async () => {
+    queryMock
+      .mockResolvedValueOnce([
+        {
+          ...mockRoomRow,
+          administrative_status: 'available',
+          latest_occupancy_count: 0,
+          has_current_booking: true,
+          has_live_meeting: true,
+        },
+      ])
+      .mockResolvedValueOnce([{ count: '1' }]);
+
+    const result = await service.search({ page: 1, limit: 50 });
+    expect(result.rooms[0].currentStatus).toBe('occupied');
   });
 
   it('khong booking, khong occupancy → currentStatus=available', async () => {
@@ -120,6 +140,7 @@ describe('RoomSearchService', () => {
           administrative_status: 'available',
           latest_occupancy_count: 0,
           has_current_booking: false,
+          has_live_meeting: false,
         },
       ])
       .mockResolvedValueOnce([{ count: '1' }]);

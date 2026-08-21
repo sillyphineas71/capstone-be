@@ -291,7 +291,12 @@ describe('ManualAttendanceService (UC-B21)', () => {
       );
     });
 
-    it('AC-014/ERR-012 409: meeting tương lai (now<start) → ATTENDANCE_NOT_OPEN_YET', async () => {
+    // [2026-08-22] Doi hanh vi co y: gate `now < startTime` da bo. Diem danh
+    // thu cong TRUOC gio hop la hop le (Host mo phong som / chot danh sach
+    // truoc), va computeLateFlags van tinh dung gio. Test nay gio khang dinh
+    // KHONG con nem ATTENDANCE_NOT_OPEN_YET — request di tiep xuong cac buoc
+    // validate sau (o day: user chua phai participant → 422).
+    it('AC-014/ERR-012: meeting tương lai (now<start) KHÔNG còn bị chặn bởi ATTENDANCE_NOT_OPEN_YET', async () => {
       asHost();
       meetingRepo.findOne.mockResolvedValue(
         makeMeeting({
@@ -305,8 +310,8 @@ describe('ManualAttendanceService (UC-B21)', () => {
           { userId: TARGET_USER },
           ACTOR_HOST,
         ),
-        ConflictException,
-        'ATTENDANCE_NOT_OPEN_YET',
+        UnprocessableEntityException,
+        'USER_NOT_PARTICIPANT',
       );
     });
 
@@ -531,7 +536,9 @@ describe('ManualAttendanceService (UC-B21)', () => {
       );
     });
 
-    it('Bậc 2 — 409 gate: record OK + meeting tương lai → ATTENDANCE_NOT_OPEN_YET', async () => {
+    // [2026-08-22] Xem chu thich o createManual: gate thoi gian da bo, nen
+    // meeting tuong lai khong con dung o bac 2 ma di tiep xuong bac quyen.
+    it('Bậc 2 — meeting tương lai KHÔNG còn bị chặn, đi tiếp xuống gate quyền', async () => {
       attendanceRepo.findOne.mockResolvedValue(makeRecord());
       meetingRepo.findOne.mockResolvedValue(
         makeMeeting({
@@ -546,8 +553,8 @@ describe('ManualAttendanceService (UC-B21)', () => {
           { reason: 'x' },
           'sysadmin',
         ),
-        ConflictException,
-        'ATTENDANCE_NOT_OPEN_YET',
+        ForbiddenException,
+        'PERMISSION_DENIED',
       );
     });
 
