@@ -17,6 +17,7 @@ import {
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
 import { AuditLogSeverity } from '../../administration/entities/audit-log.entity.js';
 import { NoShowConfigService } from './no-show-config.service.js';
+import { NoShowConfirmTokenService } from './no-show-confirm-token.service.js';
 import { buildNoShowAlertEmail } from '../../mail/templates/builders.js';
 import { LiveMeetingService } from '../../live-meeting/services/live-meeting.service.js';
 import { MEETING_END_ERRORS } from '../../live-meeting/constants/meeting-end-error.constant.js';
@@ -100,10 +101,15 @@ export class NoShowLifecycleService {
     private readonly noShowConfigService: NoShowConfigService,
     private readonly auditLogsService: AuditLogsService,
     private readonly liveMeetingService: LiveMeetingService,
+    private readonly noShowConfirmTokenService: NoShowConfirmTokenService,
   ) {}
 
   // ── R1: reconcile presence ────────────────────────────────────────────────
-  /** Non-terminal (risk|warning_sent) có first_presence_at → resolved/kept. */
+  /**
+   * Non-terminal (risk|warning_sent|snoozed) có first_presence_at → resolved/kept.
+   * [Việc B, tái đánh giá 2026-08-21] Thêm 'snoozed' — presence thật là câu trả lời
+   * dứt khoát, không cần chờ hết hạn gia hạn (snooze_until) nữa.
+   */
   async reconcilePresence(): Promise<{ scanned: number; resolved: number }> {
     const result: unknown = await this.dataSource.manager.query(
       `UPDATE no_show_cases nc
@@ -113,7 +119,7 @@ export class NoShowLifecycleService {
          FROM room_booking_usages u
         WHERE u.booking_id = nc.booking_id
           AND u.first_presence_at IS NOT NULL
-          AND nc.detection_status IN ('risk','warning_sent')
+          AND nc.detection_status IN ('risk','warning_sent','snoozed')
         RETURNING nc.id`,
     );
     const n = this.rowsOf<IdRow>(result).length;
@@ -168,8 +174,14 @@ export class NoShowLifecycleService {
     const { caseId, actor, reason, mode } = params;
     const isAuto = mode === 'auto';
     const resolutionStatus = isAuto ? 'released' : 'manual_override';
-    // Nguồn hợp lệ: auto chỉ từ warning_sent; manual từ risk|warning_sent.
-    const validSources = isAuto ? ['warning_sent'] : ['risk', 'warning_sent'];
+    // Nguồn hợp lệ: 'snoozed' thêm vào CẢ 2 nhánh (Việc B tái đánh giá 2026-08-21) —
+    // auto: hết hạn gia hạn "Tôi vẫn đến" vẫn không có presence (autoReleaseBatch()).
+    // manual: admin có quyền room.noshow.release được override release ngay cả khi
+    // case đang snoozed (vd thấy rõ phòng trống dù còn hạn gia hạn) — mirror đúng
+    // quyền admin đã có sẵn để release từ 'risk' (chưa từng cảnh báo) ở nhánh manual cũ.
+    const validSources = isAuto
+      ? ['warning_sent', 'snoozed']
+      : ['risk', 'warning_sent', 'snoozed'];
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -274,16 +286,25 @@ export class NoShowLifecycleService {
       return { scanned: 0, released: 0, skipped: 0 };
     }
 
+    // [Việc B, tái đánh giá 2026-08-21] Gộp thêm nhánh 'snoozed' hết hạn snooze_until
+    // vào ĐÚNG cùng batch này (không tạo cron riêng) — cùng release() dùng chung phía
+    // dưới đã tự nhận diện nguồn qua validSources.
     const candidates: IdRow[] = await this.dataSource.manager.query(
       `SELECT nc.id
          FROM no_show_cases nc
          JOIN room_bookings b ON b.id = nc.booking_id
          LEFT JOIN room_booking_usages u ON u.booking_id = nc.booking_id
-        WHERE nc.detection_status = 'warning_sent'
-          AND nc.auto_release_eligible_at IS NOT NULL
-          AND nc.auto_release_eligible_at <= now()
-          AND b.status IN ('approved','active')
-          AND u.first_presence_at IS NULL`,
+        WHERE b.status IN ('approved','active')
+          AND u.first_presence_at IS NULL
+          AND (
+            (nc.detection_status = 'warning_sent'
+              AND nc.auto_release_eligible_at IS NOT NULL
+              AND nc.auto_release_eligible_at <= now())
+            OR
+            (nc.detection_status = 'snoozed'
+              AND nc.snooze_until IS NOT NULL
+              AND nc.snooze_until <= now())
+          )`,
     );
 
     let released = 0;
@@ -430,12 +451,36 @@ export class NoShowLifecycleService {
           .map((r) => r.email)
           .filter((e): e is string => !!e);
         if (toEmails.length > 0) {
+          // [Việc B, Hướng 2] Link "Tôi vẫn đến" — CHỈ build khi kind='warning' (case
+          // còn non-terminal tại thời điểm soạn email). Best-effort: lỗi ký token
+          // KHÔNG được làm hỏng cả email cảnh báo — bỏ qua CTA, vẫn gửi email thường.
+          let confirmLink: string | undefined;
+          if (kind === 'warning') {
+            try {
+              const token = await this.noShowConfirmTokenService.sign({
+                caseId: c.id,
+                userId: recipientUserIds[0],
+              });
+              confirmLink = this.noShowConfirmTokenService.buildLink(
+                this.configService.get<string>('APP_URL', ''),
+                token,
+              );
+            } catch (e) {
+              this.logger.warn(
+                `sign no-show confirm token failed (case ${c.id}): ${this.errMsg(e)}`,
+              );
+            }
+          }
           await this.notificationsService.enqueueEmailNotification({
             notificationType: NotificationType.NO_SHOW_ALERT,
             channel: NotificationChannel.EMAIL,
             subject,
             content,
-            emailHtml: buildNoShowAlertEmail({ kind, roomId: c.room_id }),
+            emailHtml: buildNoShowAlertEmail({
+              kind,
+              roomId: c.room_id,
+              confirmLink,
+            }),
             toEmails,
             payloadJson: meta,
           });

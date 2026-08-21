@@ -17,6 +17,14 @@ describe('NoShowDetectionService (NSC-001)', () => {
   let noShowServiceMock: any;
   let configRows: any[];
   let candidateRows: any[];
+  // Việc A — map channel→room mặc định có 2 phòng (khớp room_id của candidateRows mặc
+  // định) để các test KHÔNG liên quan tới Việc A không bị ảnh hưởng bởi filter mới.
+  let cameraMapRows: any[];
+
+  const CAMERA_ROOM_IDS = [
+    '11111111-1111-1111-1111-111111111111',
+    '22222222-2222-2222-2222-222222222222',
+  ];
 
   beforeEach(async () => {
     configRows = [{ config_value: '10' }];
@@ -24,9 +32,16 @@ describe('NoShowDetectionService (NSC-001)', () => {
       { booking_id: 'bk-1', meeting_id: 'mt-1', room_id: 'rm-1' },
       { booking_id: 'bk-2', meeting_id: 'mt-2', room_id: 'rm-2' },
     ];
+    cameraMapRows = [
+      {
+        config_json: { '0': CAMERA_ROOM_IDS[0], '2': CAMERA_ROOM_IDS[1] },
+      },
+    ];
     dsMock = {
       manager: {
         query: jest.fn().mockImplementation((sql: string) => {
+          if (sql.includes('ivss.channel_room_map'))
+            return Promise.resolve(cameraMapRows);
           if (sql.includes('system_configs'))
             return Promise.resolve(configRows);
           if (sql.includes('FROM room_bookings'))
@@ -63,7 +78,11 @@ describe('NoShowDetectionService (NSC-001)', () => {
     expect(r.scanned).toBe(2);
     expect(r.created).toBe(2);
     expect(noShowServiceMock.create).toHaveBeenCalledTimes(2);
-    expect(candCall()[1]).toEqual([10, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      10,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
     // create detectionStatus='risk' + evidence threshold
     const arg = noShowServiceMock.create.mock.calls[0][0];
     expect(arg.detectionStatus).toBe('risk');
@@ -77,7 +96,11 @@ describe('NoShowDetectionService (NSC-001)', () => {
       'NO_SHOW_THRESHOLD_MINUTES',
       15,
     );
-    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      15,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
   });
 
   it('threshold config_value không hợp lệ → fallback env', async () => {
@@ -87,23 +110,37 @@ describe('NoShowDetectionService (NSC-001)', () => {
       'NO_SHOW_THRESHOLD_MINUTES',
       15,
     );
-    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      15,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
   });
 
   it('threshold config_value null → fallback env', async () => {
     configRows = [{ config_value: null }];
     await service.detect();
-    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      15,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
   });
 
   it('threshold config_value <= 0 → fallback env', async () => {
     configRows = [{ config_value: '0' }];
     await service.detect();
-    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      15,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
   });
 
-  it('system_configs query lỗi → catch → fallback env (không throw)', async () => {
+  it('system_configs query lỗi (threshold) → catch → fallback env (không throw)', async () => {
     dsMock.manager.query.mockImplementation((sql: string) => {
+      if (sql.includes('ivss.channel_room_map'))
+        return Promise.resolve(cameraMapRows);
       if (sql.includes('system_configs'))
         return Promise.reject(new Error('db down'));
       if (sql.includes('FROM room_bookings'))
@@ -112,7 +149,11 @@ describe('NoShowDetectionService (NSC-001)', () => {
     });
     const r = await service.detect();
     expect(r.scanned).toBe(2);
-    expect(candCall()[1]).toEqual([15, RECONCILE_GRACE_SECONDS]);
+    expect(candCall()[1]).toEqual([
+      15,
+      RECONCILE_GRACE_SECONDS,
+      CAMERA_ROOM_IDS,
+    ]);
   });
 
   it('candidate query: LEFT JOIN usage + NOT EXISTS + bind interval (SEC-03)', async () => {
@@ -122,6 +163,7 @@ describe('NoShowDetectionService (NSC-001)', () => {
     expect(sql).toContain('u.first_presence_at IS NULL');
     expect(sql).toContain('NOT EXISTS');
     expect(sql).toContain("$1::int * interval '1 minute'");
+    expect(sql).toContain('b.room_id = ANY($3::uuid[])');
   });
 
   it('candidate đã có case (create created=false) → scanned tăng, created=0', async () => {
@@ -182,6 +224,8 @@ describe('NoShowDetectionService (NSC-001)', () => {
       // Mô phỏng: DB đã có first_presence_at (nhờ Phần 1) → điều kiện WHERE chính loại bỏ
       // candidate này hoàn toàn — SQL thật sẽ không trả về nó, mock giả lập hiệu ứng đó.
       dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('ivss.channel_room_map'))
+          return Promise.resolve(cameraMapRows);
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) return Promise.resolve([]); // bị "u.first_presence_at IS NULL" loại
         return Promise.resolve([]);
@@ -211,6 +255,8 @@ describe('NoShowDetectionService (NSC-001)', () => {
       // NOT EXISTS chạy Ở TẦNG SQL thật (đã xác nhận cấu trúc câu lệnh + bind=120 ở test
       // trên) — ở tầng mock, mô phỏng hiệu ứng: candidate này bị DB tự loại khỏi kết quả.
       dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('ivss.channel_room_map'))
+          return Promise.resolve(cameraMapRows);
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) return Promise.resolve([]); // rỗng — bị NOT EXISTS loại
         return Promise.resolve([]);
@@ -242,6 +288,8 @@ describe('NoShowDetectionService (NSC-001)', () => {
     // phía trên — lặp lại có chủ đích, đặt tên đúng "Kịch bản A" cho báo cáo cuối.)
     it('Kịch bản A — streak xác nhận trước detect() → KHÔNG báo No-show oan', async () => {
       dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('ivss.channel_room_map'))
+          return Promise.resolve(cameraMapRows);
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) return Promise.resolve([]); // first_presence_at đã set → bị loại khỏi WHERE
         return Promise.resolve([]);
@@ -281,6 +329,8 @@ describe('NoShowDetectionService (NSC-001)', () => {
         room_id: 'rm-shared',
       };
       dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('ivss.channel_room_map'))
+          return Promise.resolve(cameraMapRows);
         if (sql.includes('system_configs')) return Promise.resolve(configRows);
         if (sql.includes('FROM room_bookings')) {
           // Mô phỏng đúng semantics SQL mới: NOT EXISTS chỉ xét event có
@@ -306,8 +356,80 @@ describe('NoShowDetectionService (NSC-001)', () => {
     it('Đo độ trễ — threshold=1 phút, occupancy sạch → candidate kích hoạt ngay khi threshold đủ (không cộng thêm trễ từ guard)', async () => {
       configRows = [{ config_value: '1' }];
       const r = await service.detect();
-      expect(candCall()[1]).toEqual([1, RECONCILE_GRACE_SECONDS]);
+      expect(candCall()[1]).toEqual([
+        1,
+        RECONCILE_GRACE_SECONDS,
+        CAMERA_ROOM_IDS,
+      ]);
       expect(r.created).toBe(2); // candidateRows mặc định = phòng sạch, không nhiễu
+    });
+  });
+
+  // ══ [FIX 2026-08-21, Việc A] Phòng không gán channel camera → không xét no-show ══
+  describe('Việc A — lọc theo room_id có camera (system_configs[ivss.channel_room_map])', () => {
+    it('(a) regression — phòng có camera (map không rỗng) → hành vi giữ nguyên như cũ, bind $3 = mảng room_id từ map', async () => {
+      const r = await service.detect();
+      expect(r.scanned).toBe(2);
+      expect(r.created).toBe(2);
+      expect(candCall()[1]).toEqual([
+        10,
+        RECONCILE_GRACE_SECONDS,
+        CAMERA_ROOM_IDS,
+      ]);
+    });
+
+    it('(b) KHÔNG phòng nào có camera (map rỗng) → detect() trả {scanned:0,created:0}, KHÔNG gọi candidate query', async () => {
+      cameraMapRows = [{ config_json: {} }];
+      const r = await service.detect();
+      expect(r).toEqual({ scanned: 0, created: 0 });
+      expect(candCall()).toBeUndefined();
+      expect(noShowServiceMock.create).not.toHaveBeenCalled();
+    });
+
+    it('(b bis) chưa từng cấu hình channel_room_map (0 dòng system_configs) → coi như rỗng → skip giống hệt (b)', async () => {
+      cameraMapRows = [];
+      const r = await service.detect();
+      expect(r).toEqual({ scanned: 0, created: 0 });
+      expect(candCall()).toBeUndefined();
+    });
+
+    it('(b ter) config_json chứa giá trị không phải UUID hợp lệ → bị lọc bỏ, không tính vào camera room ids', async () => {
+      cameraMapRows = [
+        { config_json: { '0': 'not-a-uuid', '1': null, '2': 123 } },
+      ];
+      const r = await service.detect();
+      expect(r).toEqual({ scanned: 0, created: 0 });
+      expect(candCall()).toBeUndefined();
+    });
+
+    it('(c) lỗi đọc channel_room_map (DB down) → fail-safe skip cả lượt quét, KHÔNG throw, KHÔNG gọi candidate query', async () => {
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('ivss.channel_room_map'))
+          return Promise.reject(new Error('db down'));
+        if (sql.includes('system_configs')) return Promise.resolve(configRows);
+        if (sql.includes('FROM room_bookings'))
+          return Promise.resolve(candidateRows);
+        return Promise.resolve([]);
+      });
+      const r = await service.detect();
+      expect(r).toEqual({ scanned: 0, created: 0 });
+      expect(candCall()).toBeUndefined();
+      expect(noShowServiceMock.create).not.toHaveBeenCalled();
+    });
+
+    it('tick sau tự retry — không cache map rỗng vĩnh viễn: lượt 1 rỗng → skip, lượt 2 có map → quét bình thường', async () => {
+      cameraMapRows = [{ config_json: {} }];
+      const r1 = await service.detect();
+      expect(r1).toEqual({ scanned: 0, created: 0 });
+
+      cameraMapRows = [
+        {
+          config_json: { '0': CAMERA_ROOM_IDS[0], '2': CAMERA_ROOM_IDS[1] },
+        },
+      ];
+      const r2 = await service.detect();
+      expect(r2.scanned).toBe(2);
+      expect(r2.created).toBe(2);
     });
   });
 });

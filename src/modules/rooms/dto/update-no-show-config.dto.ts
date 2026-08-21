@@ -79,4 +79,17 @@ export class UpdateNoShowConfigDto {
   @IsOptional()
   @IsBoolean()
   autoReleaseEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Số phút gia hạn khi host/organizer bấm "Tôi vẫn đến" (case chuyển snoozed, KHÔNG terminal — khác dismissed).',
+    minimum: 1,
+    maximum: 1440,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  confirmExtensionMinutes?: number;
 }

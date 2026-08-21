@@ -365,6 +365,12 @@ export function buildEarlyVacancyAlertEmail(params: {
 export function buildNoShowAlertEmail(params: {
   kind: 'warning' | 'released';
   roomId: string;
+  /**
+   * [Việc B, Hướng 2] Link xác nhận "Tôi vẫn đến" — CHỈ truyền khi case còn
+   * non-terminal tại thời điểm soạn email (kind='warning'). Với kind='released'
+   * phòng đã bị thu hồi, dismiss lúc này vô nghĩa nên KHÔNG chèn nút dù có truyền vào.
+   */
+  confirmLink?: string;
 }): string {
   const isWarning = params.kind === 'warning';
   const bodyHtml =
@@ -382,7 +388,10 @@ export function buildNoShowAlertEmail(params: {
       : renderCallout(
           'Phòng đã được mở lại cho người khác đặt sử dụng.',
           'danger',
-        ));
+        )) +
+    (isWarning && params.confirmLink
+      ? renderGuestLinkButton(params.confirmLink, 'Tôi vẫn đến — giữ phòng')
+      : '');
   return renderEmailLayout({
     heading: isWarning ? 'Cảnh báo no-show' : 'Phòng đã được giải phóng',
     bodyHtml,

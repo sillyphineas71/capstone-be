@@ -17,6 +17,8 @@ export interface UpdateNoShowConfigInput {
   /** [FIX 2026-08-09, Phần 2] ĐƠN VỊ GIÂY — khác 3 field trên (phút). */
   presenceNoiseToleranceSeconds?: number;
   autoReleaseEnabled?: boolean;
+  /** [Việc B, tái đánh giá 2026-08-21] Số phút gia hạn khi bấm "Tôi vẫn đến" (snoozed). */
+  confirmExtensionMinutes?: number;
 }
 
 interface ConfigKeyDef {
@@ -86,6 +88,16 @@ export class NoShowConfigService {
       def: 3,
       min: 0,
     },
+    /**
+     * [Việc B, tái đánh giá 2026-08-21] Số phút gia hạn khi host/organizer bấm "Tôi vẫn
+     * đến" (case chuyển 'snoozed', KHÔNG terminal) — đọc bởi NoShowService.snooze().
+     */
+    confirmExtensionMinutes: {
+      key: 'no_show.confirm_extension_minutes',
+      env: 'NO_SHOW_CONFIRM_EXTENSION_MINUTES',
+      def: 10,
+      min: 1,
+    },
   };
 
   constructor(
@@ -149,6 +161,7 @@ export class NoShowConfigService {
       autoReleaseGraceMinutes,
       presenceConfirmSeconds,
       presenceNoiseToleranceSeconds,
+      confirmExtensionMinutes,
       autoReleaseEnabled,
     ] = await Promise.all([
       this.getEffectiveValue('thresholdMinutes'),
@@ -156,6 +169,7 @@ export class NoShowConfigService {
       this.getEffectiveValue('autoReleaseGraceMinutes'),
       this.getEffectiveValue('presenceConfirmSeconds'),
       this.getEffectiveValue('presenceNoiseToleranceSeconds'),
+      this.getEffectiveValue('confirmExtensionMinutes'),
       this.getEffectiveBoolValue(),
     ]);
     return {
@@ -164,6 +178,7 @@ export class NoShowConfigService {
       autoReleaseGraceMinutes,
       presenceConfirmSeconds,
       presenceNoiseToleranceSeconds,
+      confirmExtensionMinutes,
       autoReleaseEnabled,
     };
   }
@@ -175,6 +190,7 @@ export class NoShowConfigService {
     autoReleaseGraceMinutes: number;
     presenceConfirmSeconds: number;
     presenceNoiseToleranceSeconds: number;
+    confirmExtensionMinutes: number;
     autoReleaseEnabled: boolean;
   }> {
     const all = await this.getAll();
@@ -184,6 +200,7 @@ export class NoShowConfigService {
       autoReleaseGraceMinutes: all.autoReleaseGraceMinutes.value,
       presenceConfirmSeconds: all.presenceConfirmSeconds.value,
       presenceNoiseToleranceSeconds: all.presenceNoiseToleranceSeconds.value,
+      confirmExtensionMinutes: all.confirmExtensionMinutes.value,
       autoReleaseEnabled: all.autoReleaseEnabled.value,
     };
   }

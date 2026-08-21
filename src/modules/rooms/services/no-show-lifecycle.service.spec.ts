@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { NoShowLifecycleService } from './no-show-lifecycle.service.js';
 import { NoShowConfigService } from './no-show-config.service.js';
+import { NoShowConfirmTokenService } from './no-show-confirm-token.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { NotificationsService } from '../../notifications/notifications.service.js';
 import { AuditLogsService } from '../../administration/services/audit-logs.service.js';
@@ -25,6 +26,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
   let notifMock: any;
   let auditMock: any;
   let liveMeetingMock: any;
+  let confirmTokenMock: any;
   let configValues: any;
   let cfg: Record<string, unknown>;
 
@@ -48,6 +50,14 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     };
     auditMock = { logAction: jest.fn().mockResolvedValue(undefined) };
     liveMeetingMock = { endMeeting: jest.fn().mockResolvedValue({}) };
+    confirmTokenMock = {
+      sign: jest.fn().mockResolvedValue('signed-token'),
+      buildLink: jest
+        .fn()
+        .mockImplementation(
+          (base: string, token: string) => `${base}/no-show-confirm/${token}`,
+        ),
+    };
     configValues = {
       thresholdMinutes: 15,
       warningGraceMinutes: 0,
@@ -70,6 +80,7 @@ describe('NoShowLifecycleService (NSL-001)', () => {
         },
         { provide: AuditLogsService, useValue: auditMock },
         { provide: LiveMeetingService, useValue: liveMeetingMock },
+        { provide: NoShowConfirmTokenService, useValue: confirmTokenMock },
       ],
     }).compile();
     service = module.get(NoShowLifecycleService);
@@ -211,6 +222,97 @@ describe('NoShowLifecycleService (NSL-001)', () => {
     expect(
       notifMock.enqueueEmailNotification.mock.calls[0][0].toEmails,
     ).toEqual(['a@x.com']);
+  });
+
+  // ── [Việc B, Hướng 2] Link "Tôi vẫn đến" trong email cảnh báo (kind='warning') ──
+  describe('[Việc B, Hướng 2] link xác nhận trong email no-show', () => {
+    it('warnBatch email ON (kind=warning) → ký token cho recipientUserIds[0], nhúng link vào emailHtml', async () => {
+      cfg = {
+        NO_SHOW_ALERT_EMAIL_ENABLED: true,
+        APP_URL: 'https://api.example.com',
+      };
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM no_show_cases nc') && sql.includes("'risk'"))
+          return Promise.resolve([
+            { id: 'c1', booking_id: 'b1', meeting_id: 'm1', room_id: 'r1' },
+          ]);
+        if (sql.includes('UPDATE no_show_cases'))
+          return Promise.resolve(ret([{ id: 'c1' }]));
+        if (sql.includes('FROM meetings')) return Promise.resolve(meetingRow);
+        if (sql.includes('FROM users'))
+          return Promise.resolve([{ email: 'a@x.com' }]);
+        return Promise.resolve([]);
+      });
+      await service.warnBatch();
+      expect(confirmTokenMock.sign).toHaveBeenCalledWith({
+        caseId: 'c1',
+        userId: 'u1', // recipientUserIds[0] — organizer trước, mirror thứ tự dedupe
+      });
+      expect(confirmTokenMock.buildLink).toHaveBeenCalledWith(
+        'https://api.example.com',
+        'signed-token',
+      );
+      const emailHtml =
+        notifMock.enqueueEmailNotification.mock.calls[0][0].emailHtml;
+      expect(String(emailHtml)).toContain(
+        'https://api.example.com/no-show-confirm/signed-token',
+      );
+    });
+
+    it('release() email ON (kind=released) → KHÔNG ký token, KHÔNG chèn link (case đã terminal, dismiss vô nghĩa)', async () => {
+      cfg = {
+        NO_SHOW_ALERT_EMAIL_ENABLED: true,
+        APP_URL: 'https://api.example.com',
+      };
+      // wireRelease({}) mặc định: case→{booking_id:'b1',meeting_id:'m1',room_id:'r1'},
+      // booking→[{id:'b1'}], usage→[{id:'us1'}] — khớp meetingRow (meeting_id='m1') có
+      // sẵn ở trên. CHỈ override dsMock (notifyNoShow dùng dsMock, KHÔNG dùng qrMock) để
+      // thêm nhánh 'FROM users' — không đụng qrMock (giữ nguyên transaction release()).
+      wireRelease({});
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM meetings')) return Promise.resolve(meetingRow);
+        if (sql.includes('FROM users'))
+          return Promise.resolve([{ email: 'a@x.com' }]);
+        return Promise.resolve([]);
+      });
+      await service.release({
+        caseId: 'c1',
+        actor: 'admin1',
+        reason: 'x',
+        mode: 'manual',
+      });
+      expect(confirmTokenMock.sign).not.toHaveBeenCalled();
+      expect(notifMock.enqueueEmailNotification).toHaveBeenCalledTimes(1);
+      const emailHtml =
+        notifMock.enqueueEmailNotification.mock.calls[0][0].emailHtml;
+      expect(String(emailHtml)).not.toContain('no-show-confirm');
+    });
+
+    it('ký token lỗi (best-effort) → KHÔNG làm hỏng email, vẫn enqueue email không có link', async () => {
+      cfg = {
+        NO_SHOW_ALERT_EMAIL_ENABLED: true,
+        APP_URL: 'https://api.example.com',
+      };
+      confirmTokenMock.sign.mockRejectedValue(new Error('sign failed'));
+      dsMock.manager.query.mockImplementation((sql: string) => {
+        if (sql.includes('FROM no_show_cases nc') && sql.includes("'risk'"))
+          return Promise.resolve([
+            { id: 'c1', booking_id: 'b1', meeting_id: 'm1', room_id: 'r1' },
+          ]);
+        if (sql.includes('UPDATE no_show_cases'))
+          return Promise.resolve(ret([{ id: 'c1' }]));
+        if (sql.includes('FROM meetings')) return Promise.resolve(meetingRow);
+        if (sql.includes('FROM users'))
+          return Promise.resolve([{ email: 'a@x.com' }]);
+        return Promise.resolve([]);
+      });
+      const r = await service.warnBatch();
+      expect(r.warned).toBe(1);
+      expect(notifMock.enqueueEmailNotification).toHaveBeenCalledTimes(1);
+      const emailHtml =
+        notifMock.enqueueEmailNotification.mock.calls[0][0].emailHtml;
+      expect(String(emailHtml)).not.toContain('no-show-confirm');
+    });
   });
 
   // ── §4 release (R2 guards) ──

@@ -237,7 +237,12 @@ export const envValidationSchema = Joi.object({
   // NSL-001 (#32/#33/#35): grace cảnh báo + grace auto-release (phút) + bật email cảnh báo.
   NO_SHOW_WARNING_GRACE_MINUTES: Joi.number().integer().min(0).default(0),
   NO_SHOW_AUTO_RELEASE_GRACE_MINUTES: Joi.number().integer().min(1).default(5),
+  // Việc B (tái đánh giá 2026-08-21): số phút gia hạn khi bấm "Tôi vẫn đến" (snoozed).
+  NO_SHOW_CONFIRM_EXTENSION_MINUTES: Joi.number().integer().min(1).default(10),
   NO_SHOW_ALERT_EMAIL_ENABLED: Joi.boolean().default(false),
+  // Việc B (Hướng 2): secret riêng ký link xác nhận "Tôi vẫn đến" trong email no-show —
+  // mirror GUEST_TOKEN_SECRET (min(16).required()), KHÁC hoàn toàn secret đó.
+  NO_SHOW_CONFIRM_LINK_SECRET: Joi.string().min(16).required(),
   // EVD-001 (#34/#48): ngưỡng early-vacancy (phút) + bật email cảnh báo trống sớm.
   EARLY_VACANCY_EMPTY_MINUTES: Joi.number().integer().min(1).default(10),
   EARLY_VACANCY_MIN_REMAINING_MINUTES: Joi.number()

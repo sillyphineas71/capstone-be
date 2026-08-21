@@ -8,6 +8,7 @@ import {
 import { DataSource } from 'typeorm';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { NoShowConfigService } from './no-show-config.service.js';
 
 interface MeetingPartyRow {
   organizer_id: string | null;
@@ -35,14 +36,17 @@ interface NoShowRow {
   resolution_status: string | null;
   note: string | null;
   evidence_json: Record<string, unknown> | null;
+  snooze_until: Date | string | null;
 }
 
 const RETURN_COLS = `id, booking_id, meeting_id, room_id, detection_status, detected_at,
-  warning_sent_at, released_at, resolved_by, resolution_status, note, evidence_json`;
+  warning_sent_at, released_at, resolved_by, resolution_status, note, evidence_json, snooze_until`;
 
 const TERMINAL_STATUSES = ['resolved', 'dismissed', 'released'];
 const ALLOWED_UPDATE_TARGETS = ['confirmed', 'dismissed', 'resolved'];
 const SYSTEM_OWNED_STATUSES = ['warning_sent', 'released'];
+/** [Việc B, tái đánh giá 2026-08-21] Nguồn hợp lệ để chuyển 'snoozed' — mirror dismissed cũ. */
+const SNOOZE_SOURCE_STATUSES = ['risk', 'warning_sent'];
 
 /**
  * NoShowService (NSC-001 / UC-41+42) — tạo (idempotent) + cập nhật no-show case.
@@ -58,6 +62,7 @@ export class NoShowService {
     private readonly dataSource: DataSource,
     private readonly websocketService: WebsocketService,
     private readonly authzRepo: AuthzReadRepository,
+    private readonly noShowConfigService: NoShowConfigService,
   ) {}
 
   /**
@@ -282,6 +287,107 @@ export class NoShowService {
   }
 
   /**
+   * [Việc B, tái đánh giá 2026-08-21] "Tôi vẫn đến" — case chuyển 'snoozed' (KHÔNG
+   * terminal, khác 'dismissed' cũ), gia hạn `snooze_until = now() + confirmExtensionMinutes`.
+   * Dùng chung 1 đường (không tách route riêng) cho cả 3 nơi gọi: `InMeetingRoom.jsx`,
+   * `NotificationBell.jsx` (qua PATCH /no-show-cases/:id — xem no-show.controller.ts),
+   * và `NoShowConfirmController` (Việc B Hướng 2, in-process).
+   *
+   * Race 2 request gần như đồng thời (app + email cùng lúc): atomic
+   * `UPDATE ... WHERE detection_status IN ('risk','warning_sent') RETURNING` — Postgres khoá
+   * row trong lúc UPDATE, request thứ 2 chờ request thứ 1 commit rồi mới re-evaluate WHERE
+   * trên row ĐÃ 'snoozed' → 0 row → tự nhiên rơi vào nhánh idempotent bên dưới, KHÔNG gia
+   * hạn thêm lần 2.
+   */
+  async snooze(
+    id: string,
+    userId: string | null,
+    note?: string,
+  ): Promise<Record<string, unknown>> {
+    const rows: NoShowRow[] = await this.dataSource.manager.query(
+      `SELECT ${RETURN_COLS} FROM no_show_cases WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+    const current = rows?.[0];
+    if (!current) {
+      throw new NotFoundException({
+        code: 'NO_SHOW_CASE_NOT_FOUND',
+        message: 'No-show case not found.',
+      });
+    }
+
+    // Terminal thật (dismissed/released/resolved) → chặn y hệt update() — KHÔNG cho
+    // "hồi sinh" case đã chốt bằng đường snooze. 'snoozed' KHÔNG nằm trong danh sách
+    // này (không terminal) nên case đang snoozed lọt qua tới nhánh idempotent dưới.
+    if (TERMINAL_STATUSES.includes(current.detection_status)) {
+      throw new BadRequestException({
+        code: 'INVALID_NO_SHOW_TRANSITION',
+        message: 'No-show case is already finalized.',
+      });
+    }
+
+    await this.assertAuthorized(
+      current,
+      { detectionStatus: 'snoozed' },
+      userId,
+    );
+
+    // Idempotent: đã snoozed từ trước (bấm lại trong app/email trong lúc còn hạn, hoặc
+    // vừa thua race ở nhánh dưới) → trả nguyên trạng, KHÔNG gia hạn thêm.
+    if (current.detection_status === 'snoozed') {
+      return this.toResponse(current, { alreadySnoozed: true });
+    }
+
+    if (!SNOOZE_SOURCE_STATUSES.includes(current.detection_status)) {
+      throw new BadRequestException({
+        code: 'INVALID_NO_SHOW_TRANSITION',
+        message: 'No-show case is not eligible for snooze.',
+      });
+    }
+
+    const { confirmExtensionMinutes } =
+      await this.noShowConfigService.getValues();
+
+    const updated: unknown = await this.dataSource.manager.query(
+      `UPDATE no_show_cases SET
+         detection_status = 'snoozed',
+         snooze_until = now() + ($2::int * interval '1 minute'),
+         note = COALESCE($3, note),
+         resolved_by = COALESCE($4, resolved_by)
+       WHERE id = $1 AND detection_status = ANY($5)
+       RETURNING ${RETURN_COLS}`,
+      [
+        id,
+        confirmExtensionMinutes,
+        note ?? null,
+        userId,
+        SNOOZE_SOURCE_STATUSES,
+      ],
+    );
+    const updatedRows = this.rowsOf(updated);
+    if (updatedRows.length === 0) {
+      // Thua race: trạng thái đổi giữa SELECT và UPDATE — đọc lại để trả đúng nhánh.
+      const freshRows: NoShowRow[] = await this.dataSource.manager.query(
+        `SELECT ${RETURN_COLS} FROM no_show_cases WHERE id = $1 LIMIT 1`,
+        [id],
+      );
+      const fresh = freshRows[0];
+      if (fresh?.detection_status === 'snoozed') {
+        return this.toResponse(fresh, { alreadySnoozed: true });
+      }
+      throw new BadRequestException({
+        code: 'INVALID_NO_SHOW_TRANSITION',
+        message: 'No-show case is already finalized.',
+      });
+    }
+
+    return this.toResponse(this.firstRow(updated), {
+      alreadySnoozed: false,
+      extensionMinutes: confirmExtensionMinutes,
+    });
+  }
+
+  /**
    * [FIX 2026-08-09, Phần 5] Authorization cho update() — mirror ĐÚNG check
    * PermissionsGuard từng làm (cùng repo `AuthzReadRepository.getEffectiveRolesAndPermissions`,
    * cùng shape ForbiddenException) cho MỌI transition — hành vi cũ giữ nguyên 100% khi user
@@ -291,6 +397,10 @@ export class NoShowService {
    * 'dismissed'` (KHÔNG áp dụng cho 'confirmed'/'resolved') VÀ userId khớp organizer_id
    * HOẶC host_id của meeting liên quan (join qua current.meeting_id → meetings, mirror
    * ĐÚNG pattern notifyNoShow() ở no-show-lifecycle.service.ts:352-354).
+   *
+   * [Việc B, tái đánh giá 2026-08-21] Lối thoát hẹp này MỞ RỘNG thêm 'snoozed' —
+   * cùng điều kiện sở hữu (organizer/host), khác 'dismissed' chỉ ở việc case KHÔNG
+   * terminal ngay (xem snooze()).
    */
   private async assertAuthorized(
     current: NoShowRow,
@@ -310,7 +420,10 @@ export class NoShowService {
       await this.authzRepo.getEffectiveRolesAndPermissions(userId);
     if (permissions.includes('room.noshow.update')) return;
 
-    if (dto.detectionStatus === 'dismissed') {
+    if (
+      dto.detectionStatus === 'dismissed' ||
+      dto.detectionStatus === 'snoozed'
+    ) {
       const meetingRows: MeetingPartyRow[] =
         await this.dataSource.manager.query(
           `SELECT organizer_id, host_id FROM meetings WHERE id = $1 LIMIT 1`,
@@ -338,7 +451,20 @@ export class NoShowService {
     return result as NoShowRow;
   }
 
-  private toResponse(row: NoShowRow): Record<string, unknown> {
+  /** Mirror NoShowLifecycleService#rowsOf — chuẩn hoá `[rows, affectedCount]` → `rows`. */
+  private rowsOf<T>(result: unknown): T[] {
+    if (Array.isArray(result)) {
+      const head: unknown = result[0];
+      if (Array.isArray(head)) return head as T[];
+      return result as T[];
+    }
+    return [];
+  }
+
+  private toResponse(
+    row: NoShowRow,
+    snoozeMeta?: { alreadySnoozed: boolean; extensionMinutes?: number },
+  ): Record<string, unknown> {
     return {
       id: row.id,
       bookingId: row.booking_id,
@@ -352,6 +478,11 @@ export class NoShowService {
       resolutionStatus: row.resolution_status,
       note: row.note,
       evidenceJson: row.evidence_json,
+      snoozeUntil: row.snooze_until,
+      ...(snoozeMeta ? { alreadySnoozed: snoozeMeta.alreadySnoozed } : {}),
+      ...(snoozeMeta?.extensionMinutes !== undefined
+        ? { extensionMinutes: snoozeMeta.extensionMinutes }
+        : {}),
     };
   }
 }

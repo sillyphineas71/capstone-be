@@ -83,16 +83,21 @@ export class NoShowController {
   // UC-42: cập nhật no-show case (user).
   // [FIX 2026-08-09, Phần 5 — R5.1] KHÔNG dùng PermissionsGuard/@RequirePermissions ở
   // route này (khác mọi route khác trong controller) — authorization đã chuyển vào
-  // NoShowService.update() để có đủ context (dto.detectionStatus + meeting ownership)
-  // cho host/organizer tự dismiss case CỦA CHÍNH MÌNH mà không cần quyền admin rộng.
-  // Guard dùng chung KHÔNG bị đụng, mọi route khác vẫn y hệt trước.
+  // NoShowService.update()/snooze() để có đủ context (dto.detectionStatus + meeting
+  // ownership) cho host/organizer tự dismiss/snooze case CỦA CHÍNH MÌNH mà không cần
+  // quyền admin rộng. Guard dùng chung KHÔNG bị đụng, mọi route khác vẫn y hệt trước.
+  //
+  // [Việc B, tái đánh giá 2026-08-21] `detectionStatus:'snoozed'` ("Tôi vẫn đến") tách
+  // riêng qua `NoShowService.snooze()` (KHÔNG qua update() — state machine khác hẳn:
+  // không terminal, atomic + idempotent) — 'dismissed' ("Bỏ qua" tay của admin) VẪN đi
+  // update() y hệt cũ, KHÔNG đổi.
   @Patch('no-show-cases/:id')
   @HttpCode(200)
   @UseGuards(JwtAuthGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @ApiOperation({
     summary:
-      'Cập nhật 1 case no-show (user xử lý) — host/organizer được tự dismiss case của cuộc họp mình, còn lại cần quyền room.noshow.update',
+      'Cập nhật 1 case no-show (user xử lý) — host/organizer được tự dismiss/snooze case của cuộc họp mình, còn lại cần quyền room.noshow.update',
   })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -100,6 +105,14 @@ export class NoShowController {
     @Req() req: any,
   ) {
     const userId = req.user?.userId || req.user?.sub || req.user?.id || null;
+    if (dto.detectionStatus === 'snoozed') {
+      const data = await this.noShowService.snooze(id, userId, dto.note);
+      return {
+        success: true,
+        message: 'No-show case snoozed',
+        data,
+      };
+    }
     const data = await this.noShowService.update(id, dto, userId);
     return {
       success: true,

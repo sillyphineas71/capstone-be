@@ -25,6 +25,7 @@ import { RoomStatusService } from './services/room-status.service.js';
 import { RoomSearchService } from './services/room-search.service.js';
 import { RoomDeleteNotificationProcessor } from './services/room-delete-notification.processor.js';
 import { NoShowController } from './controllers/no-show.controller.js';
+import { NoShowConfirmController } from './controllers/no-show-confirm.controller.js';
 import { NoShowConfigController } from './controllers/no-show-config.controller.js';
 import { EarlyVacancyConfigController } from './controllers/early-vacancy-config.controller.js';
 import { RoomBookingsController } from './controllers/room-bookings.controller.js';
@@ -33,6 +34,7 @@ import { NoShowService } from './services/no-show.service.js';
 import { NoShowDetectionService } from './services/no-show-detection.service.js';
 import { NoShowConfigService } from './services/no-show-config.service.js';
 import { NoShowLifecycleService } from './services/no-show-lifecycle.service.js';
+import { NoShowConfirmTokenService } from './services/no-show-confirm-token.service.js';
 import { EarlyVacancyService } from './services/early-vacancy.service.js';
 import { EarlyVacancyConfigService } from './services/early-vacancy-config.service.js';
 
@@ -67,6 +69,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
   controllers: [
     RoomsController,
     NoShowController,
+    NoShowConfirmController,
     NoShowConfigController,
     EarlyVacancyConfigController,
     RoomBookingsController,
@@ -80,6 +83,7 @@ import { EarlyVacancyConfigService } from './services/early-vacancy-config.servi
     NoShowDetectionService,
     NoShowConfigService,
     NoShowLifecycleService,
+    NoShowConfirmTokenService,
     EarlyVacancyService,
     EarlyVacancyConfigService,
     RoomBookingsService,

@@ -17,6 +17,8 @@ interface RoomStatusRow {
   reserved_start_time: Date | string | null;
   reserved_end_time: Date | string | null;
   no_show_status: string | null;
+  /** [Việc B, tái đánh giá 2026-08-21] Chỉ có giá trị khi no_show_status='snoozed'. */
+  no_show_snooze_until: Date | string | null;
 }
 
 export interface RoomStatusListItem {
@@ -33,6 +35,8 @@ export interface RoomStatusListItem {
   occupancyCount: number | null;
   /** detection_status của no_show_case mới nhất thuộc booking đang diễn ra; null nếu không có. */
   noShowStatus: string | null;
+  /** [Việc B, tái đánh giá 2026-08-21] Mốc hết hạn gia hạn "Tôi vẫn đến" — chỉ có giá trị khi noShowStatus='snoozed'. */
+  noShowSnoozeUntil: Date | string | null;
   lastPresenceAt: Date | string | null;
 }
 
@@ -52,6 +56,8 @@ export interface RoomStatusDetail {
   noShowCase: null;
   /** detection_status của no_show_case mới nhất thuộc booking đang diễn ra; null nếu không có. */
   noShowStatus: string | null;
+  /** [Việc B, tái đánh giá 2026-08-21] Mốc hết hạn gia hạn "Tôi vẫn đến" — chỉ có giá trị khi noShowStatus='snoozed'. */
+  noShowSnoozeUntil: Date | string | null;
   releaseHistory: never[];
   lastPresenceAt: Date | string | null;
   occupancyCount: number | null;
@@ -104,7 +110,7 @@ export class RoomStatusService {
       ORDER BY b.reserved_start_time ASC LIMIT 1
     ) cb ON true
     LEFT JOIN LATERAL (
-      SELECT ns.detection_status
+      SELECT ns.detection_status, ns.snooze_until
       FROM no_show_cases ns
       WHERE ns.booking_id = cb.booking_id
       ORDER BY ns.detected_at DESC LIMIT 1
@@ -116,7 +122,7 @@ export class RoomStatusService {
     oc.occupancy_count, lp.event_time AS last_presence_at,
     cb.booking_id, cb.meeting_id, cb.title, cb.host_name,
     cb.reserved_start_time, cb.reserved_end_time,
-    nsc.detection_status AS no_show_status`;
+    nsc.detection_status AS no_show_status, nsc.snooze_until AS no_show_snooze_until`;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -201,6 +207,7 @@ export class RoomStatusService {
         : null,
       occupancyCount: row.occupancy_count ?? null,
       noShowStatus: row.no_show_status ?? null,
+      noShowSnoozeUntil: row.no_show_snooze_until ?? null,
       lastPresenceAt: row.last_presence_at ?? null,
     };
   }
@@ -222,6 +229,7 @@ export class RoomStatusService {
         : null,
       noShowCase: null,
       noShowStatus: row.no_show_status ?? null,
+      noShowSnoozeUntil: row.no_show_snooze_until ?? null,
       releaseHistory: [],
       lastPresenceAt: row.last_presence_at ?? null,
       occupancyCount: row.occupancy_count ?? null,

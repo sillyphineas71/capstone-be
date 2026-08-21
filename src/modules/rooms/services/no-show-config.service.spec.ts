@@ -110,7 +110,7 @@ describe('NoShowConfigService (NSL-001 #35)', () => {
     );
   });
 
-  it('getAll trả 6 key (5 số + 1 bool) + source [FIX Phần 2: thêm presenceConfirmSeconds/presenceNoiseToleranceSeconds]', async () => {
+  it('getAll trả 7 key (6 số + 1 bool) + source [Việc B tái đánh giá: thêm confirmExtensionMinutes]', async () => {
     repoMock.findOne.mockResolvedValue(null);
     const all = await service.getAll();
     expect(Object.keys(all)).toEqual([
@@ -119,9 +119,48 @@ describe('NoShowConfigService (NSL-001 #35)', () => {
       'autoReleaseGraceMinutes',
       'presenceConfirmSeconds',
       'presenceNoiseToleranceSeconds',
+      'confirmExtensionMinutes',
       'autoReleaseEnabled',
     ]);
     expect(all.warningGraceMinutes).toEqual({ value: 0, source: 'default' });
+  });
+
+  // ── [Việc B, tái đánh giá 2026-08-21] confirmExtensionMinutes (snoozed) ──
+  it('confirmExtensionMinutes: default=10 phút khi không row + không env', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    const r = await service.getEffectiveValue('confirmExtensionMinutes');
+    expect(r).toEqual({ value: 10, source: 'default' });
+  });
+
+  it('confirmExtensionMinutes: source=system_configs khi có row hợp lệ', async () => {
+    repoMock.findOne.mockResolvedValue({ configValue: '15' });
+    const r = await service.getEffectiveValue('confirmExtensionMinutes');
+    expect(r).toEqual({ value: 15, source: 'system_configs' });
+  });
+
+  it('update: confirmExtensionMinutes → upsert key no_show.confirm_extension_minutes', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    await service.update({ confirmExtensionMinutes: 20 }, 'admin1');
+    expect(repoMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configKey: 'no_show.confirm_extension_minutes',
+        configValue: '20',
+        valueType: 'number',
+        configGroup: 'no_show',
+      }),
+    );
+  });
+
+  it('update: confirmExtensionMinutes < min(1) → BadRequestException', async () => {
+    await expect(
+      service.update({ confirmExtensionMinutes: 0 }, 'admin1'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('getValues() trả confirmExtensionMinutes dạng number gọn', async () => {
+    repoMock.findOne.mockResolvedValue(null);
+    const values = await service.getValues();
+    expect(values.confirmExtensionMinutes).toBe(10);
   });
 
   // ── Phần 2: presenceConfirmSeconds/presenceNoiseToleranceSeconds (đơn vị GIÂY) ──

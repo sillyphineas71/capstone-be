@@ -8,6 +8,12 @@ interface CandidateRow {
   meeting_id: string;
   room_id: string;
 }
+interface ChannelRoomMapRow {
+  config_json: Record<string, unknown> | null;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * NoShowDetectionService (NSC-001) — quét booking quá ngưỡng chưa có presence → tạo no-show case.
@@ -46,6 +52,21 @@ interface CandidateRow {
  * tái dùng đúng pattern đã có ở `reconcilePendingConfirmations()`
  * (occupancy-persistence.service.ts) — chỉ tính occupancy event xảy ra SAU khi
  * booking đang xét đã bắt đầu, loại event của phiên/booking khác trước đó.
+ *
+ * [FIX 2026-08-21, Việc A] Phòng KHÔNG được gán channel camera thì KHÔNG xét no-show
+ * (yêu cầu nghiệp vụ Harry). Nguồn "phòng có camera" DUY NHẤT xác nhận qua recon DB
+ * thật là `system_configs['ivss.channel_room_map']` (config_json {channelId: room_uuid})
+ * — đúng bảng/đúng key mà `ivss-occupancy-ingest.service.ts#resolveRoom()` dùng để route
+ * sự kiện camera vào phòng, và cũng là nơi DUY NHẤT UI System Settings (màn "Channel Maps")
+ * ghi vào (qua ChannelMapConfigController, PATCH /system-configurations/channel-maps).
+ * `iot_devices.device_type='room_camera'` KHÔNG dùng làm nguồn — recon DB thật
+ * (2026-08-21) cho thấy 2/3 phòng có record `iot_devices` loại này lại KHÔNG có trong
+ * `ivss.channel_room_map` hiện hành (thiết bị đã đăng ký nhưng channel chưa/không còn
+ * trỏ tới phòng đó) — dùng iot_devices sẽ include nhầm phòng không hề nhận được sự kiện
+ * occupancy thật nào, làm hỏng đúng mục đích của fix này.
+ * Đọc map lỗi (DB down) hoặc map rỗng (chưa phòng nào gán camera) → fail-safe: bỏ qua
+ * CẢ lượt quét (KHÔNG throw ra cron), scanned=created=0 — tick sau (mỗi phút) tự đọc lại,
+ * không cache/ghi nhớ vĩnh viễn.
  */
 @Injectable()
 export class NoShowDetectionService {
@@ -65,11 +86,27 @@ export class NoShowDetectionService {
   async detect(): Promise<{ scanned: number; created: number }> {
     const threshold = await this.readThreshold();
 
+    let cameraRoomIds: string[];
+    try {
+      cameraRoomIds = await this.getCameraRoomIds();
+    } catch (e) {
+      this.logger.error(
+        `read camera-room map failed — skip toàn bộ lượt quét (fail-safe, tick sau tự retry): ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+      return { scanned: 0, created: 0 };
+    }
+    if (cameraRoomIds.length === 0) {
+      return { scanned: 0, created: 0 };
+    }
+
     const candidates = await this.dataSource.manager.query(
       `SELECT b.id AS booking_id, b.meeting_id, b.room_id
        FROM room_bookings b
        LEFT JOIN room_booking_usages u ON u.booking_id = b.id
        WHERE b.status IN ('approved','active')
+         AND b.room_id = ANY($3::uuid[])
          AND b.reserved_start_time + ($1::int * interval '1 minute') < now()
          AND u.first_presence_at IS NULL
          AND NOT EXISTS (SELECT 1 FROM no_show_cases nc WHERE nc.booking_id = b.id)
@@ -81,7 +118,11 @@ export class NoShowDetectionService {
               AND re.event_time >= b.reserved_start_time
               AND re.event_time >= now() - ($2::int * interval '1 second')
          )`,
-      [threshold, NoShowDetectionService.RECONCILE_GRACE_SECONDS],
+      [
+        threshold,
+        NoShowDetectionService.RECONCILE_GRACE_SECONDS,
+        cameraRoomIds,
+      ],
     );
 
     let created = 0;
@@ -107,6 +148,26 @@ export class NoShowDetectionService {
     }
 
     return { scanned: candidates.length, created };
+  }
+
+  /**
+   * Danh sách room_id "có camera" — DUY NHẤT nguồn `ivss.channel_room_map` (xem header,
+   * Việc A). Lỗi đọc DB được ĐỂ TRỒI lên `detect()` (không catch ở đây) để `detect()` áp
+   * fail-safe skip cả lượt quét, thay vì âm thầm coi "không phòng nào có camera".
+   */
+  private async getCameraRoomIds(): Promise<string[]> {
+    const rows: ChannelRoomMapRow[] = await this.dataSource.manager.query(
+      `SELECT config_json FROM system_configs
+       WHERE config_key = 'ivss.channel_room_map' AND is_active = true LIMIT 1`,
+    );
+    const raw = rows[0]?.config_json;
+    const ids = new Set<string>();
+    if (raw && typeof raw === 'object') {
+      for (const v of Object.values(raw)) {
+        if (typeof v === 'string' && UUID_RE.test(v)) ids.add(v);
+      }
+    }
+    return [...ids];
   }
 
   /** Precedence (NC-2): system_configs[no_show.threshold_minutes] → env → default 15. */

@@ -22,6 +22,7 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     reserved_start_time: '2026-06-16T08:00:00Z',
     reserved_end_time: '2026-06-16T10:00:00Z',
     no_show_status: null,
+    no_show_snooze_until: null,
     ...over,
   });
 
@@ -53,6 +54,7 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
       },
       occupancyCount: 5,
       noShowStatus: null,
+      noShowSnoozeUntil: null,
       lastPresenceAt: '2026-06-16T09:00:00Z',
     });
     const sql = String(dsMock.manager.query.mock.calls[0][0]);
@@ -125,6 +127,7 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
       },
       noShowCase: null,
       noShowStatus: null,
+      noShowSnoozeUntil: null,
       releaseHistory: [],
       lastPresenceAt: '2026-06-16T09:00:00Z',
       occupancyCount: 5,
@@ -171,6 +174,39 @@ describe('RoomStatusService (RMS-001 / UC-36+38)', () => {
     const r = await service.getRoomStatus('r1');
     expect(r.noShowStatus).toBe('released');
     expect(r.noShowCase).toBeNull();
+  });
+
+  // ─── [Việc B, tái đánh giá 2026-08-21] noShowSnoozeUntil passthrough ───
+  it('list: noShowStatus=snoozed → noShowSnoozeUntil lấy từ nsc.snooze_until', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({
+        no_show_status: 'snoozed',
+        no_show_snooze_until: '2026-08-21T10:15:00Z',
+      }),
+    ]);
+    const r = await service.getRealtimeStatus({});
+    expect(r[0].noShowStatus).toBe('snoozed');
+    expect(r[0].noShowSnoozeUntil).toBe('2026-08-21T10:15:00Z');
+  });
+
+  it('list: SQL SELECT_COLS có nsc.snooze_until AS no_show_snooze_until', async () => {
+    dsMock.manager.query.mockResolvedValue([]);
+    await service.getRealtimeStatus({});
+    const sql = String(dsMock.manager.query.mock.calls[0][0]);
+    expect(sql).toContain('nsc.snooze_until AS no_show_snooze_until');
+    expect(sql).toContain('SELECT ns.detection_status, ns.snooze_until');
+  });
+
+  it('detail: noShowStatus=snoozed → noShowSnoozeUntil có giá trị thật', async () => {
+    dsMock.manager.query.mockResolvedValue([
+      row({
+        no_show_status: 'snoozed',
+        no_show_snooze_until: '2026-08-21T10:15:00Z',
+      }),
+    ]);
+    const r = await service.getRoomStatus('r1');
+    expect(r.noShowStatus).toBe('snoozed');
+    expect(r.noShowSnoozeUntil).toBe('2026-08-21T10:15:00Z');
   });
 
   it('detail: 404 ROOM_NOT_FOUND khi không tồn tại/soft-deleted', async () => {

@@ -9,18 +9,21 @@ import {
 import { NoShowService } from './no-show.service.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { AuthzReadRepository } from '../../auth/repositories/authz-read.repository.js';
+import { NoShowConfigService } from './no-show-config.service.js';
 
 describe('NoShowService (NSC-001 / UC-41+42)', () => {
   let service: NoShowService;
   let dsMock: any;
   let wsMock: any;
   let authzMock: any;
+  let configMock: any;
   let insertRows: any[];
   let existingRows: any[];
   let currentRows: any[];
   let updatedRows: any[];
   let meetingRows: any[];
   let permissions: string[];
+  let confirmExtensionMinutes: number;
 
   const row = (over: any = {}) => ({
     id: 'nsc-1',
@@ -35,6 +38,7 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     resolution_status: null,
     note: null,
     evidence_json: { threshold: 15 },
+    snooze_until: null,
     ...over,
   });
 
@@ -48,6 +52,7 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     // đi qua nhánh permission-cũ, KHÔNG âm thầm rơi vào nhánh ownership mới.
     permissions = ['room.noshow.update'];
     meetingRows = [{ organizer_id: 'organizer-1', host_id: 'host-1' }];
+    confirmExtensionMinutes = 10;
     dsMock = {
       manager: {
         query: jest.fn().mockImplementation((sql: string) => {
@@ -70,6 +75,11 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
         .fn()
         .mockImplementation(() => Promise.resolve({ roles: [], permissions })),
     };
+    configMock = {
+      getValues: jest
+        .fn()
+        .mockImplementation(() => Promise.resolve({ confirmExtensionMinutes })),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -77,6 +87,7 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
         { provide: DataSource, useValue: dsMock },
         { provide: WebsocketService, useValue: wsMock },
         { provide: AuthzReadRepository, useValue: authzMock },
+        { provide: NoShowConfigService, useValue: configMock },
       ],
     }).compile();
     service = module.get(NoShowService);
@@ -350,5 +361,196 @@ describe('NoShowService (NSC-001 / UC-41+42)', () => {
     );
     expect(String(dataCall[0])).toContain('n.room_id = $1');
     expect(dataCall[1]).toContain('rm-9');
+  });
+
+  // ══ [Việc B, tái đánh giá 2026-08-21] snooze() — "Tôi vẫn đến" gia hạn, KHÔNG terminal ══
+  describe('snooze() — Việc B tái đánh giá 2026-08-21', () => {
+    it('từ risk → UPDATE detection_status=snoozed, bind confirmExtensionMinutes từ config, trả extensionMinutes + alreadySnoozed=false', async () => {
+      currentRows = [row({ detection_status: 'risk' })];
+      updatedRows = [
+        row({
+          detection_status: 'snoozed',
+          snooze_until: '2026-08-21T11:00:00Z',
+          resolved_by: 'user-1',
+        }),
+      ];
+      const r = await service.snooze('nsc-1', 'user-1');
+      expect(r.detectionStatus).toBe('snoozed');
+      expect(r.snoozeUntil).toBe('2026-08-21T11:00:00Z');
+      expect(r.alreadySnoozed).toBe(false);
+      expect(r.extensionMinutes).toBe(10);
+
+      const updateCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('UPDATE no_show_cases'),
+      );
+      expect(String(updateCall[0])).toContain("detection_status = 'snoozed'");
+      expect(String(updateCall[0])).toContain(
+        "snooze_until = now() + ($2::int * interval '1 minute')",
+      );
+      expect(updateCall[1]).toEqual([
+        'nsc-1',
+        10,
+        null,
+        'user-1',
+        ['risk', 'warning_sent'],
+      ]);
+    });
+
+    it('từ warning_sent → cũng cho phép snooze (nguồn hợp lệ thứ 2)', async () => {
+      currentRows = [row({ detection_status: 'warning_sent' })];
+      updatedRows = [row({ detection_status: 'snoozed' })];
+      await expect(service.snooze('nsc-1', 'user-1')).resolves.toMatchObject({
+        detectionStatus: 'snoozed',
+      });
+    });
+
+    it('đọc confirmExtensionMinutes từ NoShowConfigService (không hard-code) — đổi config → đổi bind param', async () => {
+      confirmExtensionMinutes = 25;
+      currentRows = [row({ detection_status: 'risk' })];
+      updatedRows = [row({ detection_status: 'snoozed' })];
+      await service.snooze('nsc-1', 'user-1');
+      const updateCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('UPDATE no_show_cases'),
+      );
+      expect(updateCall[1][1]).toBe(25);
+      expect(configMock.getValues).toHaveBeenCalledTimes(1);
+    });
+
+    it('idempotent: case đã snoozed từ trước → trả alreadySnoozed=true NGAY, KHÔNG gọi UPDATE (không gia hạn thêm)', async () => {
+      currentRows = [
+        row({
+          detection_status: 'snoozed',
+          snooze_until: '2026-08-21T11:00:00Z',
+        }),
+      ];
+      const r = await service.snooze('nsc-1', 'user-1');
+      expect(r.alreadySnoozed).toBe(true);
+      expect(r.snoozeUntil).toBe('2026-08-21T11:00:00Z');
+      expect(
+        dsMock.manager.query.mock.calls.some((c: any[]) =>
+          String(c[0]).includes('UPDATE no_show_cases'),
+        ),
+      ).toBe(false);
+    });
+
+    it('race: UPDATE thua (0 row, request khác vừa snooze trước) → re-fetch thấy đã snoozed → alreadySnoozed=true, KHÔNG throw lỗi', async () => {
+      let selectCount = 0;
+      dsMock.manager.query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE no_show_cases')) return Promise.resolve([]);
+        if (sql.includes('FROM meetings')) return Promise.resolve(meetingRows);
+        if (sql.includes('WHERE id =')) {
+          selectCount++;
+          // Lượt 1 (SELECT ban đầu): risk — đủ điều kiện thử snooze.
+          // Lượt 2 (re-fetch sau khi UPDATE thua race): đã snoozed bởi request khác.
+          return Promise.resolve(
+            selectCount === 1
+              ? [row({ detection_status: 'risk' })]
+              : [
+                  row({
+                    detection_status: 'snoozed',
+                    snooze_until: '2026-08-21T11:00:00Z',
+                  }),
+                ],
+          );
+        }
+        return Promise.resolve([]);
+      });
+      const r = await service.snooze('nsc-1', 'user-1');
+      expect(r.alreadySnoozed).toBe(true);
+      expect(r.snoozeUntil).toBe('2026-08-21T11:00:00Z');
+      expect(selectCount).toBe(2);
+    });
+
+    it('race: UPDATE thua (0 row) NHƯNG re-fetch thấy case đã terminal thật (vd released bởi auto-release) → 400 INVALID_NO_SHOW_TRANSITION', async () => {
+      let selectCount = 0;
+      dsMock.manager.query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('UPDATE no_show_cases')) return Promise.resolve([]);
+        if (sql.includes('FROM meetings')) return Promise.resolve(meetingRows);
+        if (sql.includes('WHERE id =')) {
+          selectCount++;
+          return Promise.resolve(
+            selectCount === 1
+              ? [row({ detection_status: 'warning_sent' })]
+              : [row({ detection_status: 'released' })],
+          );
+        }
+        return Promise.resolve([]);
+      });
+      await expect(service.snooze('nsc-1', 'user-1')).rejects.toMatchObject({
+        response: { code: 'INVALID_NO_SHOW_TRANSITION' },
+      });
+    });
+
+    it('case đã terminal thật (dismissed/released/resolved) NGAY từ đầu → 400, KHÔNG gọi UPDATE', async () => {
+      currentRows = [row({ detection_status: 'dismissed' })];
+      await expect(service.snooze('nsc-1', 'user-1')).rejects.toMatchObject({
+        response: { code: 'INVALID_NO_SHOW_TRANSITION' },
+      });
+      expect(
+        dsMock.manager.query.mock.calls.some((c: any[]) =>
+          String(c[0]).includes('UPDATE no_show_cases'),
+        ),
+      ).toBe(false);
+    });
+
+    it('case không terminal nhưng cũng không phải nguồn hợp lệ (vd confirmed) → 400 INVALID_NO_SHOW_TRANSITION', async () => {
+      currentRows = [row({ detection_status: 'confirmed' })];
+      await expect(service.snooze('nsc-1', 'user-1')).rejects.toMatchObject({
+        response: { code: 'INVALID_NO_SHOW_TRANSITION' },
+      });
+    });
+
+    it('404 khi case không tồn tại', async () => {
+      currentRows = [];
+      await expect(service.snooze('nsc-1', 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    // ── Authorization: mirror ĐÚNG dismiss cũ (organizer/host hoặc room.noshow.update) ──
+    it('user CÓ room.noshow.update → snooze bất kỳ ai, không cần ownership', async () => {
+      permissions = ['room.noshow.update'];
+      currentRows = [row({ detection_status: 'risk' })];
+      updatedRows = [row({ detection_status: 'snoozed' })];
+      await expect(
+        service.snooze('nsc-1', 'someone-with-permission'),
+      ).resolves.toMatchObject({ detectionStatus: 'snoozed' });
+    });
+
+    it('user KHÔNG có quyền, LÀ organizer → cho phép snooze', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'user-1', host_id: 'other-host' }];
+      currentRows = [row({ detection_status: 'risk' })];
+      updatedRows = [row({ detection_status: 'snoozed' })];
+      await expect(service.snooze('nsc-1', 'user-1')).resolves.toMatchObject({
+        detectionStatus: 'snoozed',
+      });
+    });
+
+    it('user KHÔNG có quyền, LÀ host → cho phép snooze', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'other-organizer', host_id: 'user-1' }];
+      currentRows = [row({ detection_status: 'risk' })];
+      updatedRows = [row({ detection_status: 'snoozed' })];
+      await expect(service.snooze('nsc-1', 'user-1')).resolves.toMatchObject({
+        detectionStatus: 'snoozed',
+      });
+    });
+
+    it('user KHÔNG có quyền, KHÔNG phải organizer/host → 403', async () => {
+      permissions = [];
+      meetingRows = [{ organizer_id: 'other-1', host_id: 'other-2' }];
+      currentRows = [row({ detection_status: 'risk' })];
+      await expect(service.snooze('nsc-1', 'user-1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+
+    it('userId null → 403 (chặn sớm, không query thêm)', async () => {
+      currentRows = [row({ detection_status: 'risk' })];
+      await expect(service.snooze('nsc-1', null)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
   });
 });
