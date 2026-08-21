@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Post,
@@ -17,6 +18,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { NoShowService } from '../services/no-show.service.js';
+import { NoShowDetectionService } from '../services/no-show-detection.service.js';
 import { NoShowLifecycleService } from '../services/no-show-lifecycle.service.js';
 import { CreateNoShowDto } from '../dto/create-no-show.dto.js';
 import { UpdateNoShowDto } from '../dto/update-no-show.dto.js';
@@ -32,10 +34,20 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 export class NoShowController {
   constructor(
     private readonly noShowService: NoShowService,
+    private readonly noShowDetectionService: NoShowDetectionService,
     private readonly noShowLifecycleService: NoShowLifecycleService,
   ) {}
 
   // UC-41 (internal): tạo no-show case (token-gated, idempotent → 201/200).
+  //
+  // [FIX 2026-08-21, Việc A — gap vá] Endpoint này (spec gốc: "gọi bởi cron/camera-service")
+  // là đường tạo case THỨ HAI, độc lập với `NoShowDetectionService.detect()` — nhận thẳng
+  // `roomId` từ request body. Việc A (2026-08-21) ban đầu chỉ chặn ở `detect()`, bỏ sót
+  // đường này nên phòng KHÔNG có camera vẫn tạo case được nếu có request POST thẳng vào
+  // đây (case B302 thật, xem no-show-detection.service.ts header). Vá: tái dùng ĐÚNG
+  // `NoShowDetectionService.getCameraRoomIds()` (1 nguồn sự thật DUY NHẤT, không viết lại
+  // logic) — fail-closed CẢ khi đọc map lỗi (throw tự nhiên → 500, KHÔNG âm thầm cho qua),
+  // mirror đúng triết lý fail-safe/fail-closed đã có ở `detect()`.
   @Post('internal/no-show-cases')
   @UseGuards(InternalTokenGuard)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
@@ -47,6 +59,14 @@ export class NoShowController {
     @Body() dto: CreateNoShowDto,
     @Res({ passthrough: true }) res: Response,
   ) {
+    const cameraRoomIds = await this.noShowDetectionService.getCameraRoomIds();
+    if (!cameraRoomIds.includes(dto.roomId)) {
+      throw new BadRequestException({
+        code: 'ROOM_HAS_NO_CAMERA',
+        message:
+          'Room has no camera mapped (ivss.channel_room_map); no-show detection is not applicable for this room.',
+      });
+    }
     const { case: c, created } = await this.noShowService.create(dto);
     res.status(created ? 201 : 200);
     return {

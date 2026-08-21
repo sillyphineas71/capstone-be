@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 describe('NoShowController (NSC-001)', () => {
   let controller: NoShowController;
   let serviceMock: any;
+  let detectionMock: any;
   let lifecycleMock: any;
 
   beforeEach(() => {
@@ -20,10 +21,19 @@ describe('NoShowController (NSC-001)', () => {
       update: jest.fn(),
       list: jest.fn(),
     };
+    detectionMock = {
+      // [FIX 2026-08-21, Việc A — gap vá] mặc định 'rm-1' có camera — không phá các
+      // test createInternal cũ vốn không quan tâm tới camera map.
+      getCameraRoomIds: jest.fn().mockResolvedValue(['rm-1']),
+    };
     lifecycleMock = {
       manualRelease: jest.fn(),
     };
-    controller = new NoShowController(serviceMock, lifecycleMock);
+    controller = new NoShowController(
+      serviceMock,
+      detectionMock,
+      lifecycleMock,
+    );
   });
 
   it('createInternal: created=true → status 201 + envelope', async () => {
@@ -51,8 +61,54 @@ describe('NoShowController (NSC-001)', () => {
       created: false,
     });
     const res = { status: jest.fn() } as any;
-    await controller.createInternal({ bookingId: 'bk-1' } as any, res);
+    await controller.createInternal(
+      { bookingId: 'bk-1', roomId: 'rm-1' } as any,
+      res,
+    );
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // [FIX 2026-08-21, Việc A — gap vá] roomId KHÔNG nằm trong ivss.channel_room_map
+  // (mirror case thật: booking B302 "Phòng họp nhỏ B302", MT-20260821-017) → 400,
+  // KHÔNG được gọi noShowService.create (không âm thầm tạo case rồi mới chặn).
+  it('createInternal: roomId KHÔNG có camera (không trong getCameraRoomIds) → 400 ROOM_HAS_NO_CAMERA, KHÔNG gọi service.create', async () => {
+    detectionMock.getCameraRoomIds.mockResolvedValue([
+      '097cf988-8976-42d9-a83d-e5a0013022d9',
+      'c9f536d4-c1d7-4d72-8bf7-00f55e5a7fe3',
+    ]);
+    const res = { status: jest.fn() } as any;
+    await expect(
+      controller.createInternal(
+        {
+          bookingId: 'bk-b302',
+          meetingId: 'mt-b302',
+          roomId: 'c528cc27-54a7-4be3-8c8e-cb84cbd515c4',
+        },
+        res,
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(serviceMock.create).not.toHaveBeenCalled();
+  });
+
+  it('createInternal: roomId CÓ trong getCameraRoomIds → vẫn tạo case như cũ (regression)', async () => {
+    detectionMock.getCameraRoomIds.mockResolvedValue([
+      'c9f536d4-c1d7-4d72-8bf7-00f55e5a7fe3',
+    ]);
+    serviceMock.create.mockResolvedValue({
+      case: { id: 'nsc-2', booking_id: 'bk-2', detection_status: 'risk' },
+      created: true,
+    });
+    const res = { status: jest.fn() } as any;
+    await controller.createInternal(
+      {
+        bookingId: 'bk-2',
+        meetingId: 'mt-2',
+        roomId: 'c9f536d4-c1d7-4d72-8bf7-00f55e5a7fe3',
+      },
+      res,
+    );
+    expect(serviceMock.create).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 
   it('list: envelope { success, message, data, meta } + truyền query xuống service', async () => {

@@ -442,6 +442,10 @@ export class NoShowLifecycleService {
         'NO_SHOW_ALERT_EMAIL_ENABLED',
         false,
       );
+      // [DEBUG TẠM 2026-08-21 — gỡ sau khi bắt được nguyên nhân, KHÔNG đổi hành vi]
+      this.logger.debug(
+        `[DEBUG notifyNoShow] case=${c.id} kind=${kind} emailEnabled=${emailEnabled} recipientUserIds=${JSON.stringify(recipientUserIds)}`,
+      );
       if (emailEnabled) {
         const emailRows: EmailRow[] = await this.dataSource.manager.query(
           `SELECT email FROM users WHERE id = ANY($1) AND deleted_at IS NULL`,
@@ -450,6 +454,10 @@ export class NoShowLifecycleService {
         const toEmails = emailRows
           .map((r) => r.email)
           .filter((e): e is string => !!e);
+        // [DEBUG TẠM 2026-08-21 — gỡ sau khi bắt được nguyên nhân, KHÔNG đổi hành vi]
+        this.logger.debug(
+          `[DEBUG notifyNoShow] case=${c.id} kind=${kind} toEmails=${JSON.stringify(toEmails)}`,
+        );
         if (toEmails.length > 0) {
           // [Việc B, Hướng 2] Link "Tôi vẫn đến" — CHỈ build khi kind='warning' (case
           // còn non-terminal tại thời điểm soạn email). Best-effort: lỗi ký token
@@ -471,6 +479,10 @@ export class NoShowLifecycleService {
               );
             }
           }
+          // [DEBUG TẠM 2026-08-21 — gỡ sau khi bắt được nguyên nhân, KHÔNG đổi hành vi]
+          this.logger.debug(
+            `[DEBUG notifyNoShow] case=${c.id} kind=${kind} CHUẨN BỊ GỌI enqueueEmailNotification, confirmLink=${confirmLink ?? 'undefined'}`,
+          );
           await this.notificationsService.enqueueEmailNotification({
             notificationType: NotificationType.NO_SHOW_ALERT,
             channel: NotificationChannel.EMAIL,

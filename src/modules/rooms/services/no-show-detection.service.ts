@@ -67,6 +67,16 @@ const UUID_RE =
  * Đọc map lỗi (DB down) hoặc map rỗng (chưa phòng nào gán camera) → fail-safe: bỏ qua
  * CẢ lượt quét (KHÔNG throw ra cron), scanned=created=0 — tick sau (mỗi phút) tự đọc lại,
  * không cache/ghi nhớ vĩnh viễn.
+ *
+ * [FIX 2026-08-21, Việc A — gap vá] Fix trên chỉ chặn ở `detect()` (đường quét cron).
+ * Recon DB thật (case booking B302 "Phòng họp nhỏ B302", meeting MT-20260821-017) xác
+ * nhận `POST /internal/no-show-cases` (`NoShowController#createInternal` →
+ * `NoShowService.create()`) là đường TẠO CASE THỨ HAI — theo đúng spec gốc NSC-001
+ * ("gọi bởi cron/camera-service"), nhận thẳng `roomId` từ request body, KHÔNG hề qua
+ * `getCameraRoomIds()` — nên phòng không camera vẫn bị tạo case nếu có request POST
+ * thẳng vào endpoint này (token nội bộ hợp lệ là đủ, không cần qua cron). `getCameraRoomIds()`
+ * đổi từ `private` → public để `createInternal` tái dùng ĐÚNG 1 nguồn sự thật này (xem
+ * no-show.controller.ts) thay vì viết lại logic riêng.
  */
 @Injectable()
 export class NoShowDetectionService {
@@ -152,10 +162,13 @@ export class NoShowDetectionService {
 
   /**
    * Danh sách room_id "có camera" — DUY NHẤT nguồn `ivss.channel_room_map` (xem header,
-   * Việc A). Lỗi đọc DB được ĐỂ TRỒI lên `detect()` (không catch ở đây) để `detect()` áp
-   * fail-safe skip cả lượt quét, thay vì âm thầm coi "không phòng nào có camera".
+   * Việc A). Lỗi đọc DB được ĐỂ TRỒI lên caller (không catch ở đây): `detect()` áp
+   * fail-safe skip cả lượt quét; `NoShowController#createInternal` (Việc A, gap vá
+   * 2026-08-21) áp fail-closed — từ chối tạo case thay vì âm thầm coi "không phòng nào
+   * có camera". Public (không còn `private`) để tái dùng đúng 1 nguồn sự thật này ở
+   * CẢ 2 nơi có thể tạo `no_show_cases` — xem no-show.controller.ts.
    */
-  private async getCameraRoomIds(): Promise<string[]> {
+  async getCameraRoomIds(): Promise<string[]> {
     const rows: ChannelRoomMapRow[] = await this.dataSource.manager.query(
       `SELECT config_json FROM system_configs
        WHERE config_key = 'ivss.channel_room_map' AND is_active = true LIMIT 1`,
