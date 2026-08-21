@@ -10,6 +10,7 @@ import {
   Req,
   Res,
   HttpCode,
+  Logger,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -32,6 +33,8 @@ import { RequirePermissions } from '../../auth/decorators/require-permissions.de
 @ApiTags('Rooms - No-Show')
 @Controller()
 export class NoShowController {
+  private readonly logger = new Logger(NoShowController.name);
+
   constructor(
     private readonly noShowService: NoShowService,
     private readonly noShowDetectionService: NoShowDetectionService,
@@ -59,14 +62,39 @@ export class NoShowController {
     @Body() dto: CreateNoShowDto,
     @Res({ passthrough: true }) res: Response,
   ) {
+    // [DEBUG TẠM 2026-08-22 — gỡ cùng đợt với log ở detect(), KHÔNG đổi hành vi nghiệp vụ]
+    // In toàn bộ dto NGAY LÚC request tới, trước khi làm bất cứ gì.
+    this.logger.debug(
+      `[DEBUG createInternal] Request đến lúc ${new Date().toISOString()} — dto=${JSON.stringify(dto)}`,
+    );
+
     const cameraRoomIds = await this.noShowDetectionService.getCameraRoomIds();
-    if (!cameraRoomIds.includes(dto.roomId)) {
+    const roomHasCamera = cameraRoomIds.includes(dto.roomId);
+
+    // [DEBUG TẠM 2026-08-22 — gỡ cùng đợt với log ở detect(), KHÔNG đổi hành vi nghiệp vụ]
+    // In cameraRoomIds thật + kết quả includes() — TRƯỚC khi quyết định chặn hay cho qua.
+    this.logger.debug(
+      `[DEBUG createInternal] cameraRoomIds(len=${cameraRoomIds.length})=${JSON.stringify(cameraRoomIds)} | dto.roomId=${dto.roomId} | roomHasCamera=${roomHasCamera}`,
+    );
+
+    if (!roomHasCamera) {
+      // [DEBUG TẠM 2026-08-22 — gỡ cùng đợt với log ở detect(), KHÔNG đổi hành vi nghiệp vụ]
+      // Log NGAY TRƯỚC throw — xác nhận log này CÓ chạy (không bị exception filter nuốt).
+      this.logger.debug(
+        `[DEBUG createInternal] CHẶN 400 ROOM_HAS_NO_CAMERA cho roomId=${dto.roomId} — KHÔNG tạo case.`,
+      );
       throw new BadRequestException({
         code: 'ROOM_HAS_NO_CAMERA',
         message:
           'Room has no camera mapped (ivss.channel_room_map); no-show detection is not applicable for this room.',
       });
     }
+
+    // [DEBUG TẠM 2026-08-22 — gỡ cùng đợt với log ở detect(), KHÔNG đổi hành vi nghiệp vụ]
+    // Log NGAY TRƯỚC khi gọi create() (ghi INSERT thật) — đường này KHÔNG bị chặn.
+    this.logger.debug(
+      `[DEBUG createInternal] LỌT QUA gate — chuẩn bị gọi noShowService.create() cho roomId=${dto.roomId} bookingId=${dto.bookingId}`,
+    );
     const { case: c, created } = await this.noShowService.create(dto);
     res.status(created ? 201 : 200);
     return {

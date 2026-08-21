@@ -111,6 +111,13 @@ export class NoShowDetectionService {
       return { scanned: 0, created: 0 };
     }
 
+    // [DEBUG TẠM 2026-08-22 — gỡ sau khi bắt được nguyên nhân leak camera-gate,
+    // KHÔNG đổi hành vi nghiệp vụ] In đầy đủ cameraRoomIds + $1/$2 NGAY TRƯỚC câu
+    // query candidates, để đối chiếu với danh sách candidates SQL trả về bên dưới.
+    this.logger.debug(
+      `[DEBUG detect] TRƯỚC query candidates — cameraRoomIds(len=${cameraRoomIds.length})=${JSON.stringify(cameraRoomIds)} | $1 threshold=${threshold} | $2 RECONCILE_GRACE_SECONDS=${NoShowDetectionService.RECONCILE_GRACE_SECONDS}`,
+    );
+
     const candidates = await this.dataSource.manager.query(
       `SELECT b.id AS booking_id, b.meeting_id, b.room_id
        FROM room_bookings b
@@ -135,10 +142,32 @@ export class NoShowDetectionService {
       ],
     );
 
+    // [DEBUG TẠM 2026-08-22 — gỡ sau khi bắt được nguyên nhân leak camera-gate,
+    // KHÔNG đổi hành vi nghiệp vụ] In TOÀN BỘ candidates SQL vừa trả về (kèm room_id
+    // từng dòng) — nếu có room_id KHÔNG nằm trong cameraRoomIds ở log trên, bug nằm
+    // NGAY TRONG câu SQL (Postgres/driver), không phải ở bước xử lý sau.
+    this.logger.debug(
+      `[DEBUG detect] SAU query candidates — count=${candidates.length} | rows=${JSON.stringify(
+        candidates.map((c: { booking_id: string; meeting_id: string; room_id: string }) => ({
+          booking_id: c.booking_id,
+          meeting_id: c.meeting_id,
+          room_id: c.room_id,
+          room_id_in_cameraRoomIds: cameraRoomIds.includes(c.room_id),
+        })),
+      )}`,
+    );
+
     let created = 0;
     const detectedAt = new Date().toISOString();
     for (const c of candidates) {
       try {
+        // [DEBUG TẠM 2026-08-22 — gỡ sau khi bắt được nguyên nhân leak camera-gate,
+        // KHÔNG đổi hành vi nghiệp vụ] Log NGAY TRƯỚC khi gọi create() (ghi INSERT thật)
+        // — nếu room_id_in_cameraRoomIds=false xuất hiện ở đây mà KHÔNG xuất hiện ở log
+        // "SAU query candidates" phía trên, nghĩa là candidate đã bị đổi/lọt giữa 2 bước.
+        this.logger.debug(
+          `[DEBUG detect] TRƯỚC create() cho booking=${c.booking_id} room_id=${c.room_id} room_id_in_cameraRoomIds=${cameraRoomIds.includes(c.room_id)}`,
+        );
         const r = await this.noShowService.create({
           bookingId: c.booking_id,
           meetingId: c.meeting_id,
