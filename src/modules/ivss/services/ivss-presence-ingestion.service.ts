@@ -245,62 +245,92 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       // A/B trước) → so khớp NULL-safe (`IS NOT DISTINCT FROM`), gộp theo channelId
       // trong cửa sổ — chấp nhận đánh đổi có thể gộp nhầm 2 người lạ khác nhau đứng sát
       // giờ CÙNG 1 channel (ưu tiên chống spam hơn phân biệt tuyệt đối từng người lạ).
-      // SELECT-precheck (KHÔNG UNIQUE constraint/migration) — khác convention
-      // AlertsService.recordAlert() (unique index + bắt 23505) vì bài toán khác bản
-      // chất: đây là event log theo cửa sổ thời gian trôi (không phải "1 alert đang
-      // mở"), chỉ 1 nguồn ghi duy nhất (không có luồng thứ 2 nào ghi cùng bảng cho
-      // cùng sự kiện như cron+immediate của Alerts) → race window ở đây không đáng kể.
       // iot_device_events cũng chưa từng có UNIQUE constraint nào (mọi migration trước
       // giờ chỉ ADD COLUMN + index thường) — thêm retroactive lên bảng ĐANG có dữ liệu
       // trùng thật (chính bug đang sửa) có rủi ro migration fail không cần thiết.
-      const dupRows: IdRow[] = await this.dataSource.manager.query(
-        `SELECT id FROM iot_device_events
-         WHERE device_id = $1
-           AND event_type = 'ivss_face_event'
-           AND payload_json->>'channelId' = $2
-           AND payload_json->>'szUid' IS NOT DISTINCT FROM $3
-           AND event_time >= $4
-         ORDER BY event_time DESC LIMIT 1`,
-        [
-          deviceId,
-          String(evt.channelId),
-          szUid ?? null,
-          new Date(eventTime.getTime() - DEDUP_WINDOW_MS),
-        ],
-      );
-      if (dupRows[0]) {
+      //
+      // [RACE FIX 2026-08-22] SELECT-precheck rời rạc (KHÔNG transaction) từng coi race
+      // window "không đáng kể" — SAI, xác nhận bằng dữ liệu thật: 60 nhóm event trùng
+      // TUYỆT ĐỐI cùng giây (channel+szUid+event_time) trong 7 ngày (2 request gần như
+      // đồng thời, cả 2 cùng SELECT "không thấy trùng" TRƯỚC KHI request nào kịp INSERT
+      // — SELECT và INSERT là 2 statement auto-commit rời rạc, không gì khoá 2 request
+      // lại). Mirror ĐÚNG pattern đã chạy production tại
+      // vehicle-resolve.service.ts:190-234 (RACE FIX bằng chứng thật 2026-08-08): bọc
+      // SELECT-precheck + INSERT trong 1 `dataSource.transaction()`, khoá
+      // pg_advisory_xact_lock theo channelId+szUid NGAY ĐẦU — 2 request CÙNG
+      // channel+szUid giờ xếp hàng (transaction sau đợi transaction trước COMMIT rồi
+      // mới SELECT, nên luôn THẤY được row vừa tạo). pg_advisory_XACT_lock (KHÔNG phải
+      // advisory_lock thường) tự giải phóng khi transaction kết thúc (commit/rollback),
+      // an toàn nếu exception giữa chừng, KHÔNG cần unlock tay. Khoá theo channelId+szUid
+      // (mịn hơn vehicle-resolve chỉ khoá channelId) — 2 người KHÁC NHAU cùng 1 channel
+      // cùng lúc KHÔNG bị chặn nhau, chỉ đúng 2 event TRÙNG người mới xếp hàng.
+      // szUid null (người lạ hoàn toàn) → thế sentinel string TRƯỚC khi bind, KHÔNG
+      // nối chuỗi có NULL trong SQL (`'x' || NULL` = NULL ⇒ hashtext/advisory_lock lỗi).
+      // Không đổi SQL text của SELECT/INSERT — chỉ đổi đường gọi (`manager.query` thay
+      // `this.dataSource.manager.query`) + bọc transaction/lock. Phần SAU (broadcast/
+      // zonePresenceWriter/restrictedZoneIntrusion) GIỮ NGUYÊN ngoài transaction — đúng
+      // nguyên tắc vehicle-resolve: chỉ bọc đúng đoạn merge-hoặc-insert.
+      const lockKey = `ivss_face_dedup_${evt.channelId}_${szUid ?? '__stranger__'}`;
+      const insertResult = await this.dataSource.transaction(async (manager) => {
+        await manager.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1::text))`,
+          [lockKey],
+        );
+
+        const dupRows: IdRow[] = await manager.query(
+          `SELECT id FROM iot_device_events
+           WHERE device_id = $1
+             AND event_type = 'ivss_face_event'
+             AND payload_json->>'channelId' = $2
+             AND payload_json->>'szUid' IS NOT DISTINCT FROM $3
+             AND event_time >= $4
+           ORDER BY event_time DESC LIMIT 1`,
+          [
+            deviceId,
+            String(evt.channelId),
+            szUid ?? null,
+            new Date(eventTime.getTime() - DEDUP_WINDOW_MS),
+          ],
+        );
+        if (dupRows[0]) {
+          return { skipped: true as const, dupId: dupRows[0].id };
+        }
+
+        // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
+        // F-B/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí các cột/tham
+        // số cũ (payload_json vẫn param $5, processed_status vẫn param $6).
+        // [FIX 2026-08-11, Zone Access Log đường B] zone_id THÊM Ở CUỐI ($8) — tái dùng ĐÚNG
+        // presenceZoneId đã tính ở trên (dòng 173, từ channel_presence_zone_map), KHÔNG query
+        // thêm, KHÔNG đổi logic resolve zone hiện có. NULL khi channel không map presence zone
+        // (giữ nguyên hành vi cũ cho event không thuộc zone nào). Cột phục vụ RIÊNG
+        // IvssZoneAccessLogService (đọc trực tiếp iot_device_events.zone_id) — KHÔNG đụng
+        // presenceSkipped/matchState/writeAppearEvent ở trên/dưới.
+        const insRows: IdRow[] = await manager.query(
+          `INSERT INTO iot_device_events
+             (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id, zone_id)
+           VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7, $8)
+           RETURNING id`,
+          [
+            deviceId,
+            roomId,
+            meetingId,
+            eventTime,
+            JSON.stringify(payload),
+            processedStatus,
+            snapshotFileId,
+            presenceZoneId,
+          ],
+        );
+        return { skipped: false as const, sourceEventId: insRows[0]?.id ?? null };
+      });
+
+      if (insertResult.skipped) {
         this.logger.debug(
-          `IVSS event dedupe: bỏ qua (channel=${evt.channelId} szUid=${szUid}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${dupRows[0].id}).`,
+          `IVSS event dedupe: bỏ qua (channel=${evt.channelId} szUid=${szUid}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${insertResult.dupId}).`,
         );
         return;
       }
-
-      // QĐ-4 (nhánh B): RETURNING id → sourceEventId (đi vào metadata presence, không cột).
-      // F-B/F-E: snapshot_file_id THÊM Ở CUỐI danh sách cột — KHÔNG đổi vị trí các cột/tham
-      // số cũ (payload_json vẫn param $5, processed_status vẫn param $6).
-      // [FIX 2026-08-11, Zone Access Log đường B] zone_id THÊM Ở CUỐI ($8) — tái dùng ĐÚNG
-      // presenceZoneId đã tính ở trên (dòng 173, từ channel_presence_zone_map), KHÔNG query
-      // thêm, KHÔNG đổi logic resolve zone hiện có. NULL khi channel không map presence zone
-      // (giữ nguyên hành vi cũ cho event không thuộc zone nào). Cột phục vụ RIÊNG
-      // IvssZoneAccessLogService (đọc trực tiếp iot_device_events.zone_id) — KHÔNG đụng
-      // presenceSkipped/matchState/writeAppearEvent ở trên/dưới.
-      const insRows: IdRow[] = await this.dataSource.manager.query(
-        `INSERT INTO iot_device_events
-           (device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id, zone_id)
-         VALUES ($1, $2, $3, 'ivss_face_event', $4, 'ivss', 'info', $5::jsonb, $6, $7, $8)
-         RETURNING id`,
-        [
-          deviceId,
-          roomId,
-          meetingId,
-          eventTime,
-          JSON.stringify(payload),
-          processedStatus,
-          snapshotFileId,
-          presenceZoneId,
-        ],
-      );
-      const sourceEventId = insRows[0]?.id ?? null;
+      const sourceEventId = insertResult.sourceEventId;
 
       if (matchState !== 'matched') {
         // OQ-5: log + metric (đếm qua log); vẫn đã persist row unmatched.

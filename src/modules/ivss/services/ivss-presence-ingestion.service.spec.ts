@@ -54,6 +54,10 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
     captured = [];
     dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
       captured.push({ sql, params });
+      // [RACE FIX 2026-08-22] pg_advisory_xact_lock — statement đầu tiên trong
+      // transaction bọc SELECT-dedupe+INSERT. Kết quả không được đọc bởi caller,
+      // chỉ cần resolve (mirror vehicle-resolve.service.spec.ts).
+      if (sql.includes('pg_advisory_xact_lock')) return Promise.resolve([{}]);
       if (sql.includes('FROM iot_devices WHERE device_code'))
         return Promise.resolve(over.bridge ?? [{ id: 'bridge1' }]);
       // Nợ #3: participant check — default LÀ participant ([{id}]); over.participant=[] → ngoài họp.
@@ -140,6 +144,12 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
 
   beforeEach(async () => {
     dsMock = { manager: { query: jest.fn() } };
+    // [RACE FIX 2026-08-22] onFaceEvent() giờ bọc SELECT-dedupe+INSERT trong
+    // this.dataSource.transaction(...) — mirror ChannelMapConfigService.spec.ts /
+    // vehicle-resolve.service.spec.ts:81-89: dùng LẠI dsMock.manager (cùng jest.fn
+    // `.query`) bên trong callback để mọi SQL-sniffing (`captured`/wire()) hiện có
+    // tiếp tục hoạt động không đổi, không cần EntityManager mock riêng.
+    dsMock.transaction = jest.fn((cb: (m: any) => unknown) => cb(dsMock.manager));
     wsMock = { emitToRoom: jest.fn() };
     writerMock = {
       resolvePresenceZone: jest.fn().mockResolvedValue({ valid: true }),
@@ -1049,6 +1059,133 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       wire();
       await service.onFaceEvent(evt());
       expect(payloadOf().matchState).toBe('matched');
+    });
+  });
+
+  // ── [RACE FIX 2026-08-22] pg_advisory_xact_lock chống 2 request đồng thời ──
+  // Bằng chứng thật production: 60 nhóm event trùng TUYỆT ĐỐI cùng giây (channel+szUid+
+  // event_time) trong 7 ngày — SELECT-precheck rời rạc (KHÔNG transaction) không chặn được
+  // 2 request gần như đồng thời cùng SELECT "không thấy trùng" trước khi request nào kịp
+  // INSERT. Mirror ĐÚNG kỹ thuật test đã dùng ở vehicle-resolve.service.spec.ts:1143-1242.
+  describe('[RACE FIX 2026-08-22] pg_advisory_xact_lock chống 2 request đồng thời cùng channel+szUid', () => {
+    /**
+     * Mutex thủ công mô phỏng pg_advisory_xact_lock: request 2 PHẢI đợi transaction
+     * của request 1 chạy XONG HẲN (kể cả INSERT) rồi mới được bắt đầu callback của nó —
+     * đúng hành vi cần chứng minh. KHÔNG có mutex này (`dsMock.transaction` mặc định ở
+     * beforeEach gọi `cb` ngay lập tức) thì 2 lệnh gọi sẽ interleave theo microtask,
+     * đúng race đã xác nhận bằng dữ liệu thật.
+     */
+    const wireSerializedTransaction = () => {
+      let lockChain: Promise<unknown> = Promise.resolve();
+      dsMock.transaction = jest.fn((cb: (m: any) => Promise<unknown>) => {
+        const run = lockChain.then(() => cb(dsMock.manager));
+        lockChain = run.catch(() => undefined);
+        return run;
+      });
+    };
+
+    it('#1 — Promise.all 2 event giống hệt nhau (cùng channelId+szUid) → CHỈ 1 INSERT, lần 2 log dedupe-skip', async () => {
+      wire();
+      wireSerializedTransaction();
+      let dedupeCalls = 0;
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('IS NOT DISTINCT FROM')) {
+          dedupeCalls++;
+          captured.push({ sql, params });
+          // Nhờ lockChain, request 2 chỉ SELECT SAU KHI request 1 đã INSERT xong
+          // (thật sự khớp hành vi transaction serialize) → thấy được row vừa tạo.
+          return Promise.resolve(dedupeCalls === 1 ? [] : [{ id: 'evt1' }]);
+        }
+        return base(sql, params);
+      });
+      const debugSpy = jest.spyOn((service as any).logger, 'debug');
+
+      await Promise.all([
+        service.onFaceEvent(evt()),
+        service.onFaceEvent(evt()),
+      ]);
+
+      expect(
+        captured.filter((c) => c.sql.includes('INSERT INTO iot_device_events'))
+          .length,
+      ).toBe(1);
+      const debugged = debugSpy.mock.calls.some((c) =>
+        String(c[0]).includes('dedupe: bỏ qua'),
+      );
+      expect(debugged).toBe(true);
+    });
+
+    it('#2 — szUid=null (người lạ hoàn toàn) → lock key KHÔNG null, KHÔNG throw, vẫn dedupe đúng', async () => {
+      wire();
+      wireSerializedTransaction();
+      let dedupeCalls = 0;
+      const base = dsMock.manager.query.getMockImplementation();
+      dsMock.manager.query.mockImplementation((sql: string, params: any[]) => {
+        if (sql.includes('pg_advisory_xact_lock')) {
+          captured.push({ sql, params });
+          // lockKey = `ivss_face_dedup_${channelId}_${szUid ?? '__stranger__'}` —
+          // phải là string cụ thể, KHÔNG bao giờ null/undefined (mới tránh được
+          // 'x' || NULL = NULL ⇒ hashtext/advisory_lock lỗi).
+          expect(params[0]).toBe('ivss_face_dedup_5___stranger__');
+          expect(params[0]).not.toBeNull();
+          return Promise.resolve([{}]);
+        }
+        if (sql.includes('IS NOT DISTINCT FROM')) {
+          dedupeCalls++;
+          captured.push({ sql, params });
+          expect(params[2]).toBeNull(); // szUid null → NULL-safe key trong SELECT, KHÔNG sentinel
+          return Promise.resolve(dedupeCalls === 1 ? [] : [{ id: 'evt1' }]);
+        }
+        return base(sql, params);
+      });
+
+      await expect(
+        Promise.all([
+          service.onFaceEvent(evt({ personUid: undefined })),
+          service.onFaceEvent(evt({ personUid: undefined })),
+        ]),
+      ).resolves.toBeDefined();
+
+      expect(
+        captured.filter((c) => c.sql.includes('INSERT INTO iot_device_events'))
+          .length,
+      ).toBe(1);
+    });
+
+    it('#3 — transaction() gọi ĐÚNG 1 lần/sự kiện, pg_advisory_xact_lock là statement ĐẦU TIÊN trong transaction', async () => {
+      wire();
+      await service.onFaceEvent(evt());
+
+      expect(dsMock.transaction).toHaveBeenCalledTimes(1);
+      // Statement đầu tiên SAU khi transaction() bắt đầu chạy callback phải là lock —
+      // TRƯỚC CẢ SELECT dedupe lẫn INSERT (captured ghi theo đúng thứ tự gọi thật).
+      const txSqls = captured
+        .map((c) => c.sql)
+        .filter(
+          (sql) =>
+            sql.includes('pg_advisory_xact_lock') ||
+            sql.includes('IS NOT DISTINCT FROM') ||
+            sql.includes('INSERT INTO iot_device_events'),
+        );
+      expect(txSqls[0]).toContain('pg_advisory_xact_lock');
+      expect(txSqls[1]).toContain('IS NOT DISTINCT FROM');
+      expect(txSqls[2]).toContain('INSERT INTO iot_device_events');
+    });
+
+    it('SQL text của SELECT-dedupe/INSERT KHÔNG đổi so với trước fix (chỉ đổi đường gọi qua transaction)', async () => {
+      wire();
+      await service.onFaceEvent(evt());
+      const dq = captured.find((c) => c.sql.includes('IS NOT DISTINCT FROM'))!;
+      expect(dq.sql).toContain(
+        "payload_json->>'szUid' IS NOT DISTINCT FROM $3",
+      );
+      const ins = captured.find((c) =>
+        c.sql.includes('INSERT INTO iot_device_events'),
+      )!;
+      expect(ins.sql).toContain(
+        '(device_id, room_id, meeting_id, event_type, event_time, source_protocol, severity, payload_json, processed_status, snapshot_file_id, zone_id)',
+      );
     });
   });
 
