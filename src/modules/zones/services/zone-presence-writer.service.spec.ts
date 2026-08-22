@@ -22,6 +22,12 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
         query: jest.fn().mockResolvedValue([{ zone_type: 'corridor' }]),
       },
       createQueryRunner: jest.fn(() => qr),
+      // [RACE FIX 2026-08-22] writeCountEvent() giờ bọc SELECT-dedupe+INSERT trong
+      // this.dataSource.transaction(...) — mirror vehicle-resolve.service.spec.ts /
+      // ivss-presence-ingestion.service.spec.ts: dùng LẠI ds.manager (cùng jest.fn
+      // `.query`) bên trong callback để mọi mock hiện có tiếp tục hoạt động không đổi.
+      // KHÔNG ảnh hưởng writeAppearEvent() (vẫn dùng createQueryRunner()/qr riêng).
+      transaction: jest.fn((cb: (m: any) => unknown) => cb(ds.manager)),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -134,7 +140,13 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
   });
 
   // [FIX 2026-08-18] Dedupe writeCountEvent() — khóa zoneId+occupancyCount, cửa sổ 8s.
-  describe('writeCountEvent (F3, recon B5 — dedupe [FIX 2026-08-18])', () => {
+  // [RACE FIX 2026-08-22] SELECT-precheck + INSERT giờ bọc trong dataSource.transaction()
+  // + pg_advisory_xact_lock — mirror ĐÚNG kỹ thuật đã dùng ở vehicle-resolve.service.ts /
+  // ivss-presence-ingestion.service.ts. writeCountEvent() KHÔNG còn dùng createQueryRunner
+  // (khác writeAppearEvent() ở trên — method đó GIỮ NGUYÊN, không đụng), nên test dưới đây
+  // theo dõi qua `ds.manager.query` (= `manager` truyền vào callback transaction) thay vì
+  // `ds.createQueryRunner`/`qr.*`.
+  describe('writeCountEvent (F3, recon B5 — dedupe [FIX 2026-08-18] + race fix [2026-08-22])', () => {
     const countInput = (over: any = {}) => ({
       zoneId: 'z-area',
       occupancyCount: 5,
@@ -144,13 +156,22 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
       ...over,
     });
 
+    const insertCalls = () =>
+      ds.manager.query.mock.calls.filter((c: any[]) =>
+        String(c[0]).includes('INSERT INTO zone_presence_events'),
+      );
+
     /** dedupeHit=null → SELECT dedupe trả [] (không trùng). dedupeHit='id' → trả row đó. */
     const wireDs = (dedupeHit: string | null = null) => {
       ds.manager.query.mockImplementation((sql: string) => {
+        if (String(sql).includes('pg_advisory_xact_lock'))
+          return Promise.resolve([{}]);
         if (String(sql).includes('FROM zones WHERE id'))
           return Promise.resolve([{ id: 'z-area' }]);
         if (String(sql).includes("event_type = 'count'"))
           return Promise.resolve(dedupeHit ? [{ id: dedupeHit }] : []);
+        if (String(sql).includes('INSERT INTO zone_presence_events'))
+          return Promise.resolve([{ id: 'zpe-1' }]);
         return Promise.resolve([]);
       });
     };
@@ -159,12 +180,9 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
       wireDs(null);
       const r = await service.writeCountEvent(countInput());
       expect(r).toEqual({ presenceId: 'zpe-1' });
-      const ins = qr.manager.query.mock.calls.find((c: any[]) =>
-        String(c[0]).includes('INSERT INTO zone_presence_events'),
-      );
-      expect(ins).toBeDefined();
-      expect(String(ins[0])).toContain("'count'");
-      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1);
+      expect(insertCalls().length).toBe(1);
+      expect(String(insertCalls()[0][0])).toContain("'count'");
+      expect(ds.transaction).toHaveBeenCalledTimes(1);
     });
 
     it('zone không tồn tại → ném, KHÔNG chạm dedupe-check, KHÔNG mở transaction', async () => {
@@ -172,19 +190,21 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
       await expect(service.writeCountEvent(countInput())).rejects.toThrow(
         'không tồn tại hoặc đã xoá',
       );
-      expect(ds.createQueryRunner).not.toHaveBeenCalled();
+      expect(ds.transaction).not.toHaveBeenCalled();
     });
 
     it('2 event CÙNG zoneId+occupancyCount trong cửa sổ 8s → CHỈ 1 row được ghi, lần 2 trả presenceId của row đã có', async () => {
       wireDs(null);
       const r1 = await service.writeCountEvent(countInput());
       expect(r1).toEqual({ presenceId: 'zpe-1' });
-      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1); // lần 1: có mở transaction thật
 
       wireDs('zpe-1'); // lần 2: giả lập DB đã có row lần 1 vừa ghi → dedupe-check thấy trùng
       const r2 = await service.writeCountEvent(countInput());
       expect(r2).toEqual({ presenceId: 'zpe-1' });
-      expect(ds.createQueryRunner).toHaveBeenCalledTimes(1); // KHÔNG mở transaction thêm lần nữa → KHÔNG INSERT
+
+      // Vẫn mở transaction cả 2 lần (bắt buộc để lock+check), nhưng CHỈ INSERT 1 lần.
+      expect(ds.transaction).toHaveBeenCalledTimes(2);
+      expect(insertCalls().length).toBe(1);
     });
 
     it('2 event CÙNG zoneId nhưng occupancyCount KHÁC nhau (số người đổi thật) → CẢ 2 đều được ghi, KHÔNG bị dedupe nhầm', async () => {
@@ -196,15 +216,15 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
         countInput({ occupancyCount: 8 }),
       );
       expect(r1.presenceId).toBe('zpe-1');
-      expect(r2.presenceId).toBe('zpe-1'); // mock INSERT luôn trả cùng 1 id giả — quan trọng là createQueryRunner được gọi CẢ 2 lần
-      expect(ds.createQueryRunner).toHaveBeenCalledTimes(2);
+      expect(r2.presenceId).toBe('zpe-1'); // mock INSERT luôn trả cùng 1 id giả
+      expect(insertCalls().length).toBe(2);
     });
 
     it('2 event cách nhau NGOÀI cửa sổ 8s (DB không còn thấy trùng) → CẢ 2 đều được ghi', async () => {
       wireDs(null); // dedupe-check luôn trả [] (mô phỏng đã ngoài cửa sổ thời gian)
       await service.writeCountEvent(countInput());
       await service.writeCountEvent(countInput());
-      expect(ds.createQueryRunner).toHaveBeenCalledTimes(2);
+      expect(insertCalls().length).toBe(2);
     });
 
     it('query dedupe đúng tham số: zoneId, occupancyCount, mốc cửa sổ = eventTime - 8000ms', async () => {
@@ -231,21 +251,94 @@ describe('ZonePresenceWriterService (ZPW-001 / UC-109)', () => {
     it('regression: metadata (channelId) vẫn ghi đúng vào metadata_json khi KHÔNG trùng — heatmap không mất dữ liệu nguồn', async () => {
       wireDs(null);
       await service.writeCountEvent(countInput());
-      const ins = qr.manager.query.mock.calls.find((c: any[]) =>
-        String(c[0]).includes('INSERT INTO zone_presence_events'),
-      );
+      const ins = insertCalls()[0];
       const meta = JSON.parse(ins[1][4]);
       expect(meta).toEqual({ channelId: 3, source: 'ivss_occupancy' });
     });
 
-    it('INSERT lỗi → rollback + release + ném lại (hành vi cũ giữ nguyên khi không trùng)', async () => {
-      wireDs(null);
-      qr.manager.query.mockRejectedValueOnce(new Error('db boom'));
+    it('INSERT lỗi → ném lại (hành vi cũ giữ nguyên khi không trùng)', async () => {
+      ds.manager.query.mockImplementation((sql: string) => {
+        if (String(sql).includes('pg_advisory_xact_lock'))
+          return Promise.resolve([{}]);
+        if (String(sql).includes('FROM zones WHERE id'))
+          return Promise.resolve([{ id: 'z-area' }]);
+        if (String(sql).includes("event_type = 'count'"))
+          return Promise.resolve([]);
+        if (String(sql).includes('INSERT INTO zone_presence_events'))
+          return Promise.reject(new Error('db boom'));
+        return Promise.resolve([]);
+      });
       await expect(service.writeCountEvent(countInput())).rejects.toThrow(
         'db boom',
       );
-      expect(qr.rollbackTransaction).toHaveBeenCalledTimes(1);
-      expect(qr.release).toHaveBeenCalledTimes(1);
+    });
+
+    // ── [RACE FIX 2026-08-22] pg_advisory_xact_lock chống 2 request đồng thời ──
+    // Bằng chứng thật production: 20 cặp event gần-trùng trong cửa sổ 8s (zone+count),
+    // đợt test 2026-08-15 — SELECT-precheck rời rạc không chặn được 2 request gần như
+    // đồng thời. Mirror ĐÚNG kỹ thuật test đã dùng ở vehicle-resolve.service.spec.ts /
+    // ivss-presence-ingestion.service.spec.ts (mutex-chain mô phỏng pg_advisory_xact_lock).
+    describe('[RACE FIX 2026-08-22] pg_advisory_xact_lock chống 2 request đồng thời cùng zone+count', () => {
+      /**
+       * Mutex thủ công mô phỏng pg_advisory_xact_lock: request 2 PHẢI đợi transaction
+       * của request 1 chạy XONG HẲN (kể cả INSERT) rồi mới được bắt đầu callback của nó.
+       */
+      const wireSerializedTransaction = () => {
+        let lockChain: Promise<unknown> = Promise.resolve();
+        ds.transaction = jest.fn((cb: (m: any) => Promise<unknown>) => {
+          const run = lockChain.then(() => cb(ds.manager));
+          lockChain = run.catch(() => undefined);
+          return run;
+        });
+      };
+
+      it('#1 — Promise.all 2 event giống hệt nhau (cùng zone+count) → CHỈ 1 INSERT, lần 2 log dedupe-skip', async () => {
+        wireSerializedTransaction();
+        let dedupeCalls = 0;
+        ds.manager.query.mockImplementation((sql: string) => {
+          if (String(sql).includes('pg_advisory_xact_lock'))
+            return Promise.resolve([{}]);
+          if (String(sql).includes('FROM zones WHERE id'))
+            return Promise.resolve([{ id: 'z-area' }]);
+          if (String(sql).includes("event_type = 'count'")) {
+            dedupeCalls++;
+            return Promise.resolve(dedupeCalls === 1 ? [] : [{ id: 'zpe-1' }]);
+          }
+          if (String(sql).includes('INSERT INTO zone_presence_events'))
+            return Promise.resolve([{ id: 'zpe-1' }]);
+          return Promise.resolve([]);
+        });
+        const debugSpy = jest.spyOn((service as any).logger, 'debug');
+
+        await Promise.all([
+          service.writeCountEvent(countInput()),
+          service.writeCountEvent(countInput()),
+        ]);
+
+        expect(insertCalls().length).toBe(1);
+        const debugged = debugSpy.mock.calls.some((c) =>
+          String(c[0]).includes('dedupe: bỏ qua'),
+        );
+        expect(debugged).toBe(true);
+      });
+
+      it('#2 — transaction() gọi ĐÚNG 1 lần/sự kiện, pg_advisory_xact_lock là statement ĐẦU TIÊN trong transaction', async () => {
+        wireDs(null);
+        await service.writeCountEvent(countInput());
+
+        expect(ds.transaction).toHaveBeenCalledTimes(1);
+        const txSqls = ds.manager.query.mock.calls
+          .map((c: any[]) => String(c[0]))
+          .filter(
+            (sql: string) =>
+              sql.includes('pg_advisory_xact_lock') ||
+              sql.includes("event_type = 'count'") ||
+              sql.includes('INSERT INTO zone_presence_events'),
+          );
+        expect(txSqls[0]).toContain('pg_advisory_xact_lock');
+        expect(txSqls[1]).toContain("event_type = 'count'");
+        expect(txSqls[2]).toContain('INSERT INTO zone_presence_events');
+      });
     });
   });
 });

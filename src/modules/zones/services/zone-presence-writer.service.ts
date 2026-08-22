@@ -144,7 +144,23 @@ export class ZonePresenceWriterService {
    * GHI — INSERT 1 dòng `count` (F3, recon B5). KHÔNG giới hạn `zone_type` như
    * `writeAppearEvent` (QC-5 chỉ áp dụng vòng `appear` — crowd-alert/heatmap đọc
    * theo zone_id bất kỳ do `alert_rules`/dashboard chỉ định, không kén loại zone).
-   * Chỉ kiểm zone tồn tại (chưa xoá mềm). Tx riêng, COMMIT trước khi trả.
+   * Chỉ kiểm zone tồn tại (chưa xoá mềm).
+   *
+   * [RACE FIX 2026-08-22] SELECT-precheck [FIX 2026-08-18] rời rạc (KHÔNG transaction)
+   * từng coi race window "không đáng kể" vì writeCountEvent() chỉ 1 nguồn gọi tuần tự —
+   * SAI, xác nhận bằng dữ liệu thật: 20 cặp event gần-trùng trong cửa sổ 8s (gap
+   * 0.24s-7.9s, cùng zone+occupancyCount) ở đợt test 2026-08-15 — camera đếm người bắn
+   * liên tục lúc có chuyển động, 2 request gần như đồng thời cùng SELECT "không thấy
+   * trùng" TRƯỚC KHI request nào kịp INSERT (SELECT/INSERT là 2 statement auto-commit
+   * rời rạc, không gì khoá 2 request lại). Cùng lớp race đã xác nhận + sửa 2 lần ở
+   * vehicle-resolve.service.ts (ANPR) và ivss-presence-ingestion.service.ts (onFaceEvent).
+   * Mirror ĐÚNG pattern: bọc SELECT-precheck + INSERT trong 1 `dataSource.transaction()`,
+   * khoá pg_advisory_xact_lock theo zoneId+occupancyCount NGAY ĐẦU — 2 request CÙNG
+   * zone+count giờ xếp hàng (transaction sau đợi transaction trước COMMIT rồi mới
+   * SELECT, nên luôn THẤY được row vừa tạo). pg_advisory_XACT_lock tự giải phóng khi
+   * transaction kết thúc (commit/rollback), không cần unlock tay. Không đổi SQL text
+   * SELECT/INSERT, không migration. KHÔNG đụng `writeAppearEvent()` — method đó dùng
+   * `createQueryRunner()` riêng, giữ nguyên (không có SELECT-precheck để race).
    */
   async writeCountEvent(
     input: WriteCountInput,
@@ -159,69 +175,76 @@ export class ZonePresenceWriterService {
       );
     }
 
-    // [FIX 2026-08-18] Dedupe precheck — khóa zoneId+occupancyCount (CẢ HAI phải khớp,
-    // KHÔNG chỉ zoneId: 1 lần đếm THẬT SỰ đổi giá trị vẫn phải ghi, phục vụ heatmap
-    // chính xác), cửa sổ 8s. Trùng → KHÔNG INSERT, nhưng VẪN trả về presenceId của row
-    // đã có (KHÔNG bỏ qua/return rỗng) — caller (ivss-occupancy-ingest.service.ts)
-    // destructure { presenceId } ngay sau lệnh gọi này rồi dùng để gọi
-    // evaluateZoneCountNow() TỨC THỜI; trả presenceId thật giữ nguyên khả năng đánh giá
-    // ngưỡng crowd-alert mỗi lần gọi, chỉ giảm số row LƯU TRỮ (ảnh hưởng cron quét lại
-    // sau này), không giảm tần suất đánh giá ngưỡng thời gian thực.
-    const dupRows: Array<{ id: string }> = await this.dataSource.manager.query(
-      `SELECT id FROM zone_presence_events
-       WHERE zone_id = $1
-         AND event_type = 'count'
-         AND occupancy_count = $2
-         AND event_time >= $3
-       ORDER BY event_time DESC LIMIT 1`,
-      [
-        input.zoneId,
-        input.occupancyCount,
-        new Date(input.eventTime.getTime() - DEDUP_WINDOW_MS),
-      ],
-    );
-    if (dupRows[0]) {
-      this.logger.debug(
-        `writeCountEvent dedupe: bỏ qua INSERT (zone=${input.zoneId} count=${input.occupancyCount}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${dupRows[0].id}).`,
-      );
-      return { presenceId: dupRows[0].id };
-    }
-
     const metaJson =
       input.metadata && Object.keys(input.metadata).length > 0
         ? JSON.stringify(input.metadata)
         : null;
 
-    const qr = this.dataSource.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
+    const lockKey = `zone_count_dedup_${input.zoneId}_${input.occupancyCount}`;
+    let result: { skipped: boolean; presenceId: string };
     try {
-      const rows: Array<{ id: string }> = await qr.manager.query(
-        `INSERT INTO zone_presence_events
-           (zone_id, device_id, user_id, event_type, occupancy_count,
-            confidence_score, event_time, source_type, metadata_json)
-         VALUES ($1, $2, NULL, 'count', $3, NULL, $4, 'ivss', $5::jsonb)
-         RETURNING id`,
-        [
-          input.zoneId,
-          input.deviceId ?? null,
-          input.occupancyCount,
-          input.eventTime,
-          metaJson,
-        ],
-      );
-      await qr.commitTransaction();
-      return { presenceId: rows[0].id };
+      result = await this.dataSource.transaction(async (manager) => {
+        await manager.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1::text))`,
+          [lockKey],
+        );
+
+        // [FIX 2026-08-18] Dedupe precheck — khóa zoneId+occupancyCount (CẢ HAI phải
+        // khớp, KHÔNG chỉ zoneId: 1 lần đếm THẬT SỰ đổi giá trị vẫn phải ghi, phục vụ
+        // heatmap chính xác), cửa sổ 8s. Trùng → KHÔNG INSERT, nhưng VẪN trả về
+        // presenceId của row đã có (KHÔNG bỏ qua/return rỗng) — caller
+        // (ivss-occupancy-ingest.service.ts) destructure { presenceId } ngay sau lệnh
+        // gọi này rồi dùng để gọi evaluateZoneCountNow() TỨC THỜI; trả presenceId thật
+        // giữ nguyên khả năng đánh giá ngưỡng crowd-alert mỗi lần gọi, chỉ giảm số row
+        // LƯU TRỮ (ảnh hưởng cron quét lại sau này), không giảm tần suất đánh giá
+        // ngưỡng thời gian thực.
+        const dupRows: Array<{ id: string }> = await manager.query(
+          `SELECT id FROM zone_presence_events
+           WHERE zone_id = $1
+             AND event_type = 'count'
+             AND occupancy_count = $2
+             AND event_time >= $3
+           ORDER BY event_time DESC LIMIT 1`,
+          [
+            input.zoneId,
+            input.occupancyCount,
+            new Date(input.eventTime.getTime() - DEDUP_WINDOW_MS),
+          ],
+        );
+        if (dupRows[0]) {
+          return { skipped: true, presenceId: dupRows[0].id };
+        }
+
+        const rows: Array<{ id: string }> = await manager.query(
+          `INSERT INTO zone_presence_events
+             (zone_id, device_id, user_id, event_type, occupancy_count,
+              confidence_score, event_time, source_type, metadata_json)
+           VALUES ($1, $2, NULL, 'count', $3, NULL, $4, 'ivss', $5::jsonb)
+           RETURNING id`,
+          [
+            input.zoneId,
+            input.deviceId ?? null,
+            input.occupancyCount,
+            input.eventTime,
+            metaJson,
+          ],
+        );
+        return { skipped: false, presenceId: rows[0].id };
+      });
     } catch (e) {
-      await qr.rollbackTransaction();
       this.logger.error(
         `writeCountEvent failed (zone=${input.zoneId} count=${input.occupancyCount}): ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );
       throw e;
-    } finally {
-      await qr.release();
     }
+
+    if (result.skipped) {
+      this.logger.debug(
+        `writeCountEvent dedupe: bỏ qua INSERT (zone=${input.zoneId} count=${input.occupancyCount}) — đã có event trùng trong ${DEDUP_WINDOW_MS}ms (id=${result.presenceId}).`,
+      );
+    }
+    return { presenceId: result.presenceId };
   }
 }
