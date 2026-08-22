@@ -2,11 +2,18 @@
  * Tính cờ trễ / về sớm cho điểm danh thủ công (UC-B21, spec §5.3).
  * Hàm THUẦN — KHÔNG phụ thuộc Nest; dùng chung cho createManual + updateProfile.
  *
- * Quy tắc no-grace (khớp read-side đã verify attendance.service.ts:284-286):
- *   isLate      = checkInTime > startTime
- *   lateMinutes = late ? max(1, ceil(diffMs / 60000)) : 0
+ * [2026-08-22] graceMinutes BẮT BUỘC truyền vào (không default ngầm) — trước
+ * đây hàm này tính no-grace tuyệt đối trong khi FaceAttendanceService (camera)
+ * đọc system_configs['attendance.late_grace_minutes'], khiến điểm danh thủ
+ * công và camera có thể cho isLate khác nhau ở cùng 1 mốc trễ. Gọi
+ * getAttendanceLateGraceMinutes() (cùng nguồn cấu hình với camera) trước rồi
+ * truyền kết quả vào đây — xem get-late-grace-minutes.util.ts.
+ *
+ * Công thức:
+ *   isLate      = checkInTime > startTime + graceMinutes phút
+ *   lateMinutes = late ? max(1, ceil(diffMs / 60000)) : 0   (diff tính từ startTime, KHÔNG trừ grace)
  *   leftEarly   = checkOutTime != null && endTime != null && checkOutTime < endTime
- *               (endTime null → leftEarly = false)
+ *               (endTime null → leftEarly = false; không liên quan graceMinutes)
  */
 export interface LateFlags {
   isLate: boolean;
@@ -19,8 +26,10 @@ export function computeLateFlags(
   startTime: Date,
   checkOutTime: Date | null,
   endTime: Date | null,
+  graceMinutes: number,
 ): LateFlags {
-  const isLate = checkInTime.getTime() > startTime.getTime();
+  const graceMs = graceMinutes * 60_000;
+  const isLate = checkInTime.getTime() > startTime.getTime() + graceMs;
   const lateMinutes = isLate
     ? Math.max(
         1,

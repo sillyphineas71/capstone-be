@@ -6,6 +6,7 @@ import {
   FaceVerifyInput,
 } from '../../../common/ports/face-verify-hook.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
+import { getAttendanceLateGraceMinutes } from '../../attendance/utils/get-late-grace-minutes.util.js';
 
 interface MappingRow {
   user_id: string;
@@ -31,7 +32,6 @@ interface MeetingRow {
 @Injectable()
 export class FaceAttendanceService implements FaceVerifyHook {
   private readonly logger = new Logger(FaceAttendanceService.name);
-  private static readonly DEFAULT_LATE_GRACE_MINUTES = 0;
   // Cho phép quét trễ sau giờ kết thúc bao nhiêu phút vẫn ghi (mặc định 0 = chặn ngay khi quá end).
   private static readonly POST_GRACE_MINUTES = 0;
 
@@ -90,7 +90,10 @@ export class FaceAttendanceService implements FaceVerifyHook {
     }
 
     // NC-2: late theo grace.
-    const grace = await this.getLateGraceMinutes();
+    const grace = await getAttendanceLateGraceMinutes(
+      this.dataSource.manager,
+      this.configService,
+    );
     const start = new Date(meeting.start_time);
     const isLate = verifyTime.getTime() > start.getTime() + grace * 60_000;
     const lateMinutes = isLate
@@ -285,30 +288,5 @@ export class FaceAttendanceService implements FaceVerifyHook {
     const bookingId = row.metadata_json?.['bookingId'];
     if (typeof bookingId !== 'string' || !bookingId) return null;
     return { userId: row.user_id, meetingId: bookingId };
-  }
-
-  /** NC-2: system_configs[attendance.late_grace_minutes] → env → default 0. */
-  private async getLateGraceMinutes(): Promise<number> {
-    try {
-      const rows: Array<{ config_value: string | null }> =
-        await this.dataSource.manager.query(
-          `SELECT config_value FROM system_configs WHERE config_key = 'attendance.late_grace_minutes' LIMIT 1`,
-        );
-      const raw = rows?.[0]?.config_value;
-      if (raw != null && raw !== '') {
-        const n = parseInt(raw, 10);
-        if (!Number.isNaN(n) && n >= 0) return n;
-      }
-    } catch (e) {
-      this.logger.warn(
-        `read attendance.late_grace_minutes failed: ${
-          e instanceof Error ? e.message : 'unknown'
-        }`,
-      );
-    }
-    return this.configService.get<number>(
-      'ATTENDANCE_LATE_GRACE_MINUTES',
-      FaceAttendanceService.DEFAULT_LATE_GRACE_MINUTES,
-    );
   }
 }

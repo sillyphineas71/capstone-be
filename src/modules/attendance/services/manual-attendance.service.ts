@@ -8,6 +8,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository, IsNull, Not } from 'typeorm';
 import {
   MeetingEntity,
@@ -27,6 +28,7 @@ import {
 import { AuditLogsService } from '../../../modules/administration/services/audit-logs.service.js';
 import { AuthzReadRepository } from '../../../modules/auth/repositories/authz-read.repository.js';
 import { computeLateFlags } from '../utils/compute-late-flags.util.js';
+import { getAttendanceLateGraceMinutes } from '../utils/get-late-grace-minutes.util.js';
 import {
   ManualAttendanceResponseDto,
   toManualAttendanceResponse,
@@ -60,6 +62,7 @@ export class ManualAttendanceService {
     private readonly attendanceRecordRepo: Repository<AttendanceRecordEntity>,
     private readonly auditLogs: AuditLogsService,
     private readonly authzRead: AuthzReadRepository,
+    private readonly configService: ConfigService,
   ) {}
 
   // ===== Endpoint #1: tạo bản ghi thủ công =====
@@ -100,11 +103,18 @@ export class ManualAttendanceService {
 
     const now = new Date();
     const checkInTime = dto.checkInTime ? new Date(dto.checkInTime) : now;
+    // Cùng nguồn ân hạn với FaceAttendanceService (camera) — xem
+    // get-late-grace-minutes.util.ts, tránh 2 luồng tính isLate lệch nhau.
+    const graceMinutes = await getAttendanceLateGraceMinutes(
+      this.attendanceRecordRepo.manager,
+      this.configService,
+    );
     const flags = computeLateFlags(
       checkInTime,
       meeting.startTime,
       null,
       meeting.endTime,
+      graceMinutes,
     );
 
     const record = this.attendanceRecordRepo.create({
@@ -234,11 +244,16 @@ export class ManualAttendanceService {
 
     // Tính lại flags nhưng KHÔNG đổi attendanceStatus (§1.4-9 — desync chủ ý).
     if (newCheckIn) {
+      const graceMinutes = await getAttendanceLateGraceMinutes(
+        this.attendanceRecordRepo.manager,
+        this.configService,
+      );
       const flags = computeLateFlags(
         newCheckIn,
         meeting.startTime,
         newCheckOut,
         meeting.endTime,
+        graceMinutes,
       );
       record.isLate = flags.isLate;
       record.lateMinutes = flags.lateMinutes;

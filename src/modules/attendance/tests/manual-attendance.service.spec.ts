@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/unbound-method, @typescript-eslint/no-unsafe-assignment */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import {
   NotFoundException,
@@ -86,6 +87,8 @@ describe('ManualAttendanceService (UC-B21)', () => {
   let attendanceRepo: jest.Mocked<Repository<AttendanceRecordEntity>>;
   let auditLogs: jest.Mocked<AuditLogsService>;
   let authzRead: jest.Mocked<AuthzReadRepository>;
+  let configService: { get: jest.Mock };
+  let attendanceManagerQuery: jest.Mock;
 
   const makeMeeting = (over: Partial<MeetingEntity> = {}): MeetingEntity =>
     ({
@@ -141,6 +144,10 @@ describe('ManualAttendanceService (UC-B21)', () => {
       create: jest.fn(),
       save: jest.fn(),
     });
+    // manager.query của attendanceRecordRepo — dùng bởi getAttendanceLateGraceMinutes()
+    // (đọc system_configs['attendance.late_grace_minutes']). Mặc định resolve [] (không có
+    // dòng nào — khớp trạng thái DB thật hiện tại), khiến hàm fallback về configService.get().
+    attendanceManagerQuery = jest.fn().mockResolvedValue([]);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ManualAttendanceService,
@@ -151,7 +158,10 @@ describe('ManualAttendanceService (UC-B21)', () => {
         },
         {
           provide: getRepositoryToken(AttendanceRecordEntity),
-          useValue: repoMock(),
+          useValue: {
+            ...repoMock(),
+            manager: { query: attendanceManagerQuery },
+          },
         },
         {
           provide: AuditLogsService,
@@ -165,6 +175,12 @@ describe('ManualAttendanceService (UC-B21)', () => {
               .mockResolvedValue({ roles: ['INTERNAL_USER'], permissions: [] }),
           },
         },
+        {
+          // Fallback no-grace mặc định (0) — giữ nguyên hành vi mọi test cũ.
+          // Test riêng cho grace>0 override bằng configService.get.mockReturnValueOnce(15).
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue(0) },
+        },
       ],
     }).compile();
 
@@ -174,6 +190,7 @@ describe('ManualAttendanceService (UC-B21)', () => {
     attendanceRepo = module.get(getRepositoryToken(AttendanceRecordEntity));
     auditLogs = module.get(AuditLogsService);
     authzRead = module.get(AuthzReadRepository);
+    configService = module.get(ConfigService);
 
     // Default: create echoes arg (+ id/timestamps); save echoes arg.
     attendanceRepo.create.mockImplementation(
@@ -244,6 +261,69 @@ describe('ManualAttendanceService (UC-B21)', () => {
       expect(res.attendanceStatus).toBe(AttendanceRecordStatus.LATE);
       expect(res.isLate).toBe(true);
       expect(res.lateMinutes).toBe(3);
+    });
+
+    // [2026-08-22] Đồng bộ ân hạn đi muộn với FaceAttendanceService (camera) —
+    // computeLateFlags() giờ nhận graceMinutes từ getAttendanceLateGraceMinutes(),
+    // cùng nguồn system_configs['attendance.late_grace_minutes'] mà camera đọc.
+    describe('đồng bộ grace period với FaceAttendanceService (camera)', () => {
+      it('grace=15 (từ system_configs), trễ 10 phút (trong ân hạn) → present, isLate=false', async () => {
+        asHost();
+        const meeting = makeMeeting({ startTime: past('2020-01-01T09:00:00Z') });
+        meetingRepo.findOne.mockResolvedValue(meeting);
+        participantRepo.findOne.mockResolvedValue(makeParticipant());
+        attendanceRepo.findOne.mockResolvedValue(null);
+        attendanceManagerQuery.mockResolvedValueOnce([{ config_value: '15' }]);
+
+        const res = await service.createManual(
+          'meeting-uuid-1',
+          { userId: TARGET_USER, checkInTime: '2020-01-01T09:10:00Z' },
+          ACTOR_HOST,
+        );
+        expect(res.isLate).toBe(false);
+        expect(res.lateMinutes).toBe(0);
+        expect(res.attendanceStatus).toBe(AttendanceRecordStatus.PRESENT);
+      });
+
+      it('grace=15 (từ system_configs), trễ 20 phút (vượt ân hạn) → late, isLate=true', async () => {
+        asHost();
+        const meeting = makeMeeting({ startTime: past('2020-01-01T09:00:00Z') });
+        meetingRepo.findOne.mockResolvedValue(meeting);
+        participantRepo.findOne.mockResolvedValue(makeParticipant());
+        attendanceRepo.findOne.mockResolvedValue(null);
+        attendanceManagerQuery.mockResolvedValueOnce([{ config_value: '15' }]);
+
+        const res = await service.createManual(
+          'meeting-uuid-1',
+          { userId: TARGET_USER, checkInTime: '2020-01-01T09:20:00Z' },
+          ACTOR_HOST,
+        );
+        expect(res.isLate).toBe(true);
+        expect(res.lateMinutes).toBe(20);
+        expect(res.attendanceStatus).toBe(AttendanceRecordStatus.LATE);
+      });
+
+      it('system_configs chưa có dòng nào (mảng rỗng) → fallback ConfigService.get, không throw', async () => {
+        asHost();
+        const meeting = makeMeeting({ startTime: past('2020-01-01T09:00:00Z') });
+        meetingRepo.findOne.mockResolvedValue(meeting);
+        participantRepo.findOne.mockResolvedValue(makeParticipant());
+        attendanceRepo.findOne.mockResolvedValue(null);
+        // attendanceManagerQuery mặc định resolve [] (từ beforeEach) — mô phỏng đúng
+        // trạng thái DB thật hiện tại (chưa ai lưu config này qua SystemSettings).
+        configService.get.mockReturnValueOnce(15);
+
+        const res = await service.createManual(
+          'meeting-uuid-1',
+          { userId: TARGET_USER, checkInTime: '2020-01-01T09:10:00Z' },
+          ACTOR_HOST,
+        );
+        expect(configService.get).toHaveBeenCalledWith(
+          'ATTENDANCE_LATE_GRACE_MINUTES',
+          0,
+        );
+        expect(res.isLate).toBe(false); // grace 15 (fallback) > trễ 10 phút
+      });
     });
 
     it('AC-006 422: user không phải participant', async () => {
@@ -478,6 +558,27 @@ describe('ManualAttendanceService (UC-B21)', () => {
       expect(res.isLate).toBe(true);
       expect(res.lateMinutes).toBe(5);
       expect(res.attendanceStatus).toBe(AttendanceRecordStatus.PRESENT); // KHÔNG đổi
+    });
+
+    it('[2026-08-22] updateProfile cũng đọc grace period (system_configs) — trong ân hạn → isLate=false, attendanceStatus vẫn KHÔNG đổi (desync chủ ý §1.4-9 giữ nguyên)', async () => {
+      asHost();
+      meetingRepo.findOne.mockResolvedValue(makeMeeting());
+      const record = makeRecord({
+        attendanceStatus: AttendanceRecordStatus.PRESENT,
+        isLate: false,
+      });
+      attendanceRepo.findOne.mockResolvedValue(record);
+      attendanceManagerQuery.mockResolvedValueOnce([{ config_value: '15' }]);
+
+      const res = await service.updateProfile(
+        'meeting-uuid-1',
+        'record-uuid-1',
+        { checkInTime: '2020-01-01T09:05:00Z' }, // trễ 5 phút, trong ân hạn 15 phút
+        ACTOR_HOST,
+      );
+      expect(res.isLate).toBe(false);
+      expect(res.lateMinutes).toBe(0);
+      expect(res.attendanceStatus).toBe(AttendanceRecordStatus.PRESENT); // vẫn KHÔNG đổi, chỉ công thức isLate đổi
     });
 
     it('AC-011/ERR-011 422: checkOutTime < checkInTime → INVALID_TIME_RANGE', async () => {
