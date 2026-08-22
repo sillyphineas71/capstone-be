@@ -103,6 +103,12 @@ export class ZonePresenceTimelineService {
       eventType: e.eventType,
       occupancyCount: e.occupancyCount,
       userId: e.userId,
+      // [2026-08-22] isStranger CHỈ áp dụng cho 'appear' (lượt bắt gặp 1 người cụ thể).
+      // 'count' (đếm người, writeCountEvent()) LUÔN userId=null theo thiết kế — KHÔNG
+      // phải "không nhận diện được", mà là sự kiện tổng hợp không gắn 1 người nào cả.
+      // Gộp cả 2 vào 1 công thức `userId === null` sẽ gắn nhầm badge "Người lạ" cho
+      // mọi dòng count (đa số dữ liệu bảng này).
+      isStranger: e.eventType === 'appear' && e.userId === null,
     }));
   }
 }

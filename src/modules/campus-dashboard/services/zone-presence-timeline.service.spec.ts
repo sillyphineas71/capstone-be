@@ -146,4 +146,41 @@ describe('ZonePresenceTimelineService (ZPT-001 / UC-119)', () => {
       occupancyCount: 5,
     });
   });
+
+  // [2026-08-22] isStranger — mirror công thức RAL-001/ALS-002 (userId===null) NHƯNG
+  // chỉ áp dụng cho eventType='appear', tránh gắn nhầm 'count' (luôn userId=null theo
+  // thiết kế writeCountEvent(), không phải "không nhận diện được").
+  describe('[2026-08-22] isStranger (eventType=appear + userId null)', () => {
+    it('appear + userId=null (người lạ thật) → isStranger=true', async () => {
+      presenceRepo.find.mockResolvedValue([
+        event({ eventType: 'appear', userId: null }),
+      ]);
+      const result = await service.getTimeline('zone-1', from, to);
+      expect(result.events[0].isStranger).toBe(true);
+    });
+
+    it('appear + userId có giá trị (người quen) → isStranger=false', async () => {
+      presenceRepo.find.mockResolvedValue([
+        event({ eventType: 'appear', userId: 'u1' }),
+      ]);
+      const result = await service.getTimeline('zone-1', from, to);
+      expect(result.events[0].isStranger).toBe(false);
+    });
+
+    it('QUAN TRỌNG NHẤT — count (đếm người, userId luôn null theo thiết kế) → isStranger=false, KHÔNG gắn nhầm "Người lạ"', async () => {
+      presenceRepo.find.mockResolvedValue([
+        event({ eventType: 'count', occupancyCount: 5, userId: null }),
+      ]);
+      const result = await service.getTimeline('zone-1', from, to);
+      expect(result.events[0].isStranger).toBe(false);
+    });
+
+    it('disappear + userId=null → isStranger=false (chỉ appear mới tính, mirror thiết kế hiện tại — disappear chưa có writer nào tạo ra nhưng vẫn phải an toàn nếu xuất hiện)', async () => {
+      presenceRepo.find.mockResolvedValue([
+        event({ eventType: 'disappear', userId: null }),
+      ]);
+      const result = await service.getTimeline('zone-1', from, to);
+      expect(result.events[0].isStranger).toBe(false);
+    });
+  });
 });
