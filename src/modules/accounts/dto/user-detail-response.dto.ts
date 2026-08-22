@@ -1,3 +1,5 @@
+import type { BiometricReviewStatus } from '../../../common/utils/biometric-status-resolver.util.js';
+
 export class DepartmentInfoDto {
   id: string;
   departmentName: string;
@@ -30,5 +32,9 @@ export class UserDetailResponseDto {
   lastLoginAt: string | null;
   roles: RoleInfoDto[];
   hasFaceProfile: boolean;
+  /** Trạng thái duyệt sinh trắc học chi tiết (BR-004) — xem biometric-status-resolver.util.ts */
+  biometricReviewStatus: BiometricReviewStatus;
+  /** Hạn sử dụng tài khoản — chỉ có giá trị với tài khoản đối tác/khách */
+  accountExpiresAt: string | null;
   createdAt: string;
 }

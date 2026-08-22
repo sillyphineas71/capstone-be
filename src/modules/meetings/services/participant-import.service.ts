@@ -44,9 +44,11 @@ import {
   MAX_IMPORT_ROWS,
   MAX_IMPORT_FILE_BYTES,
   XLSX_MIME,
-  IMPORT_PARTICIPANTS_HEADERS,
   IMPORT_PARTICIPANTS_COLUMNS,
+  IMPORT_PARTICIPANTS_HEADERS,
+  IMPORT_PARTICIPANTS_HEADER_ALIASES,
   IMPORT_PARTICIPANT_TYPE_ALIASES,
+  ImportColumnKey,
   ImportParticipantType,
   ImportRowStatus,
   ImportRowReason,
@@ -70,7 +72,13 @@ interface ParsedRow {
 interface RowState {
   parsed: ParsedRow;
   result: ImportRowResult;
+  /** Loại đã chốt sau bước tra cứu người dùng; null khi dòng lỗi ngay từ đầu. */
   kind: ImportParticipantType | null;
+  /**
+   * Loại do người dùng khai tường minh ở cột "Loại" (chỉ file legacy 7 cột còn cột này).
+   * null = không khai -> hệ thống tự đoán theo kết quả tra cứu Email/Mã nhân viên.
+   */
+  declaredKind: ImportParticipantType | null;
   resolvedUserId?: string;
   isHardError: boolean;
   isWarning: boolean;
@@ -97,11 +105,13 @@ export class ParticipantImportService {
     workbook.creator = 'SmartTracking System';
     workbook.created = new Date();
 
-    const sheet = workbook.addWorksheet('Participants');
+    // Sheet/tiêu đề phải khớp 1-1 với file mẫu sinh ở BookMeeting.jsx (downloadSampleExcel)
+    // — 1 định dạng duy nhất cho cả booking lẫn Meeting Detail.
+    const sheet = workbook.addWorksheet('DanhSach');
     sheet.columns = IMPORT_PARTICIPANTS_COLUMNS.map((c) => ({
       header: c.header,
       key: c.key,
-      width: c.key === 'stt' ? 8 : 24,
+      width: c.key === 'email' ? 28 : 24,
     }));
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true };
@@ -115,17 +125,13 @@ export class ParticipantImportService {
     });
 
     sheet.addRow({
-      stt: 1,
-      type: 'internal',
-      email: 'nhanvien@company.com',
+      email: 'nhanvien@smrmpts.com',
       employee_code: '',
       full_name: '',
       organization_name: '',
       phone_number: '',
     });
     sheet.addRow({
-      stt: 2,
-      type: 'internal',
       email: '',
       employee_code: 'EMP0123',
       full_name: '',
@@ -133,8 +139,6 @@ export class ParticipantImportService {
       phone_number: '',
     });
     sheet.addRow({
-      stt: 3,
-      type: 'external',
       email: 'khach@doitac.com',
       employee_code: '',
       full_name: 'Nguyen Van B',
@@ -142,23 +146,22 @@ export class ParticipantImportService {
       phone_number: '0900000000',
     });
 
-    const guide = workbook.addWorksheet('Huong dan');
-    guide.columns = [{ width: 24 }, { width: 70 }];
+    const guide = workbook.addWorksheet('HuongDan');
+    guide.columns = [{ width: 24 }, { width: 74 }];
     const guideRows: [string, string][] = [
       ['Cột', 'Mô tả'],
-      ['STT', 'Số thứ tự dòng (tùy chọn, chỉ để tham khảo)'],
-      [
-        'Loại',
-        'Bắt buộc: Nội bộ / internal (nhân viên nội bộ) hoặc Khách ngoài / external (khách ngoài)',
-      ],
       [
         'Email',
-        'Internal: định danh chính (ưu tiên). External: email liên hệ (bắt buộc)',
+        'Nhân viên: định danh chính (ưu tiên). Khách ngoài: email liên hệ (bắt buộc)',
       ],
-      ['Mã nhân viên', 'Internal: fallback khi Email trống'],
-      ['Họ và tên', 'External: bắt buộc'],
-      ['Tổ chức', 'External: tùy chọn'],
-      ['Số điện thoại', 'External: tùy chọn'],
+      ['Mã nhân viên', 'Nhân viên: tùy chọn (dùng khi không có email)'],
+      ['Họ và tên', 'Khách ngoài: bắt buộc'],
+      ['Tổ chức/Công ty', 'Khách ngoài: tùy chọn'],
+      ['Số điện thoại', 'Khách ngoài: tùy chọn'],
+      [
+        'Cách nhận diện',
+        'Hệ thống tự tra Email/Mã nhân viên: khớp một tài khoản trong hệ thống = nhân viên nội bộ; không khớp = khách ngoài (bắt buộc điền Họ và tên).',
+      ],
       [
         'Lưu ý',
         'Chỉ tài khoản nội bộ có vai trò Nhân viên (Employee) hoặc Quản lý (Manager) mới được thêm làm người tham dự. Tài khoản Business Admin / System Admin sẽ bị từ chối (dòng lỗi ROLE_NOT_ALLOWED).',
@@ -238,17 +241,31 @@ export class ParticipantImportService {
     await this.evaluateWarnings(meeting, states, authUser.userId);
 
     // ── Step 5: Two-step gate ──
-    const hasWarnings = states.some((s) => s.isWarning);
-    if (hasWarnings && options.forceAddWithWarnings !== true) {
+    // [2026-08-23] Gate mở rộng cho CẢ dòng lỗi (trước đây chỉ chặn khi có cảnh báo):
+    // file có lỗi vẫn được commit âm thầm phần hợp lệ và FE báo "thành công", người dùng
+    // không hề biết dòng nào rớt. Nay mọi file "không sạch" đều trả preview 422 để người
+    // dùng xem trước rồi mới quyết định — đúng luồng của màn Đặt lịch họp.
+    const warningCount = states.filter((s) => s.isWarning).length;
+    const errorCount = states.filter((s) => s.isHardError).length;
+    if (
+      (warningCount > 0 || errorCount > 0) &&
+      options.forceAddWithWarnings !== true
+    ) {
       throw new UnprocessableEntityException({
         success: false,
-        message: 'Có dòng cảnh báo. Vui lòng xem lại và xác nhận.',
+        message:
+          errorCount > 0
+            ? 'Tệp có dòng không hợp lệ. Vui lòng xem lại và xác nhận.'
+            : 'Có dòng cảnh báo. Vui lòng xem lại và xác nhận.',
         error: {
           code: ImportRequestError.WARNING_CONFIRMATION_REQUIRED,
           details: {
             totalRows: states.length,
-            warningCount: states.filter((s) => s.isWarning).length,
-            errorCount: states.filter((s) => s.isHardError).length,
+            // successCount ở preview = số dòng SẼ được thêm nếu người dùng xác nhận.
+            successCount: states.length - errorCount,
+            warningCount,
+            errorCount,
+            failedCount: errorCount,
             results: states.map((s) => s.result),
           },
         },
@@ -323,7 +340,6 @@ export class ParticipantImportService {
     const failedCount = states.filter(
       (s) => s.result.status === ImportRowStatus.FAILED,
     ).length;
-    const warningCount = states.filter((s) => s.isWarning).length;
 
     await this.writeImportAudit(meetingId, authUser.userId, clientContext, {
       totalRows: states.length,
@@ -436,25 +452,34 @@ export class ParticipantImportService {
       });
     }
 
-    // Validate header: đúng số cột (7) và đúng tên cột theo thứ tự chuẩn.
+    // Validate header theo TÊN cột (không theo vị trí) — chấp nhận template mới 5 cột,
+    // template legacy 7 cột (STT/Loại) và file bị đổi thứ tự cột; nhưng vẫn chặn khi
+    // người dùng tự ý thêm cột lạ.
     const headerRow = sheet.getRow(1);
-    const actualHeaders = IMPORT_PARTICIPANTS_HEADERS.map((_, idx) =>
-      this.cellString(headerRow.getCell(idx + 1)).toLowerCase(),
-    );
-    const headerMatches = IMPORT_PARTICIPANTS_HEADERS.every(
-      (expected, idx) => actualHeaders[idx] === expected.toLowerCase(),
-    );
-    if (
-      sheet.columnCount > IMPORT_PARTICIPANTS_HEADERS.length ||
-      !headerMatches
-    ) {
+    const columnIndex = new Map<ImportColumnKey, number>();
+    const unknownHeaders: string[] = [];
+    for (let c = 1; c <= sheet.columnCount; c++) {
+      const raw = this.cellString(headerRow.getCell(c));
+      if (!raw) continue;
+      const key = IMPORT_PARTICIPANTS_HEADER_ALIASES[raw.toLowerCase()];
+      if (!key) {
+        unknownHeaders.push(raw);
+        continue;
+      }
+      if (!columnIndex.has(key)) columnIndex.set(key, c);
+    }
+
+    const hasIdentifierColumn =
+      columnIndex.has('email') || columnIndex.has('employee_code');
+    if (unknownHeaders.length > 0 || !hasIdentifierColumn) {
       throw new BadRequestException({
         success: false,
-        message: 'Sai nguyên mẫu. Vui lòng không tự ý thêm cột.',
+        message: 'Sai nguyên mẫu. Vui lòng không tự ý thêm/đổi tên cột.',
         error: {
           code: ImportRequestError.INVALID_TEMPLATE,
           details: {
             expectedHeaders: IMPORT_PARTICIPANTS_HEADERS,
+            unknownHeaders,
             actualColumnCount: sheet.columnCount,
           },
         },
@@ -463,16 +488,20 @@ export class ParticipantImportService {
 
     const rows: ParsedRow[] = [];
     const lastRow = sheet.rowCount;
+    const cellOf = (excelRow: ExcelJS.Row, key: ImportColumnKey): string => {
+      const idx = columnIndex.get(key);
+      return idx ? this.cellString(excelRow.getCell(idx)) : '';
+    };
     for (let r = 2; r <= lastRow; r++) {
       const excelRow = sheet.getRow(r);
-      // Cột 1 = STT (chỉ tham khảo, không dùng trong logic).
-      const rawType = this.cellString(excelRow.getCell(2)).toLowerCase();
+      // Cột STT (nếu có) chỉ để tham khảo, không dùng trong logic.
+      const rawType = cellOf(excelRow, 'type').toLowerCase();
       const type = IMPORT_PARTICIPANT_TYPE_ALIASES[rawType] ?? rawType;
-      const email = this.cellString(excelRow.getCell(3)).toLowerCase();
-      const employeeCode = this.cellString(excelRow.getCell(4));
-      const fullName = this.cellString(excelRow.getCell(5));
-      const organizationName = this.cellString(excelRow.getCell(6));
-      const phoneNumber = this.cellString(excelRow.getCell(7));
+      const email = cellOf(excelRow, 'email').toLowerCase();
+      const employeeCode = cellOf(excelRow, 'employee_code');
+      const fullName = cellOf(excelRow, 'full_name');
+      const organizationName = cellOf(excelRow, 'organization_name');
+      const phoneNumber = cellOf(excelRow, 'phone_number');
 
       // Bỏ qua dòng hoàn toàn trống, hoặc chỉ điền mỗi STT mà các cột khác trống
       if (
@@ -518,49 +547,46 @@ export class ParticipantImportService {
     return rows;
   }
 
+  /**
+   * Validate tĩnh (chưa chạm DB). Template mới KHÔNG có cột "Loại" nên phần lớn dòng
+   * sẽ ở trạng thái "auto" (declaredKind = null) — loại thật được chốt ở bước
+   * resolveAndDetectDuplicates sau khi tra Email/Mã nhân viên, giống hệt logic của
+   * màn Đặt lịch họp (BookMeeting.jsx -> handleExcelImport).
+   */
   private staticValidate(parsed: ParsedRow): RowState {
     const isInternal =
       parsed.type === (ImportParticipantType.INTERNAL as string);
     const isExternal =
       parsed.type === (ImportParticipantType.EXTERNAL as string);
+    const declaredKind = isInternal
+      ? ImportParticipantType.INTERNAL
+      : isExternal
+        ? ImportParticipantType.EXTERNAL
+        : null;
     const identifier =
       parsed.email || parsed.employeeCode || parsed.fullName || '';
 
     const result: ImportRowResult = {
       row: parsed.row,
-      type: isInternal
-        ? ImportParticipantType.INTERNAL
-        : isExternal
-          ? ImportParticipantType.EXTERNAL
-          : 'unknown',
+      type: declaredKind ?? 'unknown',
       identifier,
       status: ImportRowStatus.VALID,
     };
     const state: RowState = {
       parsed,
       result,
-      kind: isInternal
-        ? ImportParticipantType.INTERNAL
-        : isExternal
-          ? ImportParticipantType.EXTERNAL
-          : null,
+      kind: declaredKind,
+      declaredKind,
       isHardError: false,
       isWarning: false,
     };
 
-    if (!isInternal && !isExternal) {
+    // File legacy: cột "Loại" có điền nhưng sai giá trị -> lỗi như cũ.
+    if (!declaredKind && parsed.type) {
       return this.markError(state, ImportRowReason.INVALID_ROW_TYPE);
     }
 
-    if (isInternal) {
-      if (!parsed.email && !parsed.employeeCode) {
-        return this.markError(state, ImportRowReason.MISSING_IDENTIFIER);
-      }
-      if (parsed.email && !EMAIL_REGEX.test(parsed.email)) {
-        return this.markError(state, ImportRowReason.INVALID_EMAIL);
-      }
-    } else {
-      // external
+    if (declaredKind === ImportParticipantType.EXTERNAL) {
       if (
         !parsed.fullName ||
         !parsed.email ||
@@ -568,6 +594,15 @@ export class ParticipantImportService {
       ) {
         return this.markError(state, ImportRowReason.INVALID_EXTERNAL_ROW);
       }
+      return state;
+    }
+
+    // internal tường minh HOẶC auto: phải có ít nhất 1 định danh hợp lệ để tra cứu.
+    if (!parsed.email && !parsed.employeeCode) {
+      return this.markError(state, ImportRowReason.MISSING_IDENTIFIER);
+    }
+    if (parsed.email && !EMAIL_REGEX.test(parsed.email)) {
+      return this.markError(state, ImportRowReason.INVALID_EMAIL);
     }
 
     return state;
@@ -577,19 +612,16 @@ export class ParticipantImportService {
     meetingId: string,
     states: RowState[],
   ): Promise<void> {
-    const internalStates = states.filter(
-      (s) => !s.isHardError && s.kind === ImportParticipantType.INTERNAL,
-    );
-    const externalStates = states.filter(
-      (s) => !s.isHardError && s.kind === ImportParticipantType.EXTERNAL,
+    // Dòng cần tra cứu tài khoản nội bộ: khai tường minh "Nội bộ" HOẶC để hệ thống tự đoán.
+    const lookupStates = states.filter(
+      (s) =>
+        !s.isHardError && s.declaredKind !== ImportParticipantType.EXTERNAL,
     );
 
     // ── Resolve internal users (batch) ──
-    if (internalStates.length > 0) {
-      const emails = internalStates
-        .map((s) => s.parsed.email)
-        .filter((e) => !!e);
-      const codes = internalStates
+    if (lookupStates.length > 0) {
+      const emails = lookupStates.map((s) => s.parsed.email).filter((e) => !!e);
+      const codes = lookupStates
         .map((s) => s.parsed.employeeCode)
         .filter((c) => !!c);
 
@@ -609,18 +641,43 @@ export class ParticipantImportService {
         if (u.employeeCode) byCode.set(u.employeeCode, u);
       }
 
-      for (const s of internalStates) {
+      for (const s of lookupStates) {
         const user =
           (s.parsed.email && byEmail.get(s.parsed.email)) ||
           (s.parsed.employeeCode && byCode.get(s.parsed.employeeCode)) ||
           null;
-        if (!user) {
-          this.markError(s, ImportRowReason.USER_NOT_FOUND);
-        } else {
+        if (user) {
+          s.kind = ImportParticipantType.INTERNAL;
+          s.result.type = ImportParticipantType.INTERNAL;
           s.resolvedUserId = user.id;
+          continue;
+        }
+        if (s.declaredKind === ImportParticipantType.INTERNAL) {
+          this.markError(s, ImportRowReason.USER_NOT_FOUND);
+          continue;
+        }
+        // Auto: không khớp tài khoản nào -> coi là khách ngoài, khi đó Họ và tên
+        // là bắt buộc (giống BookMeeting.jsx).
+        s.kind = ImportParticipantType.EXTERNAL;
+        s.result.type = ImportParticipantType.EXTERNAL;
+        if (
+          !s.parsed.fullName ||
+          !s.parsed.email ||
+          !EMAIL_REGEX.test(s.parsed.email)
+        ) {
+          this.markError(s, ImportRowReason.INVALID_EXTERNAL_ROW);
         }
       }
+    }
 
+    const internalStates = states.filter(
+      (s) => !s.isHardError && s.kind === ImportParticipantType.INTERNAL,
+    );
+    const externalStates = states.filter(
+      (s) => !s.isHardError && s.kind === ImportParticipantType.EXTERNAL,
+    );
+
+    if (internalStates.length > 0) {
       // [2026-08-21] Chặn import Business Admin / System Admin làm participant —
       // hệ thống chỉ cho phép Employee/Manager tham dự cuộc họp.
       const resolvedIdsForRoleCheck = internalStates

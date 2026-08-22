@@ -15,17 +15,22 @@ export enum ImportParticipantType {
 }
 
 /**
- * Cột chuẩn của template (đúng thứ tự cột trong sheet đầu tiên).
+ * [2026-08-23] Template CHUẨN DUY NHẤT của hệ thống — 5 cột, KHÔNG có cột "Loại".
+ * Trùng khít với file mẫu sinh ở màn Đặt lịch họp (BookMeeting.jsx -> downloadSampleExcel)
+ * để người dùng chỉ học 1 định dạng: file tải ở booking upload thẳng vào Meeting Detail
+ * được và ngược lại.
+ *
+ * Loại người tham dự được SUY RA tự động (giống booking): tra Email/Mã nhân viên trong
+ * bảng users -> tìm thấy = nội bộ; không thấy = khách ngoài (khi đó "Họ và tên" là bắt buộc).
+ *
  * `key`: field nội bộ dùng khi đọc/ghi dữ liệu.
  * `header`: tiêu đề hiển thị (tiếng Việt) trong file Excel.
  */
 export const IMPORT_PARTICIPANTS_COLUMNS = [
-  { key: 'stt', header: 'STT' },
-  { key: 'type', header: 'Loại' },
   { key: 'email', header: 'Email' },
   { key: 'employee_code', header: 'Mã nhân viên' },
   { key: 'full_name', header: 'Họ và tên' },
-  { key: 'organization_name', header: 'Tổ chức' },
+  { key: 'organization_name', header: 'Tổ chức/Công ty' },
   { key: 'phone_number', header: 'Số điện thoại' },
 ] as const;
 
@@ -36,8 +41,49 @@ export const IMPORT_PARTICIPANTS_HEADERS = IMPORT_PARTICIPANTS_COLUMNS.map(
   (c) => c.header,
 );
 
+/** Tên field nội bộ của 1 cột nhận diện được (gồm cả 2 cột legacy STT/Loại). */
+export type ImportColumnKey =
+  | 'stt'
+  | 'type'
+  | 'email'
+  | 'employee_code'
+  | 'full_name'
+  | 'organization_name'
+  | 'phone_number';
+
 /**
- * Alias tiếng Việt cho giá trị cột "Loại", bên cạnh giá trị cũ (internal/external).
+ * Bản đồ tiêu đề cột -> field, dùng để đọc file theo TÊN cột thay vì theo vị trí.
+ * Nhờ vậy BE đọc được cả:
+ *   - template mới 5 cột (booking + Meeting Detail dùng chung),
+ *   - template legacy 7 cột (STT, Loại, ...) đã phát cho người dùng trước 2026-08-23,
+ *   - file bị đổi thứ tự cột.
+ * Bất kỳ tiêu đề nào KHÔNG nằm trong bản đồ này đều bị coi là sai nguyên mẫu.
+ */
+export const IMPORT_PARTICIPANTS_HEADER_ALIASES: Record<
+  string,
+  ImportColumnKey
+> = {
+  // 5 cột chuẩn
+  email: 'email',
+  'mã nhân viên': 'employee_code',
+  'họ và tên': 'full_name',
+  'tổ chức/công ty': 'organization_name',
+  'số điện thoại': 'phone_number',
+  // Alias legacy / snake_case
+  stt: 'stt',
+  loại: 'type',
+  type: 'type',
+  employee_code: 'employee_code',
+  full_name: 'full_name',
+  'tổ chức': 'organization_name',
+  'phòng ban/tổ chức': 'organization_name',
+  organization_name: 'organization_name',
+  phone_number: 'phone_number',
+};
+
+/**
+ * Alias tiếng Việt cho giá trị cột "Loại" (chỉ còn dùng cho file legacy), bên cạnh
+ * giá trị cũ (internal/external). Template mới không có cột này.
  */
 export const IMPORT_PARTICIPANT_TYPE_ALIASES: Record<
   string,

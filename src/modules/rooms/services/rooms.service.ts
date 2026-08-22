@@ -34,6 +34,17 @@ import {
   MeetingEventSourceType,
 } from '../../meetings/entities/meeting-event.entity.js';
 import { RoomEventEntity } from '../entities/room-event.entity.js';
+import {
+  EquipmentEntity,
+  EquipmentType,
+  AssetStatus as EquipmentAssetStatus,
+} from '../../equipment/entities/equipment.entity.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import {
+  NotificationType,
+  NotificationChannel,
+  NotificationPriority,
+} from '../../notifications/entities/notification.entity.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { BackgroundJobType } from '../../administration/entities/background-job.entity.js';
 import { RoomDeleteNotificationProcessor } from './room-delete-notification.processor.js';
@@ -63,7 +74,25 @@ export class RoomsService {
     private readonly backgroundJobsService: BackgroundJobsService,
     private readonly roomDeleteNotificationProcessor: RoomDeleteNotificationProcessor,
     private readonly roomStatusService: RoomStatusService,
+    private readonly notificationsService: NotificationsService,
   ) {}
+
+  /**
+   * Helper Lay danh sach ID nguoi dung co role BUSINESS_ADMIN.
+   * Mirror EquipmentService.resolveBusinessAdminIds().
+   */
+  private async resolveBusinessAdminIds(): Promise<string[]> {
+    if (!this.dataSource.manager?.query) {
+      return [];
+    }
+    const rows: Array<{ id: string }> = await this.dataSource.manager.query(
+      `SELECT DISTINCT u.id FROM users u
+         JOIN user_roles ur ON ur.user_id = u.id AND ur.is_active = true
+         JOIN roles r ON r.id = ur.role_id
+        WHERE r.role_code = 'BUSINESS_ADMIN' AND u.deleted_at IS NULL`,
+    );
+    return rows.map((r) => r.id);
+  }
 
   /**
    * Kiem tra roomCode da ton tai trong DB (ke ca soft delete).
@@ -243,24 +272,101 @@ export class RoomsService {
       allowRecording: room.allowRecording,
     };
 
-    const saved = await this.dataSource.transaction(async (em) => {
-      room.roomName = roomName;
-      room.areaName = areaName;
-      if (dto.capacity !== undefined) room.capacity = dto.capacity;
-      if (dto.siteName !== undefined) room.siteName = dto.siteName;
-      if (dto.locationDescription !== undefined)
-        room.locationDescription = dto.locationDescription;
-      if (dto.roomType !== undefined) room.roomType = dto.roomType;
-      if (dto.hasCamera !== undefined) room.hasCamera = dto.hasCamera;
-      if (dto.hasMicrophone !== undefined)
-        room.hasMicrophone = dto.hasMicrophone;
-      if (dto.hasDisplay !== undefined) room.hasDisplay = dto.hasDisplay;
-      if (dto.allowRecording !== undefined)
-        room.allowRecording = dto.allowRecording;
-      room.updatedBy = userId;
-      // roomCode/currentStatus/isActive/createdBy/createdAt: khong dong den
-      return em.save(RoomEntity, room);
-    });
+    const { saved, autoUnassignedEquipments } =
+      await this.dataSource.transaction(async (em) => {
+        room.roomName = roomName;
+        room.areaName = areaName;
+        if (dto.capacity !== undefined) room.capacity = dto.capacity;
+        if (dto.siteName !== undefined) room.siteName = dto.siteName;
+        if (dto.locationDescription !== undefined)
+          room.locationDescription = dto.locationDescription;
+        if (dto.roomType !== undefined) room.roomType = dto.roomType;
+        if (dto.hasCamera !== undefined) room.hasCamera = dto.hasCamera;
+        if (dto.hasMicrophone !== undefined)
+          room.hasMicrophone = dto.hasMicrophone;
+        if (dto.hasDisplay !== undefined) room.hasDisplay = dto.hasDisplay;
+        if (dto.allowRecording !== undefined)
+          room.allowRecording = dto.allowRecording;
+        room.updatedBy = userId;
+        // roomCode/currentStatus/isActive/createdBy/createdAt: khong dong den
+        const savedRoom = await em.save(RoomEntity, room);
+
+        // BAO_CAO 2026-08-23: khi co/mic/man hinh cua phong vua bi TAT
+        // (true -> false), thiet bi loai do dang gan phong nay phai duoc
+        // TU DONG GO — tranh trang thai vo ly "phong khong con mic nhung
+        // mic B van dang gan phong". Doi xung logic go thiet bi o deleteRoom
+        // (UC-63): mutation + audit log cung nam trong transaction chinh.
+        const removedTypes: EquipmentType[] = [];
+        if (oldValueJson.hasCamera && savedRoom.hasCamera === false) {
+          removedTypes.push(EquipmentType.CAMERA);
+        }
+        if (oldValueJson.hasMicrophone && savedRoom.hasMicrophone === false) {
+          removedTypes.push(EquipmentType.MICROPHONE);
+        }
+        if (oldValueJson.hasDisplay && savedRoom.hasDisplay === false) {
+          removedTypes.push(EquipmentType.DISPLAY);
+        }
+
+        const autoUnassignedEquipments: Array<{
+          id: string;
+          equipmentCode: string;
+          equipmentName: string;
+          equipmentType: EquipmentType;
+        }> = [];
+
+        if (removedTypes.length > 0) {
+          const affected = await em
+            .createQueryBuilder(EquipmentEntity, 'equipment')
+            .where('equipment.currentRoomId = :roomId', { roomId })
+            .andWhere('equipment.equipmentType IN (:...types)', {
+              types: removedTypes,
+            })
+            .andWhere('equipment.deletedAt IS NULL')
+            .getMany();
+
+          for (const eq of affected) {
+            const oldEquipmentValue = {
+              currentRoomId: eq.currentRoomId,
+              assetStatus: eq.assetStatus,
+            };
+            eq.currentRoomId = null;
+            eq.assignedBy = null;
+            eq.assignedAt = null;
+            eq.installedAt = null;
+            eq.assignmentNote = null;
+            if (eq.assetStatus === EquipmentAssetStatus.ASSIGNED) {
+              eq.assetStatus = EquipmentAssetStatus.AVAILABLE;
+            }
+            await em.save(EquipmentEntity, eq);
+
+            const equipmentAuditLog = em.create(AuditLogEntity, {
+              userId,
+              actionType: 'update',
+              entityType: 'equipment',
+              entityId: eq.id,
+              oldValueJson: oldEquipmentValue,
+              newValueJson: {
+                currentRoomId: null,
+                assetStatus: eq.assetStatus,
+                reason: 'room_config_updated',
+                roomId,
+              },
+              ipAddress: ipAddress ?? null,
+              severity: AuditLogSeverity.INFO,
+            });
+            await em.save(AuditLogEntity, equipmentAuditLog);
+
+            autoUnassignedEquipments.push({
+              id: eq.id,
+              equipmentCode: eq.equipmentCode,
+              equipmentName: eq.equipmentName,
+              equipmentType: eq.equipmentType,
+            });
+          }
+        }
+
+        return { saved: savedRoom, autoUnassignedEquipments };
+      });
 
     try {
       await this.dataSource.transaction(async (em) => {
@@ -292,6 +398,40 @@ export class RoomsService {
       this.logger.error(
         `Failed to write audit log for room update ${saved.id}: ${err instanceof Error ? err.message : 'Unknown'}`,
       );
+    }
+
+    // BAO_CAO 2026-08-23 — bao BUSINESS_ADMIN khi co thiet bi bi TU DONG GO do
+    // doi cau hinh phong (fail-separate, KHONG rollback nghiep vu update()).
+    if (autoUnassignedEquipments.length > 0) {
+      try {
+        const adminIds = await this.resolveBusinessAdminIds();
+        const equipmentListText = autoUnassignedEquipments
+          .map((eq) => `${eq.equipmentName} (${eq.equipmentCode})`)
+          .join(', ');
+        await this.notificationsService.createNotification({
+          notificationType: NotificationType.EQUIPMENT_AUTO_UNASSIGNED,
+          channel: NotificationChannel.IN_APP,
+          subject: 'Thiết bị đã được tự động gỡ khỏi phòng',
+          content: `Phòng ${saved.roomName} vừa cập nhật cấu hình (tắt loại thiết bị không còn sử dụng), hệ thống đã tự động gỡ ${autoUnassignedEquipments.length} thiết bị đang gán tại phòng này: ${equipmentListText}. Vui lòng kiểm tra tại Equipment Manager.`,
+          relatedEntityType: 'room',
+          relatedEntityId: saved.id,
+          recipientScope: 'user_list',
+          recipientUserIds: adminIds,
+          priority: NotificationPriority.HIGH,
+          createdBy: userId,
+          payloadJson: {
+            roomId: saved.id,
+            roomName: saved.roomName,
+            autoUnassignedEquipments,
+          },
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to notify BUSINESS_ADMIN for equipment auto-unassigned by room ${saved.id}: ${
+            err instanceof Error ? err.message : 'Unknown'
+          }`,
+        );
+      }
     }
 
     this.websocketService.broadcast('room.updated', {
@@ -479,12 +619,17 @@ export class RoomsService {
       });
     }
 
-    const [scheduledMeetings, pendingMeetings, blockedByInProgressMeeting] =
-      await Promise.all([
-        this.findFutureScheduledMeetings(roomId),
-        this.findFuturePendingMeetings(roomId),
-        this.hasBlockingInProgressMeeting(roomId),
-      ]);
+    const [
+      scheduledMeetings,
+      pendingMeetings,
+      blockedByInProgressMeeting,
+      assignedEquipmentCount,
+    ] = await Promise.all([
+      this.findFutureScheduledMeetings(roomId),
+      this.findFuturePendingMeetings(roomId),
+      this.hasBlockingInProgressMeeting(roomId),
+      this.countAssignedEquipment(roomId),
+    ]);
 
     return new DeletionImpactResponseDto({
       roomId: room.id,
@@ -498,7 +643,26 @@ export class RoomsService {
         endTime: m.endTime,
       })),
       pendingMeetingCount: pendingMeetings.length,
+      assignedEquipmentCount,
     });
+  }
+
+  /**
+   * So thiet bi (equipments, chua soft-delete) dang gan phong nay — khong
+   * chan xoa phong (khac EX1/EX2), chi de hien thi preview. Khi xoa that,
+   * cac thiet bi nay se duoc TU DONG GO trong deleteRoom() (xem countAssignedEquipment
+   * duoc goi lai ben trong transaction de lay danh sach).
+   */
+  private async countAssignedEquipment(
+    roomId: string,
+    manager?: EntityManager,
+  ): Promise<number> {
+    const em = manager ?? this.dataSource.manager;
+    return em
+      .createQueryBuilder(EquipmentEntity, 'equipment')
+      .where('equipment.currentRoomId = :roomId', { roomId })
+      .andWhere('equipment.deletedAt IS NULL')
+      .getCount();
   }
 
   /**
@@ -557,7 +721,8 @@ export class RoomsService {
       });
     }
 
-    const affectedMeetingIds = await this.dataSource.transaction(async (em) => {
+    const { meetingIds: affectedMeetingIds, affectedEquipmentCount } =
+      await this.dataSource.transaction(async (em) => {
       const affectedMeetings = await this.findFuturePendingMeetings(roomId, em);
 
       // (a) soft-delete rooms
@@ -609,10 +774,54 @@ export class RoomsService {
       });
       await em.save(RoomEventEntity, roomEvent);
 
-      return meetingIds;
+      // (f) TU DONG GO cac thiet bi dang gan phong nay (khong chan xoa phong
+      // — BA khong phai tu go tung thiet bi truoc; quyet dinh chot voi PM
+      // 2026-08-23, doi xung voi logic go tham chieu phong o deleteEquipment
+      // UC-63). Thiet bi ve trang thai AVAILABLE neu dang ASSIGNED; giu
+      // nguyen assetStatus neu dang MAINTENANCE/RETIRED/LOST (khong lien quan
+      // phong bi xoa).
+      const assignedEquipments = await em
+        .createQueryBuilder(EquipmentEntity, 'equipment')
+        .where('equipment.currentRoomId = :roomId', { roomId })
+        .andWhere('equipment.deletedAt IS NULL')
+        .getMany();
+      for (const eq of assignedEquipments) {
+        const oldValue = {
+          currentRoomId: eq.currentRoomId,
+          assetStatus: eq.assetStatus,
+        };
+        eq.currentRoomId = null;
+        eq.assignedBy = null;
+        eq.assignedAt = null;
+        eq.installedAt = null;
+        eq.assignmentNote = null;
+        if (eq.assetStatus === EquipmentAssetStatus.ASSIGNED) {
+          eq.assetStatus = EquipmentAssetStatus.AVAILABLE;
+        }
+        await em.save(EquipmentEntity, eq);
+
+        const equipmentAuditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'equipment',
+          entityId: eq.id,
+          oldValueJson: oldValue,
+          newValueJson: {
+            currentRoomId: null,
+            assetStatus: eq.assetStatus,
+            reason: 'room_deleted',
+            deletedRoomId: roomId,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, equipmentAuditLog);
+      }
+
+      return { meetingIds, affectedEquipmentCount: assignedEquipments.length };
     });
 
-    // (f) audit log — ngoai transaction, fail khong rollback
+    // (g) audit log cho room — ngoai transaction, fail khong rollback
     try {
       await this.dataSource.transaction(async (em) => {
         const auditLog = em.create(AuditLogEntity, {
@@ -620,7 +829,11 @@ export class RoomsService {
           actionType: 'delete',
           entityType: 'room',
           entityId: roomId,
-          newValueJson: { deletedAt: new Date(), affectedMeetingIds },
+          newValueJson: {
+            deletedAt: new Date(),
+            affectedMeetingIds,
+            affectedEquipmentCount,
+          },
           ipAddress: ipAddress ?? null,
           severity: AuditLogSeverity.INFO,
         });
@@ -664,6 +877,7 @@ export class RoomsService {
       roomId,
       deletedAt,
       affectedMeetingCount: affectedMeetingIds.length,
+      affectedEquipmentCount,
       notificationJobId,
     });
   }

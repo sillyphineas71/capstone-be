@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, IsNull, Brackets } from 'typeorm';
 import {
   EquipmentEntity,
+  EquipmentType,
   AssetStatus,
   HealthStatus,
 } from '../entities/equipment.entity.js';
@@ -38,8 +39,21 @@ import {
   EquipmentFaultHistoryItemDto,
   EquipmentFaultEventType,
 } from '../dto/equipment-fault-history-item.dto.js';
+import { RoomEquipmentGapItemDto } from '../dto/room-equipment-gap-item.dto.js';
 
 const EQUIPMENTS_PATH = '/api/v1/equipments';
+
+/**
+ * Chi 3 loai thiet bi nay co cot dang ky rieng tren RoomEntity
+ * (has_camera/has_microphone/has_display). Cac loai khac (speaker,
+ * capture_agent, sensor, other) khong co co so de doi chieu nen KHONG bi
+ * chan boi validateRoomRegisteredForType — xem BAO_CAO tuong ung ve gap nay.
+ */
+const ROOM_EQUIPMENT_TYPE_LABELS: Partial<Record<EquipmentType, string>> = {
+  [EquipmentType.CAMERA]: 'Camera',
+  [EquipmentType.MICROPHONE]: 'Microphone',
+  [EquipmentType.DISPLAY]: 'Màn hình/Tivi',
+};
 
 /**
  * UC-61 — Đăng ký thiết bị họp mới.
@@ -102,6 +116,64 @@ export class EquipmentService {
   }
 
   /**
+   * Danh sach nhan Tieng Viet cac loai thiet bi phong da duoc dang ky
+   * (has_camera/has_microphone/has_display = true), dung de hien thi chi tiet
+   * trong thong bao loi ROOM_EQUIPMENT_TYPE_MISMATCH.
+   */
+  private getRoomRegisteredTypeLabels(room: RoomEntity): string[] {
+    const labels: string[] = [];
+    if (room.hasCamera) labels.push(ROOM_EQUIPMENT_TYPE_LABELS[EquipmentType.CAMERA]!);
+    if (room.hasMicrophone)
+      labels.push(ROOM_EQUIPMENT_TYPE_LABELS[EquipmentType.MICROPHONE]!);
+    if (room.hasDisplay) labels.push(ROOM_EQUIPMENT_TYPE_LABELS[EquipmentType.DISPLAY]!);
+    return labels;
+  }
+
+  /**
+   * Chan gan thiet bi vao phong neu phong CHUA duoc dang ky co loai thiet bi
+   * do (vd: gan mic vao phong chi dang ky camera + TV). Chi ap dung cho 3 loai
+   * co cot dang ky rieng (camera/microphone/display) — cac loai khac (speaker,
+   * capture_agent, sensor, other) khong co co so doi chieu nen bo qua kiem tra.
+   */
+  private assertRoomRegisteredForEquipmentType(
+    room: RoomEntity,
+    equipmentType: EquipmentType,
+    path: string,
+  ): void {
+    const flagByType: Partial<Record<EquipmentType, boolean>> = {
+      [EquipmentType.CAMERA]: room.hasCamera,
+      [EquipmentType.MICROPHONE]: room.hasMicrophone,
+      [EquipmentType.DISPLAY]: room.hasDisplay,
+    };
+    const requiredFlag = flagByType[equipmentType];
+    if (requiredFlag === undefined || requiredFlag === true) {
+      return;
+    }
+
+    const registeredLabels = this.getRoomRegisteredTypeLabels(room);
+    const registeredText =
+      registeredLabels.length > 0
+        ? registeredLabels.join(', ')
+        : 'chưa đăng ký loại thiết bị nào';
+
+    throw new ConflictException({
+      success: false,
+      message: `Phòng ${room.roomName} chỉ mới được đăng ký có các thiết bị: ${registeredText}. Bạn có thể đăng ký lại thiết bị ở trang Quản lý phòng họp.`,
+      error: {
+        code: 'ROOM_EQUIPMENT_TYPE_MISMATCH',
+        details: {
+          roomId: room.id,
+          roomName: room.roomName,
+          equipmentType,
+          registeredTypes: registeredLabels,
+        },
+      },
+      timestamp: new Date().toISOString(),
+      path,
+    });
+  }
+
+  /**
    * Đăng ký thiết bị mới vào kho.
    */
   async create(
@@ -142,6 +214,51 @@ export class EquipmentService {
     // 4. Uniqueness — equipment_code
     await this.checkDuplicateCode(equipmentCode);
 
+    // 4b. Gán phòng ngay lúc tạo (tùy chọn) — validate TRƯỚC transaction tạo
+    // thiết bị, để không tạo ra thiết bị nếu phòng không hợp lệ / không khớp
+    // loại thiết bị đã đăng ký (cùng rule với assignToRoom, UC-65).
+    let assignedRoom: RoomEntity | null = null;
+    if (dto.roomId) {
+      assignedRoom = await this.dataSource
+        .getRepository(RoomEntity)
+        .findOne({ where: { id: dto.roomId, deletedAt: IsNull() } });
+      if (!assignedRoom) {
+        throw new NotFoundException({
+          success: false,
+          message: 'Khong tim thay phong hop',
+          error: { code: 'ROOM_NOT_FOUND', details: { roomId: dto.roomId } },
+          timestamp: new Date().toISOString(),
+          path: EQUIPMENTS_PATH,
+        });
+      }
+      if (
+        !(
+          assignedRoom.isActive === true &&
+          assignedRoom.currentStatus !== RoomStatus.INACTIVE
+        )
+      ) {
+        throw new ConflictException({
+          success: false,
+          message: 'Phong khong o trang thai nhan duoc thiet bi',
+          error: {
+            code: 'ROOM_NOT_ASSIGNABLE',
+            details: {
+              roomId: dto.roomId,
+              isActive: assignedRoom.isActive,
+              currentStatus: assignedRoom.currentStatus,
+            },
+          },
+          timestamp: new Date().toISOString(),
+          path: EQUIPMENTS_PATH,
+        });
+      }
+      this.assertRoomRegisteredForEquipmentType(
+        assignedRoom,
+        dto.equipmentType,
+        EQUIPMENTS_PATH,
+      );
+    }
+
     // 5. Tạo thiết bị trong transaction
     const saved = await this.dataSource.transaction(async (em) => {
       const equipment = em.create(EquipmentEntity, {
@@ -154,13 +271,13 @@ export class EquipmentService {
         purchaseDate: dto.purchaseDate ?? null,
         specificationJson: dto.specification ?? null,
         // server set cứng — không nhận từ input
-        assetStatus: AssetStatus.AVAILABLE,
+        assetStatus: assignedRoom ? AssetStatus.ASSIGNED : AssetStatus.AVAILABLE,
         healthStatus: dto.healthStatus ?? HealthStatus.UNKNOWN,
-        currentRoomId: null,
-        assignedBy: null,
-        assignedAt: null,
-        installedAt: null,
-        assignmentNote: null,
+        currentRoomId: assignedRoom ? assignedRoom.id : null,
+        assignedBy: assignedRoom ? userId : null,
+        assignedAt: assignedRoom ? new Date() : null,
+        installedAt: assignedRoom ? new Date() : null,
+        assignmentNote: assignedRoom ? (dto.assignmentNote ?? null) : null,
         iotDeviceId: null,
         lastMaintenanceAt: null,
         lastIssueReportedAt: null,
@@ -184,6 +301,7 @@ export class EquipmentService {
             serialNumber: saved.serialNumber,
             assetStatus: saved.assetStatus,
             healthStatus: saved.healthStatus,
+            currentRoomId: saved.currentRoomId,
           },
           ipAddress: ipAddress ?? null,
           severity: AuditLogSeverity.INFO,
@@ -1024,7 +1142,16 @@ export class EquipmentService {
       });
     }
 
-    // A.5: snapshot trạng thái cũ cho audit
+    // A.5: phòng phải đã đăng ký đúng loại thiết bị này (vd: không cho gán
+    // mic vào phòng chỉ đăng ký camera + TV) — chặn ngay, báo chi tiết loại
+    // thiết bị phòng đã đăng ký.
+    this.assertRoomRegisteredForEquipmentType(
+      room,
+      equipment.equipmentType as EquipmentType,
+      `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+    );
+
+    // A.6: snapshot trạng thái cũ cho audit
     const oldValue = {
       currentRoomId: equipment.currentRoomId,
       assetStatus: equipment.assetStatus,
@@ -1086,5 +1213,176 @@ export class EquipmentService {
       currentRoomId: saved.currentRoomId,
       createdAt: saved.createdAt,
     });
+  }
+
+  /**
+   * Gỡ thiết bị khỏi phòng hiện tại — ngược lại của assignToRoom (UC-65).
+   * Mirror assignToRoom: Phase A validate → Phase B transaction update →
+   * Phase C audit fail-separate. Thiết bị đang MAINTENANCE/RETIRED/LOST vẫn
+   * được gỡ khỏi phòng (chỉ clear tham chiếu phòng), KHÔNG tự đổi những
+   * assetStatus đó — chỉ đưa ASSIGNED -> AVAILABLE.
+   */
+  async unassignFromRoom(
+    equipmentId: string,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<EquipmentResponseDto> {
+    // Phase A — validate
+    const equipment = await this.equipmentRepo.findOne({
+      where: { id: equipmentId, deletedAt: IsNull() },
+    });
+    if (!equipment) {
+      throw new NotFoundException({
+        success: false,
+        message: 'Khong tim thay thiet bi',
+        error: {
+          code: 'EQUIPMENT_NOT_FOUND',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    if (!equipment.currentRoomId) {
+      throw new ConflictException({
+        success: false,
+        message: 'Thiet bi hien khong duoc gan vao phong nao',
+        error: {
+          code: 'EQUIPMENT_NOT_ASSIGNED',
+          details: { equipmentId },
+        },
+        timestamp: new Date().toISOString(),
+        path: `${EQUIPMENTS_PATH}/${equipmentId}/assignment`,
+      });
+    }
+
+    const oldValue = {
+      currentRoomId: equipment.currentRoomId,
+      assetStatus: equipment.assetStatus,
+    };
+
+    // Phase B — cập nhật trong transaction
+    const saved = await this.dataSource.transaction(async (em) => {
+      equipment.currentRoomId = null;
+      equipment.assignedBy = null;
+      equipment.assignedAt = null;
+      equipment.installedAt = null;
+      equipment.assignmentNote = null;
+      if (equipment.assetStatus === AssetStatus.ASSIGNED) {
+        equipment.assetStatus = AssetStatus.AVAILABLE;
+      }
+      return em.save(EquipmentEntity, equipment);
+    });
+
+    // Phase C — audit fail-separate (transaction riêng, không rollback gỡ)
+    try {
+      await this.dataSource.transaction(async (em) => {
+        const auditLog = em.create(AuditLogEntity, {
+          userId,
+          actionType: 'update',
+          entityType: 'equipment',
+          entityId: saved.id,
+          oldValueJson: oldValue,
+          newValueJson: {
+            currentRoomId: saved.currentRoomId,
+            assetStatus: saved.assetStatus,
+          },
+          ipAddress: ipAddress ?? null,
+          severity: AuditLogSeverity.INFO,
+        });
+        await em.save(AuditLogEntity, auditLog);
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to write audit log for equipment unassignment ${saved.id}: ${
+          err instanceof Error ? err.message : 'Unknown'
+        }`,
+      );
+    }
+
+    return new EquipmentResponseDto({
+      id: saved.id,
+      equipmentCode: saved.equipmentCode,
+      equipmentName: saved.equipmentName,
+      equipmentType: saved.equipmentType,
+      serialNumber: saved.serialNumber,
+      brand: saved.brand,
+      model: saved.model,
+      purchaseDate: saved.purchaseDate,
+      assetStatus: saved.assetStatus,
+      healthStatus: saved.healthStatus,
+      currentRoomId: saved.currentRoomId,
+      createdAt: saved.createdAt,
+    });
+  }
+
+  /**
+   * Danh sách phòng đã đăng ký có thiết bị (has_camera/has_microphone/
+   * has_display) nhưng chưa có Equipment thực tế (currentRoomId) tương ứng
+   * loại đó — dùng cho banner nhắc nhở Business Admin gán thiết bị còn thiếu.
+   * Thiết bị RETIRED/LOST không tính là "đã có" (coi như không còn ở phòng đó
+   * trên thực tế dù currentRoomId có thể còn sót do luồng report-fault).
+   */
+  async getRoomsMissingEquipment(): Promise<{
+    data: RoomEquipmentGapItemDto[];
+    totalRoomsMissing: number;
+  }> {
+    const rows: Array<{
+      id: string;
+      room_code: string;
+      room_name: string;
+      has_camera: boolean;
+      has_microphone: boolean;
+      has_display: boolean;
+      camera_count: string;
+      microphone_count: string;
+      display_count: string;
+    }> = await this.dataSource.manager.query(
+      `SELECT r.id, r.room_code, r.room_name,
+              r.has_camera, r.has_microphone, r.has_display,
+              COUNT(*) FILTER (WHERE e.equipment_type = 'camera') AS camera_count,
+              COUNT(*) FILTER (WHERE e.equipment_type = 'microphone') AS microphone_count,
+              COUNT(*) FILTER (WHERE e.equipment_type = 'display') AS display_count
+         FROM rooms r
+         LEFT JOIN equipments e
+           ON e.current_room_id = r.id
+          AND e.deleted_at IS NULL
+          AND e.asset_status NOT IN ('retired', 'lost')
+        WHERE r.is_active = true
+          AND r.deleted_at IS NULL
+          AND (r.has_camera OR r.has_microphone OR r.has_display)
+        GROUP BY r.id, r.room_code, r.room_name, r.has_camera, r.has_microphone, r.has_display
+        ORDER BY r.room_code ASC`,
+    );
+
+    const data: RoomEquipmentGapItemDto[] = [];
+    for (const row of rows) {
+      const missingTypes: EquipmentType[] = [];
+      if (row.has_camera && Number(row.camera_count) === 0) {
+        missingTypes.push(EquipmentType.CAMERA);
+      }
+      if (row.has_microphone && Number(row.microphone_count) === 0) {
+        missingTypes.push(EquipmentType.MICROPHONE);
+      }
+      if (row.has_display && Number(row.display_count) === 0) {
+        missingTypes.push(EquipmentType.DISPLAY);
+      }
+      if (missingTypes.length === 0) continue;
+
+      data.push(
+        new RoomEquipmentGapItemDto({
+          roomId: row.id,
+          roomCode: row.room_code,
+          roomName: row.room_name,
+          missingTypes,
+          missingTypeLabels: missingTypes.map(
+            (t) => ROOM_EQUIPMENT_TYPE_LABELS[t] ?? t,
+          ),
+        }),
+      );
+    }
+
+    return { data, totalRoomsMissing: data.length };
   }
 }

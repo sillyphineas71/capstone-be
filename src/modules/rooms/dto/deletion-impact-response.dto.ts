@@ -15,6 +15,8 @@ export class DeletionImpactResponseDto {
   blockingMeetings: DeletionImpactBlockingMeetingDto[];
   /** Cuoc hop DRAFT/PENDING_APPROVAL — khong chan, se bi null hoa roomId + bao host/manager neu xoa. */
   pendingMeetingCount: number;
+  /** So thiet bi (equipments) dang gan phong nay — khong chan xoa, se bi TU DONG GO khoi phong neu xoa (ve trang thai available). */
+  assignedEquipmentCount: number;
 
   constructor(data: DeletionImpactResponseDto) {
     Object.assign(this, data);

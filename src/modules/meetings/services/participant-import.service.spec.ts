@@ -17,6 +17,7 @@ import {
   UserEntity,
   AccountStatus,
 } from '../../accounts/entities/user.entity.js';
+import { UserRoleEntity } from '../../accounts/entities/user-role.entity.js';
 import { SystemConfigEntity } from '../../administration/entities/system-config.entity.js';
 import {
   IMPORT_PARTICIPANTS_HEADERS,
@@ -47,6 +48,20 @@ async function buildXlsx(
   return Buffer.from(buf);
 }
 
+/**
+ * Layout template legacy 7 cột (trước 2026-08-23) — BE vẫn phải đọc được vì người dùng
+ * có thể còn giữ file cũ.
+ */
+const LEGACY_COLUMNS = [
+  { key: 'stt', header: 'STT' },
+  { key: 'type', header: 'Loại' },
+  { key: 'email', header: 'Email' },
+  { key: 'employee_code', header: 'Mã nhân viên' },
+  { key: 'full_name', header: 'Họ và tên' },
+  { key: 'organization_name', header: 'Tổ chức' },
+  { key: 'phone_number', header: 'Số điện thoại' },
+] as const;
+
 function fileOf(buffer: Buffer) {
   return {
     buffer,
@@ -65,6 +80,8 @@ describe('ParticipantImportService', () => {
   let meeting: Partial<MeetingEntity>;
   let dbUsers: Array<Partial<UserEntity>>;
   let existingParticipantUserIds: string[];
+  /** userId đang giữ role BUSINESS_ADMIN/SYSTEM_ADMIN -> không được mời họp. */
+  let ineligibleUserIds: string[];
 
   beforeEach(() => {
     meeting = {
@@ -96,6 +113,7 @@ describe('ParticipantImportService', () => {
       },
     ];
     existingParticipantUserIds = [];
+    ineligibleUserIds = [];
 
     meetingsService = {
       checkUserPermission: jest.fn().mockResolvedValue(false),
@@ -150,6 +168,18 @@ describe('ParticipantImportService', () => {
         getMany: jest.fn().mockResolvedValue([]),
       })),
     };
+    // Role check (getIneligibleMeetingUserIds) dùng query builder -> mock riêng.
+    const userRoleRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn(() =>
+          Promise.resolve(ineligibleUserIds.map((userId) => ({ userId }))),
+        ),
+      })),
+    };
     const roomRepo = { findOne: jest.fn().mockResolvedValue(null) };
     const configRepo = { findOne: jest.fn().mockResolvedValue(null) };
 
@@ -159,6 +189,7 @@ describe('ParticipantImportService', () => {
         if (entity === UserEntity) return userRepo;
         if (entity === MeetingParticipantEntity) return participantRepo;
         if (entity === MeetingExternalParticipantEntity) return externalRepo;
+        if (entity === UserRoleEntity) return userRoleRepo;
         if (entity === RoomEntity) return roomRepo;
         if (entity === SystemConfigEntity) return configRepo;
         return { find: jest.fn().mockResolvedValue([]) };
@@ -203,9 +234,9 @@ describe('ParticipantImportService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('rejects when an extra column is added beyond the 7 standard columns', async () => {
+  it('rejects a file with an unknown extra column', async () => {
     const buf = await buildXlsx(
-      [{ type: 'internal', email: 'an@company.com', extra: 'x' }],
+      [{ email: 'an@company.com', extra: 'x' }],
       [...IMPORT_PARTICIPANTS_COLUMNS, { key: 'extra', header: 'Extra' }],
     );
     await expect(
@@ -213,16 +244,19 @@ describe('ParticipantImportService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('accepts Vietnamese "Loại" values (Nội bộ / Khách ngoài)', async () => {
-    const buf = await buildXlsx([
-      { stt: 1, type: 'Nội bộ', email: 'an@company.com' },
-      {
-        stt: 2,
-        type: 'Khách ngoài',
-        email: 'guest@ext.com',
-        full_name: 'Guest X',
-      },
-    ]);
+  it('still reads the legacy 7-column template (STT / Loại) by header name', async () => {
+    const buf = await buildXlsx(
+      [
+        { stt: 1, type: 'Nội bộ', email: 'an@company.com' },
+        {
+          stt: 2,
+          type: 'Khách ngoài',
+          email: 'guest@ext.com',
+          full_name: 'Guest X',
+        },
+      ],
+      LEGACY_COLUMNS,
+    );
 
     const report = await service.importParticipants(
       'meeting-1',
@@ -237,10 +271,10 @@ describe('ParticipantImportService', () => {
   });
 
   it('skips rows where only STT is filled and the rest are empty', async () => {
-    const buf = await buildXlsx([
-      { stt: 1, type: 'internal', email: 'an@company.com' },
-      { stt: 2 },
-    ]);
+    const buf = await buildXlsx(
+      [{ stt: 1, type: 'internal', email: 'an@company.com' }, { stt: 2 }],
+      LEGACY_COLUMNS,
+    );
 
     const report = await service.importParticipants(
       'meeting-1',
@@ -254,12 +288,11 @@ describe('ParticipantImportService', () => {
     expect(report.successCount).toBe(1);
   });
 
-  it('commits internal + external rows and dispatches notifications', async () => {
+  it('auto-detects internal vs external, commits and dispatches notifications', async () => {
     const buf = await buildXlsx([
-      { type: 'internal', email: 'an@company.com' },
-      { type: 'internal', email: '', employee_code: 'EMP002' },
+      { email: 'an@company.com' },
+      { email: '', employee_code: 'EMP002' },
       {
-        type: 'external',
         email: 'guest@ext.com',
         full_name: 'Guest X',
         organization_name: 'ABC',
@@ -290,18 +323,21 @@ describe('ParticipantImportService', () => {
     );
   });
 
-  it('marks unknown user and duplicate-in-file rows as errors', async () => {
-    const buf = await buildXlsx([
-      { type: 'internal', email: 'ghost@company.com' },
-      { type: 'internal', email: 'an@company.com' },
-      { type: 'internal', email: 'an@company.com' },
-      { type: 'wrong', email: 'x@company.com' },
-    ]);
+  it('marks unknown user and duplicate-in-file rows as errors (with force)', async () => {
+    const buf = await buildXlsx(
+      [
+        { type: 'internal', email: 'ghost@company.com' },
+        { type: 'internal', email: 'an@company.com' },
+        { type: 'internal', email: 'an@company.com' },
+        { type: 'wrong', email: 'x@company.com' },
+      ],
+      LEGACY_COLUMNS,
+    );
 
     const report = await service.importParticipants(
       'meeting-1',
       fileOf(buf),
-      {},
+      { forceAddWithWarnings: true },
       authUser,
       ctx,
     );
@@ -313,15 +349,66 @@ describe('ParticipantImportService', () => {
     expect(report.successCount).toBe(1); // only the first an@company.com
   });
 
+  it('an unresolved email with no full name is reported as an invalid guest row', async () => {
+    const buf = await buildXlsx([{ email: 'ghost@company.com' }]);
+
+    await expect(
+      service.importParticipants('meeting-1', fileOf(buf), {}, authUser, ctx),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+
+    const report = await service.importParticipants(
+      'meeting-1',
+      fileOf(buf),
+      { forceAddWithWarnings: true },
+      authUser,
+      ctx,
+    );
+    expect(report.results[0].reason).toBe(ImportRowReason.INVALID_EXTERNAL_ROW);
+    expect(report.successCount).toBe(0);
+  });
+
+  it('two-step: error row without force -> 422 preview and no DB write', async () => {
+    const buf = await buildXlsx([
+      { email: 'an@company.com' },
+      { email: 'ghost@company.com' }, // thiếu Họ và tên -> lỗi
+    ]);
+
+    await expect(
+      service.importParticipants('meeting-1', fileOf(buf), {}, authUser, ctx),
+    ).rejects.toMatchObject({
+      response: {
+        error: {
+          details: { totalRows: 2, successCount: 1, failedCount: 1 },
+        },
+      },
+    });
+    expect(
+      meetingsService.persistInternalParticipantCore,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects a row resolving to a Business Admin / System Admin account', async () => {
+    ineligibleUserIds = ['u-an'];
+    const buf = await buildXlsx([{ email: 'an@company.com' }]);
+
+    const report = await service.importParticipants(
+      'meeting-1',
+      fileOf(buf),
+      { forceAddWithWarnings: true },
+      authUser,
+      ctx,
+    );
+    expect(report.results[0].reason).toBe(ImportRowReason.ROLE_NOT_ALLOWED);
+    expect(report.successCount).toBe(0);
+  });
+
   it('two-step: warning without force → 422 and no DB write', async () => {
     meetingsService.checkParticipantConflicts.mockResolvedValue({
       conflicts: [{ userId: 'u-an', busyFrom: 'x', busyTo: 'y' }],
       hasConflict: true,
       conflictCount: 1,
     });
-    const buf = await buildXlsx([
-      { type: 'internal', email: 'an@company.com' },
-    ]);
+    const buf = await buildXlsx([{ email: 'an@company.com' }]);
 
     await expect(
       service.importParticipants(
@@ -343,9 +430,7 @@ describe('ParticipantImportService', () => {
       hasConflict: true,
       conflictCount: 1,
     });
-    const buf = await buildXlsx([
-      { type: 'internal', email: 'an@company.com' },
-    ]);
+    const buf = await buildXlsx([{ email: 'an@company.com' }]);
 
     const report = await service.importParticipants(
       'meeting-1',
@@ -375,9 +460,7 @@ describe('ParticipantImportService', () => {
   });
 
   it('marks status success/failed correctly in results', async () => {
-    const buf = await buildXlsx([
-      { type: 'internal', email: 'an@company.com' },
-    ]);
+    const buf = await buildXlsx([{ email: 'an@company.com' }]);
     const report = await service.importParticipants(
       'meeting-1',
       fileOf(buf),

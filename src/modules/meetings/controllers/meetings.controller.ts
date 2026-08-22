@@ -469,7 +469,7 @@ export class MeetingsController {
   @ApiOperation({
     summary: 'Tải tệp Excel mẫu để import thành viên',
     description:
-      'Trả về file .xlsx chứa header chuẩn (type, email, employee_code, full_name, organization_name, phone_number), dòng ví dụ và sheet hướng dẫn.',
+      'Trả về file .xlsx chứa header chuẩn (Email, Mã nhân viên, Họ và tên, Tổ chức/Công ty, Số điện thoại), dòng ví dụ và sheet hướng dẫn. Định dạng TRÙNG KHÍT với file mẫu ở màn Đặt lịch họp — 1 template dùng chung cho cả 2 màn.',
   })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
   async downloadImportTemplate(
@@ -480,7 +480,7 @@ export class MeetingsController {
     res.setHeader('Content-Type', XLSX_MIME);
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="meeting-participants-template.xlsx"',
+      'attachment; filename="SmarTracking_Template_Them_Danh_Sach.xlsx"',
     );
     res.send(buffer);
   }
@@ -496,7 +496,7 @@ export class MeetingsController {
   @ApiOperation({
     summary: 'Import thành viên cuộc họp bằng Excel',
     description:
-      'Tải lên file .xlsx danh sách thành viên (internal + external). Lần đầu (forceAddWithWarnings=false) nếu có dòng cảnh báo sẽ trả 422 kèm preview. Gửi lại với forceAddWithWarnings=true để thêm cả dòng cảnh báo. Xử lý partial-success theo từng dòng.',
+      'Tải lên file .xlsx danh sách thành viên. Loại (nội bộ / khách ngoài) được tự nhận diện theo Email/Mã nhân viên. Lần đầu (forceAddWithWarnings=false) nếu có dòng cảnh báo HOẶC dòng lỗi sẽ trả 422 kèm preview từng dòng. Gửi lại với forceAddWithWarnings=true để thêm các dòng hợp lệ. Xử lý partial-success theo từng dòng.',
   })
   @ApiParam({ name: 'meetingId', type: 'string', format: 'uuid' })
   @ApiBody({
@@ -1015,10 +1015,26 @@ export class MeetingsController {
   }
 
   // ------------------------------------------------------------
+  /**
+   * [2026-08-23] BỎ PermissionsGuard có chủ đích — KHÔNG phải quên.
+   *
+   * Trước đây endpoint này yêu cầu `meeting.participant.add.external`, mà EMPLOYEE
+   * không được cấp -> nhân viên là Host/Organizer mời được khách ngoài LÚC ĐẶT LỊCH
+   * (POST /meetings nhận `externalParticipants` mà không cần permission nào) nhưng
+   * lại bị 403 khi mời thêm sau đó. Cùng một hành vi nghiệp vụ, hai luật khác nhau.
+   * Chính sách cũ cũng đã hở sẵn: EMPLOYEE có `meeting.participant.import` và file
+   * import cho phép dòng khách ngoài.
+   *
+   * Nay theo đúng pattern của DELETE .../participants/external ngay bên dưới: guard
+   * chỉ còn JwtAuthGuard, quyền được quyết định trong service —
+   * `isOwner (organizer/host) || checkUserPermission('meeting.participant.add.external')`,
+   * cộng thêm chặn theo status và theo visibility PRIVATE. Nhờ vậy Host/Organizer tự
+   * mời khách được, còn nhân viên KHÔNG liên quan tới cuộc họp vẫn bị 403 — chặt hơn
+   * so với việc cấp permission này cho cả role EMPLOYEE.
+   */
   @Post('meetings/:meetingId/participants/external')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermissions('meeting.participant.add.external')
+  @UseGuards(JwtAuthGuard)
   @UsePipes(
     new ValidationPipe({
       whitelist: true,

@@ -16,10 +16,13 @@ export class ManageUsersQueryDto {
   @IsUUID('4', { message: 'roleId phải là định dạng UUID' })
   roleId?: string;
 
+  // 'expired' là giá trị filter ảo (không phải giá trị DB thật của account_status):
+  // tài khoản đối tác accountStatus='active' nhưng accountExpiresAt đã qua — xem
+  // listUsersForManagement().
   @IsOptional()
-  @IsIn(['active', 'inactive', 'locked', 'pending_reset'], {
+  @IsIn(['active', 'inactive', 'locked', 'pending_reset', 'expired'], {
     message:
-      'accountStatus chỉ được là active, inactive, locked hoặc pending_reset',
+      'accountStatus chỉ được là active, inactive, locked, pending_reset hoặc expired',
   })
   accountStatus?: string;
 

@@ -154,7 +154,7 @@ export class AdminBiometricReviewService {
   async getBiometricSubmissionDetail(faceProfileId: string) {
     const fp = await this.faceProfileRepo.findOne({
       where: { id: faceProfileId, deletedAt: IsNull() },
-      relations: { user: true },
+      relations: { user: { department: true } },
     });
 
     if (!fp) {
@@ -209,6 +209,13 @@ export class AdminBiometricReviewService {
       // [FIX 2026-08-11] avatarUrl HIỆN TẠI — mirror cách lấy ở list(), user đã load đủ
       // qua relations:{user:true} (không select riêng) nên không cần query thêm.
       avatarUrl: user.avatarUrl,
+      // [FIX 2026-08-23] FE modal "Chi tiết yêu cầu duyệt ảnh sinh trắc học" cần
+      // employeeCode + department nhưng response cũ không có (spec 6.2 cũng thiếu) —
+      // bổ sung để khớp phần list() đã trả sẵn các field này.
+      employeeCode: user.employeeCode,
+      department: user.department
+        ? { id: user.department.id, departmentName: user.department.departmentName }
+        : null,
       status: fp.status,
       primaryImageFileId: fp.primaryImageFileId,
       imageFile,

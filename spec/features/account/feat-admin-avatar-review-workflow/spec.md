@@ -8,6 +8,7 @@
 | 2026-06-24 | RECLARIFY-FIX: format recipientJson = jsonb_build_array(:targetUserId). AC-007 require auth + UUID valid before 404. | Section 8 AC-007, Section 12.1 recipientUserIdsJson, Section 13.2 transaction note. |
 | 2026-07-29 | DRIFT-FIX: sua OOS-005 va Authorization Rules cho khop thuc te code — migration `20260727000006-GrantManagerAvatarReviewPermission.ts` da cap quyen `account.biometric.review`/`account.biometric.download` cho role `MANAGER`. Xac nhan MANAGER duoc phep duyet (dung yeu cau nghiep vu goc: "van qua buoc manager duyet"). Xem ke hoach doi ten toan bo feature nay sang "biometric" tai `spec/features/account/feat-split-avatar-and-biometric/plan.md` va `tasks.md` (T08) — CHUA ap dung trong lan sua nay, chi sua drift OOS-005. | Muc 2.2, 2.3, 9.2 (OOS-005) |
 | 2026-07-29 | T08 (feat-split-avatar-and-biometric/tasks.md): doi ten toan bo feature sang bien the "biometric" dung ban chat (Feature ID ACCT-BIOMETRIC-REVIEW-001, endpoint `/admin/biometric-submissions*`, error code `BIOMETRIC_*`, audit action `biometric.approve/reject/download`, notification_type `biometric_rejected`, permission `account.biometric.review/download`). XOA hanh vi tu dong cap nhat `users.avatar_url` khi approve (FR-007 sua doi, BR-BIOMETRIC-URL danh dau obsolete, bo buoc 6 trong FR-027/13.1 transaction, bo `avatarUrlUpdated` khoi audit payload, sua AC-002/AC-002b, sua data model 5.1/11.2/11.3, sua notification text 12.1 tu "anh dai dien" thanh "anh sinh trac hoc") theo quyet dinh D2 tai `feat-split-avatar-and-biometric/plan.md`. Them MANAGER vao bang Role o toan bo API Contract (muc 6) va permission seed note (muc 10.3) cho dong bo voi DRIFT-FIX. | Toan bo tai lieu: header, 1.1-1.4, 1.6 (Q-BL-01), 3.1 (FR-006/007/BR-BIOMETRIC-URL), 3.4-3.9, 3.6 (FR-027), 4, 5.1, 5.3, 5.4, 6 (6.1-6.5), 7, 8 (AC-002/002b va toan bo ma loi), 9, 10.3, 11.1-11.3, 12.1-12.2, 13.1-13.2, 14 |
+| 2026-08-23 | BUGFIX: FE trang `/business-admin/biometric-submissions` (modal "Chi tiet yeu cau duyet anh sinh trac hoc") bi trong toan bo thong tin user vi BE detail response chi co `userFullName`/`userEmail` (FE doc nham field `fullName`/`email`) va hoan toan thieu `employeeCode`/`department`. Bo sung `employeeCode`, `department` vao response cua `GET /admin/biometric-submissions/{faceProfileId}` (service load them `user.department` relation) va sua FE doc dung field `userFullName`/`userEmail`. | Muc 6.2 (them field), FR-009 (mo rong noi dung tra ve) |
 
 # Feature Specification: Admin Biometric Review Workflow
 
@@ -168,7 +169,7 @@ BR-BIOMETRIC-URL [OBSOLETE 2026-07-29 — xem DRIFT-FIX]: Rule nay (rang buoc di
 
 FR-008: WHEN System Administrator gui yeu cau GET danh sach biometric submissions co query `status=pending_review`, THE system SHALL tra ve danh sach cac face profiles dang cho duyet kem thong tin user summary, co ho tro pagination (`page`, `limit` voi max 100), filter (`status`, `q`, `departmentId`), va sort (`sortBy` whitelist 6 fields, `sortOrder` chi `asc`/`desc`).
 
-FR-009: WHEN System Administrator gui yeu cau GET chi tiet submission voi `faceProfileId` hop le, THE system SHALL tra ve thong tin day du: user summary, face profile status, image metadata (file name, mime type, file size, storage provider), submitted time, consent time va review metadata (neu co). Response KHONG chua signed `imageUrl`; muon xem/tai anh bat buoc goi `/download-url`.
+FR-009: WHEN System Administrator gui yeu cau GET chi tiet submission voi `faceProfileId` hop le, THE system SHALL tra ve thong tin day du: user summary (ho ten, email, ma nhan vien, phong ban), face profile status, image metadata (file name, mime type, file size, storage provider), submitted time, consent time va review metadata (neu co). Response KHONG chua signed `imageUrl`; muon xem/tai anh bat buoc goi `/download-url`.
 
 FR-010: WHEN System Administrator gui yeu cau GET download URL voi `faceProfileId` hop le va role `SYSTEM_ADMIN` + permission `account.biometric.download`, THE system SHALL tao va tra ve signed/temporary URL (TTL 5-15 phut), `expiresAt` dinh dang ISO 8601 co timezone offset, dong thoi ghi audit log `biometric.download`.
 
@@ -464,6 +465,8 @@ Response KHONG chua signed `imageUrl`. Chi chua metadata ve file anh. Muon xem/t
     "userId": "uuid",
     "userFullName": "Nguyen Van A",
     "userEmail": "a@company.com",
+    "employeeCode": "EMP-0001",
+    "department": { "id": "uuid", "departmentName": "IT" },
     "status": "pending_review",
     "primaryImageFileId": "uuid",
     "imageFile": {

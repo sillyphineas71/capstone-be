@@ -38,6 +38,7 @@ import { AssignEquipmentDto } from '../dto/assign-equipment.dto.js';
 import { EquipmentResponseDto } from '../dto/equipment-response.dto.js';
 import { EquipmentFaultConfirmationResponseDto } from '../dto/equipment-fault-confirmation-response.dto.js';
 import { EquipmentFaultHistoryItemDto } from '../dto/equipment-fault-history-item.dto.js';
+import { RoomEquipmentGapItemDto } from '../dto/room-equipment-gap-item.dto.js';
 
 @ApiTags('Equipment')
 @Controller('equipments')
@@ -221,6 +222,33 @@ export class EquipmentController {
     };
   }
 
+  @Get('rooms-missing-equipment')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.read')
+  @ApiOperation({
+    summary: 'Danh sach phong da dang ky thiet bi nhung chua duoc gan du',
+  })
+  @ApiResponse({ status: 200, description: 'Danh sach phong con thieu thiet bi' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.read' })
+  async getRoomsMissingEquipment(): Promise<{
+    success: boolean;
+    message: string;
+    data: RoomEquipmentGapItemDto[];
+    meta: { totalRoomsMissing: number };
+  }> {
+    const { data, totalRoomsMissing } =
+      await this.equipmentService.getRoomsMissingEquipment();
+
+    return {
+      success: true,
+      message: 'Danh sach phong con thieu thiet bi',
+      data,
+      meta: { totalRoomsMissing },
+    };
+  }
+
   @Patch(':equipmentId/assignment')
   @HttpCode(HttpStatus.OK)
   @UseGuards(PermissionsGuard)
@@ -268,6 +296,46 @@ export class EquipmentController {
     return {
       success: true,
       message: 'Phan bo thiet bi vao phong thanh cong',
+      data: result,
+    };
+  }
+
+  @Delete(':equipmentId/assignment')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('equipment.assign')
+  @ApiOperation({ summary: 'Go thiet bi khoi phong dang gan' })
+  @ApiResponse({ status: 200, description: 'Go thiet bi khoi phong thanh cong' })
+  @ApiResponse({ status: 401, description: 'Chua xac thuc' })
+  @ApiResponse({ status: 403, description: 'Khong co quyen equipment.assign' })
+  @ApiResponse({ status: 404, description: 'Khong tim thay thiet bi' })
+  @ApiResponse({
+    status: 409,
+    description: 'Thiet bi hien khong duoc gan vao phong nao',
+  })
+  async unassignFromRoom(
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @CurrentUser() user: { userId: string } | undefined,
+    @Ip() ipAddress: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: EquipmentResponseDto;
+  }> {
+    const userId = user?.userId;
+    if (!userId) {
+      throw new Error('userId is required — check JwtAuthGuard');
+    }
+
+    const result = await this.equipmentService.unassignFromRoom(
+      equipmentId,
+      userId,
+      ipAddress,
+    );
+
+    return {
+      success: true,
+      message: 'Go thiet bi khoi phong thanh cong',
       data: result,
     };
   }

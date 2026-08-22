@@ -17,6 +17,12 @@ import { DeleteRoomResponseDto } from '../dto/delete-room-response.dto.js';
 import { WebsocketService } from '../../websocket/websocket.service.js';
 import { BackgroundJobsService } from '../../administration/services/background-jobs.service.js';
 import { RoomDeleteNotificationProcessor } from '../services/room-delete-notification.processor.js';
+import { NotificationsService } from '../../notifications/notifications.service.js';
+import { NotificationType } from '../../notifications/entities/notification.entity.js';
+import {
+  EquipmentType,
+  AssetStatus as EquipmentAssetStatus,
+} from '../../equipment/entities/equipment.entity.js';
 
 /** Chainable mock cho EntityManager/QueryBuilder — dung cho findFutureAffectedMeetings/hasBlockingInProgressMeeting. */
 function mockQueryBuilder(overrides: {
@@ -42,6 +48,7 @@ describe('RoomsService', () => {
     Partial<RoomDeleteNotificationProcessor>
   >;
   let roomStatusService: jest.Mocked<Partial<RoomStatusService>>;
+  let notificationsService: jest.Mocked<Partial<NotificationsService>>;
   let managerCreateQueryBuilder: jest.Mock;
 
   const mockUserId = '550e8400-e29b-41d4-a716-446655440000';
@@ -109,6 +116,10 @@ describe('RoomsService', () => {
       getRoomStatus: jest.fn(),
     };
 
+    notificationsService = {
+      createNotification: jest.fn().mockResolvedValue(undefined as any),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RoomsService,
@@ -121,6 +132,7 @@ describe('RoomsService', () => {
           useValue: roomDeleteNotificationProcessor,
         },
         { provide: RoomStatusService, useValue: roomStatusService },
+        { provide: NotificationsService, useValue: notificationsService },
       ],
     }).compile();
 
@@ -351,6 +363,81 @@ describe('RoomsService', () => {
       ).rejects.toThrow(NotFoundException);
       expect(dataSource.transaction).not.toHaveBeenCalled();
       expect(websocketService.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('should auto-unassign equipment still gan phong khi tat cau hinh (hasMicrophone true -> false) va bao BUSINESS_ADMIN', async () => {
+      const roomWithMic = { ...mockRoom, hasMicrophone: true };
+      (roomRepo.findOne as jest.Mock).mockResolvedValue(roomWithMic);
+      mockNoNameConflict();
+
+      const assignedMic = {
+        id: 'equipment-mic-1',
+        equipmentCode: 'MIC-01',
+        equipmentName: 'Microphone B',
+        equipmentType: EquipmentType.MICROPHONE,
+        currentRoomId: mockRoomId,
+        assetStatus: EquipmentAssetStatus.ASSIGNED,
+        assignedBy: 'someone',
+        assignedAt: new Date(),
+        installedAt: new Date(),
+        assignmentNote: 'note',
+      };
+      const equipmentQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([{ ...assignedMic }]),
+      };
+
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) => {
+          const mockEm = {
+            create: jest.fn((_entity, data) => data),
+            save: jest
+              .fn()
+              .mockImplementation((entity, data) =>
+                entity === RoomEntity
+                  ? Promise.resolve({ ...roomWithMic, ...data })
+                  : Promise.resolve(data),
+              ),
+            createQueryBuilder: jest.fn().mockReturnValue(equipmentQb),
+          };
+          return cb(mockEm);
+        },
+      );
+      mockAuditTransactionSucceeds();
+
+      const result = await service.update(
+        mockRoomId,
+        { hasMicrophone: false },
+        mockUserId,
+      );
+
+      expect(result.hasMicrophone).toBe(false);
+      expect(equipmentQb.andWhere).toHaveBeenCalledWith(
+        'equipment.equipmentType IN (:...types)',
+        { types: [EquipmentType.MICROPHONE] },
+      );
+      expect(notificationsService.createNotification).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notificationType: NotificationType.EQUIPMENT_AUTO_UNASSIGNED,
+          relatedEntityType: 'room',
+          relatedEntityId: mockRoomId,
+        }),
+      );
+    });
+
+    it('should NOT auto-unassign equipment when device flags do not change', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      mockNoNameConflict();
+      mockUpdateTransactionSucceeds();
+      mockAuditTransactionSucceeds();
+
+      await service.update(mockRoomId, validUpdateDto, mockUserId);
+
+      expect(notificationsService.createNotification).not.toHaveBeenCalled();
     });
 
     it('should NOT throw duplicate-name error when name is unchanged (self-exclusion)', async () => {
@@ -591,10 +678,28 @@ describe('RoomsService', () => {
         NotFoundException,
       );
     });
+
+    it('should return assignedEquipmentCount without blocking canDelete', async () => {
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      managerCreateQueryBuilder
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [] })) // findFutureScheduledMeetings
+        .mockReturnValueOnce(mockQueryBuilder({ getMany: [] })) // findFuturePendingMeetings
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 0 })) // hasBlockingInProgressMeeting
+        .mockReturnValueOnce(mockQueryBuilder({ getCount: 3 })); // countAssignedEquipment
+
+      const result = await service.getDeletionImpact(mockRoomId);
+
+      expect(result.canDelete).toBe(true);
+      expect(result.assignedEquipmentCount).toBe(3);
+    });
   });
 
   describe('deleteRoom', () => {
-    function buildMockEm(affectedMeetings: any[], bookings: any[] = []) {
+    function buildMockEm(
+      affectedMeetings: any[],
+      bookings: any[] = [],
+      equipments: any[] = [],
+    ) {
       const em: any = {
         createQueryBuilder: jest.fn((_entity: any, alias: string) => {
           if (alias === 'meeting') {
@@ -602,6 +707,9 @@ describe('RoomsService', () => {
           }
           if (alias === 'booking') {
             return mockQueryBuilder({ getMany: bookings });
+          }
+          if (alias === 'equipment') {
+            return mockQueryBuilder({ getMany: equipments });
           }
           return mockQueryBuilder({});
         }),
@@ -653,6 +761,49 @@ describe('RoomsService', () => {
         'room.deleted',
         expect.objectContaining({ roomId: mockRoomId }),
       );
+    });
+
+    it('should auto-unassign equipment assigned to the deleted room — ASSIGNED reverts to AVAILABLE, MAINTENANCE keeps its status', async () => {
+      const assignedCamera: any = {
+        id: 'eq-1',
+        currentRoomId: mockRoomId,
+        assetStatus: 'assigned',
+        assignedBy: 'someone',
+        assignedAt: new Date(),
+        installedAt: new Date(),
+        assignmentNote: 'note',
+      };
+      const maintenanceMic: any = {
+        id: 'eq-2',
+        currentRoomId: mockRoomId,
+        assetStatus: 'maintenance',
+        assignedBy: 'someone',
+        assignedAt: new Date(),
+        installedAt: new Date(),
+        assignmentNote: null,
+      };
+
+      (roomRepo.findOne as jest.Mock).mockResolvedValue({ ...mockRoom });
+      mockNotBlockedAndNoScheduledMeetings();
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(
+        async (cb: any) =>
+          cb(buildMockEm([], [], [assignedCamera, maintenanceMic])),
+      );
+      mockAuditTransactionSucceeds();
+
+      const result = await service.deleteRoom(mockRoomId, mockUserId);
+
+      expect(result.affectedEquipmentCount).toBe(2);
+      // ASSIGNED -> AVAILABLE, tham chieu phong duoc go het
+      expect(assignedCamera.currentRoomId).toBeNull();
+      expect(assignedCamera.assetStatus).toBe('available');
+      expect(assignedCamera.assignedBy).toBeNull();
+      expect(assignedCamera.assignedAt).toBeNull();
+      expect(assignedCamera.installedAt).toBeNull();
+      expect(assignedCamera.assignmentNote).toBeNull();
+      // MAINTENANCE giu nguyen assetStatus, chi go tham chieu phong
+      expect(maintenanceMic.currentRoomId).toBeNull();
+      expect(maintenanceMic.assetStatus).toBe('maintenance');
     });
 
     it('should delete a room with pending/draft meetings — release bookings, null roomId, keep status, enqueue job', async () => {
