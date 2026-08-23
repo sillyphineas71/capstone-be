@@ -44,4 +44,12 @@ export class ManageUserItemDto {
     nullable: true,
   })
   phoneNumber?: string | null;
+
+  @ApiProperty({
+    description:
+      'Hạn sử dụng tài khoản (chỉ có giá trị với tài khoản đối tác/khách, ISO 8601)',
+    required: false,
+    nullable: true,
+  })
+  accountExpiresAt?: string | null;
 }

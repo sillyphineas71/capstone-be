@@ -44,6 +44,10 @@ import {
 } from '../../administration/entities/audit-log.entity.js';
 import { BIOMETRIC_EXEMPT_ROLE_CODES } from '../../../common/utils/biometric-exempt-roles.util.js';
 import {
+  resolveBiometricReviewStatus,
+  FaceProfileStatusRow,
+} from '../../../common/utils/biometric-status-resolver.util.js';
+import {
   PARTNER_DEPARTMENT_ID,
   isPartnerAccount,
   resolvePartnerDepartmentId,
@@ -1794,9 +1798,18 @@ export class UsersService {
       }
     }
 
-    const faceProfile = await rm.findOne(FaceProfileEntity, {
+    const faceProfileRows = await rm.find(FaceProfileEntity, {
       where: { userId: targetUserId },
     });
+    const biometricResolution = resolveBiometricReviewStatus(
+      faceProfileRows.map(
+        (p): FaceProfileStatusRow => ({
+          status: p.status,
+          lastUpdatedAt: p.lastUpdatedAt,
+          enrolledAt: p.enrolledAt,
+        }),
+      ),
+    );
 
     let departmentDto: DepartmentInfoDto | null = null;
     if (fresh.department) {
@@ -1821,7 +1834,11 @@ export class UsersService {
       mustChangePassword: fresh.mustChangePassword,
       lastLoginAt: fresh.lastLoginAt ? fresh.lastLoginAt.toISOString() : null,
       roles: rolesDto,
-      hasFaceProfile: !!faceProfile,
+      hasFaceProfile: faceProfileRows.length > 0,
+      biometricReviewStatus: biometricResolution.biometricReviewStatus,
+      accountExpiresAt: fresh.accountExpiresAt
+        ? fresh.accountExpiresAt.toISOString()
+        : null,
       createdAt: fresh.createdAt.toISOString(),
     };
   }
@@ -1897,10 +1914,19 @@ export class UsersService {
       }
     }
 
-    // 6. Fetch face profile existence
-    const faceProfile = await em.findOne(FaceProfileEntity, {
+    // 6. Fetch face profile rows + resolve biometric review status (BR-004)
+    const faceProfileRows = await em.find(FaceProfileEntity, {
       where: { userId: targetUserId },
     });
+    const biometricResolution = resolveBiometricReviewStatus(
+      faceProfileRows.map(
+        (p): FaceProfileStatusRow => ({
+          status: p.status,
+          lastUpdatedAt: p.lastUpdatedAt,
+          enrolledAt: p.enrolledAt,
+        }),
+      ),
+    );
 
     // 7. Assemble department info
     let departmentDto: DepartmentInfoDto | null = null;
@@ -1929,7 +1955,11 @@ export class UsersService {
         ? targetUser.lastLoginAt.toISOString()
         : null,
       roles: rolesDto,
-      hasFaceProfile: !!faceProfile,
+      hasFaceProfile: faceProfileRows.length > 0,
+      biometricReviewStatus: biometricResolution.biometricReviewStatus,
+      accountExpiresAt: targetUser.accountExpiresAt
+        ? targetUser.accountExpiresAt.toISOString()
+        : null,
       createdAt: targetUser.createdAt.toISOString(),
     };
 
@@ -2138,7 +2168,15 @@ export class UsersService {
         departmentId: query.departmentId,
       });
     }
-    if (query.accountStatus) {
+    if (query.accountStatus === 'expired') {
+      // 'expired' là filter ảo: tài khoản đối tác accountStatus vẫn 'active' trong
+      // DB nhưng accountExpiresAt đã qua (login đã bị chặn — xem LoginService).
+      qb.andWhere('u.accountStatus = :activeStatus', {
+        activeStatus: 'active',
+      })
+        .andWhere('u.accountExpiresAt IS NOT NULL')
+        .andWhere('u.accountExpiresAt <= :now', { now });
+    } else if (query.accountStatus) {
       qb.andWhere('u.accountStatus = :accountStatus', {
         accountStatus: query.accountStatus,
       });
@@ -2182,6 +2220,7 @@ export class UsersService {
       'u.departmentId',
       'u.avatarUrl',
       'u.phoneNumber',
+      'u.accountExpiresAt',
     ])
       .orderBy(sortColumn, sortDirection)
       .skip((page - 1) * limit)
@@ -2220,6 +2259,9 @@ export class UsersService {
       roles: rolesMap.get(u.id) ?? [],
       avatarUrl: u.avatarUrl,
       phoneNumber: u.phoneNumber,
+      accountExpiresAt: u.accountExpiresAt
+        ? u.accountExpiresAt.toISOString()
+        : null,
     }));
 
     return { data, total };

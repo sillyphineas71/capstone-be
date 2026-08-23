@@ -50,6 +50,10 @@ export enum NotificationType {
   EQUIPMENT_FAULT_REPORTED = 'equipment_fault_reported',
   EQUIPMENT_FAULT_CONFIRMED = 'equipment_fault_confirmed',
   EQUIPMENT_FAULT_RESOLVED = 'equipment_fault_resolved',
+  // BAO_CAO 2026-08-23: cau hinh phong (has_camera/has_microphone/has_display)
+  // bi tat trong khi thiet bi loai do van dang gan phong -> he thong tu go va
+  // bao BUSINESS_ADMIN.
+  EQUIPMENT_AUTO_UNASSIGNED = 'equipment_auto_unassigned',
 }
 
 export enum NotificationChannel {

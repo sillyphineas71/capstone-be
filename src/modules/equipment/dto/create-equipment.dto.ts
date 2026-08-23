@@ -5,6 +5,7 @@ import {
   IsEnum,
   IsObject,
   IsDateString,
+  IsUUID,
   MaxLength,
   Length,
   Matches,
@@ -15,8 +16,12 @@ import { EquipmentType, HealthStatus } from '../entities/equipment.entity.js';
  * UC-61 — Input đăng ký thiết bị họp mới (POST /api/v1/equipments).
  *
  * Chỉ nhận field trong danh sách chốt. Các field còn lại của entity
- * (currentRoomId, iotDeviceId, assetStatus, assign*, lastIssue*, lastMaintenance*)
+ * (iotDeviceId, assetStatus, assignedBy/assignedAt, lastIssue*, lastMaintenance*)
  * KHÔNG được nhận từ client — `forbidNonWhitelisted` sẽ reject nếu gửi.
+ *
+ * roomId/assignmentNote (tùy chọn): cho phép gán phòng ngay lúc đăng ký thay vì
+ * phải tạo xong rồi gán riêng ở bước sau (PATCH .../assignment). Nếu gán, service
+ * validate roomId TRƯỚC khi tạo (không tạo thiết bị "mồ côi" nếu gán thất bại).
  */
 export class CreateEquipmentDto {
   @IsString({ message: 'equipmentName phai la chuoi ky tu' })
@@ -72,4 +77,13 @@ export class CreateEquipmentDto {
       'healthStatus khong hop le. Gia tri: healthy, warning, faulty, offline, unknown',
   })
   healthStatus?: HealthStatus;
+
+  @IsOptional()
+  @IsUUID('4', { message: 'roomId phai la dinh dang UUID' })
+  roomId?: string;
+
+  @IsOptional()
+  @IsString({ message: 'assignmentNote phai la chuoi ky tu' })
+  @MaxLength(2000, { message: 'assignmentNote toi da 2000 ky tu' })
+  assignmentNote?: string;
 }

@@ -218,6 +218,7 @@ describe('RoomsController', () => {
         roomName: 'Phong hop 301',
         affectedMeetingCount: 3,
         blockedByInProgressMeeting: false,
+        assignedEquipmentCount: 0,
       };
       roomsService.getDeletionImpact.mockResolvedValue(impact);
 
@@ -234,6 +235,7 @@ describe('RoomsController', () => {
       roomId: mockRoomId,
       deletedAt: new Date(),
       affectedMeetingCount: 2,
+      affectedEquipmentCount: 0,
       notificationJobId: 'job-1',
     };
 
