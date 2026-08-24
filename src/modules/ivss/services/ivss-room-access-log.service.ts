@@ -194,7 +194,7 @@ export class IvssRoomAccessLogService {
               e.meeting_id                  AS meeting_id
          ${fromSql}
          ${whereSql}
-        ORDER BY e.event_time ASC
+        ORDER BY e.event_time DESC
         LIMIT $6 OFFSET $7`,
       [...filterParams, limit, offset],
     );

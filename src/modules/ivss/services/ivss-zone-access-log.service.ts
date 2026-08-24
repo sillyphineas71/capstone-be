@@ -161,7 +161,7 @@ export class IvssZoneAccessLogService {
               e.payload_json->>'similarity' AS similarity
          ${fromSql}
          ${whereSql}
-        ORDER BY e.event_time ASC
+        ORDER BY e.event_time DESC
         LIMIT $5 OFFSET $6`,
       [...filterParams, limit, offset],
     );
