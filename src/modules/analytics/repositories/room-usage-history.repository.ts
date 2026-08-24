@@ -206,9 +206,15 @@ export class RoomUsageHistoryRepository {
           SUM(
             CASE
               WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 3600
+                THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                       LEAST(rbu.actual_end_time, rbu.reserved_end_time)
+                       - GREATEST(rbu.actual_start_time, rbu.reserved_start_time)
+                     )) / 3600)
               WHEN rbu.first_presence_at IS NOT NULL AND rbu.last_presence_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 3600
+                THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                       LEAST(rbu.last_presence_at, rbu.reserved_end_time)
+                       - GREATEST(rbu.first_presence_at, rbu.reserved_start_time)
+                     )) / 3600)
               ELSE NULL
             END
           )::text AS total_actual_hours,

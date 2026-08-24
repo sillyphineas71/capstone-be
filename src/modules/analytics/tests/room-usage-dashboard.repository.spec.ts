@@ -117,11 +117,19 @@ describe('RoomUsageDashboardRepository', () => {
       expect(sql).toContain(
         'WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL',
       );
+      // Thời lượng thực tế bị kẹp (clamp) vào đúng khung giờ đã đặt, để một bản
+      // ghi usage lỗi (kết thúc sau nhiều ngày) không đẩy tỷ lệ lấp đầy vượt 100%.
       expect(sql).toContain(
-        'EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60',
+        'LEAST(rbu.actual_end_time, rbu.reserved_end_time)',
       );
       expect(sql).toContain(
-        'EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60',
+        'GREATEST(rbu.actual_start_time, rbu.reserved_start_time)',
+      );
+      expect(sql).toContain(
+        'LEAST(rbu.last_presence_at, rbu.reserved_end_time)',
+      );
+      expect(sql).toContain(
+        'GREATEST(rbu.first_presence_at, rbu.reserved_start_time)',
       );
       expect(sql).toContain('rbu.actual_start_time IS NOT NULL');
     });
@@ -163,7 +171,9 @@ describe('RoomUsageDashboardRepository', () => {
       mockQuery.mockResolvedValue([]);
       await repo.getRoomUsagesRaw('r1', '2026-06-01', '2026-06-30');
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('rbu.actual_start_time AS "actualStartTime"');
+      expect(sql).toContain(
+        'THEN GREATEST(rbu.actual_start_time, rbu.reserved_start_time) END AS "actualStartTime"',
+      );
     });
   });
 });

@@ -133,8 +133,8 @@ export class NoShowRateRepository {
 
     const sql = `
       SELECT
-        COUNT(DISTINCT rb.id)::int AS total_bookings,
-        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count
+        COUNT(DISTINCT rb.id)::int AS "totalBookings",
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS "noShowCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       LEFT JOIN no_show_cases nsc ON nsc.booking_id = rb.id
@@ -152,8 +152,8 @@ export class NoShowRateRepository {
     ]);
 
     return {
-      totalBookings: rows?.[0]?.total_bookings ?? 0,
-      noShowCount: rows?.[0]?.no_show_count ?? 0,
+      totalBookings: rows?.[0]?.totalBookings ?? 0,
+      noShowCount: rows?.[0]?.noShowCount ?? 0,
     };
   }
 
@@ -168,8 +168,8 @@ export class NoShowRateRepository {
     const sql = `
       SELECT
         (rb.reserved_start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date::text AS date,
-        COUNT(DISTINCT rb.id)::int AS total_bookings,
-        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count
+        COUNT(DISTINCT rb.id)::int AS "totalBookings",
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS "noShowCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       LEFT JOIN no_show_cases nsc ON nsc.booking_id = rb.id
@@ -190,8 +190,8 @@ export class NoShowRateRepository {
 
     return rows.map((r: any) => ({
       date: r.date,
-      noShowCount: r.no_show_count,
-      totalBookings: r.total_bookings,
+      noShowCount: r.noShowCount,
+      totalBookings: r.totalBookings,
     }));
   }
 
@@ -209,9 +209,9 @@ export class NoShowRateRepository {
       SELECT
         r.id AS id,
         r.room_name AS name,
-        COUNT(DISTINCT rb.id)::int AS total_bookings,
-        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count,
-        COUNT(*) OVER()::int AS full_count
+        COUNT(DISTINCT rb.id)::int AS "totalBookings",
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS "noShowCount",
+        COUNT(*) OVER()::int AS "fullCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       INNER JOIN rooms r ON r.id = rb.room_id
@@ -222,7 +222,7 @@ export class NoShowRateRepository {
         AND rb.reserved_start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND ${scope.clause}
       GROUP BY r.id, r.room_name
-      ORDER BY no_show_count DESC, (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC
+      ORDER BY "noShowCount" DESC, (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
 
@@ -249,9 +249,9 @@ export class NoShowRateRepository {
       SELECT
         d.id AS id,
         d.department_name AS name,
-        COUNT(DISTINCT rb.id)::int AS total_bookings,
-        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count,
-        COUNT(*) OVER()::int AS full_count
+        COUNT(DISTINCT rb.id)::int AS "totalBookings",
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS "noShowCount",
+        COUNT(*) OVER()::int AS "fullCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       INNER JOIN users u ON u.id = m.organizer_id
@@ -263,7 +263,7 @@ export class NoShowRateRepository {
         AND rb.reserved_start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND ${scope.clause}
       GROUP BY d.id, d.department_name
-      ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, no_show_count DESC
+      ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, "noShowCount" DESC
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
 
@@ -291,9 +291,9 @@ export class NoShowRateRepository {
         u.id AS id,
         u.full_name AS name,
         u.email AS email,
-        COUNT(DISTINCT rb.id)::int AS total_bookings,
-        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS no_show_count,
-        COUNT(*) OVER()::int AS full_count
+        COUNT(DISTINCT rb.id)::int AS "totalBookings",
+        COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::int AS "noShowCount",
+        COUNT(*) OVER()::int AS "fullCount"
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
       INNER JOIN users u ON u.id = m.organizer_id
@@ -304,7 +304,7 @@ export class NoShowRateRepository {
         AND rb.reserved_start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND ${scope.clause}
       GROUP BY u.id, u.full_name, u.email
-      ORDER BY no_show_count DESC, (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC
+      ORDER BY "noShowCount" DESC, (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
     `;
 

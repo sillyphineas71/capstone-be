@@ -238,7 +238,10 @@ export class NoShowRateService {
     const currentMonth = localTime.getUTCMonth(); // 0-indexed
     const currentDay = localTime.getUTCDate();
 
-    const activePreset = preset || 'month';
+    // Khi client chỉ gửi from & to (không kèm preset) thì coi như khoảng tùy chọn,
+    // thay vì âm thầm bỏ qua bộ lọc và trả về tháng hiện tại.
+    // Mirror on-time-rate.service.ts để mọi endpoint analytics hành xử giống nhau.
+    const activePreset = preset || (from && to ? 'custom' : 'month');
 
     if (activePreset === 'day') {
       const todayStr = localTime.toISOString().split('T')[0];
