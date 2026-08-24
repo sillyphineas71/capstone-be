@@ -113,7 +113,7 @@ describe('NoShowRateRepository', () => {
 
   describe('getKpiAggregate', () => {
     it('queries totals and counts of confirmed/released cases', async () => {
-      mockQuery.mockResolvedValue([{ total_bookings: 15, no_show_count: 3 }]);
+      mockQuery.mockResolvedValue([{ totalBookings: 15, noShowCount: 3 }]);
       const result = await repo.getKpiAggregate(baseParams);
       expect(result).toEqual({ totalBookings: 15, noShowCount: 3 });
 
@@ -132,9 +132,9 @@ describe('NoShowRateRepository', () => {
         {
           id: 'r1',
           name: 'Room 1',
-          total_bookings: 5,
-          no_show_count: 3,
-          full_count: 1,
+          totalBookings: 5,
+          noShowCount: 3,
+          fullCount: 1,
         },
       ]);
       const result = await repo.getRoomRanking(baseParams, 1, 10);
@@ -142,7 +142,7 @@ describe('NoShowRateRepository', () => {
 
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toContain('INNER JOIN rooms r ON r.id = rb.room_id');
-      expect(sql).toContain('ORDER BY no_show_count DESC');
+      expect(sql).toContain('ORDER BY "noShowCount" DESC');
       expect(sql).toContain('LIMIT');
       expect(sql).toContain('OFFSET');
     });
@@ -154,9 +154,9 @@ describe('NoShowRateRepository', () => {
         {
           id: 'd1',
           name: 'Dept 1',
-          total_bookings: 5,
-          no_show_count: 3,
-          full_count: 1,
+          totalBookings: 5,
+          noShowCount: 3,
+          fullCount: 1,
         },
       ]);
       const result = await repo.getDepartmentRanking(baseParams, 1, 10);
@@ -168,7 +168,7 @@ describe('NoShowRateRepository', () => {
       );
       // Department sorts by rate DESC, then count DESC
       expect(sql).toContain(
-        "ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, no_show_count DESC",
+        "ORDER BY (COUNT(DISTINCT nsc.id) FILTER (WHERE nsc.detection_status IN ('confirmed', 'released'))::double precision / NULLIF(COUNT(DISTINCT rb.id), 0)) DESC, \"noShowCount\" DESC",
       );
     });
   });
@@ -180,16 +180,16 @@ describe('NoShowRateRepository', () => {
           id: 'u1',
           name: 'User 1',
           email: 'u1@co.com',
-          total_bookings: 5,
-          no_show_count: 3,
-          full_count: 1,
+          totalBookings: 5,
+          noShowCount: 3,
+          fullCount: 1,
         },
       ]);
       const result = await repo.getOrganizerRanking(baseParams, 1, 10);
       expect(result).toHaveLength(1);
 
       const sql = mockQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('ORDER BY no_show_count DESC');
+      expect(sql).toContain('ORDER BY "noShowCount" DESC');
     });
   });
 });

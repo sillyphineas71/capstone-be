@@ -277,7 +277,10 @@ export class RoomUsageDashboardService {
     from?: string,
     to?: string,
   ): { from: string; to: string } {
-    const activePreset = preset || 'month';
+    // Khi client chỉ gửi from & to (không kèm preset) thì coi như khoảng tùy chọn,
+    // thay vì âm thầm bỏ qua bộ lọc và trả về tháng hiện tại.
+    // Mirror on-time-rate.service.ts để mọi endpoint analytics hành xử giống nhau.
+    const activePreset = preset || (from && to ? 'custom' : 'month');
 
     // L1/L3: Use Intl.DateTimeFormat to obtain the current local date in Asia/Ho_Chi_Minh
     // avoiding the fragile manual UTC+7 offset arithmetic that is incorrect for DST-aware code.

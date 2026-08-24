@@ -96,7 +96,8 @@ export class DashboardOverviewRepository {
     const sql = `
       SELECT COUNT(*)::int AS cnt
       FROM meetings m
-      WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+      WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND m.status <> 'draft'
         AND m.deleted_at IS NULL
         AND ${scope.clause}
@@ -116,7 +117,8 @@ export class DashboardOverviewRepository {
       SELECT COUNT(DISTINCT rb.room_id)::int AS cnt
       FROM room_bookings rb
       INNER JOIN meetings m ON m.id = rb.meeting_id
-      WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+      WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND m.status <> 'draft'
         AND m.deleted_at IS NULL
         AND rb.status IN ('approved','active','completed','released')
@@ -140,9 +142,15 @@ export class DashboardOverviewRepository {
         COALESCE(SUM(
           CASE
             WHEN rbu.actual_end_time IS NOT NULL AND rbu.actual_start_time IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60
+              THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.actual_end_time, rbu.reserved_end_time)
+                     - GREATEST(rbu.actual_start_time, rbu.reserved_start_time)
+                   )) / 60)
             WHEN rbu.last_presence_at IS NOT NULL AND rbu.first_presence_at IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60
+              THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.last_presence_at, rbu.reserved_end_time)
+                     - GREATEST(rbu.first_presence_at, rbu.reserved_start_time)
+                   )) / 60)
             ELSE 0
           END
         ), 0)::numeric AS actual_minutes_sum,
@@ -151,7 +159,8 @@ export class DashboardOverviewRepository {
         ), 0)::numeric AS reserved_minutes_sum
       FROM room_booking_usages rbu
       INNER JOIN meetings m ON m.id = rbu.meeting_id
-      WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+      WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND m.status <> 'draft'
         AND m.deleted_at IS NULL
         AND ${scope.clause}
@@ -174,14 +183,16 @@ export class DashboardOverviewRepository {
       SELECT
         (SELECT COUNT(*)::int FROM no_show_cases nsc
           INNER JOIN meetings m ON m.id = nsc.meeting_id
-          WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+          WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
             AND m.status <> 'draft' AND m.deleted_at IS NULL
             AND nsc.detection_status IN ('confirmed','released')
             AND ${scope.clause}
         ) AS no_show_count,
         (SELECT COUNT(*)::int FROM room_bookings rb
           INNER JOIN meetings m ON m.id = rb.meeting_id
-          WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+          WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
             AND m.status <> 'draft' AND m.deleted_at IS NULL
             AND rb.status IN ('approved','active','completed','released')
             AND ${scope.clause}
@@ -209,7 +220,8 @@ export class DashboardOverviewRepository {
         COUNT(*) FILTER (WHERE ar.is_present = true AND ar.is_late = false)::int AS on_time_count
       FROM attendance_records ar
       INNER JOIN meetings m ON m.id = ar.meeting_id
-      WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+      WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND m.status <> 'draft'
         AND m.deleted_at IS NULL
         AND ar.attendance_status IN ('present','late')
@@ -234,14 +246,16 @@ export class DashboardOverviewRepository {
       FROM (
         SELECT m.organizer_id AS uid
         FROM meetings m
-        WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+        WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
           AND m.status <> 'draft' AND m.deleted_at IS NULL
           AND ${scope.clause}
         UNION
         SELECT mp.user_id AS uid
         FROM meeting_participants mp
         INNER JOIN meetings m ON m.id = mp.meeting_id
-        WHERE m.start_time BETWEEN $${pIdx} AND $${pIdx + 1}
+        WHERE m.start_time >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND m.start_time <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
           AND m.status <> 'draft' AND m.deleted_at IS NULL
           AND mp.invitation_status <> 'declined'
           AND ${scope.clause}
@@ -262,7 +276,8 @@ export class DashboardOverviewRepository {
       SELECT COUNT(*)::int AS cnt
       FROM recording_sessions rs
       INNER JOIN meetings m ON m.id = rs.meeting_id
-      WHERE rs.started_at BETWEEN $${pIdx} AND $${pIdx + 1}
+      WHERE rs.started_at >= ($${pIdx} || ' 00:00:00+07')::timestamptz
+        AND rs.started_at <= ($${pIdx + 1} || ' 23:59:59.999+07')::timestamptz
         AND m.status <> 'draft'
         AND m.deleted_at IS NULL
         AND ${scope.clause}
@@ -281,17 +296,27 @@ export class DashboardOverviewRepository {
     const sql = `
       WITH days AS (
         SELECT gs::date AS day
-        FROM generate_series($${pIdx}::timestamptz, $${pIdx + 1}::timestamptz, '1 day') gs
+        FROM generate_series(
+          $${pIdx}::date,
+          $${pIdx + 1}::date,
+          '1 day'
+        ) gs
       )
       SELECT
         d.day::text AS date,
-        COUNT(m.id)::int AS meeting_count,
+        COUNT(DISTINCT m.id)::int AS meeting_count,
         COALESCE(SUM(
           CASE
             WHEN rbu.actual_end_time IS NOT NULL AND rbu.actual_start_time IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60
+              THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.actual_end_time, rbu.reserved_end_time)
+                     - GREATEST(rbu.actual_start_time, rbu.reserved_start_time)
+                   )) / 60)
             WHEN rbu.last_presence_at IS NOT NULL AND rbu.first_presence_at IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60
+              THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.last_presence_at, rbu.reserved_end_time)
+                     - GREATEST(rbu.first_presence_at, rbu.reserved_start_time)
+                   )) / 60)
             ELSE 0
           END
         ), 0)::numeric AS actual_minutes_sum,
@@ -299,7 +324,8 @@ export class DashboardOverviewRepository {
           EXTRACT(EPOCH FROM (rbu.reserved_end_time - rbu.reserved_start_time)) / 60
         ), 0)::numeric AS reserved_minutes_sum
       FROM days d
-      LEFT JOIN meetings m ON m.start_time::date = d.day
+      LEFT JOIN meetings m
+        ON (m.start_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date = d.day
         AND m.status <> 'draft' AND m.deleted_at IS NULL
         AND ${scope.clause}
       LEFT JOIN room_booking_usages rbu ON rbu.meeting_id = m.id

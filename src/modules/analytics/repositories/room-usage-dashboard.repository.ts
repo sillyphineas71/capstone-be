@@ -141,8 +141,14 @@ export class RoomUsageDashboardRepository {
         SUM(
           CASE
             WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL
-              THEN EXTRACT(EPOCH FROM (rbu.actual_end_time - rbu.actual_start_time)) / 60
-            ELSE EXTRACT(EPOCH FROM (rbu.last_presence_at - rbu.first_presence_at)) / 60
+              THEN GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.actual_end_time, rbu.reserved_end_time)
+                     - GREATEST(rbu.actual_start_time, rbu.reserved_start_time)
+                   )) / 60)
+            ELSE GREATEST(0, EXTRACT(EPOCH FROM (
+                     LEAST(rbu.last_presence_at, rbu.reserved_end_time)
+                     - GREATEST(rbu.first_presence_at, rbu.reserved_start_time)
+                   )) / 60)
           END
         )::double precision AS actual_minutes
       FROM room_booking_usages rbu
@@ -320,10 +326,14 @@ export class RoomUsageDashboardRepository {
     // Overlap: include usages whose parent booking overlaps the period [from, to]
     const sql = `
       SELECT
-        rbu.actual_start_time AS "actualStartTime",
-        rbu.actual_end_time AS "actualEndTime",
-        rbu.first_presence_at AS "firstPresenceAt",
-        rbu.last_presence_at AS "lastPresenceAt"
+        CASE WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL
+             THEN GREATEST(rbu.actual_start_time, rbu.reserved_start_time) END AS "actualStartTime",
+        CASE WHEN rbu.actual_start_time IS NOT NULL AND rbu.actual_end_time IS NOT NULL
+             THEN LEAST(rbu.actual_end_time, rbu.reserved_end_time) END AS "actualEndTime",
+        CASE WHEN rbu.first_presence_at IS NOT NULL AND rbu.last_presence_at IS NOT NULL
+             THEN GREATEST(rbu.first_presence_at, rbu.reserved_start_time) END AS "firstPresenceAt",
+        CASE WHEN rbu.first_presence_at IS NOT NULL AND rbu.last_presence_at IS NOT NULL
+             THEN LEAST(rbu.last_presence_at, rbu.reserved_end_time) END AS "lastPresenceAt"
       FROM room_booking_usages rbu
       INNER JOIN room_bookings rb ON rb.id = rbu.booking_id
       INNER JOIN meetings m ON m.id = rb.meeting_id

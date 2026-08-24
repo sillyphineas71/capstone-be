@@ -94,12 +94,19 @@ export class MeetingRequestListItemDto {
   @Expose()
   decisionBy: UserSummaryDto | null;
 
+  /**
+   * `startTime`/`endTime` la gio HIEN TAI cua cuoc hop. Bat buoc phai co vi
+   * `requestedStartTime` chi khac null khi request xin DOI gio (UPDATE_TIME);
+   * voi request duyet thuong no la null va FE khong con gi de hien thi.
+   */
   @Expose()
   meeting: {
     id: string;
     title: string;
     roomId: string | null;
     hostId: string | null;
+    startTime: Date | null;
+    endTime: Date | null;
   } | null;
 
   /**
@@ -157,6 +164,8 @@ export class MeetingRequestListItemDto {
       title: string;
       roomId: string | null;
       hostId: string | null;
+      startTime: Date | null;
+      endTime: Date | null;
     } | null,
     oldMeetingSnapshot: {
       startTime: Date | null;

@@ -7007,6 +7007,8 @@ export class MeetingsService {
                 title: mr.meeting.title,
                 roomId: mr.meeting.roomId,
                 hostId: mr.meeting.hostId,
+                startTime: mr.meeting.startTime,
+                endTime: mr.meeting.endTime,
               }
             : null,
           // F-R3: snapshot giờ/phòng CŨ — chỉ dùng khi request là UPDATE_TIME/
