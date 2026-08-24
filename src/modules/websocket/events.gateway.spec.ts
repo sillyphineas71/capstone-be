@@ -390,4 +390,101 @@ describe('EventsGateway', () => {
       expect(socket.leave).not.toHaveBeenCalled();
     });
   });
+
+  describe('zone:subscribe — B2 zone realtime gate (zones.gate_log.read)', () => {
+    const ZONE_UUID = '44444444-4444-4444-4444-444444444444';
+
+    it('should reject when there is no identity at all', async () => {
+      const socket = buildSocket();
+      socket.data.identity = null;
+      const result = await gateway.handleZoneSubscribe(
+        { zoneId: ZONE_UUID },
+        socket,
+      );
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(authzRepo.getEffectiveRolesAndPermissions).not.toHaveBeenCalled();
+    });
+
+    it('should reject a guest identity (no zone use-case for guests)', async () => {
+      const socket = buildSocket();
+      socket.data.identity = {
+        type: 'guest',
+        externalParticipantId: 'ep-1',
+        meetingId: '11111111-1111-1111-1111-111111111111',
+        jti: 'jti-1',
+      };
+      const result = await gateway.handleZoneSubscribe(
+        { zoneId: ZONE_UUID },
+        socket,
+      );
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(authzRepo.getEffectiveRolesAndPermissions).not.toHaveBeenCalled();
+    });
+
+    it('should reject an employee without zones.gate_log.read permission', async () => {
+      authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['EMPLOYEE'],
+        permissions: [],
+      });
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = await gateway.handleZoneSubscribe(
+        { zoneId: ZONE_UUID },
+        socket,
+      );
+      expect(result.ok).toBe(false);
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    it('should join zone:{zoneId} for an employee with zones.gate_log.read permission', async () => {
+      authzRepo.getEffectiveRolesAndPermissions.mockResolvedValue({
+        roles: ['SYSTEM_ADMIN'],
+        permissions: ['zones.gate_log.read'],
+      });
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = await gateway.handleZoneSubscribe(
+        { zoneId: ZONE_UUID },
+        socket,
+      );
+      expect(result.ok).toBe(true);
+      expect(socket.join).toHaveBeenCalledWith(`zone:${ZONE_UUID}`);
+      expect(authzRepo.getEffectiveRolesAndPermissions).toHaveBeenCalledWith(
+        'user-1',
+      );
+    });
+
+    it('should reject a malformed zoneId regardless of identity', async () => {
+      const socket = buildSocket();
+      socket.data.identity = { type: 'employee', userId: 'user-1' };
+      const result = await gateway.handleZoneSubscribe(
+        { zoneId: 'not-a-uuid' },
+        socket,
+      );
+      expect(result.ok).toBe(false);
+      expect(authzRepo.getEffectiveRolesAndPermissions).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('zone:unsubscribe', () => {
+    it('should leave zone:{zoneId} for a valid zoneId', () => {
+      const socket = buildSocket();
+      const ZONE_UUID = '44444444-4444-4444-4444-444444444444';
+      const result = gateway.handleZoneUnsubscribe({ zoneId: ZONE_UUID }, socket);
+      expect(result.ok).toBe(true);
+      expect(socket.leave).toHaveBeenCalledWith(`zone:${ZONE_UUID}`);
+    });
+
+    it('should reject a malformed zoneId', () => {
+      const socket = buildSocket();
+      const result = gateway.handleZoneUnsubscribe(
+        { zoneId: 'not-a-uuid' },
+        socket,
+      );
+      expect(result.ok).toBe(false);
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
+  });
 });

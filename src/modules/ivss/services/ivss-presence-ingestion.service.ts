@@ -48,6 +48,11 @@ interface PresenceBroadcast {
 const IVSS_PRESENCE_EVENT = 'ivss.presence';
 const IVSS_MEETING_ROOM = (meetingId: string): string =>
   `ivss:meeting:${meetingId}`;
+// B2 (Zone realtime, gate ZONE_REALTIME_ENABLED) — mirror IVSS_PRESENCE_EVENT/
+// IVSS_MEETING_ROOM ở trên, room/channel MỚI HOÀN TOÀN, KHÔNG liên quan
+// ivss:subscribe cũ (không auth). Auth thật nằm ở EventsGateway#handleZoneSubscribe.
+const ZONE_PRESENCE_EVENT = 'zone.presence.updated';
+const ZONE_ROOM = (zoneId: string): string => `zone:${zoneId}`;
 
 type Direction = 'enter' | 'leave' | 'seen';
 type MatchState =
@@ -88,6 +93,9 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
   private readonly logger = new Logger(IvssPresenceIngestionService.name);
   // IRP-001 (#40) C1/B1: gate broadcast realtime — default OFF (mirror SCHEDULER_*_ENABLED).
   private readonly realtimeEnabled: boolean;
+  // B2 (Zone realtime): gate riêng, ĐỘC LẬP với realtimeEnabled (IVSS meeting) —
+  // default OFF, bật qua ZONE_REALTIME_ENABLED khi đã kiểm thử xong zone:subscribe.
+  private readonly zoneRealtimeEnabled: boolean;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -100,6 +108,10 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
   ) {
     this.realtimeEnabled = this.configService.get<boolean>(
       'IVSS_REALTIME_ENABLED',
+      false,
+    );
+    this.zoneRealtimeEnabled = this.configService.get<boolean>(
+      'ZONE_REALTIME_ENABLED',
       false,
     );
   }
@@ -370,6 +382,18 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
             },
           );
 
+          // B2 (Zone realtime): broadcast SAU writeAppearEvent() đã commit xong
+          // (presenceId đã có) — KHÔNG nằm trong transaction/lock của writer, KHÔNG
+          // thể làm rollback lại ghi đã xong. broadcastZonePresence tự nuốt lỗi.
+          if (this.zoneRealtimeEnabled) {
+            this.broadcastZonePresence({
+              zoneId: presenceZoneId,
+              userId,
+              direction,
+              eventTime,
+            });
+          }
+
           // Đường TỨC THỜI (bên cạnh cron evaluateIntrusions() 5 phút — KHÔNG
           // thay thế, cron vẫn chạy làm lưới quét bù). try/catch RIÊNG — lỗi ở
           // đây KHÔNG được làm hỏng luồng ghi appear chính (always-ack #36).
@@ -445,6 +469,37 @@ export class IvssPresenceIngestionService implements IvssEventHandlerPort {
       // C3 best-effort: lỗi query/emit/gateway-down → log, KHÔNG throw, KHÔNG rollback persist.
       this.logger.warn(
         `IVSS realtime broadcast skipped: ${
+          e instanceof Error ? e.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  /**
+   * B2 (Zone realtime) — đẩy realtime "có sự kiện zone mới" về room
+   * zone:<zoneId>, để ZoneManagement (FE) refetch ngay thay vì đợi polling.
+   * Mirror broadcastPresence(): TOÀN BỘ thân trong try/catch → KHÔNG bao giờ
+   * throw ra ngoài (không vỡ ingest). Gọi SAU writeAppearEvent() đã commit
+   * xong (xem call site) — lỗi ở đây KHÔNG thể rollback ghi đã xong.
+   * Payload tối giản (KHÔNG szUid/similarity/imageBase64, mirror SEC-01) —
+   * FE chỉ dùng event này như tín hiệu "có gì mới", không render trực tiếp.
+   */
+  private broadcastZonePresence(args: {
+    zoneId: string;
+    userId: string | null;
+    direction: Direction;
+    eventTime: Date;
+  }): void {
+    try {
+      this.websocketService.emitToRoom(ZONE_ROOM(args.zoneId), ZONE_PRESENCE_EVENT, {
+        zoneId: args.zoneId,
+        userId: args.userId,
+        direction: args.direction,
+        at: args.eventTime.toISOString(),
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Zone realtime broadcast skipped: ${
           e instanceof Error ? e.message : 'unknown'
         }`,
       );

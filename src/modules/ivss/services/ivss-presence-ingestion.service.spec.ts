@@ -114,7 +114,9 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
   const zoneIdOf = () => insert()!.params[7];
 
   // IRP-001 (#40): build service với gate realtime ON/OFF (B1 — mirror configService.get bool).
-  const build = async (realtime = false) => {
+  // B2 (Zone realtime): zoneRealtime — tham số MỚI, mặc định false, KHÔNG đổi chữ ký gọi
+  // build(true)/build(false) đã có ở mọi test cũ (backward-compatible).
+  const build = async (realtime = false, zoneRealtime = false) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IvssPresenceIngestionService,
@@ -133,8 +135,11 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: (key: string, def: unknown) =>
-              key === 'IVSS_REALTIME_ENABLED' ? realtime : def,
+            get: (key: string, def: unknown) => {
+              if (key === 'IVSS_REALTIME_ENABLED') return realtime;
+              if (key === 'ZONE_REALTIME_ENABLED') return zoneRealtime;
+              return def;
+            },
           },
         },
       ],
@@ -436,6 +441,70 @@ describe('IvssPresenceIngestionService (IPI-001 #38+#39)', () => {
       expect(writerMock.writeAppearEvent.mock.calls[0][0].userId).toBeNull();
       expect(payloadOf().presenceSkipped).toBeNull();
       expect(zoneIdOf()).toBe(AREA); // zone_id KHÔNG phụ thuộc presenceSkipped — luôn theo channel map
+    });
+  });
+
+  // B2 (Zone realtime) — broadcastZonePresence() gọi SAU writeAppearEvent() thành công,
+  // gate ĐỘC LẬP với zoneRealtimeEnabled, KHÔNG đụng zone-presence-writer.service.ts.
+  describe('B2 zone realtime — broadcastZonePresence() (zone:{zoneId}, zone.presence.updated)', () => {
+    const AREA = AREA_UUID;
+
+    it('flag=true + writeAppearEvent thành công → emitToRoom(zone:{zoneId}, zone.presence.updated, payload)', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA } }); // isZoneContext=true (roomId null)
+      service = await build(false, true);
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+        `zone:${AREA}`,
+        'zone.presence.updated',
+        expect.objectContaining({ zoneId: AREA, userId: 'u1' }),
+      );
+    });
+
+    it('flag=false (mặc định) → KHÔNG emit zone broadcast dù writeAppearEvent vẫn chạy', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA } });
+      service = await build(false, false);
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
+    });
+
+    it('userId null (người lạ hoàn toàn) + flag=true → vẫn broadcast với userId=null (mirror FIX 2026-08-19, KHÔNG chặn người lạ)', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA }, user: [] });
+      service = await build(false, true);
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+
+      expect(writerMock.writeAppearEvent.mock.calls[0][0].userId).toBeNull();
+      expect(wsMock.emitToRoom).toHaveBeenCalledWith(
+        `zone:${AREA}`,
+        'zone.presence.updated',
+        expect.objectContaining({ zoneId: AREA, userId: null }),
+      );
+    });
+
+    it('flag=true nhưng emitToRoom ném lỗi → onFaceEvent KHÔNG vỡ, intrusion check vẫn chạy tiếp bình thường (lỗi bị nuốt trong broadcastZonePresence)', async () => {
+      wire({ channelMap: {}, presenceMap: { '5': AREA } });
+      wsMock.emitToRoom.mockImplementation(() => {
+        throw new Error('gateway down');
+      });
+      service = await build(false, true);
+      await expect(
+        service.onFaceEvent(evt({ utc: new Date().toISOString() })),
+      ).resolves.toBeUndefined();
+
+      expect(writerMock.writeAppearEvent).toHaveBeenCalledTimes(1);
+      expect(intrusionMock.evaluateZoneEventNow).toHaveBeenCalledTimes(1);
+    });
+
+    it('presenceSkipped (KHÔNG ghi appear) → broadcastZonePresence KHÔNG được gọi dù flag=true', async () => {
+      wire(); // KHÔNG presenceMap → presenceSkipped='zone_unmapped', writeAppearEvent KHÔNG chạy
+      service = await build(false, true);
+      await service.onFaceEvent(evt({ utc: new Date().toISOString() }));
+
+      expect(writerMock.writeAppearEvent).not.toHaveBeenCalled();
+      expect(wsMock.emitToRoom).not.toHaveBeenCalled();
     });
   });
 

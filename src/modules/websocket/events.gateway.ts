@@ -21,6 +21,7 @@ import { GUEST_TOKEN_TYPE } from '../guest-access/constants/guest-access.constan
 import { GuestJwtPayload } from '../guest-access/types/guest-jwt-payload.type.js';
 import { MeetingParticipantEntity } from '../meetings/entities/meeting-participant.entity.js';
 import { MeetingEntity } from '../meetings/entities/meeting.entity.js';
+import { AuthzReadRepository } from '../auth/repositories/authz-read.repository.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,6 +29,9 @@ const IVSS_MEETING_ROOM = (meetingId: string): string =>
   `ivss:meeting:${meetingId}`;
 const MEETING_ROOM = (meetingId: string): string => `meeting:${meetingId}`;
 const USER_ROOM = (userId: string): string => `user:${userId}`;
+// B2 (Zone realtime) — room MỚI HOÀN TOÀN cho zone.presence.updated, KHÔNG
+// liên quan ivss:meeting:<id> cũ (không auth).
+const ZONE_ROOM = (zoneId: string): string => `zone:${zoneId}`;
 
 type SocketIdentity =
   | { type: 'employee'; userId: string }
@@ -84,6 +88,7 @@ export class EventsGateway
     private readonly guestAccessCacheService: GuestAccessCacheService,
     private readonly guestAttendanceService: GuestAttendanceService,
     private readonly dataSource: DataSource,
+    private readonly authzReadRepository: AuthzReadRepository,
   ) {}
 
   afterInit(server: Server): void {
@@ -318,6 +323,64 @@ export class EventsGateway
       return { ok: false };
     }
     const room = USER_ROOM(identity.userId);
+    void client.leave(room);
+    return { ok: true, room };
+  }
+
+  /**
+   * B2 (Zone realtime): client subscribe nhận "có sự kiện zone mới" (mirror
+   * meeting:subscribe/FR-GLA-036) — dùng để FE (ZoneManagement) refetch ngay
+   * thay vì chỉ đợi polling. Room = zone:<zoneId>. Auth THẬT ngay từ đầu
+   * (KHÁC ivss:subscribe cũ — không auth): chỉ nhân viên có permission
+   * 'zones.gate_log.read' (đúng permission đang gate HTTP route
+   * admin/gate-access-logs, xem gate-access-log.controller.ts) mới được join.
+   * Khách (guest) KHÔNG có use-case xem zone nội bộ → luôn từ chối.
+   */
+  @SubscribeMessage('zone:subscribe')
+  async handleZoneSubscribe(
+    @MessageBody() body: { zoneId?: string },
+    @ConnectedSocket() client: Socket,
+  ): Promise<{ ok: boolean; room?: string }> {
+    const zoneId = body?.zoneId;
+    if (typeof zoneId !== 'string' || !UUID_RE.test(zoneId)) {
+      return { ok: false };
+    }
+
+    const identity = (client.data as { identity?: SocketIdentity | null })
+      .identity;
+    if (!identity || identity.type !== 'employee') {
+      this.logger.warn(
+        `[WS] zone:subscribe rejected — no valid employee identity (socket=${client.id}, zoneId=${zoneId})`,
+      );
+      return { ok: false };
+    }
+
+    const { permissions } =
+      await this.authzReadRepository.getEffectiveRolesAndPermissions(
+        identity.userId,
+      );
+    if (!permissions.includes('zones.gate_log.read')) {
+      this.logger.warn(
+        `[WS] zone:subscribe rejected — user ${identity.userId} thiếu quyền zones.gate_log.read`,
+      );
+      return { ok: false };
+    }
+
+    const room = ZONE_ROOM(zoneId);
+    void client.join(room);
+    return { ok: true, room };
+  }
+
+  @SubscribeMessage('zone:unsubscribe')
+  handleZoneUnsubscribe(
+    @MessageBody() body: { zoneId?: string },
+    @ConnectedSocket() client: Socket,
+  ): { ok: boolean; room?: string } {
+    const zoneId = body?.zoneId;
+    if (typeof zoneId !== 'string' || !UUID_RE.test(zoneId)) {
+      return { ok: false };
+    }
+    const room = ZONE_ROOM(zoneId);
     void client.leave(room);
     return { ok: true, room };
   }

@@ -268,6 +268,10 @@ export const envValidationSchema = Joi.object({
   // OWED-BLOCKER: WS auth handshake là tiền-điều-kiện bật =true trên prod
   // (WS hiện vô danh — bật khi chưa auth = rò vị trí cá nhân).
   IVSS_REALTIME_ENABLED: Joi.boolean().default(false),
+  // B2 (Zone realtime): broadcast "zone.presence.updated" qua WS zone:{zoneId}
+  // (gate default OFF) — auth THẬT ngay từ đầu (zone:subscribe check permission
+  // qua AuthzReadRepository), KHÔNG cùng lỗ hổng với ivss:subscribe cũ.
+  ZONE_REALTIME_ENABLED: Joi.boolean().default(false),
   // FGC-001 (Face-access A): timeout call FaceGate (no-hang) + tz format validity + field upload ảnh.
   FACEGATE_TIMEOUT_MS: Joi.number()
     .integer()
