@@ -583,4 +583,65 @@ export class AdminBiometricReviewService {
       });
     }
   }
+
+  // ── US5: Delete (transaction) ──────────────────────────────────────────
+  //
+  // Soft-delete qua face_profiles.deleted_at (cột đã có sẵn ở entity). KHÔNG cần
+  // tự tay hạ device_user_mappings (source='portrait') như approve() — khi ảnh bị
+  // xoá, IvssPortraitSyncService.reconcilePortraits() bước (2) tự nhận ra user
+  // "NOT EXISTS (face_profiles.status='active' AND deleted_at IS NULL)" ở lượt cron
+  // kế tiếp và tự gỡ mapping/person trên IVSS — xem ivss-portrait-sync.service.ts:366-390.
+
+  async deleteBiometricSubmission(faceProfileId: string, adminUserId: string) {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const fpRows: FaceProfileEntity[] = await manager
+          .createQueryBuilder(FaceProfileEntity, 'fp')
+          .setLock('pessimistic_write')
+          .where('fp.id = :id', { id: faceProfileId })
+          .andWhere('fp.deletedAt IS NULL')
+          .getMany();
+
+        const fp = fpRows[0];
+        if (!fp)
+          throw new NotFoundException({
+            code: 'BIOMETRIC_SUBMISSION_NOT_FOUND',
+            message: 'Biometric submission not found.',
+          });
+
+        const now = new Date();
+
+        await manager.update(FaceProfileEntity, faceProfileId, {
+          deletedAt: now,
+          lastUpdatedAt: now,
+        });
+
+        await manager.insert(AuditLogEntity, {
+          userId: adminUserId,
+          actionType: 'biometric.delete',
+          entityType: 'face_profile',
+          entityId: faceProfileId,
+          oldValueJson: { status: fp.status },
+          newValueJson: { deletedAt: now.toISOString() },
+          severity: AuditLogSeverity.INFO,
+          metadataJson: { targetUserId: fp.userId },
+        });
+
+        return {
+          faceProfileId,
+          userId: fp.userId,
+          deletedAt: now.toISOString(),
+        };
+      });
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      this.logger.error(
+        `Delete biometric failed: ${err instanceof Error ? err.message : err}`,
+      );
+      throw new InternalServerErrorException({
+        code: 'BIOMETRIC_DELETE_FAILED',
+        message: 'Failed to delete biometric submission.',
+      });
+    }
+  }
 }
