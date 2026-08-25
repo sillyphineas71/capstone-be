@@ -38,6 +38,12 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
       gap?: number;
       participants?: any[];
       noMeeting?: boolean;
+      // [FIX 2026-08-25] Giả lập kết quả SELECT ĐÃ QUA COALESCE(actual_*, reserved_*)
+      // của loadBound() — mock trả thẳng giá trị hậu-COALESCE (Postgres thật mới là nơi
+      // chạy COALESCE, mock không tự tính). Không truyền → actual_*_time=null, start_time/
+      // end_time giữ nguyên mốc lịch mặc định (hành vi cũ, regression-safe).
+      actualStart?: string;
+      actualEnd?: string;
     } = {},
   ) => {
     dsMock.manager.query.mockImplementation((sql: string) => {
@@ -47,9 +53,11 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
             ? []
             : [
                 {
-                  start_time: T('09:00'),
-                  end_time: T('10:00'),
+                  start_time: o.actualStart ?? T('09:00'),
+                  end_time: o.actualEnd ?? T('10:00'),
                   status: o.status ?? 'completed',
+                  actual_start_time: o.actualStart ?? null,
+                  actual_end_time: o.actualEnd ?? null,
                 },
               ],
         );
@@ -151,6 +159,8 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
             start_time: '2020-01-01T09:00:00.000Z',
             end_time: '2020-01-01T10:00:00.000Z',
             status: 'in_progress',
+            actual_start_time: null,
+            actual_end_time: null,
           },
         ]);
       if (sql.includes("'matched'"))
@@ -258,6 +268,56 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
   it('meeting không tồn tại → null', async () => {
     wire({ noMeeting: true });
     expect(await service.getUserPresence('m1', 'u1', ADMIN_CALLER)).toBeNull();
+  });
+
+  // [FIX 2026-08-25] loadBound() đổi từ SELECT start_time/end_time (giờ ĐẶT LỊCH) sang
+  // SELECT COALESCE(actual_start_time, start_time)/COALESCE(actual_end_time, end_time) —
+  // bug cũ: họp bắt đầu/kết thúc lệch giờ đặt lịch vẫn tính presentRatio/timeline theo giờ
+  // lịch, KHÔNG theo giờ thật. Mirror pattern COALESCE(m.actual_start_time, m.start_time)
+  // đã có sẵn ở checkin-alert.service.ts + meeting.actualStartTime ?? meeting.startTime ở
+  // minutes.service.ts — KHÔNG tự phát minh công thức mới.
+  describe('COALESCE actual_start_time/actual_end_time (FIX 2026-08-25)', () => {
+    it('SQL: query meetings dùng COALESCE(actual_start_time, start_time) và COALESCE(actual_end_time, end_time)', async () => {
+      wire({ events: [] });
+      await dur();
+      const call = dsMock.manager.query.mock.calls.find((c: any[]) =>
+        String(c[0]).includes('FROM meetings WHERE id'),
+      );
+      expect(call[0]).toContain(
+        'COALESCE(actual_start_time, start_time) AS start_time',
+      );
+      expect(call[0]).toContain(
+        'COALESCE(actual_end_time, end_time) AS end_time',
+      );
+    });
+
+    it('actual_start_time/actual_end_time CÓ giá trị (họp bắt đầu/kết thúc lệch giờ đặt lịch) → presentRatio tính theo giờ THẬT, không phải giờ lịch', async () => {
+      // Đặt lịch 09:00–10:00 (60 phút) nhưng họp THẬT SỰ diễn ra 09:30–09:50 (20 phút,
+      // trễ + kết thúc sớm). actualStart/actualEnd mô phỏng đúng giá trị Postgres COALESCE
+      // trả về khi actual_*_time đã có — mirror cách wire() giả lập DB thật.
+      wire({
+        events: [ev('09:30', 'enter'), ev('09:50', 'leave')],
+        actualStart: T('09:30'),
+        actualEnd: T('09:50'),
+      });
+      const r = await dur();
+      // Có mặt trọn vẹn khung giờ THẬT (09:30–09:50 = 20 phút) → present hết → ratio = 1,
+      // KHÔNG phải 20/60 nếu (sai) vẫn lấy mẫu số là khung giờ ĐẶT LỊCH 60 phút.
+      expect(r.duration.durationMs).toBe(20 * MIN);
+      expect(r.duration.presentRatio).toBe(1);
+    });
+
+    it('actual_start_time=NULL (họp CHƯA thực sự bắt đầu, hoặc dữ liệu cũ trước khi có cột này) → COALESCE fallback đúng về start_time/end_time gốc theo giờ ĐẶT LỊCH, KHÔNG vỡ/NaN', async () => {
+      // Không truyền actualStart/actualEnd → wire() mô phỏng actual_start_time=null,
+      // actual_end_time=null, start_time/end_time = mốc lịch mặc định T('09:00')/T('10:00').
+      wire({ events: [ev('09:00', 'enter'), ev('09:30', 'leave')] });
+      const r = await dur();
+      expect(Number.isNaN(r.duration.durationMs)).toBe(false);
+      expect(Number.isNaN(r.duration.presentRatio)).toBe(false);
+      expect(r.duration.durationMs).toBe(30 * MIN);
+      // Mẫu số vẫn là khung giờ lịch 60 phút (09:00–10:00) vì actual_*_time null.
+      expect(r.duration.presentRatio).toBeCloseTo((30 * MIN) / (60 * MIN), 5);
+    });
   });
 
   // ── per-meeting summary ──
@@ -386,6 +446,8 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
               start_time: T('09:00'),
               end_time: T('10:00'),
               status: 'completed',
+              actual_start_time: null,
+              actual_end_time: null,
             },
           ]);
         if (sql.includes('FROM departments WHERE manager_user_id'))
@@ -432,6 +494,8 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
               start_time: T('09:00'),
               end_time: T('10:00'),
               status: 'completed',
+              actual_start_time: null,
+              actual_end_time: null,
             },
           ]);
         if (sql.includes('FROM departments WHERE manager_user_id'))

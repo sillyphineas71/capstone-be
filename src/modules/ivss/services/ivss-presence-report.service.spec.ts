@@ -121,6 +121,24 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
     expect(await service.buildMeetingReport('m1', ADMIN_CALLER)).toBeNull();
   });
 
+  // [FIX 2026-08-25] Header PDF trước đây in thẳng m.start_time/m.end_time (giờ ĐẶT LỊCH),
+  // lệch với participants[] bên dưới (đã tính đúng giờ THẬT qua getMeetingPresence →
+  // loadBound()). Đổi sang COALESCE(actual_*, m.*) — mirror ĐÚNG công thức ở loadBound(),
+  // chỉ đổi nguồn dữ liệu cho dòng nhãn text, KHÔNG đụng participants[]/tính toán.
+  it('SQL: query header dùng COALESCE(m.actual_start_time, m.start_time) và COALESCE(m.actual_end_time, m.end_time)', async () => {
+    queryMock.getMeetingPresence.mockResolvedValue(summary([]));
+    await service.buildMeetingReport('m1', ADMIN_CALLER);
+    const call = dsMock.manager.query.mock.calls.find((c: any[]) =>
+      String(c[0]).includes('FROM meetings m'),
+    );
+    expect(call[0]).toContain(
+      'COALESCE(m.actual_start_time, m.start_time) AS start_time',
+    );
+    expect(call[0]).toContain(
+      'COALESCE(m.actual_end_time, m.end_time) AS end_time',
+    );
+  });
+
   it('B3: meeting_code ký tự lạ → filename sanitized (chống header injection)', async () => {
     dsMock.manager.query.mockResolvedValue([
       { ...HEADER[0], meeting_code: 'MTG/001 #x"y' },

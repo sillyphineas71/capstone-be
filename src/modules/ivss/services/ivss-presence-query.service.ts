@@ -532,7 +532,10 @@ export class IvssPresenceQueryService {
   // ── data access (READ-ONLY, SEC-03 bind) ─────────────────────────────────
   private async loadBound(meetingId: string): Promise<Bound | null> {
     const rows: BoundRow[] = await this.dataSource.manager.query(
-      `SELECT start_time, end_time, status FROM meetings WHERE id = $1 LIMIT 1`,
+      `SELECT COALESCE(actual_start_time, start_time) AS start_time,
+              COALESCE(actual_end_time, end_time) AS end_time,
+              status
+         FROM meetings WHERE id = $1 LIMIT 1`,
       [meetingId],
     );
     const m = rows[0];

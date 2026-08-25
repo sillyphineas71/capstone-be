@@ -85,8 +85,16 @@ export class IvssPresenceReportService {
     );
     if (!presence) return null; // meeting không tồn tại → controller 404
 
+    // [FIX 2026-08-25] Header PDF trước đây in giờ ĐẶT LỊCH (m.start_time/end_time trần) dù
+    // presence.participants[] bên dưới (qua getMeetingPresence → loadBound()) đã tính đúng
+    // theo giờ THẬT — 2 số liệu lệch nhau khi họp bắt đầu/kết thúc trễ/sớm hơn lịch. Đổi
+    // sang COALESCE(actual_*, m.*) mirror ĐÚNG công thức đã dùng ở loadBound(), CHỈ đổi
+    // nguồn dữ liệu cho dòng nhãn text — KHÔNG đụng participants[]/buildSession()/ratio().
     const headerRows: HeaderRow[] = await this.dataSource.manager.query(
-      `SELECT m.title, m.meeting_code, m.start_time, m.end_time, m.status, r.room_name
+      `SELECT m.title, m.meeting_code,
+              COALESCE(m.actual_start_time, m.start_time) AS start_time,
+              COALESCE(m.actual_end_time, m.end_time) AS end_time,
+              m.status, r.room_name
          FROM meetings m
          LEFT JOIN rooms r ON r.id = m.room_id
         WHERE m.id = $1
