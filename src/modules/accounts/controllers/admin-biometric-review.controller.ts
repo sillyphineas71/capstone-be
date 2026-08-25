@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   Query,
   Body,
@@ -121,5 +122,20 @@ export class AdminBiometricReviewController {
       request.user.userId,
     );
     return { success: true, message: 'Anh sinh trac hoc da bi tu choi', data };
+  }
+
+  @Delete(':faceProfileId')
+  @HttpCode(200)
+  @RequireRoles('SYSTEM_ADMIN', 'BUSINESS_ADMIN')
+  @RequirePermissions('account.biometric.delete')
+  async remove(
+    @Param('faceProfileId', biometricSubmissionIdPipe()) faceProfileId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const data = await this.service.deleteBiometricSubmission(
+      faceProfileId,
+      request.user.userId,
+    );
+    return { success: true, message: 'Anh sinh trac hoc da duoc xoa', data };
   }
 }
