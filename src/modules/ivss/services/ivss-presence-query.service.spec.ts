@@ -44,9 +44,18 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
       // end_time giữ nguyên mốc lịch mặc định (hành vi cũ, regression-safe).
       actualStart?: string;
       actualEnd?: string;
+      // [FIX 2026-08-25] host_id CỦA MEETING đang test — dùng bởi resolveScope()'s
+      // isCallerHostOfMeeting(). Không truyền → null (không ai là host), regression-safe.
+      hostId?: string | null;
     } = {},
   ) => {
     dsMock.manager.query.mockImplementation((sql: string) => {
+      // QUAN TRỌNG: kiểm tra nhánh 'SELECT host_id' TRƯỚC nhánh loadBound() bên dưới — cả 2
+      // query đều chứa substring 'FROM meetings WHERE id', nhánh cụ thể hơn phải đứng trước.
+      if (sql.includes('SELECT host_id FROM meetings WHERE id'))
+        return Promise.resolve(
+          o.noMeeting ? [] : [{ host_id: o.hostId ?? null }],
+        );
       if (sql.includes('FROM meetings WHERE id'))
         return Promise.resolve(
           o.noMeeting
@@ -527,6 +536,98 @@ describe('IvssPresenceQueryService (IPD-001 #41+#42)', () => {
       roleOf('SYSTEM_ADMIN');
       const r = await service.getUserPresence('m1', targetUserId, 'sa-1');
       expect(r).not.toBeNull();
+    });
+
+    // ════════════════════════════════════════════════════════════════════
+    // [FIX 2026-08-25] Host-của-CHÍNH-meeting-đang-xem (Employee) — cho phép Host xem đủ
+    // thời lượng tham dự của TẤT CẢ participant trong cuộc họp họ chủ trì, KHÔNG mở rộng
+    // ra toàn hệ thống (khác BUSINESS_ADMIN/SYSTEM_ADMIN — vẫn phải đúng ĐÚNG meetingId).
+    // ════════════════════════════════════════════════════════════════════
+    describe('isHostOfMeeting bypass (FIX 2026-08-25)', () => {
+      it('(a) Employee là HOST của ĐÚNG meeting đang xem → getUserPresence xem được người KHÁC', async () => {
+        roleOf('EMPLOYEE');
+        wire({ events: [], hostId: 'host-1' });
+        const r = await service.getUserPresence('m1', targetUserId, 'host-1');
+        expect(r).not.toBeNull();
+      });
+
+      it('(a) Employee là HOST của ĐÚNG meeting đang xem → getMeetingPresence trả ĐỦ mọi participant, KHÔNG bị lọc', async () => {
+        roleOf('EMPLOYEE');
+        wire({
+          events: [],
+          hostId: 'host-1',
+          participants: [
+            { user_id: 'host-1', full_name: 'Host' },
+            { user_id: 'other-1', full_name: 'Người khác' },
+          ],
+        });
+        const r = (await service.getMeetingPresence('m1', 'host-1'))!;
+        expect(r.participants).toHaveLength(2);
+        expect(r.participants.map((p) => p.userId).sort()).toEqual([
+          'host-1',
+          'other-1',
+        ]);
+      });
+
+      it('(b) Employee là participant THƯỜNG (không phải host — meeting có host là người khác) → VẪN chỉ xem được chính mình, 403 SELF_ONLY khi xem người khác', async () => {
+        roleOf('EMPLOYEE');
+        // host_id của meeting 'm1' là 'host-1' — 'self-1' KHÔNG phải host.
+        wire({ events: [], hostId: 'host-1' });
+        let caught: unknown;
+        try {
+          await service.getUserPresence('m1', targetUserId, 'self-1');
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ForbiddenException);
+        expect((caught as ForbiddenException).getResponse()).toMatchObject({
+          error: { code: 'SELF_ONLY' },
+        });
+      });
+
+      it('(c) QUAN TRỌNG NHẤT — Employee là host của MEETING KHÁC (m2), KHÔNG phải host của meeting ĐANG XEM (m1) → KHÔNG được mở khoá, vẫn 403 SELF_ONLY (chống lộ dữ liệu chéo)', async () => {
+        roleOf('EMPLOYEE');
+        // Đang xem meeting 'm1', nhưng host_id thật của 'm1' là 'someone-else' —
+        // 'host-of-m2' (dù có thể là host của 1 meeting KHÁC ngoài phạm vi test này)
+        // KHÔNG được xem đủ participant của 'm1'.
+        wire({ events: [], hostId: 'someone-else' });
+        let caught: unknown;
+        try {
+          await service.getUserPresence('m1', targetUserId, 'host-of-m2');
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ForbiddenException);
+        expect((caught as ForbiddenException).getResponse()).toMatchObject({
+          error: { code: 'SELF_ONLY' },
+        });
+      });
+
+      it('(c) QUAN TRỌNG NHẤT — getMeetingPresence cùng kịch bản → participant list vẫn bị lọc còn đúng 1 dòng của caller (KHÔNG lộ participant khác)', async () => {
+        roleOf('EMPLOYEE');
+        wire({
+          events: [],
+          hostId: 'someone-else',
+          participants: [
+            { user_id: 'host-of-m2', full_name: 'Không phải host ở đây' },
+            { user_id: 'other-1', full_name: 'Người khác' },
+          ],
+        });
+        const r = (await service.getMeetingPresence('m1', 'host-of-m2'))!;
+        expect(r.participants).toHaveLength(1);
+        expect(r.participants[0].userId).toBe('host-of-m2');
+      });
+
+      it('(d) BUSINESS_ADMIN → hành vi KHÔNG đổi (regression) — KHÔNG cần/KHÔNG gọi query host_id', async () => {
+        roleOf('BUSINESS_ADMIN');
+        wire({ events: [] });
+        const r = await service.getUserPresence('m1', targetUserId, 'ba-1');
+        expect(r).not.toBeNull();
+        const hostIdCall = dsMock.manager.query.mock.calls.find((c: any[]) =>
+          String(c[0]).includes('SELECT host_id'),
+        );
+        expect(hostIdCall).toBeUndefined();
+      });
     });
   });
 });

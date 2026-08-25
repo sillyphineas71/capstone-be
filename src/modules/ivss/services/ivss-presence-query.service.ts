@@ -57,6 +57,12 @@ const DEFAULT_GAP_SECONDS = 120;
  * on-time-rate.service.ts, thêm nhánh EMPLOYEE (không có ở template gốc, vì các
  * route analytics khác chặn hẳn EMPLOYEE — route presence này cho tự xem chính mình).
  * isUnrestricted=true (SYSTEM_ADMIN/BUSINESS_ADMIN) bỏ qua mọi field còn lại.
+ *
+ * [FIX 2026-08-25] Thêm isHostOfMeeting — Employee là host của ĐÚNG meeting đang xem (không
+ * phải toàn hệ thống) được xem đủ mọi participant CỦA MEETING NÀY, giống selfUserId nhưng mở
+ * rộng hơn 1 người. CỐ Ý KHÔNG đổi selfUserId (vẫn giữ = callerId) khi là host — IvssPresenceReportService
+ * (PDF export) chặn theo `scope.selfUserId !== null`, đổi selfUserId sẽ vô tình mở khoá PDF
+ * cho host-employee, NGOÀI PHẠM VI yêu cầu này (cần quyết định sản phẩm riêng, chưa làm).
  */
 export interface IvssPresenceScope {
   viewerRole: 'SYSTEM_ADMIN' | 'BUSINESS_ADMIN' | 'MANAGER' | 'EMPLOYEE';
@@ -65,6 +71,11 @@ export interface IvssPresenceScope {
   scopeDepartmentIds: string[] | null;
   /** Chỉ có giá trị khi viewerRole = EMPLOYEE — phải khớp đúng userId đang xem. */
   selfUserId: string | null;
+  /** [FIX 2026-08-25] true khi callerId = meetings.host_id CỦA ĐÚNG meetingId truyền vào
+   * resolveScope() — chỉ có ý nghĩa khi viewerRole = EMPLOYEE. Luôn resolve LẠI theo từng
+   * meetingId cụ thể (KHÔNG cache/global) nên KHÔNG rò rỉ sang meeting khác mà caller không
+   * phải host. */
+  isHostOfMeeting: boolean;
 }
 
 /**
@@ -89,8 +100,15 @@ export class IvssPresenceQueryService {
    * [FIX 2026-08-13] Resolve scope người gọi — public vì
    * IvssPresenceReportService cần gọi trước khi build PDF (chặn EMPLOYEE hẳn,
    * khác JSON endpoint chỉ lọc).
+   *
+   * [FIX 2026-08-25] Thêm tham số bắt buộc `meetingId` — cần để xác định Employee có phải
+   * host CỦA ĐÚNG meeting đang xem hay không (meetings.host_id). Role SYSTEM_ADMIN/
+   * BUSINESS_ADMIN/MANAGER KHÔNG đổi gì (không cần biết host, trả về y hệt trước fix).
    */
-  async resolveScope(callerId: string): Promise<IvssPresenceScope> {
+  async resolveScope(
+    callerId: string,
+    meetingId: string,
+  ): Promise<IvssPresenceScope> {
     const { roles } =
       await this.authzRepo.getEffectiveRolesAndPermissions(callerId);
 
@@ -100,6 +118,7 @@ export class IvssPresenceQueryService {
         isUnrestricted: true,
         scopeDepartmentIds: null,
         selfUserId: null,
+        isHostOfMeeting: false,
       };
     }
     if (roles.includes('BUSINESS_ADMIN')) {
@@ -108,6 +127,7 @@ export class IvssPresenceQueryService {
         isUnrestricted: true,
         scopeDepartmentIds: null,
         selfUserId: null,
+        isHostOfMeeting: false,
       };
     }
     if (roles.includes('MANAGER')) {
@@ -117,15 +137,37 @@ export class IvssPresenceQueryService {
         isUnrestricted: false,
         scopeDepartmentIds,
         selfUserId: null,
+        isHostOfMeeting: false,
       };
     }
-    // EMPLOYEE (hoặc role khác lỡ được cấp quyền ngoài dự kiến) → chỉ tự xem chính mình.
+    // EMPLOYEE (hoặc role khác lỡ được cấp quyền ngoài dự kiến) → mặc định chỉ tự xem chính
+    // mình; MỞ THÊM [FIX 2026-08-25]: nếu là host của ĐÚNG meeting đang xem → xem đủ mọi
+    // participant CỦA MEETING NÀY (assertCanViewUser/filterParticipantsByScope bên dưới).
+    const isHostOfMeeting = await this.isCallerHostOfMeeting(
+      callerId,
+      meetingId,
+    );
     return {
       viewerRole: 'EMPLOYEE',
       isUnrestricted: false,
       scopeDepartmentIds: null,
       selfUserId: callerId,
+      isHostOfMeeting,
     };
+  }
+
+  /** [FIX 2026-08-25] Nguồn xác định host đáng tin cậy — đọc thẳng meetings.host_id (DB),
+   * KHÔNG tin field client tự gửi lên. */
+  private async isCallerHostOfMeeting(
+    callerId: string,
+    meetingId: string,
+  ): Promise<boolean> {
+    const rows: Array<{ host_id: string | null }> =
+      await this.dataSource.manager.query(
+        `SELECT host_id FROM meetings WHERE id = $1 LIMIT 1`,
+        [meetingId],
+      );
+    return rows[0]?.host_id === callerId;
   }
 
   /** Chặn 403 khi xem 1 người cụ thể (userPresence) không nằm trong scope. */
@@ -134,6 +176,9 @@ export class IvssPresenceQueryService {
     targetUserId: string,
   ): Promise<void> {
     if (scope.isUnrestricted) return;
+    // [FIX 2026-08-25] Host của ĐÚNG meeting đang xem → xem đủ mọi participant CỦA MEETING
+    // NÀY (scope đã resolve theo đúng meetingId, KHÔNG rò rỉ sang meeting khác).
+    if (scope.isHostOfMeeting) return;
 
     if (scope.selfUserId !== null) {
       if (scope.selfUserId === targetUserId) return;
@@ -169,6 +214,8 @@ export class IvssPresenceQueryService {
     scope: IvssPresenceScope,
   ): Promise<ParticipantRow[]> {
     if (scope.isUnrestricted) return participants;
+    // [FIX 2026-08-25] Host của ĐÚNG meeting đang xem → KHÔNG lọc, trả đủ mọi participant.
+    if (scope.isHostOfMeeting) return participants;
 
     if (scope.selfUserId !== null) {
       return participants.filter((p) => p.user_id === scope.selfUserId);
@@ -232,7 +279,7 @@ export class IvssPresenceQueryService {
       unmatchedCount: number;
     };
   } | null> {
-    const scope = await this.resolveScope(callerId);
+    const scope = await this.resolveScope(callerId, meetingId);
     await this.assertCanViewUser(scope, userId);
 
     const bound = await this.loadBound(meetingId);
@@ -292,7 +339,7 @@ export class IvssPresenceQueryService {
     const bound = await this.loadBound(meetingId);
     if (!bound) return null;
 
-    const scope = await this.resolveScope(callerId);
+    const scope = await this.resolveScope(callerId, meetingId);
     const gapMs = (await this.getGapThresholdSeconds()) * 1000;
     // [FIX 2026-08-13] Lọc participant theo scope người gọi — im lặng (KHÔNG 403), EMPLOYEE
     // chỉ còn đúng 1 dòng của chính họ, MANAGER chỉ còn participant thuộc phòng ban mình quản

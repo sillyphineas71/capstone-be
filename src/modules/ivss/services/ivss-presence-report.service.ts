@@ -67,7 +67,14 @@ export class IvssPresenceReportService {
   ): Promise<{ buffer: Buffer; filename: string } | null> {
     // [FIX 2026-08-13] EMPLOYEE bị chặn hẳn ở route PDF (khác JSON endpoint chỉ lọc còn
     // 1 dòng của chính họ) — báo cáo này là tài liệu quản lý/admin, không dành cho tự xem.
-    const scope = await this.presenceQueryService.resolveScope(callerId);
+    // [FIX 2026-08-25] resolveScope() cần thêm meetingId (host-of-meeting check) — CỐ Ý vẫn
+    // check `selfUserId !== null` ở đây (KHÔNG check isHostOfMeeting) nên host-employee VẪN bị
+    // chặn PDF như trước, KHÔNG đổi hành vi — mở khoá PDF cho host là quyết định sản phẩm
+    // riêng, ngoài phạm vi fix này.
+    const scope = await this.presenceQueryService.resolveScope(
+      callerId,
+      meetingId,
+    );
     if (scope.selfUserId !== null) {
       throw new ForbiddenException({
         success: false,

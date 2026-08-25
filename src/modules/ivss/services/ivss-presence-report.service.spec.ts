@@ -219,6 +219,24 @@ describe('IvssPresenceReportService (IPR-001 #43)', () => {
       expect(queryMock.getMeetingPresence).not.toHaveBeenCalled();
     });
 
+    // [FIX 2026-08-25] Employee-là-host-của-CHÍNH-meeting-đang-xem giờ được xem đủ participant
+    // ở 2 JSON endpoint (getUserPresence/getMeetingPresence) — CỐ Ý KHÔNG lan sang PDF report,
+    // đây là quyết định sản phẩm riêng chưa làm. Test này khoá lại: dù scope.isHostOfMeeting=true,
+    // guard PDF chỉ xét scope.selfUserId nên VẪN chặn — không đổi hành vi.
+    it('Employee LÀ HOST của meeting đang xem (isHostOfMeeting=true) → PDF report VẪN 403 (cố ý không mở khoá, ngoài phạm vi fix host-xem-đủ)', async () => {
+      queryMock.resolveScope.mockResolvedValue({
+        viewerRole: 'EMPLOYEE',
+        isUnrestricted: false,
+        scopeDepartmentIds: null,
+        selfUserId: 'host-1',
+        isHostOfMeeting: true,
+      });
+      await expect(
+        service.buildMeetingReport('m1', 'host-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(queryMock.getMeetingPresence).not.toHaveBeenCalled();
+    });
+
     it('Manager → getMeetingPresence() được gọi kèm đúng callerId (để tự lọc scope)', async () => {
       queryMock.resolveScope.mockResolvedValue({
         viewerRole: 'MANAGER',
